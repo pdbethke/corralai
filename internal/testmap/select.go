@@ -16,10 +16,11 @@ import (
 // language fact it needs is a row field (CollectionBase, TestsCmd, TestUnit,
 // CarryArgs for test-grain maps; UnitsCmd, UnitsCoruns, UnitForFile for
 // unit-grain ones), and every selection fact is in the map. Its rules are
-// the ones Python's selector applied (internal/lang/python.go, Select,
-// ForSpan, WithAuthoredTest), and python_equivalence_test.go holds the
-// engine to that selector's output on every input its tests use: moving the
-// rules here must not move what Python selects.
+// the ones Python's selector applied (pyPlugin's Select, ForSpan and
+// WithAuthoredTest, deleted once every caller used this engine), and
+// python_equivalence_test.go holds the engine to that selector's recorded
+// output on every input its tests used: moving the rules here must not move
+// what Python selects.
 
 // MaxArgv bounds the selection a command line carries, measured as argvLen.
 // Past it a test-grain selection names the units its tests live in instead —

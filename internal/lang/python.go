@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -1200,11 +1199,6 @@ func pyDeselectCmd(argv, selectors []string) ([]string, bool) {
 	return cmd, len(cmd) > len(argv)
 }
 
-// selectionMaxArgv bounds the node-id list Select puts on one command line.
-// Past it, Select names the test FILES those ids live in instead — a
-// superset, still evidence-derived, and never a whole-suite fallback.
-const selectionMaxArgv = 32 * 1024
-
 // DiagnoseSelectionFailure implements lang.SelectionDiagnoser: it recognizes
 // pytest's own usage error when the project's venv lacks the pytest-cov
 // plugin Instrument's command requires. Without it, `--cov
@@ -1396,10 +1390,7 @@ func shellArg(s string) string {
 	return s
 }
 
-// pyContextReport is the subset of `coverage json --show-contexts` Select
-// reads. contexts maps a line number (as a string) to the contexts that
-// executed it; pytest-cov names a test context `<nodeid>|<phase>`.
-// pySelectionFormat stamps the reducer's output so Select refuses any other
+// pySelectionFormat stamps the reducer's output so Evidence refuses any other
 // document — including the full coverage-json it used to parse — by name.
 // Bumped to -3 (from -2) when pySelectionFile grew Statements: a document
 // stamped -2 (a real one may still sit in an on-disk selection cache —
@@ -1437,7 +1428,7 @@ type pySelectionEvidence struct {
 // all (Statements == 0: an empty or comment-only __init__.py, benign, not
 // a finding). A *int, not int: nil means the reducer's own analysis2 call
 // failed for this file (rare — see pySelectionReducer) and the count is
-// UNKNOWN, which Index treats as "has statements" (the conservative
+// UNKNOWN, which Evidence reads as "has statements" (the conservative
 // default: never silently swallow a real finding because one file's
 // analysis hiccuped).
 type pySelectionFile struct {
@@ -1453,9 +1444,9 @@ type pySelectionEvidenceFiles struct {
 
 // parsePySelectionEvidence decodes ONE instrumented run's evidence into the
 // corral-selection-3 document, checking the format stamp BEFORE ever
-// trusting the shape of what follows. This is the ONE reader of the format —
-// Select (one file) and Index (every file) both call it, rather than each
-// re-implementing the same decode.
+// trusting the shape of what follows. This is the ONE reader of the format:
+// Evidence calls it, and everything that selects reads Evidence's output
+// through the test map (internal/testmap).
 //
 // The evidence is usually a raw `coverage json` capture: whatever the
 // wrapped test run printed, then the JSON as the LAST line (Instrument's own
@@ -1491,138 +1482,12 @@ func parsePySelectionEvidence(evidence []byte) (pySelectionEvidence, error) {
 	return rep, nil
 }
 
-// Select narrows testCmd to the tests whose recorded context executed any
-// line of codePath. Node ids are sorted so the command — and therefore the
-// cache key — is stable for the same evidence.
-func (pyPlugin) Select(evidence []byte, repoRoot, codePath, testPath string, testCmd []string) (Selection, error) {
-	rep, err := parsePySelectionEvidence(evidence)
-	if err != nil {
-		return Selection{}, err
-	}
-
-	root := normalizePyRepoRoot(repoRoot)
-	want := filepath.ToSlash(codePath)
-	wantTest := filepath.ToSlash(testPath)
-	var mine map[string]bool
-	var lines map[string][]LineRange
-	var static []LineRange
-	sawTest := false
-	for path, f := range rep.Files {
-		p, ok := alignPyPath(path, root)
-		if !ok {
-			continue
-		}
-		if wantTest != "" && p == wantTest {
-			sawTest = true
-		}
-		if p == want {
-			mine = map[string]bool{} // measured; executed by these tests, or by none
-			for _, id := range f.Tests {
-				mine[id] = true
-			}
-			lines = map[string][]LineRange{}
-			for idxStr, rngs := range f.Lines {
-				idx, err := strconv.Atoi(idxStr)
-				if err != nil || idx < 0 || idx >= len(f.Tests) {
-					return Selection{}, fmt.Errorf("lang: %s evidence for %s has a lines index %q out of range for %d tests", pySelectionFormat, path, idxStr, len(f.Tests))
-				}
-				id := f.Tests[idx]
-				for _, r := range rngs {
-					lines[id] = append(lines[id], LineRange{Start: r[0], End: r[1]})
-				}
-			}
-			for _, r := range f.Static {
-				static = append(static, LineRange{Start: r[0], End: r[1]})
-			}
-		}
-	}
-	if mine == nil {
-		// Absent from the report. This is NEVER "uncovered": coverage only
-		// lists files it could resolve back under the repo root, and a file
-		// whose paired test genuinely ran (sawTest) can still be missing
-		// here for reasons that have nothing to do with whether the suite
-		// executed it — most commonly an editable/src-layout install whose
-		// sources coverage measures OUTSIDE root, which the reducer's own
-		// `if rel.startswith(".."): continue` silently drops (see
-		// CollectSelectionEvidence's document-level pathology check, which
-		// usually catches this for the whole scan before any one file
-		// reaches here). Absence of evidence is not evidence of absence, so
-		// this always falls back to grading the whole suite, disclosed,
-		// rather than claim a kill rate for a file nothing measured.
-		if !sawTest {
-			return Selection{}, fmt.Errorf("lang: python selection evidence never saw %s or its paired test %q — did the suite run it?", codePath, testPath)
-		}
-		return Selection{}, fmt.Errorf("lang: python selection evidence measured %d file(s) but never %s, though its paired test %q did run — its coverage may not have been recorded under the repo root (e.g. an editable/src-layout install); falling back to the whole suite", len(rep.Files), codePath, testPath)
-	}
-	sel := Selection{Method: "coverage-context", Of: rep.Tests, Base: stripPyCollectionTargets(testCmd, root), Lines: lines, Static: static}
-	if len(mine) == 0 {
-		return sel, nil
-	}
-	ids := make([]string, 0, len(mine))
-	for id := range mine {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	ids, collapsed := collapseToFilesIfTooLong(ids)
-	if collapsed {
-		// The line evidence is keyed by NODE ID, and the collapse just
-		// discarded every node id in favour of the containing files. Keeping
-		// it would leave ForSpan looking up ids that are no longer in Tests,
-		// matching nothing, and labelling every mutant "unreached" — a
-		// positive claim that no test reaches those lines, for a file that
-		// was not narrowed at all. Evidence in a shape that cannot be
-		// narrowed is no line evidence: dropping it reproduces the per-file
-		// behaviour byte for byte.
-		sel.Lines, sel.Static = nil, nil
-	}
-	sel.Tests = ids
-	sel.Cmd = append(append([]string{}, sel.Base...), ids...)
-	return sel, nil
-}
-
-// Index parses the same corral-selection-3 document Select reads, into a
-// per-file readout for EVERY file the run measured: for each, the covering
-// tests mapped to how many of THAT file's lines each one executed. Shares
-// parsePySelectionEvidence with Select — no second reader of the format.
-//
-// Paths come back exactly as alignPyPath resolves them with an empty root:
-// the reducer already writes repo-relative paths for the common case
-// (os.path.relpath against the run's own cwd), and a caller building a
-// scan-wide index has no single per-file repoRoot to relativize against
-// anyway — candidacy is evaluated at the repo root the evidence was
-// collected from, so this matches Select's own root="" behaviour for a
-// relative measured path.
-func (pyPlugin) Index(evidence []byte) (map[string]FileCoverage, error) {
-	doc, err := pyPlugin{}.Evidence(evidence)
-	if err != nil {
-		return nil, err
-	}
-	out := make(map[string]FileCoverage, len(doc.Files))
-	for path, f := range doc.Files {
-		p, ok := alignPyPath(path, "")
-		if !ok {
-			continue
-		}
-		tests := make(map[string]int, len(f.Tests))
-		for id, rngs := range f.Tests {
-			n := 0
-			for _, r := range rngs {
-				n += r.End - r.Start + 1
-			}
-			tests[id] = n
-		}
-		out[p] = FileCoverage{Tests: tests, HasStatic: len(f.Static) > 0, HasStatements: f.HasStatements}
-	}
-	return out, nil
-}
-
 // Evidence implements TestEvidence: the corral-selection-3 document as a
-// language-agnostic EvidenceDoc, for the test map. It shares
-// parsePySelectionEvidence with Select — no second reader of the format — and
-// Index is a reduction over it, so there is one place the document is
+// language-agnostic EvidenceDoc, for the test map. It is the only reader of
+// parsePySelectionEvidence's result, so there is one place the document is
 // interpreted. Paths are kept exactly as the evidence stores them; the caller
-// aligns them. A malformed lines index degrades per entry (as Index always
-// did): that range is dropped, the test stays listed with what remains.
+// aligns them (AlignEvidencePath). A malformed lines index degrades per
+// entry: that range is dropped, the test stays listed with what remains.
 func (pyPlugin) Evidence(evidence []byte) (EvidenceDoc, error) {
 	rep, err := parsePySelectionEvidence(evidence)
 	if err != nil {
@@ -1680,85 +1545,6 @@ func (pyPlugin) IsLibraryCode(path string, hasPath func(string) bool) bool {
 			return true
 		}
 	}
-}
-
-// collapseToFilesIfTooLong collapses ids (sorted node ids) to their
-// containing files when the sorted argv would exceed selectionMaxArgv —
-// still evidence-derived, just a coarser (superset) selection than the
-// individual node ids would give. A no-op when ids already fits.
-//
-// The bool says whether the collapse HAPPENED, because it invalidates
-// anything else keyed by node id (see Select).
-func collapseToFilesIfTooLong(ids []string) ([]string, bool) {
-	if argvLen(ids) <= selectionMaxArgv {
-		return ids, false
-	}
-	files := map[string]bool{}
-	for _, id := range ids {
-		files[pyTestUnit(id)] = true
-	}
-	out := make([]string, 0, len(files))
-	for f := range files {
-		out = append(out, f)
-	}
-	sort.Strings(out)
-	return out, true
-}
-
-// ForSpan narrows sel to the tests whose recorded coverage reaches span. See
-// TestSelector.ForSpan and SpanRule for the contract.
-func (pyPlugin) ForSpan(sel Selection, span LineRange) ([]string, []string, string) {
-	file := func(rule string) ([]string, []string, string) {
-		return append([]string{}, sel.Cmd...), append([]string{}, sel.Tests...), rule
-	}
-	// Never "unreached" for evidence that cannot be narrowed at all: a
-	// selection whose Tests were collapsed to files still carries Lines
-	// keyed by node id, and every lookup below would miss. See
-	// Selection.NarrowableByLine.
-	if span.IsZero() || !sel.NarrowableByLine() {
-		return file(SpanRuleFile)
-	}
-	for _, s := range sel.Static {
-		if s.Overlaps(span) {
-			return file(SpanRuleStatic)
-		}
-	}
-	var ids []string
-	for _, id := range sel.Tests {
-		for _, r := range sel.Lines[id] {
-			if r.Overlaps(span) {
-				ids = append(ids, id)
-				break
-			}
-		}
-	}
-	if len(ids) == 0 {
-		return file(SpanRuleUnreached)
-	}
-	// KILL-LIKELIEST FIRST. The evidence already knows how many of the
-	// mutated span's own lines each covering test executes; a test that runs
-	// more of the changed code is likelier to observe the change. With
-	// per-mutant fail-fast (lang.FailFastArgsFor) the average killed mutant then
-	// costs the tests up to its killer rather than the whole set.
-	//
-	// THIS CHANGES ORDER ONLY. Exactly the ids selected above are returned,
-	// which is what keeps the verdict identical: "did any selected test fail"
-	// does not depend on the sequence they ran in. The tie-break is the id, so
-	// the order is still TOTAL and deterministic — two runs of the same
-	// evidence produce the same command, which a signed record requires.
-	sortBySpanCoverage(ids, sel, span)
-	ids, _ = collapseToFilesIfTooLong(ids)
-	base := sel.Base
-	if base == nil {
-		// Cmd is Base + Tests by construction. A Selection that does not
-		// hold that runs the file selection rather than slicing a command
-		// apart on an assumption it just failed.
-		if len(sel.Cmd) < len(sel.Tests) {
-			return file(SpanRuleFile)
-		}
-		base = sel.Cmd[:len(sel.Cmd)-len(sel.Tests)]
-	}
-	return append(append([]string{}, base...), ids...), ids, SpanRuleLines
 }
 
 // pyValueOptions are the pytest options that take their value as a SEPARATE
@@ -1857,37 +1643,6 @@ func isPyCollectionTarget(tok, repoRoot string) bool {
 	return err == nil
 }
 
-// WithAuthoredTest appends the authored test's path so pytest collects it
-// alongside the selection; with an empty selection it runs the authored
-// test alone — the uncovered case, where the pool's test is the only test.
-//
-// "Alone" has to mean alone: the uncovered branch builds on sel.Base (the
-// operator's command with its collection targets stripped), not on the raw
-// testCmd, or `pytest tests/` + the authored path would collect all of
-// tests/ and grade a file the evidence says nothing executes against the
-// entire suite. sel.Base is nil only for a Selection this plugin did not
-// compute, where testCmd is all there is.
-func (pyPlugin) WithAuthoredTest(sel Selection, testCmd []string, authoredTestPath string) []string {
-	base := sel.Cmd
-	if len(sel.Tests) == 0 {
-		base = testCmd
-		if sel.Base != nil {
-			base = sel.Base
-		}
-	}
-	out := append(append([]string{}, base...), authoredTestPath)
-	// `--deselect` ARGS ON THE PASSED COMMAND SURVIVE THE SELECTION. When a
-	// selection exists this function rebuilds the command from sel.Cmd and
-	// discards testCmd — which is where salvageByDeselect had just put the
-	// `--deselect <failing test>` args it computed. So the salvage ran the
-	// original command, the failing authored test failed again, and the
-	// salvage reported nothing, on every Python repo with selection on (the
-	// default). Its own comments describe the opposite. The deselect args
-	// are the one thing the caller can legitimately add to a selected
-	// command, and they are carried across.
-	return append(out, deselectArgs(testCmd)...)
-}
-
 // deselectArgs returns every `--deselect <id>` pair in argv, in order.
 func deselectArgs(argv []string) []string {
 	var out []string
@@ -1900,16 +1655,6 @@ func deselectArgs(argv []string) []string {
 		}
 	}
 	return out
-}
-
-// argvLen approximates the length of a command line carrying args, as one
-// space-joined string — the metric selectionMaxArgv bounds.
-func argvLen(args []string) int {
-	n := 0
-	for _, a := range args {
-		n += len(a) + 1
-	}
-	return n
 }
 
 func lastNonEmptyLine(b []byte) string {
@@ -1991,35 +1736,6 @@ func pyFirstFailure(output []byte) string {
 		return prefix + rest
 	}
 	return ""
-}
-
-// sortBySpanCoverage orders ids by how many of span's own lines each test
-// executed, descending, tie-broken by id ascending. See ForSpan for why this
-// is safe: it reorders a set it does not change.
-func sortBySpanCoverage(ids []string, sel Selection, span LineRange) {
-	reach := make(map[string]int, len(ids))
-	for _, id := range ids {
-		n := 0
-		for _, r := range sel.Lines[id] {
-			lo, hi := r.Start, r.End
-			if lo < span.Start {
-				lo = span.Start
-			}
-			if hi > span.End {
-				hi = span.End
-			}
-			if hi >= lo {
-				n += hi - lo + 1
-			}
-		}
-		reach[id] = n
-	}
-	sort.SliceStable(ids, func(i, j int) bool {
-		if reach[ids[i]] != reach[ids[j]] {
-			return reach[ids[i]] > reach[ids[j]]
-		}
-		return ids[i] < ids[j]
-	})
 }
 
 // LineComment is the python line-comment marker.

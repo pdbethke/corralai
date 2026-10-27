@@ -34,6 +34,7 @@ import (
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/sandbox"
 	"github.com/pdbethke/corralai/internal/shadowpool"
+	"github.com/pdbethke/corralai/internal/testmap"
 )
 
 // THERE ARE NO DEFAULT MODELS. Not here, not anywhere on the audit path.
@@ -662,6 +663,10 @@ type localAuditInput struct {
 	// suite must run instead. Zero on the `--local` path, which is exactly
 	// the pre-selection behaviour.
 	selection lang.Selection
+	// selectionMap is the scan's test map selection was made from, carried
+	// to the RunSpec and the scorer so every later command built from
+	// selection names the same runner row and grain. Zero with selection.
+	selectionMap testmap.Map
 
 	// presetMutants REPLAYS a recorded mutant set for THIS file instead of
 	// generating one: the run seeds no mutant-generator seat and grades the
@@ -1201,7 +1206,7 @@ func prepareAuditJail(ctx context.Context, in localAuditInput, plug lang.Plugin,
 		iso:     iso, timeout: timeout, testTimeout: in.mutantTimeout,
 		codePath: in.codePath, testPath: tp, repoDir: repoDir, langName: plug.Name(), fsPath: fsPath,
 		code: code, devTest: devTest, checkArgv: in.checkArgv, inv: inv,
-		baseArgv: in.baseArgv, selection: in.selection,
+		baseArgv: in.baseArgv, selection: in.selection, selectionMap: in.selectionMap,
 		bindDirFlag: in.bindDirs, noBindDepsFlag: in.noBindDeps, stdout: stdout,
 		seed: in.seed, substrate: in.substrate, mutantConcurrency: in.mutantConcurrency,
 		concurrency: in.concurrency, pool: in.pool, noFailFast: in.noFailFast,
@@ -1752,6 +1757,12 @@ func newAuditRunSpec(in localAuditInput, roles auditRoles, subj runSubject) advp
 		// one-test and list commands go through the same package script.
 		Invocation: subj.inv,
 		Selection:  in.selection,
+		// The map the Selection was made from, and the checkout it was made
+		// for: the same two values the scorer carries (buildJailWiring), so
+		// the dev pass and the authored pass build from one row and one
+		// grain.
+		SelectionMap: in.selectionMap,
+		RepoDir:      in.repoDir,
 		// Concurrency carries the workspace substrate's probe answer onto
 		// the RunSpec the driver actually reads — the ONLY hop that does,
 		// so every verdict, report line and ledger row can disclose how
@@ -2243,6 +2254,7 @@ type jailWiringInput struct {
 	// as a bare checkArgv.
 	inv            lang.Invocation
 	selection      lang.Selection
+	selectionMap   testmap.Map // localAuditInput.selectionMap
 	bindDirFlag    []string
 	noBindDepsFlag bool
 	stdout         io.Writer
@@ -2540,7 +2552,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		// has ONE tree, and a scorer told to run six mutants at once against
 		// it would queue five of them behind the borrow channel for the whole
 		// audit. The number that scores must be the number that exists.
-		w.scorer = advpool.JailScorer{Jail: pool, RepoDir: in.repoDir, BaseFiles: base, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Landing: w.landing, Concurrency: pool.Trees(), Lang: in.langName, Selection: in.selection, FailureParser: failureParser, FailFast: failFast}
+		w.scorer = advpool.JailScorer{Jail: pool, RepoDir: in.repoDir, BaseFiles: base, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Landing: w.landing, Concurrency: pool.Trees(), Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, FailFast: failFast}
 		w.validator = advpool.JailValidator{Jail: pool, RepoDir: in.repoDir, BaseFiles: base, DevTestPath: w.devTestKey, Landing: w.landing}
 		w.jailEnum = advpool.JailEnumerator{Jail: pool, BaseFiles: base}
 		// w.depBinds stays nil: there is nothing to bind read-only when the
@@ -2597,7 +2609,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		// RunSpec.Matrix, so wiring it here costs nothing when --matrix is off
 		// (the flag is the real gate).
 		enumerator := newRunEnumerator(in.iso, in.timeout, depBinds)
-		w.scorer = advpool.JailScorer{Jail: jail, RepoDir: in.repoDir, BaseFiles: repoFiles, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Landing: w.landing, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, FailureParser: failureParser, FailFast: failFast}
+		w.scorer = advpool.JailScorer{Jail: jail, RepoDir: in.repoDir, BaseFiles: repoFiles, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Landing: w.landing, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, FailFast: failFast}
 		w.validator = advpool.JailValidator{Jail: jail, RepoDir: in.repoDir, BaseFiles: repoFiles, DevTestPath: w.devTestKey, Landing: w.landing}
 		w.jailEnum = advpool.JailEnumerator{Jail: enumerator, BaseFiles: repoFiles}
 		if len(depBinds) > 0 {
@@ -2612,7 +2624,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		w.devTestKey = filepath.Base(in.testPath)
 		jail := newRunJail(in.iso, in.timeout, nil)
 		enumerator := newRunEnumerator(in.iso, in.timeout, nil)
-		w.scorer = advpool.JailScorer{Jail: jail, MutantTimeout: in.testTimeout, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, FailureParser: failureParser, FailFast: failFast}
+		w.scorer = advpool.JailScorer{Jail: jail, MutantTimeout: in.testTimeout, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, FailFast: failFast}
 		w.validator = advpool.JailValidator{Jail: jail}
 		w.jailEnum = advpool.JailEnumerator{Jail: enumerator}
 	}

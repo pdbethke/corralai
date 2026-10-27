@@ -26,7 +26,7 @@ func lineSelection() lang.Selection {
 }
 
 func TestDevCommandForNarrowsPerMutant(t *testing.T) {
-	rs := RunSpec{Lang: "python", TestCmd: "python3 -m pytest -q", Selection: lineSelection()}
+	rs := RunSpec{Lang: "python", TestCmd: "python3 -m pytest -q", SelectionMap: pytestMap(), Selection: lineSelection()}
 	f := DevCommandFor(rs)
 	if f == nil {
 		t.Fatal("line evidence present: DevCommandFor must not be nil")
@@ -46,7 +46,7 @@ func TestDevCommandForNarrowsPerMutant(t *testing.T) {
 func TestDevCommandForIsNilWithoutLineEvidence(t *testing.T) {
 	sel := lineSelection()
 	sel.Lines = nil
-	if DevCommandFor(RunSpec{Lang: "python", Selection: sel}) != nil {
+	if DevCommandFor(RunSpec{Lang: "python", SelectionMap: pytestMap(), Selection: sel}) != nil {
 		t.Error("v1-shaped evidence must mean today's behaviour")
 	}
 	if DevCommandFor(RunSpec{Lang: "python"}) != nil {
@@ -54,7 +54,7 @@ func TestDevCommandForIsNilWithoutLineEvidence(t *testing.T) {
 	}
 	sel = lineSelection()
 	sel.Tests = nil
-	if DevCommandFor(RunSpec{Lang: "python", Selection: sel}) != nil {
+	if DevCommandFor(RunSpec{Lang: "python", SelectionMap: pytestMap(), Selection: sel}) != nil {
 		t.Error("an uncovered file has no tests to narrow")
 	}
 }
@@ -67,7 +67,7 @@ func TestDevCommandForIsNilForACollapsedSelection(t *testing.T) {
 	sel := lineSelection()
 	sel.Tests = []string{"tests/test_a.py"}
 	sel.Cmd = []string{"python3", "-m", "pytest", "-q", "tests/test_a.py"}
-	if f := DevCommandFor(RunSpec{Lang: "python", Selection: sel}); f != nil {
+	if f := DevCommandFor(RunSpec{Lang: "python", SelectionMap: pytestMap(), Selection: sel}); f != nil {
 		t.Errorf("collapsed selection must grade per FILE: got %+v", f(adequacy.Mutant{ID: "m", Span: lang.LineRange{Start: 41, End: 41}}))
 	}
 }
@@ -106,6 +106,7 @@ func perMutantRunSpec() RunSpec {
 	rs.DevTestCode = "def t1():\n    pass\n"
 	rs.TestCmd = "python3 -m pytest -q"
 	rs.Selection = lineSelection()
+	rs.SelectionMap = pytestMap()
 	return rs
 }
 
@@ -285,9 +286,9 @@ func TestScoreReportForRunsEachMutantsOwnCommand(t *testing.T) {
 		{ID: "m1", Replace: "x = 2\n", Span: lang.LineRange{Start: 41, End: 41}}, // reached by t2 alone
 		{ID: "m2", Replace: "x = 3\n", Span: lang.LineRange{Start: 2, End: 2}},   // import-time: the file selection
 	}
-	shared := DevCommand(RunSpec{Lang: "python", TestCmd: "python3 -m pytest -q", Selection: lineSelection()})
+	shared := DevCommand(RunSpec{Lang: "python", TestCmd: "python3 -m pytest -q", SelectionMap: pytestMap(), Selection: lineSelection()})
 	rep, err := s.ScoreReportFor(context.Background(), codePath, code, "", mutants,
-		shared, DevCommandFor(RunSpec{Lang: "python", Selection: lineSelection()}))
+		shared, DevCommandFor(RunSpec{Lang: "python", SelectionMap: pytestMap(), Selection: lineSelection()}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -501,7 +502,7 @@ func TestScoreAuthoredReportWithoutASelectorIsUnchanged(t *testing.T) {
 }
 
 func TestVerdictSaysWhetherTheAuthoredPassProvedAlone(t *testing.T) {
-	if v := verdictFromSpec(RunSpec{Lang: "python", Selection: lineSelection()}); !v.TestSelection.AuthoredAlone {
+	if v := verdictFromSpec(RunSpec{Lang: "python", SelectionMap: pytestMap(), Selection: lineSelection()}); !v.TestSelection.AuthoredAlone {
 		t.Error("a python run with a selection proves survivors with the authored test alone; the verdict must say so")
 	}
 	if v := verdictFromSpec(RunSpec{Lang: "python"}); v.TestSelection.AuthoredAlone {

@@ -9,11 +9,12 @@ import (
 )
 
 // The selection engine builds its commands through runner-row fields, so the
-// pytest row must build exactly what pyPlugin.Select builds today. Comparing
-// against Select's own output, on the argv shapes its tests already use, is
-// what keeps "Python behaviour must not move" a checked property rather than
-// a hope: the row is wired to the same functions, and this fails the day the
-// two drift.
+// pytest row must build exactly what pyPlugin.Select built. Select is gone
+// (Task 6); what it returned for the recorded evidence and pkg/calc.py is
+// written out below — the two tests that executed the file, sorted, after
+// the collection-stripped base — and the engine's own answers for the same
+// inputs are held to Select's recorded ones in
+// internal/testmap/testdata/python-selector-golden.json.
 func TestPytestRowBuildsTodaysCommands(t *testing.T) {
 	p, _ := ByName("python")
 	row, err := RunnerByID(p, "pytest")
@@ -40,10 +41,8 @@ func TestPytestRowBuildsTodaysCommands(t *testing.T) {
 		{"pytest", "--deselect=tests/test_calc.py::test_sub"},
 	} {
 		t.Run(joinArgv(argv), func(t *testing.T) {
-			sel, err := pyPlugin{}.Select(recordedEvidence(t), fixture, "pkg/calc.py", "tests/test_calc.py", argv)
-			if err != nil {
-				t.Fatal(err)
-			}
+			sel := Selection{Tests: []string{"tests/test_calc.py::test_add", "tests/test_other.py::test_sub"}}
+			sel.Cmd = append(append([]string{}, stripPyCollectionTargets(argv, fixture)...), sel.Tests...)
 			base := row.CollectionBase(argv, fixture)
 			if want := stripPyCollectionTargets(argv, fixture); !reflect.DeepEqual(base, want) {
 				t.Errorf("CollectionBase = %v, want %v", base, want)

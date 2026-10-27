@@ -15,7 +15,7 @@ import (
 func widenFixtureIndex(t *testing.T, coverage map[string]lang.FileCoverage) (EvidenceIndex, bool) {
 	t.Helper()
 	sel := fakeSelector{index: coverage}
-	return ParseEvidenceIndex(SelectionEvidence{Ran: true, Raw: []byte("x")}, sel)
+	return ParseEvidenceIndex(sel.evidence(), sel)
 }
 
 // The design's headline fixture: utils.py has no filename pairing at all,

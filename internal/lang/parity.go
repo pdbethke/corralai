@@ -73,7 +73,7 @@ var Capabilities = []Capability{
 	rowCapability("salvage", "Keep the passing part of an authored test", func(r Runner) bool { return r.FailedTests != nil && r.DeselectCmd != nil }),
 	rowCapability("units", "Run one test unit", func(r Runner) bool { return r.ListUnits != nil && r.UnitCmd != nil }),
 	{Key: "coverage", Title: "Coverage pre-flight", Has: func(p Plugin) bool { _, ok := p.(CoverageReporter); return ok }},
-	{Key: "selection", Title: "Grade only the tests that run the file", Has: func(p Plugin) bool { _, ok := p.(TestSelector); return ok }},
+	{Key: "selection", Title: "Grade only the tests that run the file", Has: func(p Plugin) bool { _, ok := p.(TestEvidence); return ok }},
 }
 
 // Exemption is a capability a language lacks, with the reason. The parity

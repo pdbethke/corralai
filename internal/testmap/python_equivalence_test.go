@@ -16,15 +16,16 @@ import (
 )
 
 // This file proves the engine selects exactly as Python's own selector did,
-// on every input that selector's tests already use: the recorded evidence
-// and fixture under internal/lang/testdata, and the argv, selections and
-// spans those tests state. Nothing here is a new expectation. Each case runs
-// both sides and compares them field by field, so the day pyPlugin's
-// methods are deleted (Task 6) the inputs they were judged on have already
-// been judged on the engine.
+// on every input that selector's tests used: the recorded evidence and
+// fixture under internal/lang/testdata, and the argv, selections and spans
+// those tests state. Nothing here is a new expectation. Python's answers were
+// recorded from pyPlugin's Select, ForSpan and WithAuthoredTest into
+// testdata/python-selector-golden.json before those methods were deleted
+// (Task 6), and the engine is compared with that record observation by
+// observation.
 
-// pyEquiv is Python's side of the comparison: the plugin's old selector, its
-// evidence reader, and the pytest row the engine builds commands from.
+// pyEquiv is what a Python caller of the engine holds: the plugin's evidence
+// reader and the pytest row the engine builds commands from.
 type pyEquiv struct {
 	p   lang.Plugin
 	ev  lang.TestEvidence
@@ -155,8 +156,8 @@ func (e pyEquiv) engineSelect(c selectCase) (lang.Selection, error) {
 var equivSpans = []lang.LineRange{{}, {Start: 1, End: 1}, {Start: 2, End: 2}, {Start: 6, End: 6}, {Start: 2, End: 6}, {Start: 41, End: 42}, {Start: 29, End: 31}, {Start: 70, End: 75}, {Start: 10, End: 19}, {Start: 5, End: 6}}
 
 // observer is one side of the comparison: a way to Select, narrow by span
-// and add the authored test. Python's side was the plugin's old selector;
-// the engine's side is this package.
+// and add the authored test. Python's side was the plugin's old selector,
+// now recorded in the golden; the engine's side is this package.
 type observer struct {
 	sel      func(c selectCase) (lang.Selection, error)
 	forSpan  func(sel lang.Selection, span lang.LineRange) ([]string, []string, string)

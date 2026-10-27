@@ -3099,7 +3099,7 @@ func (l *localExecutor) resolveSelectionPlugin(sources []string) (plug lang.Plug
 // already a field, not something this method has to derive.
 //
 // ok is false whenever no key can be computed at all: plug has no
-// TestSelector, Instrument refuses testCmd, or TreeDigest could not name a
+// TestEvidence, Instrument refuses testCmd, or TreeDigest could not name a
 // tree (outside a git work tree, or a git failure) — every one of those
 // means "this scan cannot be cache-keyed", never a value worth caching
 // against.
@@ -3187,7 +3187,7 @@ func (l *localExecutor) collectSelection(ctx context.Context, sources []string) 
 		if keyOK {
 			if raw, hit, err := l.selectionCache.SelectionCacheGet(ctx, treeDigest, cmdDigest, langName, l.substrate); err == nil && hit {
 				l.selectionReused = true
-				return reposcan.SelectionEvidence{Raw: raw, Ran: true}
+				return reposcan.NewSelectionEvidence(plug, testCmd, raw)
 			}
 		}
 	}
@@ -5166,6 +5166,10 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 		// pool's own authored test, which no evidence run ever saw.
 		baseArgv:  l.baseCmd(j),
 		selection: sel,
+		// The scan's map, which sel was made from: the pool builds every
+		// later command from sel through the engine, which reads the row and
+		// the grain from it (advpool.RunSpec.SelectionMap).
+		selectionMap: l.selection.Map,
 		// The scan's one instrumented run, carried onto every file's spec —
 		// see localExecutor.selectionDuration.
 		selectionDuration: l.selectionDuration,
@@ -5548,7 +5552,7 @@ func (l *localExecutor) baseCmd(j reposcan.Job) []string {
 // unknown language yields nil and the audit fails closed downstream rather
 // than grading with someone else's command.
 func (l *localExecutor) testCmd(j reposcan.Job, sel lang.Selection) []string {
-	return advpool.DevCommandArgv(sel, j.Lang, l.baseCmd(j), j.TestPath)
+	return advpool.DevCommandArgv(sel, l.selection.Map, j.Lang, l.baseCmd(j), l.repoDir, j.TestPath)
 }
 
 // printLanguageProfile renders the per-language inventory the enumeration

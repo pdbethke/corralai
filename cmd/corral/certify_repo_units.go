@@ -39,15 +39,15 @@ var collectUnitEvidence = func(ctx context.Context, runner coverageRunner, files
 }
 
 // runsUnitPass reports whether the unit pass is the evidence path for plug:
-// a resolved language with no per-test selector. A nil plug (no language, or
+// a resolved language with no per-test evidence (lang.TestEvidence). A nil plug (no language, or
 // an ambiguous mixed repository) runs no pass; the selection line has
 // already said why.
 func runsUnitPass(plug lang.Plugin) bool {
 	if plug == nil {
 		return false
 	}
-	_, selects := plug.(lang.TestSelector)
-	return !selects
+	_, perTest := plug.(lang.TestEvidence)
+	return !perTest
 }
 
 // collectUnits runs the unit pass for the scan's language over sources (the

@@ -102,3 +102,23 @@ func (m Map) Unreported() []string {
 	sort.Strings(out)
 	return out
 }
+
+// Coverage is the map as a per-file readout: every measured source, with
+// each test that executed it mapped to how many of its lines that test
+// executed. It is what lang.TestSelector.Index answered before the map
+// replaced it, so a caller that ranks "which test covers this file the most"
+// (reposcan's candidacy index) reads the same numbers. A source measured with
+// no edge has an empty, non-nil Tests: zero coverage is a fact about a file
+// the run saw, never the file's absence from the readout.
+func (m Map) Coverage() map[string]lang.FileCoverage {
+	out := make(map[string]lang.FileCoverage, len(m.Sources))
+	for path, s := range m.Sources {
+		out[path] = lang.FileCoverage{Tests: map[string]int{}, HasStatic: s.HasStatic, HasStatements: s.HasStatements}
+	}
+	for _, e := range m.Edges {
+		if fc, ok := out[e.Source]; ok {
+			fc.Tests[e.Test] += e.Executed
+		}
+	}
+	return out
+}

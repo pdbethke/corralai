@@ -25,6 +25,7 @@ import (
 	golang "github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/pairing"
 	"github.com/pdbethke/corralai/internal/testgen"
+	"github.com/pdbethke/corralai/internal/testmap"
 	"github.com/pdbethke/corralai/internal/transparency"
 )
 
@@ -326,14 +327,19 @@ type JailScorer struct {
 	// test is written and what is already there. MUST equal the
 	// JailValidator's and the RunSpec's — one value, set by the caller.
 	Landing AuthoredLanding
-	// Lang and Selection shape the AUTHORED pass's command (authoredCmd);
-	// the DEV pass's is built by its callers, from the same fields on the
-	// RunSpec, via DevCommand. Lang names the plugin whose WithAuthoredTest appends a
-	// test file's path — under selection the authored test is not in the
-	// evidence and would otherwise never be collected, which reads as TEST
-	// UNSOUND for every file.
-	Lang      string
-	Selection golang.Selection
+	// Lang, Selection and SelectionMap shape the AUTHORED pass's command
+	// (authoredCmd); the DEV pass's is built by its callers, from the same
+	// fields on the RunSpec, via DevCommand. The selection engine
+	// (testmap.WithAuthoredTest) adds the authored test's path to the
+	// selection — under selection the authored test is not in the evidence
+	// and would otherwise never be collected, which reads as TEST UNSOUND for
+	// every file. SelectionMap is the map Selection was made from: it names
+	// the runner row that builds the command and the grain the engine builds
+	// it at, neither of which a Selection carries. It MUST be the RunSpec's
+	// SelectionMap — one value, set by the caller.
+	Lang         string
+	Selection    golang.Selection
+	SelectionMap testmap.Map
 	// Concurrency, when > 1, scores that many mutants at once. The zero value
 	// (every existing JailScorer{} literal) is strictly sequential — today's
 	// behavior, unchanged.
@@ -515,11 +521,12 @@ func (s JailScorer) ScoreReportFor(ctx context.Context, codePath, code, test str
 const RuleAuthoredAlone = "authored-alone"
 
 // AuthoredAlone reports whether this run's authored pass proves survivors
-// with the authored test alone — true exactly when the language has a
-// TestSelector and the run carries a selection. It is spec-derived so the
-// verdict can say it without asking the scorer.
+// with the authored test alone — true exactly when the run carries a
+// selection the engine can build commands from (selectionRow). It is
+// spec-derived so the verdict can say it without asking the scorer.
 func AuthoredAlone(rs RunSpec) bool {
-	return selectorFor(rs.Lang, rs.Selection) != nil
+	_, ok := selectionRow(rs.Lang, rs.Selection, rs.SelectionMap)
+	return ok
 }
 
 func (s JailScorer) ScoreAuthoredReport(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (adequacy.Report, error) {
@@ -547,12 +554,16 @@ func (s JailScorer) ScoreAuthoredReport(ctx context.Context, codePath, code, tes
 	// file. It is also more honest on the kill: a dev test that flaked
 	// during this pass used to count as the authored test proving a gap.
 	opts := s.baseScoreOpts()
-	if ts := s.selector(); ts != nil {
-		alone := ts.WithAuthoredTest(golang.Selection{Base: s.Selection.Base}, base, authoredTestPath(s.Landing, codePath, s.DevTestPath, s.BaseFiles))
-		cmd = alone
-		opts = append(opts, adequacy.WithCommandFor(func(adequacy.Mutant) adequacy.MutantCommand {
-			return adequacy.MutantCommand{Cmd: alone, Tests: 1, Rule: RuleAuthoredAlone}
-		}))
+	if r, ok := s.selectionRow(); ok {
+		path := authoredTestPath(s.Landing, codePath, s.DevTestPath, s.BaseFiles)
+		if alone, ok := testmap.WithAuthoredTest(s.SelectionMap, golang.Selection{Base: s.Selection.Base}, r, base, s.RepoDir, path); ok {
+			cmd = alone
+			opts = append(opts, adequacy.WithCommandFor(func(adequacy.Mutant) adequacy.MutantCommand {
+				return adequacy.MutantCommand{Cmd: alone, Tests: 1, Rule: RuleAuthoredAlone}
+			}))
+		} else {
+			log.Printf("advpool: %s: no command runs the authored test %s alone with the %s runner; the authored pass runs %v", codePath, path, r.ID, cmd)
+		}
 	}
 	rep, err := adequacy.Score(ctx, s.Jail, scoreBase, codePath, code, mutants, cmd, opts...)
 	if err != nil {
@@ -740,11 +751,12 @@ func (s JailScorer) AuthoredTestWouldBeCollected(ctx context.Context, codePath s
 	return s.verifyAuthoredTestReaches(ctx, codePath, cmd)
 }
 
-// selector is the run's TestSelector, or nil when the run has no Selection
-// or the language has no selector — in which case the authored pass runs the
-// resolved command untouched, exactly as before selection existed.
-func (s JailScorer) selector() golang.TestSelector {
-	return selectorFor(s.Lang, s.Selection)
+// selectionRow is the runner row the engine builds this scorer's authored
+// commands with, or false when the run has no Selection to build from — in
+// which case the authored pass runs the resolved command untouched, exactly
+// as before selection existed.
+func (s JailScorer) selectionRow() (golang.Runner, bool) {
+	return selectionRow(s.Lang, s.Selection, s.SelectionMap)
 }
 
 // DevCommand is the DEV pass's command for a run: the string a caller that
@@ -768,7 +780,7 @@ func (s JailScorer) selector() golang.TestSelector {
 // and this string is carried, logged and compared.
 func DevCommand(rs RunSpec) string {
 	base := adequacy.ShellSplit(rs.TestCmd)
-	narrowed := DevCommandArgv(rs.Selection, rs.Lang, base, rs.DevTestPath)
+	narrowed := DevCommandArgv(rs.Selection, rs.SelectionMap, rs.Lang, base, rs.RepoDir, rs.DevTestPath)
 	if slices.Equal(narrowed, base) {
 		return rs.TestCmd
 	}
@@ -791,9 +803,14 @@ func DevCommand(rs RunSpec) string {
 //
 // A zero Selection (or a language with no selector) returns base unchanged,
 // byte-identical to every pre-selection path.
-func DevCommandArgv(sel golang.Selection, langName string, base []string, devTestPath string) []string {
-	ts := selectorFor(langName, sel)
-	if ts == nil {
+//
+// m is the map sel was made from and repoRoot the checkout it was made for:
+// the uncovered case builds its command through the selection engine
+// (testmap.WithAuthoredTest), which reads the runner row and the grain from
+// the map and, at unit grain, the dev test's unit from repoRoot.
+func DevCommandArgv(sel golang.Selection, m testmap.Map, langName string, base []string, repoRoot, devTestPath string) []string {
+	r, ok := selectionRow(langName, sel, m)
+	if !ok {
 		return base
 	}
 	if len(sel.Tests) > 0 {
@@ -810,7 +827,15 @@ func DevCommandArgv(sel golang.Selection, langName string, base []string, devTes
 		// Selection's own Fallback/Uncovered fields say what happened.
 		return base
 	}
-	return ts.WithAuthoredTest(sel, base, devTestPath)
+	cmd, ok := testmap.WithAuthoredTest(m, sel, r, base, repoRoot, devTestPath)
+	if !ok {
+		// No command runs the paired test alone. Running base instead grades
+		// against the whole suite, which the Selection's Uncovered finding
+		// does not describe — so it is said, here, where it happens.
+		log.Printf("advpool: no command runs the paired test %s alone with the %s runner; the uncovered file's dev pass runs %v", devTestPath, r.ID, base)
+		return base
+	}
+	return cmd
 }
 
 // DevCommandFor is DevCommand at the MUTANT grain: the closure the dev (and
@@ -822,7 +847,7 @@ func DevCommandArgv(sel golang.Selection, langName string, base []string, devTes
 // nothing honest to narrow BY: no per-test line evidence (a v1-shaped
 // Selection recorded before evidence carried line ranges), no selected tests
 // (an uncovered file: the file selection is already empty, and narrowing an
-// empty set is not a measurement), or no TestSelector for the language. A nil
+// empty set is not a measurement), or no runner row to build with. A nil
 // CommandFor is the one value adequacy.WithCommandFor treats as "grade every
 // mutant with the shared command", so the fallback is byte-for-byte the
 // pre-per-mutant path rather than a second, subtly different one.
@@ -836,28 +861,41 @@ func DevCommandFor(rs RunSpec) adequacy.CommandFor {
 	if !sel.NarrowableByLine() {
 		return nil
 	}
-	ts := selectorFor(rs.Lang, sel)
-	if ts == nil {
+	r, ok := selectionRow(rs.Lang, sel, rs.SelectionMap)
+	if !ok {
 		return nil
 	}
 	return func(m adequacy.Mutant) adequacy.MutantCommand {
-		cmd, tests, rule := ts.ForSpan(sel, m.Span)
+		cmd, tests, rule := testmap.ForSpan(sel, r, m.Span)
 		return adequacy.MutantCommand{Cmd: cmd, Tests: len(tests), Rule: rule}
 	}
 }
 
-// selectorFor is the run's TestSelector, or nil when the run has no
-// Selection or the language has no selector.
-func selectorFor(langName string, sel golang.Selection) golang.TestSelector {
+// selectionRow is the runner row that built sel from m, which the engine
+// builds every further command from (the authored pass, the uncovered dev
+// pass, each mutant's span), or false when there is nothing to build from:
+// no Method (the zero Selection — the whole suite), a language whose plugin
+// produces no test evidence, or a map naming no row of that language. The
+// row is the map's own (Map.Runner, recorded where the evidence was read),
+// not one re-detected from the command here: a Selection is narrowed by one
+// row, and a second detection could only ever disagree with it.
+func selectionRow(langName string, sel golang.Selection, m testmap.Map) (golang.Runner, bool) {
 	if sel.Method == "" {
-		return nil
+		return golang.Runner{}, false
 	}
 	p, ok := golang.ByName(langName)
 	if !ok {
-		return nil
+		return golang.Runner{}, false
 	}
-	ts, _ := p.(golang.TestSelector)
-	return ts
+	if _, ok := p.(golang.TestEvidence); !ok {
+		return golang.Runner{}, false
+	}
+	r, err := golang.RunnerByID(p, m.Runner)
+	if err != nil {
+		log.Printf("advpool: %s selection carries no usable runner row (%v); its commands are not narrowed", langName, err)
+		return golang.Runner{}, false
+	}
+	return r, true
 }
 
 // AuthoredCommand is the command the AUTHORED pass really runs for codePath,
@@ -881,11 +919,21 @@ func (s JailScorer) AuthoredCommand(codePath string, base []string) []string {
 // narrowed command would never collect it and every file would read
 // TEST UNSOUND.
 func (s JailScorer) authoredCmd(codePath string, cmd []string) []string {
-	ts := s.selector()
-	if ts == nil {
+	r, ok := s.selectionRow()
+	if !ok {
 		return cmd
 	}
-	return ts.WithAuthoredTest(s.Selection, cmd, authoredTestPath(s.Landing, codePath, s.DevTestPath, s.BaseFiles))
+	path := authoredTestPath(s.Landing, codePath, s.DevTestPath, s.BaseFiles)
+	out, ok := testmap.WithAuthoredTest(s.SelectionMap, s.Selection, r, cmd, s.RepoDir, path)
+	if !ok {
+		// No command runs the selection plus the authored test exactly; the
+		// pass runs the resolved command, and the positive control
+		// (verifyAuthoredTestReaches) still decides whether it reached the
+		// authored test at all.
+		log.Printf("advpool: %s: no command adds the authored test %s to the selection with the %s runner; the authored pass runs %v", codePath, path, r.ID, cmd)
+		return cmd
+	}
+	return out
 }
 
 // scoreWorkspace builds the jail base file-map and the test command for a

@@ -152,7 +152,7 @@ func TestMostCoveringTestFileSumsPerFile(t *testing.T) {
 			"tests/deep/y_test.py::t": 5,
 		}, HasStatic: true, HasStatements: true},
 	}}
-	idx, ok := ParseEvidenceIndex(SelectionEvidence{Ran: true, Raw: []byte("x")}, sel)
+	idx, ok := ParseEvidenceIndex(sel.evidence(), sel)
 	if !ok {
 		t.Fatal("index")
 	}

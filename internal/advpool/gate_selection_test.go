@@ -9,11 +9,19 @@ import (
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/testmap"
 )
+
+// pytestMap is the map a Python coverage-context Selection is made from, as
+// far as building commands from it reads: its method (the grain) and the
+// row that read the evidence.
+func pytestMap() testmap.Map {
+	return testmap.Map{Method: testmap.MethodCoverageContext, Runner: "pytest"}
+}
 
 func repoScorer(sel lang.Selection) JailScorer {
 	return JailScorer{
-		Lang: "python", Selection: sel, DevTestPath: "tests/test_a.py",
+		Lang: "python", Selection: sel, SelectionMap: pytestMap(), DevTestPath: "tests/test_a.py",
 		BaseFiles: map[string]string{"pkg/a.py": "x = 1\n", "tests/test_a.py": "def test_x(): pass\n"},
 	}
 }
@@ -23,7 +31,7 @@ func TestDevPassRunsTheSelection(t *testing.T) {
 		Cmd:   []string{"python3", "-m", "pytest", "-q", "tests/test_a.py::test_x"},
 		Tests: []string{"tests/test_a.py::test_x"}, Method: "coverage-context",
 	})
-	got := DevCommandArgv(s.Selection, s.Lang, []string{"python3", "-m", "pytest", "-q"}, s.DevTestPath)
+	got := DevCommandArgv(s.Selection, s.SelectionMap, s.Lang, []string{"python3", "-m", "pytest", "-q"}, s.RepoDir, s.DevTestPath)
 	want := []string{"python3", "-m", "pytest", "-q", "tests/test_a.py::test_x"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("dev cmd = %v, want the selection's own command %v", got, want)
@@ -32,7 +40,7 @@ func TestDevPassRunsTheSelection(t *testing.T) {
 
 func TestDevPassUncoveredRunsOnlyThePairedTestFile(t *testing.T) {
 	s := repoScorer(lang.Selection{Method: "coverage-context"})
-	got := DevCommandArgv(s.Selection, s.Lang, []string{"python3", "-m", "pytest", "-q"}, s.DevTestPath)
+	got := DevCommandArgv(s.Selection, s.SelectionMap, s.Lang, []string{"python3", "-m", "pytest", "-q"}, s.RepoDir, s.DevTestPath)
 	want := []string{"python3", "-m", "pytest", "-q", "tests/test_a.py"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("uncovered dev cmd = %v, want the paired test file alone %v", got, want)
@@ -71,7 +79,7 @@ func TestBothPassesBuildOnTheSelectionsStrippedBase(t *testing.T) {
 		Cmd:   []string{"pytest", "tests/test_a.py::test_x"},
 		Tests: []string{"tests/test_a.py::test_x"}, Method: "coverage-context",
 	})
-	if got, want := DevCommandArgv(s.Selection, s.Lang, raw, s.DevTestPath), []string{"pytest", "tests/test_a.py::test_x"}; !reflect.DeepEqual(got, want) {
+	if got, want := DevCommandArgv(s.Selection, s.SelectionMap, s.Lang, raw, s.RepoDir, s.DevTestPath), []string{"pytest", "tests/test_a.py::test_x"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("dev cmd = %v, want %v — tests/ must not survive", got, want)
 	}
 	authored := authoredTestPath(AuthoredLanding{}, "pkg/a.py", s.DevTestPath, s.BaseFiles)
@@ -80,7 +88,7 @@ func TestBothPassesBuildOnTheSelectionsStrippedBase(t *testing.T) {
 	}
 	// Uncovered: Base alone plus the one test being run.
 	u := repoScorer(lang.Selection{Base: []string{"pytest"}, Method: "coverage-context"})
-	if got, want := DevCommandArgv(u.Selection, u.Lang, raw, u.DevTestPath), []string{"pytest", "tests/test_a.py"}; !reflect.DeepEqual(got, want) {
+	if got, want := DevCommandArgv(u.Selection, u.SelectionMap, u.Lang, raw, u.RepoDir, u.DevTestPath), []string{"pytest", "tests/test_a.py"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("uncovered dev cmd = %v, want %v", got, want)
 	}
 	if got, want := u.authoredCmd("pkg/a.py", raw), []string{"pytest", authored}; !reflect.DeepEqual(got, want) {
@@ -91,7 +99,7 @@ func TestBothPassesBuildOnTheSelectionsStrippedBase(t *testing.T) {
 func TestWholeSuiteLeavesBothPassesUnchanged(t *testing.T) {
 	s := repoScorer(lang.Selection{})
 	base := []string{"python3", "-m", "pytest", "-q"}
-	if got := DevCommandArgv(s.Selection, s.Lang, base, s.DevTestPath); !reflect.DeepEqual(got, base) {
+	if got := DevCommandArgv(s.Selection, s.SelectionMap, s.Lang, base, s.RepoDir, s.DevTestPath); !reflect.DeepEqual(got, base) {
 		t.Errorf("zero Selection must leave the dev command as before: %v", got)
 	}
 	if got := s.authoredCmd("pkg/a.py", base); !reflect.DeepEqual(got, base) {
@@ -180,7 +188,7 @@ func TestAggregateCarriesConcurrencyOntoTheVerdict(t *testing.T) {
 // same dev suite and must ask the same question.
 func TestDevCommandIsTheRunsNarrowedCommand(t *testing.T) {
 	rs := RunSpec{
-		Lang: "python", DevTestPath: "tests/test_a.py", TestCmd: "pytest tests/",
+		Lang: "python", DevTestPath: "tests/test_a.py", TestCmd: "pytest tests/", SelectionMap: pytestMap(),
 		Selection: lang.Selection{
 			Base:  []string{"pytest"},
 			Cmd:   []string{"pytest", "tests/test_a.py::test_x"},

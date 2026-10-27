@@ -648,7 +648,7 @@ runs:
 
     - name: Upload the audit statement
       if: always() && steps.corral-predicate.outputs.present == 'true'
-      uses: actions/upload-artifact@v7.0.1
+      uses: actions/upload-artifact@v7.0.2
       with:
         name: corral-audit-statement
         path: ${{ env.CORRAL_ATTEST_PATH }}

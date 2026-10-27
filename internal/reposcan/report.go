@@ -140,6 +140,16 @@ type WeakFile struct {
 	// the language, --whole-suite, an evidence run that failed). Empty when
 	// SelectionMethod is set. Never both.
 	SelectionFallback string
+	// Unreported, UnreportedReason, UnitNoun and AuthoredFallback mirror
+	// advpool.TestSelection's: how many of SelectedTests are units added only
+	// because they reported no evidence and the first one's reason, what a
+	// unit is called on the line, and why the authored pass ran the run's
+	// whole command. The line a reader sees must say all four, or a
+	// unit-graded rate reads as a tighter measurement than it was.
+	Unreported       int
+	UnreportedReason string
+	UnitNoun         string
+	AuthoredFallback string
 	// WriterMode and WriterCalls mirror advpool.Verdict.WriterMode and the
 	// test-writer's own entry in advpool.Verdict.ModelCalls: whether this
 	// file's survivors were attacked one call each ("per-survivor") or all in
@@ -585,6 +595,10 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 			SelectedTests:       r.Verdict.TestSelection.Selected,
 			SuiteTests:          r.Verdict.TestSelection.Of,
 			SelectionFallback:   r.Verdict.TestSelection.Fallback,
+			Unreported:          r.Verdict.TestSelection.Unreported,
+			UnreportedReason:    r.Verdict.TestSelection.UnreportedReason,
+			UnitNoun:            r.Verdict.TestSelection.UnitNoun,
+			AuthoredFallback:    r.Verdict.TestSelection.AuthoredFallback,
 			AuthoredExtra:       r.Verdict.AuthoredExtra,
 			WriterMode:          r.Verdict.WriterMode,
 			WriterCalls:         writerCallsOf(r.Verdict),

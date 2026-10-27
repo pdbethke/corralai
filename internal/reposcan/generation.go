@@ -276,7 +276,8 @@ package reposcan
 // longer claimed when the engine refuses the authored-alone command, so a
 // "35" Python verdict could say "alone" for a pass that ran beside the
 // selection. Verdict's own fields unchanged; TestSelection gained Unreported
-// and AuthoredFallback (nested, so outside the shallow fingerprint below).
+// AuthoredFallback, UnreportedReason and UnitNoun (nested, so outside the
+// shallow fingerprint below).
 // Behaviour bump.
 const VerdictGeneration = "36"
 

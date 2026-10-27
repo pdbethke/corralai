@@ -4053,6 +4053,48 @@ func selectionRuleBreakdown(rules map[string]int) string {
 	return "; " + strings.Join(parts, ", ")
 }
 
+// unitEvidenceLine is the line for a file graded by the units its evidence
+// links: the count in the runner row's own noun (a file, a package and a
+// cargo target are different grains, and "tests" would claim a finer one),
+// and, when units with no evidence were added for caution, how many and the
+// first one's reason, so the reader can tell evidence from caution. A row
+// that names no noun says so rather than borrowing one (no defaults).
+func unitEvidenceLine(f reposcan.WeakFile) string {
+	noun := f.UnitNoun
+	detail := "unit evidence"
+	if noun == "" {
+		detail += "; the runner row names no unit noun"
+	}
+	if f.Unreported > 0 {
+		word := "units"
+		if f.Unreported == 1 {
+			word = "unit"
+		}
+		detail += fmt.Sprintf("; %d %s with no evidence added: %s", f.Unreported, word, f.UnreportedReason)
+	}
+	if noun != "" {
+		noun = " " + noun
+	}
+	return fmt.Sprintf("graded by %s of %s%s (%s)", groupThousands(f.SelectedTests), groupThousands(f.SuiteTests), noun, detail)
+}
+
+// groupThousands renders n with a comma between thousands ("1,339"), for the
+// unit line only: the older lines print bare integers and stay byte-stable.
+func groupThousands(n int) string {
+	s := strconv.Itoa(n)
+	neg := strings.HasPrefix(s, "-")
+	if neg {
+		s = s[1:]
+	}
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "," + s[i:]
+	}
+	if neg {
+		s = "-" + s
+	}
+	return s
+}
+
 // printWeakFile prints one "weakest files" line, including the marker and
 // the disambiguating proven-missed count — factored out so the truncation
 // fallback (F4, below) renders a byte-identical line for a file that falls
@@ -4151,6 +4193,8 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 		// was measured at all, so the line says which measurement it is and
 		// then says it found nothing to measure.
 		fmt.Fprintf(w, "   graded by %d of %d tests (%s; no mutant graded)", f.SelectedTests, f.SuiteTests, f.SelectionMethod)
+	case f.SelectionMethod == testmap.MethodUnitEvidence && !f.Uncovered:
+		fmt.Fprint(w, "   "+unitEvidenceLine(f))
 	case f.SelectionMethod != "" && !f.Uncovered:
 		fmt.Fprintf(w, "   graded by %d of %d tests (%s)", f.SelectedTests, f.SuiteTests, f.SelectionMethod)
 	case f.SelectionMethod != "" && f.ImportOnly:
@@ -4179,6 +4223,12 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 	// fabricated "file" — for a run that predates this disclosure.
 	if f.PromptShape != "" {
 		fmt.Fprintf(w, " — prompts: %s", f.PromptShape)
+	}
+	if f.AuthoredFallback != "" {
+		// The dev pass's line above says how the RATE was graded; this says
+		// the authored pass fell back independently, so a proven count here
+		// is a whole-command measurement (advpool.TestSelection.AuthoredFallback).
+		fmt.Fprintf(w, "\n   authored test graded by the whole suite: %s", f.AuthoredFallback)
 	}
 	if f.MutantBudget.Total > 0 {
 		// The exam's size and why: a reader comparing two files' kill rates
@@ -5850,7 +5900,12 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 			SelectedTests:     f.SelectedTests,
 			SuiteTests:        f.SuiteTests,
 			SelectionFallback: f.SelectionFallback,
-			Uncovered:         f.Uncovered,
+			// How much of the selection is caution rather than evidence, and
+			// whether the authored pass ran the whole command: both change
+			// what the signed rate answers.
+			SelectionUnreported: f.Unreported,
+			AuthoredFallback:    f.AuthoredFallback,
+			Uncovered:           f.Uncovered,
 			// And at which grain: a signed rate averaged over mutants that
 			// each faced a different test set needs the spread to be read
 			// as the measurement it is.

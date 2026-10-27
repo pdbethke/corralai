@@ -440,3 +440,26 @@ func nextestPassCount(s string) int {
 	n, _ := strconv.Atoi(m[1])
 	return n
 }
+
+// A scan line counts a row's units in the row's own noun ("4 of 1,339 test
+// files", "packages", "test targets"). There is no fallback noun to print, so
+// a unit row without one must fail here, and a row with no unit pass must not
+// carry one.
+func TestEveryUnitRowNamesItsUnitNoun(t *testing.T) {
+	for _, r := range runners {
+		hasUnits := slices.Contains(unitRows, r.ID)
+		if hasUnits && r.UnitNoun == "" {
+			t.Errorf("%s has a unit pass but no UnitNoun: the scan line has no word for its units", r.ID)
+		}
+		if !hasUnits && r.UnitNoun != "" {
+			t.Errorf("%s has no unit pass, yet names a UnitNoun %q", r.ID, r.UnitNoun)
+		}
+	}
+	want := map[string]string{"go-test": "packages", "gotestsum": "packages", "jest": "test files", "vitest": "test files",
+		"node-test": "test files", "rspec": "test files", "phpunit": "test files", "cargo-nextest": "test targets", "cargo-test": "test targets"}
+	for _, r := range runners {
+		if n, ok := want[r.ID]; ok && r.UnitNoun != n {
+			t.Errorf("%s UnitNoun = %q, want %q", r.ID, r.UnitNoun, n)
+		}
+	}
+}

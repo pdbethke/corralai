@@ -9,6 +9,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/killrate"
+	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/queue"
 	"github.com/pdbethke/corralai/internal/testmap"
 )
@@ -55,7 +56,9 @@ func verdictFromSpec(rs RunSpec) Verdict {
 			AuthoredAlone: alone, AuthoredFallback: authoredFallback,
 			// Counted back out of the Selection rather than carried on it:
 			// the units that will run, not a number the selection claimed.
-			Unreported: testmap.UnreportedIn(rs.SelectionMap, rs.Selection),
+			Unreported:       testmap.UnreportedIn(rs.SelectionMap, rs.Selection),
+			UnreportedReason: testmap.FirstUnreportedReason(rs.SelectionMap, rs.Selection),
+			UnitNoun:         unitNounOf(rs),
 		},
 		// Concurrency rides straight through — including onto a timed-out
 		// verdict (timeoutVerdict builds off this same function), since the
@@ -304,4 +307,23 @@ func examSampleOf(rep adequacy.Report, mutants []adequacy.Mutant) examSample {
 		}
 	}
 	return s
+}
+
+// unitNounOf is the unit noun of the runner row a unit-grain selection was
+// made from, "" for any other selection. Read from the row, never defaulted:
+// a unit row without one is caught by a test in lang, and a scan line then
+// says so rather than inventing a word.
+func unitNounOf(rs RunSpec) string {
+	if rs.Selection.Method != testmap.MethodUnitEvidence || rs.SelectionMap.Runner == "" {
+		return ""
+	}
+	p, ok := lang.ByName(rs.Lang)
+	if !ok {
+		return ""
+	}
+	r, err := lang.RunnerByID(p, rs.SelectionMap.Runner)
+	if err != nil {
+		return ""
+	}
+	return r.UnitNoun
 }

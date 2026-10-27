@@ -212,6 +212,18 @@ func UnreportedIn(m Map, sel lang.Selection) int {
 	return n
 }
 
+// FirstUnreportedReason is the Err of the first unit in sel that is there
+// only because it reported no evidence, in the selection's own order, so the
+// scan line can say why units were added. "" when there is none.
+func FirstUnreportedReason(m Map, sel lang.Selection) string {
+	for _, id := range sel.Tests {
+		if node, ok := m.Tests[id]; ok && node.Grain == GrainUnit && node.Err != "" {
+			return node.Err
+		}
+	}
+	return ""
+}
+
 // canRun refuses a row with no command for the map's grain, before any
 // evidence is read: there is nothing a selection could be run with.
 func canRun(r lang.Runner, grain string) error {

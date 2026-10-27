@@ -212,3 +212,31 @@ func TestTheVerdictJudgesTheAuthoredPathTheScorerRuns(t *testing.T) {
 		t.Errorf("no resolved path: %+v", v.TestSelection)
 	}
 }
+
+// The scan line says what a unit IS and why the added ones were added, so
+// both reach the verdict from BOTH construction sites: the row's noun (never
+// a default) and the first unreported unit's own reason, in selection order.
+func TestUnitNounAndFirstReasonReachTheVerdict(t *testing.T) {
+	m := vitestUnitMap([]string{"tests/one.test.ts", "tests/two.test.ts", "tests/three.test.ts", "tests/four.test.ts"}, "tests/one.test.ts")
+	for id, why := range map[string]string{"tests/three.test.ts": "could not run: exit status 1", "tests/four.test.ts": "timed out"} {
+		n := m.Tests[id]
+		n.Err = why
+		m.Tests[id] = n
+	}
+	rs := unitRunSpec(t, m, "src/one.ts", "tests/one.test.ts")
+	for name, v := range map[string]Verdict{"converged": verdictFromSpec(rs), "timeout": (&Driver{}).timeoutVerdict(&runState{rs: rs})} {
+		if v.TestSelection.Unreported != 2 {
+			t.Errorf("%s: Unreported = %d, want 2", name, v.TestSelection.Unreported)
+		}
+		if v.TestSelection.UnitNoun != "test files" {
+			t.Errorf("%s: UnitNoun = %q, want the vitest row's \"test files\"", name, v.TestSelection.UnitNoun)
+		}
+		if v.TestSelection.UnreportedReason != "timed out" {
+			t.Errorf("%s: UnreportedReason = %q, want the first unreported unit in selection order (tests/four sorts before tests/three)", name, v.TestSelection.UnreportedReason)
+		}
+	}
+	clean := unitRunSpec(t, vitestUnitMap([]string{"tests/one.test.ts", "tests/two.test.ts"}, "tests/one.test.ts"), "src/one.ts", "tests/one.test.ts")
+	if v := verdictFromSpec(clean); v.TestSelection.UnreportedReason != "" {
+		t.Errorf("nothing unreported, yet UnreportedReason = %q", v.TestSelection.UnreportedReason)
+	}
+}

@@ -581,6 +581,8 @@ func scanFileSelectionWith(f scanstore.File, sp mutantSpread) string {
 		return "UNCOVERED"
 	case f.TestSelection != "" && sp.ok:
 		return fmt.Sprintf("%s %d/%d, %d–%d/mutant", f.TestSelection, f.SelectedTests, f.SuiteTests, sp.min, sp.max)
+	case f.TestSelection != "" && f.SelectionUnreported > 0:
+		return fmt.Sprintf("%s %d/%d (%d unreported)", f.TestSelection, f.SelectedTests, f.SuiteTests, f.SelectionUnreported)
 	case f.TestSelection != "":
 		return fmt.Sprintf("%s %d/%d", f.TestSelection, f.SelectedTests, f.SuiteTests)
 	case f.SelectionFallback != "":

@@ -442,6 +442,15 @@ type TestSelection struct {
 	// selection; this count says how much of Selected is evidence and how
 	// much is caution. Zero for a test-grain or whole-suite run.
 	Unreported int `json:"unreported,omitempty"`
+	// UnreportedReason is the first of those units' own reason (in the
+	// selection's order), verbatim, so the scan line can say WHY units were
+	// added and not only how many. Empty when Unreported is zero.
+	UnreportedReason string `json:"unreported_reason,omitempty"`
+	// UnitNoun is what a unit of this selection is called on the scan line
+	// ("test files", "packages", "test targets"): the runner row's own
+	// UnitNoun, copied here because the line is printed from the verdict and
+	// must not guess the grain. Empty for a test-grain or whole-suite run.
+	UnitNoun string `json:"unit_noun,omitempty"`
 	// AuthoredFallback is why the AUTHORED pass could not run the authored
 	// test alone or beside the selection, and so ran the run's whole
 	// command (testmap.AuthoredTestCmd's refusal, verbatim). Fallback is

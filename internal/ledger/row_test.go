@@ -98,3 +98,39 @@ func TestAnEntryCarryingCoveringUnitsStillVerifies(t *testing.T) {
 		t.Errorf("the hash moved when the reader's struct does not know CoveringUnits: %s, want %s", h, es[0].Hash)
 	}
 }
+
+// The unit selection's two disclosures are additive too: an entry carrying
+// selection_unreported and authored_fallback keeps the existing format, writes
+// both keys under their own names, parses them back and verifies clean.
+func TestAnEntryCarryingUnitSelectionDisclosuresStillVerifies(t *testing.T) {
+	root := key(0x42)
+	dir := t.TempDir()
+	auditpush.SetLedgerSigner(signerFor(root))
+	t.Cleanup(func() { auditpush.SetLedgerSigner(nil) })
+	b := ledger.Bundle{
+		Scan:  ledger.ScanRow{Repo: "o/r", Commit: "abcdef123456", ScanID: 1, CorralVersion: "vtest"},
+		Files: []ledger.Row{{Repo: "o/r", Commit: "abcdef123456", Path: "src/a.ts", Lang: "typescript", SelectionUnreported: 2, AuthoredFallback: "its filter would also run tests/two.test.ts"}},
+	}
+	if _, err := auditpush.PushBundle(dir, b); err != nil {
+		t.Fatal(err)
+	}
+	es := readBytes(t, dir)
+	if len(es) != 1 || es[0].Format != ledger.FileFormat {
+		t.Fatalf("want one entry in the existing format %q, got %d entries (format %q)", ledger.FileFormat, len(es), es[0].Format)
+	}
+	raw := string(es[0].Raw)
+	if !strings.Contains(raw, `"selection_unreported": 2`) && !strings.Contains(raw, `"selection_unreported":2`) {
+		t.Errorf("entry lacks selection_unreported:\n%s", raw)
+	}
+	if !strings.Contains(raw, `"authored_fallback"`) {
+		t.Errorf("entry lacks authored_fallback:\n%s", raw)
+	}
+	if f := es[0].Bundle.Files[0]; f.SelectionUnreported != 2 || f.AuthoredFallback == "" {
+		t.Errorf("parsed row dropped a field: %+v", f)
+	}
+	for _, c := range ledger.Verify(es, ledger.Trust{RootPub: root.Public().(ed25519.PublicKey)}) {
+		if c.Problem != "" || !c.HashOK || !c.SigOK {
+			t.Fatalf("an entry carrying the disclosures must verify clean: %+v", c)
+		}
+	}
+}

@@ -256,6 +256,13 @@ type File struct {
 	// (no selector for the language, --whole-suite, an evidence run that
 	// failed). Empty when TestSelection is set — never both.
 	SelectionFallback string
+	// SelectionUnreported and AuthoredFallback mirror advpool.TestSelection's
+	// Unreported and AuthoredFallback: units added to the selection only
+	// because they reported no evidence, and why the authored pass graded by
+	// the run's whole command. omitempty, so a row without either is
+	// byte-identical to what it was before they existed.
+	SelectionUnreported int    `json:",omitempty"`
+	AuthoredFallback    string `json:",omitempty"`
 	// WriterMode mirrors advpool.Verdict.WriterMode: whether this file's
 	// survivors were attacked by one writer call each ("per-survivor") or by
 	// one call carrying them all ("batched"). NULL — never one of the two

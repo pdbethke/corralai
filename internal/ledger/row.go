@@ -52,6 +52,15 @@ type Row struct {
 	SelectedTests     int
 	SuiteTests        int
 	SelectionFallback string
+	// SelectionUnreported is how many of the SelectedTests units are in the
+	// selection only because they reported no evidence (a unit pass whose
+	// unit failed or timed out): caution, not evidence. AuthoredFallback is
+	// why the AUTHORED pass ran the run's whole command instead of the
+	// authored test alone or beside the selection. Both omitempty, so every
+	// row without them marshals to the bytes it always did and needs no new
+	// ledger format (same reason as CoveringUnits).
+	SelectionUnreported int    `json:"selection_unreported,omitempty"`
+	AuthoredFallback    string `json:"authored_fallback,omitempty"`
 	// WriterMode is HOW the writer seat attacked this file's survivors:
 	// "per-survivor" or "batched". EMPTY reaches the warehouse as NULL, never
 	// as either spelling — a run that named no mode, or a row pushed by a

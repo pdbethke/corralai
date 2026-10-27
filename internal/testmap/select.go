@@ -113,34 +113,9 @@ func Select(m Map, r lang.Runner, testCmd []string, repoRoot, codePath, testPath
 			sel.Static = slices.Clone(src.Static)
 		}
 	}
-	seen := map[string]bool{}
-	var ids []string
-	for _, e := range m.EdgesTo(want) {
-		n, ok := m.Tests[e.Test]
-		if !ok {
-			return lang.Selection{}, fmt.Errorf("testmap: %s map has an edge from %q to %s, but no node %q", m.Lang, e.Test, want, e.Test)
-		}
-		if n.Grain != grain {
-			return lang.Selection{}, fmt.Errorf("testmap: %s map is %s, but node %q has grain %q, not %q", m.Lang, m.Method, e.Test, n.Grain, grain)
-		}
-		if grain == GrainUnit && e.Executed == 0 && !e.Loaded && e.Uncounted == "" {
-			continue
-		}
-		if !seen[e.Test] {
-			seen[e.Test] = true
-			ids = append(ids, e.Test)
-		}
-		if grain == GrainTest && len(e.Lines) > 0 {
-			sel.Lines[e.Test] = append(sel.Lines[e.Test], e.Lines...)
-		}
-	}
-	if grain == GrainUnit {
-		for _, id := range m.Unreported() {
-			if !seen[id] {
-				seen[id] = true
-				ids = append(ids, id)
-			}
-		}
+	ids, err := selectedIDs(m, grain, want, &sel)
+	if err != nil {
+		return lang.Selection{}, err
 	}
 	if len(ids) == 0 {
 		return sel, nil
@@ -180,6 +155,78 @@ func Select(m Map, r lang.Runner, testCmd []string, repoRoot, codePath, testPath
 	}
 	sel.Tests, sel.Cmd = ids, cmd
 	return sel, nil
+}
+
+// selectedIDs is the nodes Select runs for the measured source want: every
+// node with an edge to it that selects (a unit edge that measured the file and
+// executed none of it, did not load it and could not count it selects
+// nothing), plus, in a unit map, every unreported unit. It is the one
+// predicate behind Select and Uncovered, so a summary of a map cannot call a
+// file uncovered that grading would select units for. When sel is non-nil, a
+// test-grain edge's lines are recorded on it.
+func selectedIDs(m Map, grain, want string, sel *lang.Selection) ([]string, error) {
+	seen := map[string]bool{}
+	var ids []string
+	for _, e := range m.EdgesTo(want) {
+		n, ok := m.Tests[e.Test]
+		if !ok {
+			return nil, fmt.Errorf("testmap: %s map has an edge from %q to %s, but no node %q", m.Lang, e.Test, want, e.Test)
+		}
+		if n.Grain != grain {
+			return nil, fmt.Errorf("testmap: %s map is %s, but node %q has grain %q, not %q", m.Lang, m.Method, e.Test, n.Grain, grain)
+		}
+		if grain == GrainUnit && e.Executed == 0 && !e.Loaded && e.Uncounted == "" {
+			continue
+		}
+		if !seen[e.Test] {
+			seen[e.Test] = true
+			ids = append(ids, e.Test)
+		}
+		if sel != nil && grain == GrainTest && len(e.Lines) > 0 {
+			sel.Lines[e.Test] = append(sel.Lines[e.Test], e.Lines...)
+		}
+	}
+	if grain == GrainUnit {
+		for _, id := range m.Unreported() {
+			if !seen[id] {
+				seen[id] = true
+				ids = append(ids, id)
+			}
+		}
+	}
+	return ids, nil
+}
+
+// Uncovered are the measured sources grading would select no node for: no
+// edge that selects and, in a unit map, no unreported unit. Both lists are
+// sorted. Unselected are the measured sources with no selecting EDGE, which
+// is a superset: the extra ones are graded by the unreported units, so a
+// reader must not be told they are uncovered. Both ask selectedIDs, Select's
+// own predicate.
+func Uncovered(m Map) (uncovered, unselectedButGraded []string) {
+	grain, err := grainOf(m)
+	if err != nil {
+		return nil, nil
+	}
+	for p := range m.Sources {
+		ids, err := selectedIDs(m, grain, p, nil)
+		if err != nil {
+			continue
+		}
+		if len(ids) == 0 {
+			uncovered = append(uncovered, p)
+			continue
+		}
+		if grain == GrainUnit && len(ids) == len(m.Unreported()) {
+			// Every selected id is an unreported unit: no unit that reported
+			// selected the file (the reverse can only coincide when a
+			// reporting unit also selects, which adds an id).
+			unselectedButGraded = append(unselectedButGraded, p)
+		}
+	}
+	sort.Strings(uncovered)
+	sort.Strings(unselectedButGraded)
+	return uncovered, unselectedButGraded
 }
 
 // someUnitReported refuses a unit map in which no listed unit contributed

@@ -45,7 +45,7 @@ func TestTestsMapPrintsTheSummary(t *testing.T) {
 		"language: typescript, runner: vitest\n",
 		"method: unit-evidence\n",
 		"2 sources, 2 units (1 with no evidence)\n",
-		"uncovered: src/app/Idle.ts\n",
+		"1 sources executed by no unit that reported; they are graded by the 1 units with no evidence\n",
 		"no evidence: tests/composition/broken.test.ts: not run (time limit)\n",
 	} {
 		if !strings.Contains(out.String(), want) {
@@ -108,4 +108,43 @@ func TestTestsHelpExitsZero(t *testing.T) {
 			t.Errorf("corral tests %v printed no usage naming `corral tests map`", args)
 		}
 	}
+}
+
+// A file no unit that reported executed is graded by the units with no
+// evidence (the engine adds every unreported unit to every selection), so the
+// summary must not call it uncovered; with every unit reporting, it is.
+func TestTestsMapDoesNotCallAFileUncoveredWhileUnitsAreUnreported(t *testing.T) {
+	refuseModelEndpoints(t)
+	run := func(t *testing.T, units []reposcan.UnitResult) string {
+		root := unitEvidenceTSFixture(t)
+		mustWrite(t, filepath.Join(root, "src", "app", "Idle.ts"), "export function idle(): number { return 2; }\n")
+		(&fakeUnitPass{ev: reposcan.UnitEvidence{Ran: true, Units: units}}).install(t)
+		var out, errb bytes.Buffer
+		if code := runTests([]string{"map", "--repo-dir", root, "--substrate", substrateWorkspace, "--no-selection-cache", "--", "vitest", "run"}, &out, &errb); code != 0 {
+			t.Fatalf("exit %d\n%s", code, errb.String())
+		}
+		return out.String()
+	}
+	served := unitRun("tests/composition/service.test.ts", map[string]lang.LineCounts{
+		"src/app/Service.ts": {Executed: 1, Executable: 1},
+		"src/app/Idle.ts":    {Executed: 0, Executable: 1},
+	})
+	t.Run("with a failed unit", func(t *testing.T) {
+		s := run(t, []reposcan.UnitResult{served, {Unit: "tests/composition/broken.test.ts", Err: "run failed"}})
+		if strings.Contains(s, "uncovered:") {
+			t.Errorf("a file the unreported unit grades must not be listed uncovered:\n%s", s)
+		}
+		if want := "1 sources executed by no unit that reported; they are graded by the 1 units with no evidence\n"; !strings.Contains(s, want) {
+			t.Errorf("missing %q:\n%s", want, s)
+		}
+	})
+	t.Run("with every unit reporting", func(t *testing.T) {
+		s := run(t, []reposcan.UnitResult{served})
+		if !strings.Contains(s, "uncovered: src/app/Idle.ts\n") {
+			t.Errorf("missing uncovered line:\n%s", s)
+		}
+		if strings.Contains(s, "graded by the") {
+			t.Errorf("no unit is unreported, so no replacement line:\n%s", s)
+		}
+	})
 }

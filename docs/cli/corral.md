@@ -1131,8 +1131,8 @@ usage: corral tests map --repo-dir <dir> [--jail bwrap|container] [--workers N] 
     	sandbox backend for --substrate jail: bwrap (Linux), container or sandbox-exec (macOS) (default: auto-detect for this OS)
   -no-selection-cache
     	skip the selection cache: always run the evidence pass, and keep nothing
-  -out testmap.Read
-    	write the test map to this file as JSON (the format testmap.Read reads back)
+  -out string
+    	write the test map to this file as JSON that corral's own map reader reads back
   -repo-dir string
     	path of the repository to map (required)
   -runner string

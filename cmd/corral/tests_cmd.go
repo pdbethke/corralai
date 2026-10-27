@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"sort"
+	"path/filepath"
 	"strings"
 
 	"github.com/pdbethke/corralai/internal/lang"
@@ -53,7 +53,7 @@ func runTestsMap(args []string, stdout, stderr io.Writer) int {
 		fs.PrintDefaults()
 	}
 	repoDir := fs.String("repo-dir", "", "path of the repository to map (required)")
-	outPath := fs.String("out", "", "write the test map to this file as JSON (the format `testmap.Read` reads back)")
+	outPath := fs.String("out", "", "write the test map to this file as JSON that corral's own map reader reads back")
 	substrateFlag := fs.String("substrate", substrateJail, "where the evidence runs: "+substrateJail+" (bwrap) or "+substrateWorkspace+" (the checkout itself; the caller IS the isolation boundary, e.g. an ephemeral CI runner), as certify --repo")
 	jailFlag := fs.String("jail", "", "sandbox backend for --substrate jail: bwrap (Linux), container or sandbox-exec (macOS) (default: auto-detect for this OS)")
 	workers := fs.Int("workers", 0, "test units run alone under coverage at once. REQUIRED when the language's evidence is a unit pass on --substrate jail (every language but Python); corral names no count. --substrate workspace runs one at a time, as certify --repo does, and takes no count")
@@ -177,18 +177,28 @@ func runTestsMap(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// writeTestMapFile writes m through testmap.Write — the one serializer.
+// writeTestMapFile writes m through testmap.Write — the one serializer — to a
+// temporary file beside path and renames it into place, so a write that fails
+// part way leaves no truncated map under the name a reader trusts.
 func writeTestMapFile(path string, m testmap.Map) (err error) {
-	f, err := os.Create(path) // #nosec G304 -- the operator's own --out path
+	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
 	if err != nil {
 		return err
 	}
+	tmp := f.Name()
 	defer func() {
-		if cerr := f.Close(); err == nil {
-			err = cerr
+		if err != nil {
+			_ = os.Remove(tmp)
 		}
 	}()
-	return testmap.Write(f, m)
+	if err = testmap.Write(f, m); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err = f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // printTestsMap is the summary: what the map holds, what it could not measure,
@@ -211,7 +221,13 @@ func printTestsMap(w io.Writer, m testmap.Map) {
 	if m.Note != "" {
 		fmt.Fprintf(w, "note: %s\n", m.Note)
 	}
-	listCapped(w, "uncovered", uncoveredSources(m), func(s string) string { return s })
+	uncovered, gradedByUnreported := testmap.Uncovered(m)
+	listCapped(w, "uncovered", uncovered, func(s string) string { return s })
+	if n := len(gradedByUnreported); n > 0 {
+		// Not "uncovered": grading adds every unit with no evidence to the
+		// selection of every file, so these are graded by those units.
+		fmt.Fprintf(w, "%d sources executed by no unit that reported; they are graded by the %d %s with no evidence\n", n, len(unreported), noun)
+	}
 	listCapped(w, "no evidence", unreported, func(id string) string { return id + ": " + m.Tests[id].Err })
 }
 
@@ -226,27 +242,4 @@ func listCapped(w io.Writer, label string, items []string, render func(string) s
 		}
 		fmt.Fprintf(w, "%s: %s\n", label, strings.ReplaceAll(render(it), "\n", " "))
 	}
-}
-
-// uncoveredSources are the sources the evidence measured, that have
-// executable statements, and that no node executed: no edge with executed
-// lines, none that loaded the file (module-level code ran), and none that
-// measured it and could not count it. Loaded and uncounted files are
-// "executed or may be", never uncovered (ruling R24), so this is the same
-// claim candidacy makes (reposcan.ReasonUncovered), read off the map.
-func uncoveredSources(m testmap.Map) []string {
-	live := map[string]bool{}
-	for _, e := range m.Edges {
-		if e.Executed > 0 || e.Loaded || e.Uncounted != "" {
-			live[e.Source] = true
-		}
-	}
-	var out []string
-	for p, s := range m.Sources {
-		if !live[p] && !s.HasStatic && s.HasStatements {
-			out = append(out, p)
-		}
-	}
-	sort.Strings(out)
-	return out
 }

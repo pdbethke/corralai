@@ -16,13 +16,11 @@ What corral does with each language's tests. This page is rendered from the same
 | Keep the passing part of an authored test | ✓ | ✓ | ✓ | ✓ | ✓ (rspec, minitest) | — (2) | ✓ |
 | Run one test unit | ✓ | ✓ | ✓ | — (3) | ✓ (rspec) | ✓ | ✓ |
 | Coverage pre-flight | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Grade only the tests that run the file | — (4) | — (5) | — (5) | ✓ | — (5) | — (5) | — (5) |
+| Grade only the tests that run the file | ✓ | ✓ | ✓ | ✓ | ✓ (rspec) | ✓ | ✓ |
 
 1. nextest's --fail-fast and libtest's lack of one are not yet verified against a real run (runner table Phase 5)
 2. libtest --skip and nextest filtersets are not yet verified for salvage (runner table Phase 5)
-3. evidence is per test through TestSelector
-4. per-test coverage needs a run per test; its own spec (runner table Phase 6)
-5. per-test coverage contexts per runner; its own spec (runner table Phase 6)
+3. its evidence is per test, from one instrumented run (lang.TestEvidence), which the selection engine reads at test grain; a unit pass would be a second, coarser answer to the same question
 
 ## By runner
 

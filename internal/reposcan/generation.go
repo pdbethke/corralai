@@ -262,7 +262,23 @@ package reposcan
 // compile check, so a "34" TypeScript ProvenMissed can count tests that do
 // not type-check; and plain named imports of one module are unioned in the
 // merged file. Shape unchanged; behaviour bump.
-const VerdictGeneration = "35"
+//
+// "36" (2026-10-27): non-Python files are now graded by the test units their
+// evidence links (plus every unit that reported no evidence), not the whole
+// suite. Go, JavaScript, TypeScript, Ruby, PHP and Rust selections are made
+// by the one selection engine (internal/testmap) from the unit pass's map,
+// so a "35" verdict for one of those files ran every planted bug against the
+// whole suite where a "36" runs it against the linked units: a different
+// measurement of the same file, and the scan's method ("unit-evidence")
+// moves the cache key too. A selection the engine cannot run exactly (one
+// that would also collect a unit nobody named, a unit pass that reported no
+// unit) grades whole-suite, disclosed. Riding along: AuthoredAlone is no
+// longer claimed when the engine refuses the authored-alone command, so a
+// "35" Python verdict could say "alone" for a pass that ran beside the
+// selection. Verdict's own fields unchanged; TestSelection gained Unreported
+// and AuthoredFallback (nested, so outside the shallow fingerprint below).
+// Behaviour bump.
+const VerdictGeneration = "36"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

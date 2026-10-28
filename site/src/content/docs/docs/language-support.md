@@ -31,8 +31,8 @@ A language has a runner capability when any of its runners does; this is which. 
 
 | runner | `--runner` | languages | stop at first failure | list tests | run one test | run one test unit | names the killing test | salvage | names flaky tests | note |
 |---|---|---|---|---|---|---|---|---|---|---|
-| `go test` (default) | `go-test` | go | `-failfast` | ✓ | ✓ | ✓ | ✓ | ✓ |  | one-package and several-package runs and their `go list` listing verified on go 1.26 |
-| `gotestsum` | `gotestsum` | go |  | ✓ | ✓ | ✓ | ✓ |  |  | listing and one-test runs use `go test` itself; the killing test is read from `--- FAIL:` lines, which gotestsum passes through for a failed test but was not run here; units are listed with `go list` and one or several packages run through gotestsum, verified on gotestsum 1.13 |
+| `go test` (default) | `go-test` | go | `-failfast` | ✓ | ✓ | ✓ | ✓ | ✓ |  | one-package and several-package runs and their `go list` listing verified on go 1.26; the unit evidence pass runs each package with -count=1 over one GOCACHE the pass shares, warmed by its first package and frozen for the rest, so a cached test result is never read as a run |
+| `gotestsum` | `gotestsum` | go |  | ✓ | ✓ | ✓ | ✓ |  |  | listing and one-test runs use `go test` itself; the killing test is read from `--- FAIL:` lines, which gotestsum passes through for a failed test but was not run here; units are listed with `go list` and one or several packages run through gotestsum, verified on gotestsum 1.13; the unit evidence pass adds -count=1 after its `--` and shares one GOCACHE as for go test (not run through gotestsum) |
 | `pytest` (default) | `pytest` | python | `-x` | ✓ | ✓ |  | ✓ | ✓ |  |  |
 | `unittest` | `unittest` | python | `--failfast` | ✓ | ✓ |  |  |  |  | listing and one-test runs use pytest, which collects unittest suites; they need pytest installed |
 | `jest` | `jest` | javascript, typescript | `--bail` | ✓ | ✓ | ✓ | ✓ | ✓ |  | listing, one-test, one-file and several-file runs verified on jest 30.5 |

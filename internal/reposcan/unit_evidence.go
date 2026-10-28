@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -140,6 +141,7 @@ func CollectUnitEvidence(ctx context.Context, runner commandRunner, files map[st
 
 	results := make([]UnitResult, len(units))
 	cmds := make([][]string, len(units))
+	evidenceCmds := make([][]string, len(units))
 	var runnable []int
 	for i, u := range units {
 		name := lang.UnitName(u)
@@ -155,7 +157,8 @@ func CollectUnitEvidence(ctx context.Context, runner commandRunner, files map[st
 		}
 		// The evidence pass's own flags (vitest's threads pool) go on the
 		// unit command before coverage wraps it; grading never gets them.
-		cov, ok := reporter.CoverageCmd(lang.EvidenceUnitCmd(p, inv, unitCmd))
+		evidenceCmds[i] = lang.EvidenceUnitCmd(p, inv, unitCmd)
+		cov, ok := reporter.CoverageCmd(evidenceCmds[i])
 		if !ok {
 			results[i].Err = "not run: its one-unit command has no coverage instrumentation"
 			continue
@@ -174,13 +177,24 @@ func CollectUnitEvidence(ctx context.Context, runner commandRunner, files map[st
 	// Every unit runs over the same tree, so a runner that can seed it
 	// (seedingRunner) writes it once, here, and each unit runs on a
 	// copy-on-write overlay of that seed instead of a fresh copy of its own.
+	// The seed also shares the runner's tool cache (lang.EvidenceCache),
+	// when its row has one and the seed can overlay it.
 	unitRunner := runner
 	var seeded sandbox.SeededRunner
+	cache := lang.EvidenceCacheFor(p, inv)
+	cacheTarget := ""
 	if sr, ok := runner.(seedingRunner); ok {
-		s, err := sr.Seed(files)
+		s, err := sr.Seed(files, cache)
 		switch {
 		case err == nil:
 			seeded, unitRunner = s, s
+			if cache != nil {
+				shared := s.Cache()
+				cacheTarget = shared.Target
+				if cacheTarget == "" {
+					changed = joinChanged(changed, unitsUnsharedCache(cache, shared.Unshared))
+				}
+			}
 		case errors.Is(err, sandbox.ErrNoOverlay):
 			changed = joinChanged(changed, unitsFreshCopy(err))
 		default:
@@ -191,10 +205,40 @@ func CollectUnitEvidence(ctx context.Context, runner commandRunner, files map[st
 		}
 	}
 
+	if cacheTarget != "" && cache.Args != nil {
+		// The cache's own words go on each unit command after the
+		// evidence flags, before coverage wraps it, and only when the
+		// cache is shared: a unit told to use a cache that is not there
+		// would not be the run the operator's command describes.
+		for _, i := range runnable {
+			cov, ok := reporter.CoverageCmd(append(slices.Clone(evidenceCmds[i]), cache.Args(cacheTarget)...))
+			if !ok {
+				results[i].Err = "not run: its one-unit command has no coverage instrumentation with the shared cache's arguments"
+				cmds[i] = nil
+				continue
+			}
+			cmds[i] = cov
+		}
+		runnable = slices.DeleteFunc(runnable, func(i int) bool { return cmds[i] == nil })
+	}
+
 	announce(len(runnable), len(units))
+	frozen := runnable
+	if cacheTarget != "" && len(runnable) > 0 {
+		// The first runnable unit warms the shared cache: run once, alone,
+		// before any worker starts, with the cache writable. Its build
+		// flags are every later unit's, so what it caches is what they
+		// build. Its result is that unit's evidence; it is not run again.
+		// Every later unit sees the cache frozen.
+		first := runnable[0]
+		r := runUnit(ctx, warmingRunner{seeded}, files, reporter, cmds[first], modulePath, noCoverage, note)
+		r.Unit = results[first].Unit
+		results[first] = r
+		frozen = runnable[1:]
+	}
 	jobs := make(chan int)
 	var wg sync.WaitGroup
-	for range min(workers, len(runnable)) {
+	for range min(workers, len(frozen)) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -205,7 +249,7 @@ func CollectUnitEvidence(ctx context.Context, runner commandRunner, files map[st
 			}
 		}()
 	}
-	for _, i := range runnable {
+	for _, i := range frozen {
 		jobs <- i
 	}
 	close(jobs)
@@ -226,9 +270,38 @@ func CollectUnitEvidence(ctx context.Context, runner commandRunner, files map[st
 // map it was given and no other, until Close. Seed returns
 // sandbox.ErrNoOverlay when the backend cannot overlay, and the pass then
 // runs each unit on a fresh copy, as every run did before, and says so
-// (unitsFreshCopy).
+// (unitsFreshCopy). cache, when non-nil, is the tool cache the seed is to
+// share among the runs (SeededRunner.Cache says whether it does).
 type seedingRunner interface {
-	Seed(files map[string]string) (sandbox.SeededRunner, error)
+	Seed(files map[string]string, cache *lang.EvidenceCache) (sandbox.SeededRunner, error)
+}
+
+// warmingRunner runs a seed's commands through its Warm: the one run that
+// fills the shared cache, read through runUnit like every other unit's.
+type warmingRunner struct{ s sandbox.SeededRunner }
+
+func (w warmingRunner) Enumerate(ctx context.Context, files map[string]string, cmd []string) (string, error) {
+	res, err := w.s.Warm(ctx, files, cmd)
+	return res.Output, err
+}
+
+func (w warmingRunner) EnumerateDetailed(ctx context.Context, files map[string]string, cmd []string) (sandbox.EnumerateResult, error) {
+	return w.s.Warm(ctx, files, cmd)
+}
+
+// unitsUnsharedCache is said, once per pass, of a pass whose seed could not
+// share the runner's tool cache (why, from SeededRunner.Cache): each unit
+// started from an empty one, as every jailed run did before the cache was
+// shared. It costs time, never evidence.
+func unitsUnsharedCache(cache *lang.EvidenceCache, why string) string {
+	name := "tool cache"
+	if cache.Env != "" {
+		name = cache.Env
+	}
+	if why == "" {
+		why = "the seed gave no reason"
+	}
+	return "each unit started from an empty " + name + " (no shared cache: " + why + ")"
 }
 
 // unitsFreshCopy is said, once per pass, of a pass whose runner could not

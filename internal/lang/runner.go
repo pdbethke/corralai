@@ -151,6 +151,17 @@ type Runner struct {
 	// recovered worker coverage for 30 and then 84 of 93 files on two runs
 	// of the same batch, so it is not a fix.
 	EvidenceArgs func(unitCmd []string) []string
+	// EvidenceCache is the tool cache the unit evidence pass shares among
+	// its units (EvidenceCache says how), or nil for none: each unit then
+	// starts from the empty cache a jailed run always had. Callers go
+	// through EvidenceCacheFor, never the field.
+	//
+	// go test and gotestsum set it to GOCACHE: every jailed unit rebuilt
+	// the standard library and the module's dependencies from nothing,
+	// 6.21 s against 1.96 s with a warm cache for one corral package and
+	// 15.07 s against 11.13 s for another (n=3 each, one worker). Their
+	// EvidenceArgs add -count=1 for the same reason: see goEvidenceArgs.
+	EvidenceCache *EvidenceCache
 	// Disclose is what the scan line says about running this runner in
 	// repoDir; PreflightBin is the binary that must be on PATH.
 	Disclose     func(repoDir string, argv []string) []string
@@ -202,7 +213,8 @@ var runners = []Runner{
 		FirstFailure: goFirstFailure, FailedTests: goFailedTests, DeselectCmd: goDeselectCmd,
 		ListUnits: goTestListUnits, ParseUnits: goParseUnits, UnitCmd: oneUnit(goTestUnitsCmd),
 		UnitsCmd: goTestUnitsCmd, UnitForFile: goUnitForFile, UnitNoun: "packages",
-		Note: "one-package and several-package runs and their `go list` listing verified on go 1.26",
+		EvidenceArgs: goTestEvidenceArgs, EvidenceCache: goEvidenceCache,
+		Note: "one-package and several-package runs and their `go list` listing verified on go 1.26; the unit evidence pass runs each package with -count=1 over one GOCACHE the pass shares, warmed by its first package and frozen for the rest, so a cached test result is never read as a run",
 	},
 	{
 		Name: "gotestsum", ID: "gotestsum", Languages: []string{"go"}, Words: []string{"gotestsum"},
@@ -210,7 +222,8 @@ var runners = []Runner{
 		FirstFailure: goFirstFailure,
 		ListUnits:    gotestsumListUnits, ParseUnits: goParseUnits, UnitCmd: oneUnit(gotestsumUnitsCmd),
 		UnitsCmd: gotestsumUnitsCmd, UnitForFile: goUnitForFile, UnitNoun: "packages",
-		Note: "listing and one-test runs use `go test` itself; the killing test is read from `--- FAIL:` lines, which gotestsum passes through for a failed test but was not run here; units are listed with `go list` and one or several packages run through gotestsum, verified on gotestsum 1.13",
+		EvidenceArgs: gotestsumEvidenceArgs, EvidenceCache: goEvidenceCache,
+		Note: "listing and one-test runs use `go test` itself; the killing test is read from `--- FAIL:` lines, which gotestsum passes through for a failed test but was not run here; units are listed with `go list` and one or several packages run through gotestsum, verified on gotestsum 1.13; the unit evidence pass adds -count=1 after its `--` and shares one GOCACHE as for go test (not run through gotestsum)",
 	},
 	{
 		Name: "pytest", ID: "pytest", Languages: []string{"python"}, Default: true, Words: []string{"pytest"},

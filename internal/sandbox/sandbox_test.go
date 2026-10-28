@@ -216,3 +216,20 @@ func TestRunRefusesASeedOnABackendThatCannotOverlay(t *testing.T) {
 		t.Error("the command ran and wrote into the seed")
 	}
 }
+
+// A shared cache is mounted only by a backend that overlays: anywhere else
+// the backend would not know the mount, and the run would quietly go
+// without it (or, frozen, write into it). Run refuses before running.
+func TestRunRefusesACacheOnABackendThatCannotOverlay(t *testing.T) {
+	ws, host := t.TempDir(), t.TempDir()
+	for _, frozen := range []bool{true, false} {
+		r := Run(context.Background(), "echo x > ran", Options{Workspace: ws, Backend: noneIsolator{},
+			Cache: &CacheMount{Host: host, Target: CacheTarget, Env: "GOCACHE", Frozen: frozen}})
+		if r.Err == "" || r.ExitCode != -1 {
+			t.Errorf("frozen=%v: Run = %+v, want a refusal", frozen, r)
+		}
+		if _, err := os.Stat(filepath.Join(ws, "ran")); err == nil {
+			t.Errorf("frozen=%v: the command ran", frozen)
+		}
+	}
+}

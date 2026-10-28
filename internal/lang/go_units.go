@@ -144,6 +144,83 @@ func goTestUnitsCmd(argv []string, units []string) ([]string, bool) {
 	return append(slices.Clone(argv[:2]), goWithPackages(opts, at, units)...), true
 }
 
+// goEvidenceCache is the go rows' EvidenceCache: one GOCACHE for every unit
+// of an evidence pass, warmed by its first unit and frozen for the rest.
+var goEvidenceCache = &EvidenceCache{Env: "GOCACHE"}
+
+// goEvidenceArgs is go test arguments (after `go test`, or after
+// gotestsum's "--") with -count=1 as their last word, in place of any
+// -count the operator gave; nil when go's own parsing cannot read them.
+//
+// -count=1 is CORRECTNESS, not speed. The pass shares one build cache among
+// its units (goEvidenceCache), and that cache also holds test RESULTS: go
+// test replays a cached result, coverage profile included, instead of
+// running the test, whenever its inputs match one it has recorded. Every
+// jailed run used to start from an empty GOCACHE, so a result was never
+// replayed; with a shared one it could be, and a replayed result is
+// evidence of a run that did not happen in this pass. -count=1 is go's own
+// switch for "never use a cached result" (go help testflag), and it
+// changes nothing else: the build cache is still used.
+func goEvidenceArgs(args []string) ([]string, bool) {
+	opts, patterns, at, ok := goTestArgs(args)
+	if !ok {
+		return nil, false
+	}
+	var kept []string
+	keptAt := 0
+	for i := 0; i < len(opts); i++ {
+		if i == at {
+			keptAt = len(kept)
+		}
+		name, _, hasEq := strings.Cut(strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(opts[i], "-"), "-"), "test."), "=")
+		if name == "count" {
+			if !hasEq {
+				i++ // its value, which goTestArgs kept as the next word
+			}
+			continue
+		}
+		kept = append(kept, opts[i])
+	}
+	if at >= len(opts) {
+		keptAt = len(kept)
+	}
+	return append(goWithPackages(kept, keptAt, patterns), "-count=1"), true
+}
+
+// goTestEvidenceArgs is the go-test row's EvidenceArgs: goEvidenceArgs over
+// the words after `go test`. A command go's parsing refuses is returned
+// unchanged; no unit command is one (goTestUnitsCmd is built by the same
+// parsing), so this is only ever the operator's argv, for EvidenceNote.
+func goTestEvidenceArgs(unitCmd []string) []string {
+	if !goTestCmd(unitCmd) || cmdIsShellWrapped(unitCmd) {
+		return unitCmd
+	}
+	args, ok := goEvidenceArgs(unitCmd[2:])
+	if !ok {
+		return unitCmd
+	}
+	return append(slices.Clone(unitCmd[:2]), args...)
+}
+
+// gotestsumEvidenceArgs is the gotestsum row's EvidenceArgs: goEvidenceArgs
+// over the go test arguments after its "--", adding the "--" when the
+// command had none. gotestsum with no go test argument runs ./... (see
+// gotestsumSplit), so that is what the added arguments name.
+func gotestsumEvidenceArgs(unitCmd []string) []string {
+	head, goArgs, ok := gotestsumSplit(unitCmd)
+	if !ok {
+		return unitCmd
+	}
+	if len(goArgs) == 0 {
+		goArgs = []string{"./..."}
+	}
+	args, ok := goEvidenceArgs(goArgs)
+	if !ok {
+		return unitCmd
+	}
+	return append(append(slices.Clone(head), "--"), args...)
+}
+
 // goParseUnits reads goUnitTemplate's lines. A package go could not load, or
 // a line the template cannot have printed, makes the listing unreadable
 // (nil); so does a listing of no package at all.

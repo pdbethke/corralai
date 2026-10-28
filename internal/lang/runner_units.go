@@ -123,6 +123,31 @@ func EvidenceUnitCmd(p Plugin, inv Invocation, unitCmd []string) []string {
 	return r.EvidenceArgs(slices.Clone(unitCmd))
 }
 
+// EvidenceCache is a tool cache the unit evidence pass shares among its
+// units (Runner.EvidenceCache). The pass warms it with its first unit, run
+// once with the cache writable, and every later unit sees it FROZEN: a
+// copy-on-write overlay whose writes are discarded with the run, so no
+// unit's run can change what another unit reads. It lives at a fixed path
+// inside the jail. Env, when set, is the environment variable the jail
+// points at that path (GOCACHE); Args, when set, is the words a unit
+// command takes to use the cache at dir, appended after EvidenceArgs'. A
+// pass that cannot share the cache gives neither, and each unit starts
+// from an empty cache, as every jailed run did before.
+type EvidenceCache struct {
+	Env  string
+	Args func(dir string) []string
+}
+
+// EvidenceCacheFor is argv's runner's EvidenceCache, or nil when the row
+// shares none.
+func EvidenceCacheFor(p Plugin, inv Invocation) *EvidenceCache {
+	r, ok := RunnerFor(p, inv)
+	if !ok {
+		return nil
+	}
+	return r.EvidenceCache
+}
+
 // EvidenceNote is one sentence naming what the evidence pass changed in
 // argv's command, for the scan line and for a unit failure's reason (the
 // operator's own run of a unit may pass where the evidence pass's does
@@ -147,9 +172,10 @@ func EvidenceNote(p Plugin, inv Invocation) string {
 }
 
 // evidenceChange is what turning before into after added and replaced, by
-// meaning. A long flag the change removed, followed by a word the change
-// also removed, is one option written in two words (`--pool forks`), so it
-// is compared as `--pool=forks` and named as the operator wrote it.
+// meaning. A flag the change removed, followed by a word the change also
+// removed, is one option written in two words (`--pool forks`, go's
+// `-count 3`), so it is compared as `--pool=forks` and named as the
+// operator wrote it.
 func evidenceChange(before, after []string) (added, replaced []string) {
 	kept := map[string]bool{}
 	for _, w := range after {
@@ -159,7 +185,7 @@ func evidenceChange(before, after []string) (added, replaced []string) {
 	var opts []option
 	for i := 0; i < len(before); i++ {
 		w := before[i]
-		if strings.HasPrefix(w, "--") && !strings.Contains(w, "=") && !kept[w] &&
+		if strings.HasPrefix(w, "-") && w != "-" && w != "--" && !strings.Contains(w, "=") && !kept[w] &&
 			i+1 < len(before) && !strings.HasPrefix(before[i+1], "-") && !kept[before[i+1]] {
 			opts = append(opts, option{w + " " + before[i+1], w + "=" + before[i+1]})
 			i++

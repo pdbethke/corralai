@@ -971,6 +971,8 @@ func TestThreadsRedUnitIsUnreportedNamingThePool(t *testing.T) {
 
 // seedingFake is a runner that offers Seed: the units run through the
 // seeded runner it returns, and the counts say how often each was used.
+// With shareCache, the seed shares the cache it is asked for; unshared is
+// what it says when it does not.
 type seedingFake struct {
 	*unitFakeRunner
 	seedErr    error
@@ -979,12 +981,19 @@ type seedingFake struct {
 	seededRuns int
 	// ranAtClose is how many commands had run when Close was called.
 	ranAtClose int
+	shareCache bool
+	unshared   string
+	// cacheAsked is the cache Seed was asked to share; calls is every
+	// seeded run in order, "warm " or "frozen " before its command key.
+	cacheAsked *lang.EvidenceCache
+	calls      []string
 }
 
-func (s *seedingFake) Seed(files map[string]string) (sandbox.SeededRunner, error) {
+func (s *seedingFake) Seed(files map[string]string, cache *lang.EvidenceCache) (sandbox.SeededRunner, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.seeds++
+	s.cacheAsked = cache
 	if s.seedErr != nil {
 		return nil, s.seedErr
 	}
@@ -1001,8 +1010,27 @@ func (f seededFake) Enumerate(ctx context.Context, files map[string]string, cmd 
 func (f seededFake) EnumerateDetailed(ctx context.Context, files map[string]string, cmd []string) (sandbox.EnumerateResult, error) {
 	f.p.mu.Lock()
 	f.p.seededRuns++
+	f.p.calls = append(f.p.calls, "frozen "+argvKey(cmd))
 	f.p.mu.Unlock()
 	return f.p.unitFakeRunner.EnumerateDetailed(ctx, files, cmd)
+}
+
+func (f seededFake) Warm(ctx context.Context, files map[string]string, cmd []string) (sandbox.EnumerateResult, error) {
+	f.p.mu.Lock()
+	f.p.seededRuns++
+	f.p.calls = append(f.p.calls, "warm "+argvKey(cmd))
+	f.p.mu.Unlock()
+	return f.p.unitFakeRunner.EnumerateDetailed(ctx, files, cmd)
+}
+
+func (f seededFake) Cache() sandbox.SharedCache {
+	switch {
+	case f.p.cacheAsked == nil:
+		return sandbox.SharedCache{}
+	case f.p.shareCache:
+		return sandbox.SharedCache{Target: sandbox.CacheTarget}
+	}
+	return sandbox.SharedCache{Unshared: f.p.unshared}
 }
 
 func (f seededFake) Close() error {
@@ -1011,6 +1039,81 @@ func (f seededFake) Close() error {
 	f.p.closes++
 	f.p.ranAtClose = len(f.p.ran)
 	return nil
+}
+
+// A go pass shares one GOCACHE among its units: the first runnable unit
+// runs ONCE, alone, with the cache writable, and that run is its evidence;
+// every later unit runs with it frozen. Each unit command carries -count=1
+// (lang.EvidenceUnitCmd), so the frozen cache's test results are never
+// replayed as evidence, and the pass says so once. A seed that cannot
+// share the cache runs every unit as before, and the pass says that too.
+func TestCollectUnitEvidenceWarmsOnceThenFreezes(t *testing.T) {
+	collect := func(f *unitFixture, run *seedingFake) UnitEvidence {
+		return CollectUnitEvidence(context.Background(), run, map[string]string{}, f.p, f.inv, "m", 2, func(int, int) {})
+	}
+	answer := func(f *unitFixture) {
+		f.answer("m/other", sandbox.EnumerateResult{Output: "# suite-exit 0\nmode: set\nm/other/o.go:0,1 4 4\n"})
+		f.answer("m/pkg", sandbox.EnumerateResult{Output: "# suite-exit 0\nmode: set\nm/pkg/b.go:0,1 2 2\n"})
+	}
+	f := newUnitFixture(t, "go", []string{"go", "test", "./..."}, goTwoUnits)
+	answer(f)
+	run := &seedingFake{unitFakeRunner: f.run, shareCache: true}
+	ev := collect(f, run)
+	if !ev.Settled() {
+		t.Fatalf("ev = %+v, want both units green", ev)
+	}
+	if run.cacheAsked == nil || run.cacheAsked.Env != "GOCACHE" {
+		t.Errorf("Seed was asked to share %+v, want GOCACHE", run.cacheAsked)
+	}
+	for _, u := range []string{"m/other", "m/pkg"} {
+		if !strings.Contains(strings.Join(f.unitCmd(u), " "), "'-count=1'") {
+			t.Errorf("unit %s runs %q, with no -count=1", u, f.unitCmd(u))
+		}
+	}
+	want := []string{"warm " + argvKey(f.unitCmd("m/other")), "frozen " + argvKey(f.unitCmd("m/pkg"))}
+	if !slices.Equal(run.calls, want) {
+		t.Errorf("seeded runs = %q, want the first unit warm and the rest frozen: %q", run.calls, want)
+	}
+	if n := slices.Index(f.run.ran, argvKey(f.unitCmd("m/other"))); n < 0 || slices.Index(f.run.ran[n+1:], argvKey(f.unitCmd("m/other"))) >= 0 {
+		t.Errorf("the first unit ran %v, want exactly once", f.run.ran)
+	}
+	if other := unitByName(t, ev, "m/other"); other.Err != "" || other.Counts["other/o.go"].Executed == 0 {
+		t.Errorf("m/other = %+v, want its warm run's counts as its evidence", other)
+	}
+	if ev.Changed != "the evidence pass runs each unit with -count=1" {
+		t.Errorf("Changed = %q, want only the -count=1 note", ev.Changed)
+	}
+
+	// The seed could not share the cache: no warm run, every unit as
+	// before, and the pass says so once.
+	nf := newUnitFixture(t, "go", []string{"go", "test", "./..."}, goTwoUnits)
+	answer(nf)
+	norun := &seedingFake{unitFakeRunner: nf.run, unshared: "this bwrap cannot overlay a directory on the filesystem of /tmp"}
+	ev = collect(nf, norun)
+	if !ev.Settled() {
+		t.Fatalf("unshared: ev = %+v, want both units green", ev)
+	}
+	for _, c := range norun.calls {
+		if strings.HasPrefix(c, "warm ") {
+			t.Errorf("unshared: a warm run: %q", norun.calls)
+		}
+	}
+	if len(norun.calls) != 2 {
+		t.Errorf("unshared: seeded runs = %q, want the 2 units", norun.calls)
+	}
+	wantChanged := "the evidence pass runs each unit with -count=1; each unit started from an empty GOCACHE (no shared cache: this bwrap cannot overlay a directory on the filesystem of /tmp)"
+	if ev.Changed != wantChanged {
+		t.Errorf("unshared: Changed = %q, want %q", ev.Changed, wantChanged)
+	}
+
+	// A runner with no shared cache asks for none and never warms.
+	vf := newUnitFixture(t, "typescript", []string{"jest"}, "corral-units-cwd /w\n[\"/w/test/alpha.test.ts\",\"/w/test/beta.test.ts\"]\n")
+	vf.answer("test/alpha.test.ts", sandbox.EnumerateResult{Output: jsReport("7 10 src/x.ts")})
+	vf.answer("test/beta.test.ts", sandbox.EnumerateResult{Output: jsReport("2 10 src/x.ts")})
+	jrun := &seedingFake{unitFakeRunner: vf.run, shareCache: true}
+	if ev := collect(vf, jrun); !ev.Settled() || jrun.cacheAsked != nil || slices.ContainsFunc(jrun.calls, func(c string) bool { return strings.HasPrefix(c, "warm ") }) {
+		t.Errorf("jest: ev = %+v, cache asked %+v, runs %q; want no cache and no warm run", ev, jrun.cacheAsked, jrun.calls)
+	}
 }
 
 // A runner that can seed is seeded once per pass, after the listing: every

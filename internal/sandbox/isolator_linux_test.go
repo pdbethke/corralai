@@ -411,3 +411,69 @@ func TestBwrapLowerProbeFailsClosed(t *testing.T) {
 		})
 	}
 }
+
+// A shared tool cache is mounted at its fixed in-jail path in one of two
+// shapes: frozen, a copy-on-write overlay of the host cache whose writes the
+// run discards, or (the one warming run) bound writable. Either way the
+// jail's Env points at it, once, whatever the host env said, and the mount
+// follows the workspace and every dependency mount, as they follow the
+// workspace.
+func TestBwrapArgvCacheFrozenAndWarm(t *testing.T) {
+	host := t.TempDir()
+	dep := t.TempDir()
+	base := Options{Workspace: "/w", ReadOnlyBinds: []Bind{{Host: dep, Target: "/w/node_modules", PerEntry: true}}}
+	env := []string{"GOCACHE=/host/.cache/go-build", "KEEP=1"}
+
+	frozen := base
+	frozen.Cache = &CacheMount{Host: host, Target: CacheTarget, Env: "GOCACHE", Frozen: true}
+	argv, err := overlayIso(func(string) bool { return true }).Wrap("true", frozen, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !argvHas(argv, "--overlay-src", host, "--tmp-overlay", "/corral-cache") {
+		t.Errorf("frozen: want --overlay-src HOST --tmp-overlay /corral-cache: %v", argv)
+	}
+	if argvHas(argv, "--bind", host, "/corral-cache") {
+		t.Errorf("frozen: the cache is bound writable: %v", argv)
+	}
+	if got := envSettings(argv, "--setenv")["GOCACHE"]; !slices.Equal(got, []string{"/corral-cache"}) {
+		t.Errorf("frozen: GOCACHE = %q, want set once to /corral-cache", got)
+	}
+	cache := slices.Index(argv, host)
+	dependency := slices.Index(argv, "/w/node_modules")
+	if cache < 0 || dependency < 0 || cache < dependency {
+		t.Errorf("the cache mount (at %d) must follow the dependency overlay (at %d): %v", cache, dependency, argv)
+	}
+
+	warm := base
+	warm.Cache = &CacheMount{Host: host, Target: CacheTarget, Env: "GOCACHE"}
+	argv, err = overlayIso(func(string) bool { return true }).Wrap("true", warm, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !argvHas(argv, "--bind", host, "/corral-cache") || argvHas(argv, "--overlay-src", host) {
+		t.Errorf("warm: want --bind HOST /corral-cache and no overlay of it: %v", argv)
+	}
+	if got := envSettings(argv, "--setenv")["GOCACHE"]; !slices.Equal(got, []string{"/corral-cache"}) {
+		t.Errorf("warm: GOCACHE = %q, want set once to /corral-cache", got)
+	}
+
+	// A cache with no Env is mounted and no variable is set for it.
+	argv, err = overlayIso(func(string) bool { return true }).Wrap("true", Options{Workspace: "/w", Cache: &CacheMount{Host: host, Target: CacheTarget, Frozen: true}}, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := envSettings(argv, "--setenv")["GOCACHE"]; !slices.Equal(got, []string{"/host/.cache/go-build"}) {
+		t.Errorf("no Env: GOCACHE = %q, want the host's, untouched", got)
+	}
+
+	// Frozen is never quietly a writable bind: a bwrap that cannot
+	// overlay, or a cache on a filesystem that cannot be a lower layer, is
+	// refused.
+	if _, err := (bwrapIsolator{}).Wrap("true", frozen, nil); err == nil {
+		t.Error("a bwrap that cannot overlay wrapped a frozen cache")
+	}
+	if _, err := overlayIso(func(string) bool { return false }).Wrap("true", frozen, nil); err == nil {
+		t.Error("a frozen cache on a filesystem that cannot be overlaid was wrapped")
+	}
+}

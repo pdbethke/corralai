@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -297,6 +298,9 @@ func (j bwrapJail) runInJailCapturing(ctx context.Context, files map[string]stri
 type runWorkspace struct {
 	dir    string
 	seeded bool
+	// cache is the seed's shared cache as this run mounts it (frozen, or
+	// writable for the one warming run), nil for none.
+	cache *sandbox.CacheMount
 }
 
 // runIn runs cmd in ws. It is the one place a jailed run is assembled —
@@ -331,6 +335,7 @@ func (j bwrapJail) runIn(ctx context.Context, ws runWorkspace, cmd []string, max
 		MaxOutput:     maxOutput, // 0 => sandbox.Run's own 16 KiB default
 		KeepTail:      keepTail,
 		SeedLower:     seedLower,
+		Cache:         ws.cache,
 	})
 	if err != nil {
 		if res.TimedOut {
@@ -363,12 +368,22 @@ type SeededJail = sandbox.SeededRunner
 //
 // The returned runs accept only the very map that was seeded — the same
 // map value, not an equal one — and refuse any other before running
-// anything, so a seed can never answer for a tree it does not hold.
+// anything, so a seed can never answer for a tree it does not hold. The
+// map must not change after Seed.
+//
+// cache, when non-nil, is a tool cache the runs share (lang.EvidenceCache):
+// Seed makes a directory for it beside the seed, which the one Warm run
+// fills and every other run sees frozen, at sandbox.CacheTarget, with
+// cache.Env set to that path. cache.Args is the caller's to put on its
+// commands; the jail reads only Env. When this bwrap cannot overlay the
+// directory's filesystem, or it cannot be made, the runs share no cache
+// (each starts from an empty one, as a fresh run always did) and Cache
+// says why.
 //
 // Seed refuses with ErrNoOverlay, writing nothing, when the backend cannot
 // overlay (sandbox.Overlays): the caller runs on a fresh copy per run and
 // says so.
-func (j bwrapJail) Seed(files map[string]string) (SeededJail, error) {
+func (j bwrapJail) Seed(files map[string]string, cache *lang.EvidenceCache) (SeededJail, error) {
 	if j.backend == nil {
 		return nil, errors.New("adequacy: no sandbox backend — refusing to run untrusted test+code unsandboxed")
 	}
@@ -379,30 +394,80 @@ func (j bwrapJail) Seed(files map[string]string) (SeededJail, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &seededJail{j: j, dir: dir, files: reflect.ValueOf(files).UnsafePointer()}, nil
+	s := &seededJail{j: j, dir: dir, files: reflect.ValueOf(files).UnsafePointer()}
+	if cache != nil {
+		s.shareCache(cache.Env)
+	}
+	return s, nil
+}
+
+// shareCache makes the seed's shared cache directory, or records in
+// s.cache why there is none. The directory stays writable on the host
+// (MkdirTemp's 0700, the jail's own uid): a frozen run's read-only view
+// comes from the overlay, and a go whose GOCACHE directory is not writable
+// fails with EACCES rather than building without it (measured).
+func (s *seededJail) shareCache(env string) {
+	dir, err := os.MkdirTemp("", "corral-cache-*")
+	if err != nil {
+		s.cache.Unshared = fmt.Sprintf("its directory could not be made: %v", err)
+		return
+	}
+	if !sandbox.OverlaysDir(s.j.backend, dir) {
+		os.RemoveAll(dir) // #nosec G104 -- best-effort cleanup of our own empty temp dir
+		s.cache.Unshared = "this bwrap cannot overlay a directory on the filesystem of " + filepath.Dir(dir)
+		return
+	}
+	s.cacheDir, s.cacheEnv = dir, env
+	s.cache.Target = sandbox.CacheTarget
 }
 
 // seededJail is Seed's SeededJail. Runs hold mu for reading for their whole
 // duration and Close takes it for writing, so the seed is never removed
-// from under a run that has it mounted.
+// from under a run that has it mounted. Warm takes it for writing too, so
+// the shared cache is never written under a run that has it overlaid.
 type seededJail struct {
 	j      bwrapJail
 	dir    string
 	files  unsafe.Pointer // the seeded map's identity, never dereferenced
 	mu     sync.RWMutex
 	closed bool
+	// cacheDir is the shared cache's host directory, "" for none; cache
+	// is what Cache reports of it. warmed and frozenRan enforce Warm's
+	// order: once, and before any frozen run.
+	cacheDir, cacheEnv string
+	cache              sandbox.SharedCache
+	warmed             bool
+	frozenRan          atomic.Bool
+}
+
+// mount is the shared cache as one run sees it, nil for none.
+func (s *seededJail) mount(frozen bool) *sandbox.CacheMount {
+	if s.cacheDir == "" {
+		return nil
+	}
+	return &sandbox.CacheMount{Host: s.cacheDir, Target: sandbox.CacheTarget, Env: s.cacheEnv, Frozen: frozen}
+}
+
+func (s *seededJail) seeded(files map[string]string) error {
+	if reflect.ValueOf(files).UnsafePointer() != s.files {
+		return errors.New("adequacy: a seeded jail runs only the tree it was seeded with, and was handed another")
+	}
+	return nil
 }
 
 func (s *seededJail) run(ctx context.Context, files map[string]string, cmd []string) (sandbox.Result, error) {
-	if reflect.ValueOf(files).UnsafePointer() != s.files {
-		return sandbox.Result{}, errors.New("adequacy: a seeded jail runs only the tree it was seeded with, and was handed another")
+	if err := s.seeded(files); err != nil {
+		return sandbox.Result{}, err
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.closed {
 		return sandbox.Result{}, errors.New("adequacy: the seeded jail is closed")
 	}
-	return s.j.runIn(ctx, runWorkspace{dir: s.dir, seeded: true}, cmd, s.j.maxOutput, false)
+	if s.cacheDir != "" {
+		s.frozenRan.Store(true)
+	}
+	return s.j.runIn(ctx, runWorkspace{dir: s.dir, seeded: true, cache: s.mount(true)}, cmd, s.j.maxOutput, false)
 }
 
 // Enumerate is bwrapJail.Enumerate over the seed.
@@ -420,8 +485,38 @@ func (s *seededJail) EnumerateDetailed(ctx context.Context, files map[string]str
 	return sandbox.EnumerateResult{Output: res.Output, ExitCode: res.ExitCode}, err
 }
 
-// Close waits for every run in progress, then removes the seed. Runs after
-// it are refused. A second Close does nothing.
+// Cache is what Seed made of the cache it was asked to share.
+func (s *seededJail) Cache() sandbox.SharedCache { return s.cache }
+
+// Warm is EnumerateDetailed with the shared cache writable: the one run
+// that fills it. It is refused on a seed that shares no cache, a second
+// time, and once any frozen run has started (a cache written after a run
+// read it would make two runs of one pass see two caches); it holds the
+// seed exclusively, so no frozen run overlays the cache while it is
+// written.
+func (s *seededJail) Warm(ctx context.Context, files map[string]string, cmd []string) (sandbox.EnumerateResult, error) {
+	if err := s.seeded(files); err != nil {
+		return sandbox.EnumerateResult{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch {
+	case s.closed:
+		return sandbox.EnumerateResult{}, errors.New("adequacy: the seeded jail is closed")
+	case s.cacheDir == "":
+		return sandbox.EnumerateResult{}, errors.New("adequacy: Warm on a seed that shares no cache")
+	case s.warmed:
+		return sandbox.EnumerateResult{}, errors.New("adequacy: the shared cache is warmed once, and already was")
+	case s.frozenRan.Load():
+		return sandbox.EnumerateResult{}, errors.New("adequacy: the shared cache is warmed before any frozen run, and one has run")
+	}
+	s.warmed = true
+	res, err := s.j.runIn(ctx, runWorkspace{dir: s.dir, seeded: true, cache: s.mount(false)}, cmd, s.j.maxOutput, false)
+	return sandbox.EnumerateResult{Output: res.Output, ExitCode: res.ExitCode}, err
+}
+
+// Close waits for every run in progress, then removes the seed and its
+// shared cache. Runs after it are refused. A second Close does nothing.
 func (s *seededJail) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -429,10 +524,16 @@ func (s *seededJail) Close() error {
 		return nil
 	}
 	s.closed = true
+	var errs []error
 	if err := os.RemoveAll(s.dir); err != nil {
-		return fmt.Errorf("adequacy: remove the seed %s: %w", s.dir, err)
+		errs = append(errs, fmt.Errorf("adequacy: remove the seed %s: %w", s.dir, err))
 	}
-	return nil
+	if s.cacheDir != "" {
+		if err := os.RemoveAll(s.cacheDir); err != nil {
+			errs = append(errs, fmt.Errorf("adequacy: remove the shared cache %s: %w", s.cacheDir, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // toolchainBinds is the read-only binds that make cmd's own toolchain

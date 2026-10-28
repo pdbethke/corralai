@@ -146,6 +146,39 @@ type Options struct {
 	// path prints. Only a backend that Overlays may be given one; Run refuses
 	// any other, because there the run would write into the seed itself.
 	SeedLower string
+
+	// Cache, when set, is a tool cache shared by several runs (the unit
+	// evidence pass's GOCACHE), mounted at Cache.Target. Only a backend
+	// that Overlays may be given one; Run refuses any other.
+	Cache *CacheMount
+}
+
+// CacheTarget is the fixed path inside the jail a shared cache is mounted
+// at. Fixed, not the host path, so every run of a pass names the cache the
+// same way whatever temp directory holds it on the host.
+const CacheTarget = "/corral-cache"
+
+// CacheMount is a shared cache directory and how one run sees it. Frozen,
+// the run sees Host through a copy-on-write overlay at Target: it reads
+// what the cache holds and its writes land in a private tmpfs upper layer
+// gone when it ends, so no run changes what another reads. Not frozen (the
+// one run that warms the cache), Host is bound writable at Target. Host is
+// writable on the host either way: read-only comes from the overlay alone
+// (a go whose GOCACHE is a read-only directory fails with EACCES, measured,
+// rather than building without it). Env, when set, is the variable the jail
+// sets to Target, in place of any value the host env gave it.
+type CacheMount struct {
+	Host, Target, Env string
+	Frozen            bool
+}
+
+// SharedCache is what a seed made of the cache it was asked to share among
+// its runs (adequacy's Seed). Target is the in-jail path every run sees it
+// at, "" when none is shared; Unshared says why one that was asked for is
+// not ("" when it is, or none was asked for), so the caller can say so.
+type SharedCache struct {
+	Target   string
+	Unshared string
 }
 
 // ErrNoOverlay is returned when a seeded workspace (Options.SeedLower) is
@@ -169,9 +202,16 @@ func (e *NoOverlayError) Is(target error) bool { return target == ErrNoOverlay }
 // accepts only the very map it was seeded with. Declared here, beside
 // EnumerateResult and for the same reason: adequacy implements it and
 // reposcan consumes it, and neither imports the other.
+//
+// When the seed shares a cache (Cache().Target non-empty), Enumerate and
+// EnumerateDetailed see it frozen, and Warm runs one command with it
+// writable: the one run that fills it, before any frozen run, never beside
+// one, and only once.
 type SeededRunner interface {
 	Enumerate(ctx context.Context, files map[string]string, cmd []string) (string, error)
 	EnumerateDetailed(ctx context.Context, files map[string]string, cmd []string) (EnumerateResult, error)
+	Warm(ctx context.Context, files map[string]string, cmd []string) (EnumerateResult, error)
+	Cache() SharedCache
 	Close() error
 }
 
@@ -415,6 +455,11 @@ func Run(ctx context.Context, command string, opts Options) Result {
 		// Here, and not only in each backend's Wrap: a backend that knows
 		// nothing of SeedLower would bind Workspace (the seed) writable.
 		return Result{ExitCode: -1, Err: (&NoOverlayError{Backend: opts.Backend.Name()}).Error()}
+	}
+	if opts.Cache != nil && !Overlays(opts.Backend) {
+		// As for SeedLower: a backend that knows nothing of Cache would
+		// run without it, and a frozen one has no overlay to freeze it.
+		return Result{ExitCode: -1, Err: opts.Backend.Name() + " backend: cannot mount a shared cache: " + ErrNoOverlay.Error()}
 	}
 	argv, werr := opts.Backend.Wrap(command, opts, env)
 	if werr != nil {

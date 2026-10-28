@@ -135,6 +135,16 @@ func (b bwrapIsolator) Wrap(command string, opts Options, env []string) ([]strin
 	if b.overlay && b.lowers == nil {
 		return nil, errors.New("bwrap: an overlaying isolator built without its per-filesystem probe")
 	}
+	if c := opts.Cache; c != nil {
+		if c.Host == "" || c.Target == "" {
+			return nil, errors.New("bwrap: a shared cache needs its host directory and its target")
+		}
+		if c.Frozen && !b.overlaysDir(c.Host) {
+			// Never a writable bind in its place: a frozen cache that
+			// some run could write would not be frozen.
+			return nil, fmt.Errorf("bwrap: the shared cache %s cannot be overlaid frozen: %w", c.Host, ErrNoOverlay)
+		}
+	}
 	if opts.SeedLower != "" {
 		if !b.overlay {
 			return nil, fmt.Errorf("bwrap: %w", ErrNoOverlay)
@@ -157,12 +167,18 @@ func (b bwrapIsolator) Wrap(command string, opts Options, env []string) ([]strin
 			if isPinned(kv[:i]) {
 				continue // pinned below, not inherited from the host
 			}
+			if opts.Cache != nil && opts.Cache.Env != "" && kv[:i] == opts.Cache.Env {
+				continue // set below, to the shared cache
+			}
 			argv = append(argv, "--setenv", kv[:i], kv[i+1:])
 		}
 	}
 	// The jail's own env pins (HOME, GOTOOLCHAIN, ...): see pinnedEnv.
 	for _, p := range pinsFor(opts.Network) {
 		argv = append(argv, "--setenv", p.Key, p.Value)
+	}
+	if opts.Cache != nil && opts.Cache.Env != "" {
+		argv = append(argv, "--setenv", opts.Cache.Env, opts.Cache.Target)
 	}
 	// Minimal read-only root (usrmerged Linux): the command can't read /home or
 	// host secrets, only the toolchain. The workspace is the ONLY writable path.
@@ -273,6 +289,19 @@ func (b bwrapIsolator) Wrap(command string, opts Options, env []string) ([]strin
 			continue
 		}
 		argv = append(argv, "--ro-bind", bnd.Host, bnd.Target)
+	}
+	// The shared cache (Options.Cache), at its own path outside the
+	// workspace, after the workspace and every dependency mount: the
+	// mount order this function keeps is workspace, then dependency
+	// overlays or binds with their masks, then the cache. Frozen, it is a
+	// copy-on-write overlay whose writes the run discards; warming, the
+	// host directory bound writable.
+	if c := opts.Cache; c != nil {
+		if c.Frozen {
+			argv = append(argv, "--overlay-src", c.Host, "--tmp-overlay", c.Target)
+		} else {
+			argv = append(argv, "--bind", c.Host, c.Target)
+		}
 	}
 	// Cover what of a toolchain root a whole-tree mount (/usr) would
 	// otherwise expose — a cargo home's credentials, config and checkouts

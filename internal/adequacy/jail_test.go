@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -451,7 +452,7 @@ func backendVersion(backend sandbox.Isolator) string {
 
 func seedOrFatal(t *testing.T, e Enumerator, files map[string]string) SeededJail {
 	t.Helper()
-	s, err := e.(bwrapJail).Seed(files)
+	s, err := e.(bwrapJail).Seed(files, nil)
 	if err != nil {
 		t.Fatalf("Seed: %v", err)
 	}
@@ -612,7 +613,7 @@ func TestSeededJailDependencySymlinkReachesNothing(t *testing.T) {
 // says so.
 func TestSeedRefusesABackendThatCannotOverlay(t *testing.T) {
 	j := NewEnumerator(&captureIsolator{name: "container"}, time.Second).(bwrapJail)
-	s, err := j.Seed(map[string]string{"a.txt": "x"})
+	s, err := j.Seed(map[string]string{"a.txt": "x"}, &lang.EvidenceCache{Env: "GOCACHE"})
 	var no *sandbox.NoOverlayError
 	if !errors.Is(err, ErrNoOverlay) || !errors.As(err, &no) || no.Backend != "container" || s != nil {
 		t.Errorf("Seed = (%v, %v), want (nil, ErrNoOverlay naming the container backend)", s, err)
@@ -623,16 +624,21 @@ func TestSeedRefusesABackendThatCannotOverlay(t *testing.T) {
 func TestSeededJailRunsNothingAfterClose(t *testing.T) {
 	e := NewEnumerator(overlayJailOrSkip(t), 30*time.Second)
 	files := map[string]string{"a.txt": "x"}
-	s, err := e.(bwrapJail).Seed(files)
+	s, err := e.(bwrapJail).Seed(files, &lang.EvidenceCache{Env: "GOCACHE"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir := s.(*seededJail).dir
+	dir, cache := s.(*seededJail).dir, s.(*seededJail).cacheDir
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Errorf("the seed %s outlived Close: %v", dir, err)
+	}
+	if cache == "" {
+		t.Error("the seed shares no cache, so its removal is unexercised")
+	} else if _, err := os.Stat(cache); !os.IsNotExist(err) {
+		t.Errorf("the shared cache %s outlived Close: %v", cache, err)
 	}
 	if _, err := s.Enumerate(context.Background(), files, []string{"true"}); err == nil {
 		t.Error("a closed seeded jail ran a command")
@@ -647,9 +653,9 @@ func TestSeededJailRunsNothingAfterClose(t *testing.T) {
 func TestEnumeratorOffersReposcansSeed(t *testing.T) {
 	var e Enumerator = NewEnumerator(nil, time.Second)
 	if _, ok := e.(interface {
-		Seed(files map[string]string) (sandbox.SeededRunner, error)
+		Seed(files map[string]string, cache *lang.EvidenceCache) (sandbox.SeededRunner, error)
 	}); !ok {
-		t.Error("the jail enumerator has no Seed(map[string]string) (sandbox.SeededRunner, error)")
+		t.Error("the jail enumerator has no Seed(map[string]string, *lang.EvidenceCache) (sandbox.SeededRunner, error)")
 	}
 }
 
@@ -689,5 +695,114 @@ func TestOverlaidDependencyCacheStartsEmpty(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(nm, ".vite", "y")); err == nil {
 			t.Errorf("%s: a write into node_modules/.vite reached the host", name)
 		}
+	}
+}
+
+// seedCacheOrSkip is a seed sharing a GOCACHE, skipped when this host's
+// temp filesystem cannot be an overlay's lower layer (the seed then shares
+// no cache, and says why).
+func seedCacheOrSkip(t *testing.T, e Enumerator, files map[string]string) SeededJail {
+	t.Helper()
+	s, err := e.(bwrapJail).Seed(files, &lang.EvidenceCache{Env: "GOCACHE"})
+	if err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	if c := s.Cache(); c.Target == "" {
+		t.Skipf("no shared cache on this host (%s); frozen-cache path unexercised", c.Unshared)
+	}
+	return s
+}
+
+// The one warming run writes into the shared cache; a frozen run that
+// writes another file and deletes the first changes nothing on the host.
+// Both runs find the cache through GOCACHE, which the jail sets.
+func TestFrozenCacheIsNotWritten(t *testing.T) {
+	e := NewEnumerator(overlayJailOrSkip(t), 30*time.Second)
+	files := map[string]string{"a.txt": "x"}
+	s := seedCacheOrSkip(t, e, files)
+	host := s.(*seededJail).cacheDir
+
+	res, err := s.Warm(context.Background(), files, []string{"sh", "-c", `echo first > "$GOCACHE/first" && echo "$GOCACHE"`})
+	if err != nil || res.ExitCode != 0 || strings.TrimSpace(res.Output) != sandbox.CacheTarget {
+		t.Fatalf("warm: %+v err=%v, want GOCACHE=%s and a write", res, err, sandbox.CacheTarget)
+	}
+	before := treeDigest(t, host)
+	if !strings.Contains(before, "first ") {
+		t.Fatalf("the warming write did not reach the host cache: %s", before)
+	}
+	res, err = s.EnumerateDetailed(context.Background(), files, []string{"sh", "-c", `cat "$GOCACHE/first" && echo second > "$GOCACHE/second" && rm "$GOCACHE/first" && test ! -e "$GOCACHE/first"`})
+	if err != nil || res.ExitCode != 0 || strings.TrimSpace(res.Output) != "first" {
+		t.Fatalf("frozen: %+v err=%v, want it to read the warm write and write over it", res, err)
+	}
+	if got := treeDigest(t, host); got != before {
+		t.Errorf("a frozen run changed the host cache:\nbefore %s\nafter  %s", before, got)
+	}
+	// A frozen run never sees another's writes either.
+	if out, err := s.Enumerate(context.Background(), files, []string{"sh", "-c", `ls "$GOCACHE"`}); err != nil || strings.TrimSpace(out) != "first" {
+		t.Errorf("a later frozen run sees %q (err=%v), want only the warm write", out, err)
+	}
+	// Warm happens once, before any frozen run.
+	if _, err := s.Warm(context.Background(), files, []string{"true"}); err == nil {
+		t.Error("a second Warm, after frozen runs, was run")
+	}
+}
+
+// Warm is refused on a seed that shares no cache, and on a map that is not
+// the seeded one, before anything runs.
+func TestWarmRefusals(t *testing.T) {
+	e := NewEnumerator(overlayJailOrSkip(t), 30*time.Second)
+	files := map[string]string{"a.txt": "x"}
+	if _, err := seedOrFatal(t, e, files).Warm(context.Background(), files, []string{"true"}); err == nil {
+		t.Error("Warm ran on a seed with no shared cache")
+	}
+	s := seedCacheOrSkip(t, e, files)
+	if _, err := s.Warm(context.Background(), map[string]string{"a.txt": "x"}, []string{"true"}); err == nil {
+		t.Error("Warm ran a map that was not the seeded one")
+	}
+}
+
+// A real go, in the jail, over a warmed and then frozen GOCACHE: the
+// frozen cache is really shared (without -count=1, go replays the warm
+// run's cached result, the negative control), and the unit evidence pass's
+// command (lang.EvidenceUnitCmd adds -count=1) runs the test again rather
+// than replaying it. The test prints the time, so a replay is its old line.
+func TestFrozenGoCacheNeverReplaysAResult(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("no go on PATH")
+	}
+	e := NewEnumerator(overlayJailOrSkip(t), 3*time.Minute)
+	files := map[string]string{
+		"go.mod":      "module example.com/m\n\ngo 1.21\n",
+		"p/p.go":      "package p\n\nfunc One() int { return 1 }\n",
+		"p/p_test.go": "package p\n\nimport (\n\t\"fmt\"\n\t\"testing\"\n\t\"time\"\n)\n\nfunc TestOne(t *testing.T) {\n\tfmt.Println(\"RAN\", time.Now().UnixNano())\n\tif One() != 1 {\n\t\tt.Fatal(\"no\")\n\t}\n}\n",
+	}
+	s := seedCacheOrSkip(t, e, files)
+	g, _ := lang.ByName("go")
+	unit := []string{"go", "test", "-v", "example.com/m/p"}
+	evidence := lang.EvidenceUnitCmd(g, lang.Cmd([]string{"go", "test", "-v", "./..."}), unit)
+	if !slices.Contains(evidence, "-count=1") {
+		t.Fatalf("the evidence command %q has no -count=1", evidence)
+	}
+	ran := func(out string) string {
+		for _, line := range strings.Split(out, "\n") {
+			if strings.HasPrefix(line, "RAN ") {
+				return line
+			}
+		}
+		return ""
+	}
+
+	warm, err := s.Warm(context.Background(), files, unit)
+	if err != nil || warm.ExitCode != 0 || ran(warm.Output) == "" {
+		t.Fatalf("warm: %+v err=%v", warm, err)
+	}
+	replay, err := s.EnumerateDetailed(context.Background(), files, unit)
+	if err != nil || replay.ExitCode != 0 || !strings.Contains(replay.Output, "(cached)") || ran(replay.Output) != ran(warm.Output) {
+		t.Fatalf("negative control: without -count=1 a frozen run should replay the warm result, got %+v err=%v; the cache is not shared, so this proves nothing", replay, err)
+	}
+	fresh, err := s.EnumerateDetailed(context.Background(), files, evidence)
+	if err != nil || fresh.ExitCode != 0 || strings.Contains(fresh.Output, "(cached)") || ran(fresh.Output) == "" || ran(fresh.Output) == ran(warm.Output) {
+		t.Errorf("the evidence command replayed a cached result: %+v err=%v (warm printed %q)", fresh, err, ran(warm.Output))
 	}
 }

@@ -133,9 +133,19 @@ func EvidenceUnitCmd(p Plugin, inv Invocation, unitCmd []string) []string {
 // command takes to use the cache at dir, appended after EvidenceArgs'. A
 // pass that cannot share the cache gives neither, and each unit starts
 // from an empty cache, as every jailed run did before.
+//
+// Name is what the pass calls the cache when it says it was not shared;
+// Env stands in when Name is "". Unsupported, when set, is why the tool
+// the operator's argv runs would not take Args — read from the tree as the
+// jail sees it (read: the seed, then the dependency directories mounted
+// into it), never learned by running the tool and reading an error — or ""
+// when it takes them. A cache it gives a reason for is not shared, and the
+// pass says why.
 type EvidenceCache struct {
-	Env  string
-	Args func(dir string) []string
+	Name        string
+	Env         string
+	Args        func(dir string) []string
+	Unsupported func(argv []string, read func(rel string) ([]byte, error)) string
 }
 
 // EvidenceCacheFor is argv's runner's EvidenceCache, or nil when the row

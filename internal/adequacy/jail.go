@@ -6,8 +6,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/pdbethke/corralai/internal/lang"
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
@@ -344,6 +346,46 @@ func (j bwrapJail) runIn(ctx context.Context, ws runWorkspace, cmd []string, max
 		return res, err
 	}
 	return res, nil
+}
+
+// ReadTreeFile reads one file of the tree a run over files sees, without
+// running anything: files' own text for rel, else the file at rel inside
+// the dependency directory this jail mounts there (the most specific
+// DepBind whose Rel holds rel), which is where node_modules is on a real
+// run. The unit evidence pass reads an installed tool's version this way
+// (lang.EvidenceCache.Unsupported). The read goes through an os.Root over
+// the directory, so a symlink that stays inside it (pnpm's
+// node_modules/<pkg> -> .pnpm/...) is followed and one that leaves it is
+// refused, as is a rel that is absolute or climbs out of the tree. A rel
+// in neither is fs.ErrNotExist.
+func (j bwrapJail) ReadTreeFile(files map[string]string, rel string) ([]byte, error) {
+	clean := path.Clean(filepath.ToSlash(rel))
+	if path.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, "../") {
+		return nil, fmt.Errorf("adequacy: %q is not a path inside the tree", rel)
+	}
+	if s, ok := files[clean]; ok {
+		return []byte(s), nil
+	}
+	var bind *DepBind
+	for i, b := range j.binds {
+		r := path.Clean(b.Rel)
+		if (clean == r || strings.HasPrefix(clean, r+"/")) && (bind == nil || len(r) > len(path.Clean(bind.Rel))) {
+			bind = &j.binds[i]
+		}
+	}
+	if bind == nil {
+		return nil, fs.ErrNotExist
+	}
+	inner := strings.TrimPrefix(strings.TrimPrefix(clean, path.Clean(bind.Rel)), "/")
+	if inner == "" {
+		return nil, fmt.Errorf("adequacy: %q is a dependency directory, not a file", rel)
+	}
+	root, err := os.OpenRoot(bind.Host)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	return root.ReadFile(inner)
 }
 
 // ErrNoOverlay is Seed's refusal on a backend that cannot overlay a seed

@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/sandbox"
 )
@@ -1198,5 +1199,19 @@ func TestCollectUnitEvidenceSeedsOnce(t *testing.T) {
 	}
 	if len(broken.ran) != 1 {
 		t.Errorf("a failed seed ran %d commands, want only the listing", len(broken.ran))
+	}
+}
+
+// The jail the pass runs on seeds and reads its tree: CollectUnitEvidence
+// finds both by type assertion, so a signature drift would silently turn
+// off the seed or the version gate's read of node_modules instead of
+// failing to build.
+func TestTheJailSeedsAndReadsItsTree(t *testing.T) {
+	j := adequacy.NewEnumerator(nil, time.Second)
+	if _, ok := j.(seedingRunner); !ok {
+		t.Error("adequacy's jail is not a seedingRunner")
+	}
+	if _, ok := j.(TreeReader); !ok {
+		t.Error("adequacy's jail is not a TreeReader")
 	}
 }

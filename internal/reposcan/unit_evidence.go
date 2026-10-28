@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"path"
 	"slices"
 	"sort"
@@ -184,11 +185,23 @@ func CollectUnitEvidence(ctx context.Context, runner commandRunner, files map[st
 	cache := lang.EvidenceCacheFor(p, inv)
 	cacheTarget := ""
 	if sr, ok := runner.(seedingRunner); ok {
-		s, err := sr.Seed(files, cache)
+		// A cache whose tool would not take its options (an installed
+		// version that predates them) is not asked for: the seed shares
+		// none, and the pass says why below.
+		asked, unsupported := cache, ""
+		if cache != nil && cache.Unsupported != nil {
+			if unsupported = cache.Unsupported(inv.Argv, treeFileReader(runner, files)); unsupported != "" {
+				asked = nil
+			}
+		}
+		s, err := sr.Seed(files, asked)
 		switch {
 		case err == nil:
 			seeded, unitRunner = s, s
-			if cache != nil {
+			switch {
+			case unsupported != "":
+				changed = joinChanged(changed, unitsUnsharedCache(cache, unsupported))
+			case cache != nil:
 				shared := s.Cache()
 				cacheTarget = shared.Target
 				if cacheTarget == "" {
@@ -212,9 +225,17 @@ func CollectUnitEvidence(ctx context.Context, runner commandRunner, files map[st
 		// The cache's own words go on each unit command after the
 		// evidence flags, before coverage wraps it, and only when the
 		// cache is shared: a unit told to use a cache that is not there
-		// would not be the run the operator's command describes.
+		// would not be the run the operator's command describes. They
+		// are words the operator did not write, so the note names them
+		// — on the scan line and in a red unit's reason — as the
+		// evidence flags are named. (On this path changed is still the
+		// note alone: every sentence added above is about a cache that
+		// was NOT shared.)
+		args := cache.Args(cacheTarget)
+		note = unitsCacheArgs(note, cache, args)
+		changed = note
 		for _, i := range runnable {
-			cov, ok := reporter.CoverageCmd(append(slices.Clone(evidenceCmds[i]), cache.Args(cacheTarget)...))
+			cov, ok := reporter.CoverageCmd(append(slices.Clone(evidenceCmds[i]), args...))
 			if !ok {
 				results[i].Err = "not run: its one-unit command has no coverage instrumentation with the shared cache's arguments"
 				cmds[i] = nil
@@ -292,15 +313,57 @@ func (w warmingRunner) EnumerateDetailed(ctx context.Context, files map[string]s
 	return w.s.Warm(ctx, files, cmd)
 }
 
+// treeFileReader reads a file of the tree a unit runs over, as the jail
+// will see it: the seed's own files, then, when the runner can
+// (TreeReader), the dependency directories it mounts into the jail, where
+// node_modules is on a real run. A runner that cannot gives
+// fs.ErrNotExist for anything outside the seed.
+func treeFileReader(runner commandRunner, files map[string]string) func(rel string) ([]byte, error) {
+	return func(rel string) ([]byte, error) {
+		if s, ok := files[rel]; ok {
+			return []byte(s), nil
+		}
+		if tr, ok := runner.(TreeReader); ok {
+			return tr.ReadTreeFile(files, rel)
+		}
+		return nil, fs.ErrNotExist
+	}
+}
+
+// TreeReader is a commandRunner that reads one file of a run's tree as the
+// jail sees it (adequacy's bwrapJail.ReadTreeFile): from files, else from
+// the dependency directory mounted at that path.
+type TreeReader interface {
+	ReadTreeFile(files map[string]string, rel string) ([]byte, error)
+}
+
+// unitsCacheArgs is note (lang.EvidenceNote, "" for no change) extended
+// with the options a shared cache adds to every unit command.
+func unitsCacheArgs(note string, cache *lang.EvidenceCache, args []string) string {
+	what := strings.Join(args, " ") + " (a shared " + cacheName(cache) + ", filled by the first unit and frozen for every later one)"
+	if note == "" {
+		return "the evidence pass runs each unit with " + what
+	}
+	return note + ", and with " + what
+}
+
+// cacheName is what the pass calls a cache: its Name, else its Env.
+func cacheName(cache *lang.EvidenceCache) string {
+	switch {
+	case cache.Name != "":
+		return cache.Name
+	case cache.Env != "":
+		return cache.Env
+	}
+	return "tool cache"
+}
+
 // unitsUnsharedCache is said, once per pass, of a pass whose seed could not
 // share the runner's tool cache (why, from SeededRunner.Cache): each unit
 // started from an empty one, as every jailed run did before the cache was
 // shared. It costs time, never evidence.
 func unitsUnsharedCache(cache *lang.EvidenceCache, why string) string {
-	name := "tool cache"
-	if cache.Env != "" {
-		name = cache.Env
-	}
+	name := cacheName(cache)
 	if why == "" {
 		why = "the seed gave no reason"
 	}

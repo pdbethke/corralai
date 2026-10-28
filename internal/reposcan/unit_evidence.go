@@ -197,6 +197,9 @@ func CollectUnitEvidence(ctx context.Context, runner commandRunner, files map[st
 			}
 		case errors.Is(err, sandbox.ErrNoOverlay):
 			changed = joinChanged(changed, unitsFreshCopy(err))
+			if cache != nil {
+				changed = joinChanged(changed, unitsUnsharedCache(cache, overlayRefuser(err)+" cannot overlay"))
+			}
 		default:
 			for _, i := range runnable {
 				results[i].Err = unitCouldNotRun + err.Error()
@@ -310,6 +313,12 @@ func unitsUnsharedCache(cache *lang.EvidenceCache, why string) string {
 // more workers that exhausted REA's tmpfs, and every unit failed ENOSPC).
 // It names the backend that refused when the error does.
 func unitsFreshCopy(err error) string {
+	return "units ran on a fresh copy each (" + overlayRefuser(err) + " cannot overlay)"
+}
+
+// overlayRefuser names the backend an ErrNoOverlay came from, for the
+// pass's sentences about it.
+func overlayRefuser(err error) string {
 	who := "this backend"
 	var no *sandbox.NoOverlayError
 	if errors.As(err, &no) {
@@ -318,7 +327,7 @@ func unitsFreshCopy(err error) string {
 			who = "this bwrap"
 		}
 	}
-	return "units ran on a fresh copy each (" + who + " cannot overlay)"
+	return who
 }
 
 // joinChanged appends one sentence to UnitEvidence.Changed.

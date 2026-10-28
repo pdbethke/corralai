@@ -1106,6 +1106,17 @@ func TestCollectUnitEvidenceWarmsOnceThenFreezes(t *testing.T) {
 		t.Errorf("unshared: Changed = %q, want %q", ev.Changed, wantChanged)
 	}
 
+	// A seed refused outright (no overlay at all) shares no cache either,
+	// and the pass says that too, beside the fresh-copy sentence.
+	rf := newUnitFixture(t, "go", []string{"go", "test", "./..."}, goTwoUnits)
+	answer(rf)
+	refused := &seedingFake{unitFakeRunner: rf.run, seedErr: &sandbox.NoOverlayError{Backend: "bwrap"}}
+	ev = collect(rf, refused)
+	wantChanged = "the evidence pass runs each unit with -count=1; units ran on a fresh copy each (this bwrap cannot overlay); each unit started from an empty GOCACHE (no shared cache: this bwrap cannot overlay)"
+	if !ev.Settled() || ev.Changed != wantChanged {
+		t.Errorf("seed refused: ev.Changed = %q, want %q", ev.Changed, wantChanged)
+	}
+
 	// A runner with no shared cache asks for none and never warms.
 	vf := newUnitFixture(t, "typescript", []string{"jest"}, "corral-units-cwd /w\n[\"/w/test/alpha.test.ts\",\"/w/test/beta.test.ts\"]\n")
 	vf.answer("test/alpha.test.ts", sandbox.EnumerateResult{Output: jsReport("7 10 src/x.ts")})

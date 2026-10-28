@@ -166,6 +166,9 @@ func goEvidenceArgs(args []string) ([]string, bool) {
 	if !ok {
 		return nil, false
 	}
+	// goTestArgs keeps a flag's value as the next word of opts, so only a
+	// word starting with "-" is a flag: `-tags count` is the tag "count",
+	// never the -count flag.
 	var kept []string
 	keptAt := 0
 	for i := 0; i < len(opts); i++ {
@@ -173,13 +176,22 @@ func goEvidenceArgs(args []string) ([]string, bool) {
 			keptAt = len(kept)
 		}
 		name, _, hasEq := strings.Cut(strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(opts[i], "-"), "-"), "test."), "=")
-		if name == "count" {
-			if !hasEq {
-				i++ // its value, which goTestArgs kept as the next word
+		value, _ := goTestOption(opts[i])
+		takes := strings.HasPrefix(opts[i], "-") && value && !hasEq && i+1 < len(opts)
+		if name == "count" && strings.HasPrefix(opts[i], "-") {
+			if takes {
+				i++ // its value
 			}
 			continue
 		}
 		kept = append(kept, opts[i])
+		if takes {
+			i++
+			if i == at {
+				keptAt = len(kept)
+			}
+			kept = append(kept, opts[i])
+		}
 	}
 	if at >= len(opts) {
 		keptAt = len(kept)

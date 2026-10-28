@@ -201,7 +201,14 @@ func evidenceChange(before, after []string) (added, replaced []string) {
 		}
 	}
 	for _, w := range after {
-		if !had[w] {
+		// Only an option is a change the operator is told of. A row adds
+		// a bare word or "--" only to keep its command's meaning — the
+		// "--" and ./... gotestsum's row writes for a command with no go
+		// test arguments, which bare gotestsum already runs — and each
+		// unit command names its own unit there anyway, so naming those
+		// words would say the pass ran something it did not. A row adds
+		// its options as single words (`--pool=threads`, `-count=1`).
+		if !had[w] && strings.HasPrefix(w, "-") && w != "--" {
 			added = append(added, w)
 		}
 	}

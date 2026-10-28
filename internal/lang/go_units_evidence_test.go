@@ -33,6 +33,11 @@ func TestGoTestEvidenceArgsCountOne(t *testing.T) {
 		{"go test, -test.count and --count", []string{"go", "test", "./..."},
 			[]string{"go", "test", "-test.count=2", "--count=4", "-race", "example.com/m/p"},
 			[]string{"go", "test", "-race", "example.com/m/p", "-count=1"}},
+		// A flag VALUE spelled like the flag is a value: -tags count
+		// keeps its tag and the flag after it.
+		{"go test, a value spelled count", []string{"go", "test", "./..."},
+			[]string{"go", "test", "-tags", "count", "-race", "example.com/m/p"},
+			[]string{"go", "test", "-tags", "count", "-race", "example.com/m/p", "-count=1"}},
 		{"go test, already -count=1", []string{"go", "test", "./..."},
 			[]string{"go", "test", "example.com/m/p", "-count=1"},
 			[]string{"go", "test", "example.com/m/p", "-count=1"}},
@@ -71,6 +76,12 @@ func TestGoTestEvidenceArgsCountOne(t *testing.T) {
 		{[]string{"go", "test", "-count", "1", "./..."}, ""},
 		{[]string{"gotestsum", "--", "-count=1", "./..."}, ""},
 		{[]string{"gotestsum", "--", "-count=5", "./..."}, "the evidence pass runs each unit with -count=1 in place of -count=5"},
+		{[]string{"gotestsum", "--", "-count=3", "./..."}, "the evidence pass runs each unit with -count=1 in place of -count=3"},
+		// The "--" and ./... the row adds to a gotestsum with no go test
+		// arguments only keep the command's meaning: each unit still runs
+		// its own package, and the note names only -count=1.
+		{[]string{"gotestsum", "--format", "dots"}, "the evidence pass runs each unit with -count=1"},
+		{[]string{"gotestsum"}, "the evidence pass runs each unit with -count=1"},
 	} {
 		if got := EvidenceNote(g, Cmd(c.argv)); got != c.want {
 			t.Errorf("EvidenceNote(%q) = %q, want %q", c.argv, got, c.want)

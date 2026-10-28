@@ -40,10 +40,16 @@ const MethodUnitEvidence = "unit-evidence"
 // Map records which test nodes executed which source files, and under what
 // conditions that evidence was collected.
 type Map struct {
-	Schema  int
-	Lang    string            // plugin name
-	Runner  string            // runner row ID
-	Command []string          // the operator's argv the evidence ran under
+	Schema int
+	Lang   string // plugin name
+	Runner string // runner row ID
+	// Command is the operator's test command (argv) the map was built
+	// for, as written. It is not every word the evidence ran with: the unit
+	// evidence pass may add runner flags per unit (lang.EvidenceUnitCmd:
+	// vitest's --pool=threads, go's -count=1, a shared cache's options),
+	// and none of those is recorded in the map; the pass names them on its
+	// scan line (reposcan.UnitEvidence.Changed).
+	Command []string
 	Scope   []string          // source roots / enumerated scope the map was built for; nil = whole repo
 	Tree    string            // tree digest the evidence was collected on
 	Method  string            // "coverage-context" | "unit-evidence"

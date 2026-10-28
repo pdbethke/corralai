@@ -2657,8 +2657,15 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 // deps line and review's jail note: one copy-on-write overlay (the run may
 // write, the writes are discarded with it), read-only per entry because the
 // directory's filesystem cannot be an overlay's lower layer although this
-// bwrap overlays, or read-only (a backend that does not overlay).
+// bwrap overlays, or read-only (a backend that does not overlay). A
+// directory that cannot be listed comes first: every dependency bind is
+// PerEntry, its per-entry binds expand to nothing, and bwrap does not
+// overlay it (sandbox.OverlaysDir needs its listing for the cache masks), so
+// no backend mounts it and the line must not name a mount.
 func depMountWords(iso sandbox.Isolator, host string) string {
+	if _, err := os.ReadDir(host); err != nil {
+		return "not mounted: it could not be read"
+	}
 	switch {
 	case sandbox.OverlaysDir(iso, host):
 		return "copy-on-write, writable in the run only"

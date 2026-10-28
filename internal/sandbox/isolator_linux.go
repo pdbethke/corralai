@@ -49,9 +49,32 @@ func (bwrapIsolator) Name() string { return "bwrap" }
 func (b bwrapIsolator) overlays() bool { return b.overlay }
 
 // overlaysDir reports whether a PerEntry bind of host is one overlay: the
-// bwrap overlays at all, and host's filesystem can be a lower layer.
+// bwrap overlays at all, host can be listed (the overlay's cache masks are
+// read from it), and host's filesystem can be a lower layer. It is
+// dirOverlay's answer, so OverlaysDir (which the deps line reads) and Wrap
+// (which mounts) decide alike.
 func (b bwrapIsolator) overlaysDir(host string) bool {
-	return b.overlay && b.lowers != nil && b.lowers.overlays(host)
+	_, ok := b.dirOverlay(host, host)
+	return ok
+}
+
+// dirOverlay is the one decision behind overlaysDir and Wrap's dependency
+// mount: whether a PerEntry bind of host at target is one overlay, and if
+// so the cache masks laid over it. A host that cannot be listed is not
+// overlaid: its masks cannot be computed, and an overlay without them
+// would let a host cache steer the run. The listing is read again at each
+// call, so a directory whose permissions change between the deps line and
+// the run can still be disclosed one way and mounted the other; nothing in
+// a run changes a dependency directory's permissions.
+func (b bwrapIsolator) dirOverlay(host, target string) ([]string, bool) {
+	if !b.overlay || b.lowers == nil {
+		return nil, false
+	}
+	masks, err := cacheDirMasks(host, target)
+	if err != nil || !b.lowers.overlays(host) {
+		return nil, false
+	}
+	return masks, true
 }
 
 // lowerCache is the per-filesystem answer to "can a directory here be an
@@ -274,9 +297,9 @@ func (b bwrapIsolator) Wrap(command string, opts Options, env []string) ([]strin
 		// creates a mountpoint only when its parent already exists and is
 		// writable, and an overlay or bind made before the workspace mount
 		// would be hidden under it.
-		if bnd.PerEntry && b.overlaysDir(bnd.Host) {
+		if bnd.PerEntry {
 			// The cache masks come after the overlay they cover.
-			if masks, err := cacheDirMasks(bnd.Host, bnd.Target); err == nil {
+			if masks, ok := b.dirOverlay(bnd.Host, bnd.Target); ok {
 				argv = append(argv, "--overlay-src", bnd.Host, "--tmp-overlay", bnd.Target)
 				argv = append(argv, masks...)
 				continue

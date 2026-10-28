@@ -186,6 +186,16 @@ func runTestsMap(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	printTestsMap(stdout, m)
+	// A map served from the selection cache ran nothing, so every line below
+	// about the pass (what it changed in the command, which units its bound
+	// cut) describes an earlier run. Said first, and on every hit, as
+	// certify --repo's units line says "reused" on every hit: printed only
+	// when --evidence-timeout was given, an earlier run's sentences read as
+	// this run's. A bound the operator named was never read either; the
+	// clause says so rather than let it pass as used.
+	if ex.unitsReused || ex.selectionReused {
+		fmt.Fprintf(stdout, "evidence: reused from the selection cache — tree unchanged since an earlier run%s\n", ex.evidenceTimeoutUnused("cached evidence, no run"))
+	}
 	// The evidence came from a command the operator did not write; said
 	// once, whether every unit was green or not (lang.EvidenceNote).
 	if unitPass && ex.units.Changed != "" {
@@ -195,11 +205,6 @@ func runTestsMap(args []string, stdout, stderr io.Writer) int {
 	// this says which bound and the flag that raises it.
 	if cut := ex.units.CutShort(); unitPass && cut > 0 {
 		fmt.Fprintln(stdout, evidenceCutNote(cut, ex.evidenceTimeout))
-	}
-	// A map served from the selection cache ran nothing, so a bound the
-	// operator named was never read; say so rather than let it pass as used.
-	if (ex.unitsReused || ex.selectionReused) && ex.evidenceTimeoutGiven {
-		fmt.Fprintf(stdout, "evidence: reused from the selection cache — tree unchanged since an earlier run%s\n", ex.evidenceTimeoutUnused("cached evidence, no run"))
 	}
 	// Written after the summary, and only now: a pass that did not run wrote
 	// nothing above, so a file on disk always holds a map that was built.

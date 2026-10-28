@@ -356,6 +356,34 @@ func TestBwrapArgvDependencyOnARefusingFilesystemStaysPerEntry(t *testing.T) {
 	}
 }
 
+// A dependency directory the isolator cannot read is not overlaid, and
+// OverlaysDir says so: Wrap needs the directory's listing for its cache
+// masks, and the deps line reads OverlaysDir, so the disclosure and the
+// mount must come from the same decision. (Before, OverlaysDir said
+// copy-on-write while Wrap fell back to per-entry binds.)
+func TestBwrapUnreadableDependencyDirIsNotOverlaid(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root reads a directory whatever its mode")
+	}
+	host := filepath.Join(t.TempDir(), "node_modules")
+	if err := os.Mkdir(host, 0o300); err != nil { // #nosec G301 -- deliberately unreadable
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(host, 0o700) }) // #nosec G302 -- let TempDir clean up
+	iso := overlayIso(func(string) bool { return true })
+	if OverlaysDir(iso, host) {
+		t.Error("OverlaysDir = true for a directory that cannot be read")
+	}
+	opts := Options{Workspace: "/w", ReadOnlyBinds: []Bind{{Host: host, Target: "/w/node_modules", PerEntry: true}}}
+	argv, err := iso.Wrap("true", opts, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if argvHas(argv, "--overlay-src", host) {
+		t.Errorf("an unreadable directory was overlaid: %v", argv)
+	}
+}
+
 // The lower probe runs once per filesystem (st_dev), however many
 // directories on it ask.
 func TestLowerCacheProbesOncePerFilesystem(t *testing.T) {

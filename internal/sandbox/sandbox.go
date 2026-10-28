@@ -63,7 +63,9 @@ type Bind struct {
 	// in Host is a symlink in the jail, resolved there, where a link leaving
 	// Host reaches only what the jail mounts (the per-entry binds refused
 	// such a link, because a bind follows its source). A Host on a
-	// filesystem overlayfs refuses as a lower keeps the per-entry binds.
+	// filesystem overlayfs refuses as a lower keeps the per-entry binds, as
+	// does a Host that cannot be listed (its masks cannot be computed; its
+	// per-entry binds then expand to nothing).
 	PerEntry bool
 }
 
@@ -230,9 +232,10 @@ func Overlays(iso Isolator) bool {
 type dirOverlayer interface{ overlaysDir(host string) bool }
 
 // OverlaysDir reports whether iso mounts a PerEntry bind of host as one
-// copy-on-write overlay (Bind.PerEntry): it overlays at all, and host's
-// filesystem can be an overlay's lower layer (probed once per filesystem).
-// False means the bind is read-only, one mount per entry.
+// copy-on-write overlay (Bind.PerEntry): it overlays at all, host can be
+// listed, and host's filesystem can be an overlay's lower layer (probed once
+// per filesystem). It is the same decision Wrap mounts by. False means the
+// bind is read-only, one mount per entry.
 func OverlaysDir(iso Isolator, host string) bool {
 	o, ok := iso.(dirOverlayer)
 	return ok && o.overlaysDir(host)

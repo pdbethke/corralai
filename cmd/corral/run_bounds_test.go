@@ -443,3 +443,47 @@ func TestEvidenceTimeoutUnusedOnACacheHitIsSaid(t *testing.T) {
 		t.Errorf("the scan's units line on a cache hit must say the bound went unused:\n%s", b.String())
 	}
 }
+
+// A cache hit that prints the pass's Changed sentence says the evidence
+// was reused, whether or not --evidence-timeout was given: otherwise an
+// earlier run's "evidence: …" line reads as this run's. The reuse line
+// comes before it.
+func TestTestsMapSaysReusedWheneverChangedIsFromCache(t *testing.T) {
+	refuseModelEndpoints(t)
+	const changed = "each unit ran with --pool=threads, which the operator's command did not name"
+	const reused = "evidence: reused from the selection cache"
+	root := unitEvidenceTSFixture(t)
+	gitRun := gitCmd(t, root)
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+	fake := &fakeUnitPass{ev: reposcan.UnitEvidence{Ran: true, Changed: changed, Units: []reposcan.UnitResult{
+		unitRun("tests/composition/service.test.ts", map[string]lang.LineCounts{"src/app/Service.ts": {Executed: 1, Executable: 1}}),
+	}}}
+	fake.install(t)
+	cacheDB := filepath.Join(t.TempDir(), "cache.duckdb")
+	run := func() string {
+		var out, errb bytes.Buffer
+		if code := runTests([]string{"map", "--repo-dir", root, "--substrate", substrateWorkspace, "--cache-db", cacheDB, "--", "vitest", "run"}, &out, &errb); code != 0 {
+			t.Fatalf("exit %d\n%s", code, errb.String())
+		}
+		return out.String()
+	}
+	if s := run(); strings.Contains(s, reused) || !strings.Contains(s, "evidence: "+changed) {
+		t.Errorf("the first run ran the pass: want its Changed line and no reuse line:\n%s", s)
+	}
+	s := run()
+	if n := len(fake.called()); n != 1 {
+		t.Fatalf("the pass ran %d time(s), want 1 (the second run is a cache hit)", n)
+	}
+	r, c := strings.Index(s, reused), strings.Index(s, "evidence: "+changed)
+	if c < 0 {
+		t.Fatalf("a cache hit must still print the cached pass's Changed:\n%s", s)
+	}
+	if r < 0 || r > c {
+		t.Errorf("a cache hit printing Changed must say, before it, that the evidence was reused:\n%s", s)
+	}
+	if strings.Contains(s, "--evidence-timeout") {
+		t.Errorf("with no flag, the reuse line carries no --evidence-timeout clause:\n%s", s)
+	}
+}

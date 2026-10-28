@@ -279,7 +279,17 @@ package reposcan
 // AuthoredFallback, UnreportedReason and UnitNoun (nested, so outside the
 // shallow fingerprint below).
 // Behaviour bump.
-const VerdictGeneration = "36"
+//
+// "37" (2026-10-27): the unit evidence pass runs vitest units with
+// --pool=threads (lang.EvidenceUnitCmd). Under the forks pool a unit's
+// worker wrote no coverage, so a "36" pass recorded a forks-project unit as
+// clean evidence holding only what the main process and subprocesses wrote
+// (measured on REA: 1, 4 and 13 source files where threads executes 40, 11
+// and 59), and a "36" verdict's selection could leave out a unit that runs
+// the file. "36" never left its branch; bumped anyway, because a dev box's
+// cache holds "36" verdicts graded on that evidence. Verdict unchanged;
+// behaviour bump.
+const VerdictGeneration = "37"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

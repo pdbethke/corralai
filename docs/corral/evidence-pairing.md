@@ -276,6 +276,20 @@ repositories built from the runner-table fixture suites
   project file, which is what vitest's forks pool gives (measured on vitest
   3.2.7); run with --pool=threads`. The vitest row of the language-support
   page states the condition.
+- **Correction, 2026-10-27: that line was not the whole of it.** A forks-pool
+  unit whose test spawned a subprocess, or whose configuration the main
+  process imported, did name project files: the ones those processes wrote,
+  never the worker's. Such a unit passed as clean evidence. On REA (vitest
+  5.0.3, a copy holding only these three test files, the jail, 3 workers),
+  `hopperClient.protocol.test.ts`, `ciQualification.test.ts` and
+  `ghidraEndpointLifetime.test.ts` executed 1, 4 and 13 source files under
+  the forks pool their projects configure, and 40, 11 and 59 under
+  `--pool=threads` (n=3 for threads, n=1 for forks). The unit evidence pass
+  now runs every vitest unit with `--pool=threads` itself (the row's
+  `EvidenceArgs`; grading is unchanged), and a unit that is red that way is
+  reported with no evidence, naming the flag, rather than graded on partial
+  evidence. The no-worker-coverage line above is what a unit reads when even
+  that names no project file.
 - After the review's fixes, jest (3 run, 0 failed, `lib/one.js` promoted, jail
   and workspace) and commander.js in the jail (109 run, 4 failed, 7 promoted)
   were re-run, with the same results.

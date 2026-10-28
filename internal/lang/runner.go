@@ -130,6 +130,27 @@ type Runner struct {
 	// disclosed — measured, with what to do about it; "" when the runner
 	// has no such known cause and the general "unparseable" reason stands.
 	UnitNoCoverage string
+	// EvidenceArgs is a unit command (UnitRunCmd's result) with the flags
+	// the unit EVIDENCE pass needs and grading does not: the pass runs each
+	// unit alone under coverage to learn what it executes, and a flag that
+	// changes how the runner schedules its workers can change what coverage
+	// those workers write without changing whether the tests pass. Grading
+	// never sees these flags. nil means the evidence pass runs the unit
+	// command unchanged; the field is optional per runner, so the parity
+	// table holds no entry for it. Callers go through EvidenceUnitCmd and
+	// EvidenceNote, never the field. It must also accept the operator's own
+	// argv: EvidenceNote applies it there to name the words it adds, and the
+	// unit pass's cache key digests it over that argv.
+	//
+	// vitest sets it because its forks pool SIGTERMs its workers, which then
+	// write no V8 coverage: the pass recorded only what the main process
+	// and subprocesses wrote, and called the unit clean. Measured
+	// 2026-10-27 on vitest 5.0.3: three forks-pool units executed 1, 4 and
+	// 13 source files that way, and 40, 11 and 59 with --pool=threads. A
+	// SIGTERM handler calling v8.takeCoverage recovered worker coverage for
+	// 30 and then 84 of 93 files on two runs of the same batch, so it is
+	// not a fix.
+	EvidenceArgs func(unitCmd []string) []string
 	// Disclose is what the scan line says about running this runner in
 	// repoDir; PreflightBin is the binary that must be on PATH.
 	Disclose     func(repoDir string, argv []string) []string
@@ -249,8 +270,9 @@ var runners = []Runner{
 		FirstFailure: firstOf(vitestFailures), FailedTests: vitestFailures, DeselectCmd: vitestDeselectCmd,
 		ListUnits: vitestListUnits, ParseUnits: vitestParseUnits, UnitCmd: oneUnit(vitestUnitsCmd), UnitCoruns: vitestUnitCoruns,
 		UnitsCmd: vitestUnitsCmd, UnitsCoruns: eachUnitCoruns(vitestUnitCoruns), UnitForFile: fileUnitForFile, UnitNoun: "test files",
-		UnitNoCoverage: "no worker coverage: the run's V8 coverage named no project file, which is what vitest's forks pool gives (measured on vitest 3.2.7); run with --pool=threads",
-		Note:           "listing, one-test, one-file and several-file runs verified on vitest 3.2; unit evidence needs --pool=threads (vitest 3.2.7's default forks pool wrote no worker coverage); unit evidence counted through corral's vm source-map preload on vitest 3.2.7 and 5.0.3; vitest 1, 2 and 4 were not run",
+		EvidenceArgs:   vitestEvidenceArgs,
+		UnitNoCoverage: "no worker coverage: the run's V8 coverage named no project file, though corral ran the unit with --pool=threads; that is what vitest's forks pool gives (measured on vitest 3.2.7 and 5.0.3), so check whether the test file itself forces another pool",
+		Note:           "listing, one-test, one-file and several-file runs verified on vitest 3.2; the unit evidence pass runs each file with --pool=threads, because the forks pool wrote no worker coverage (measured on vitest 3.2.7 and 5.0.3); unit evidence counted through corral's vm source-map preload on vitest 3.2.7 and 5.0.3; vitest 1, 2 and 4 were not run",
 	},
 	{
 		Name: "node --test", ID: "node-test", Languages: []string{"javascript", "typescript"}, Default: true,

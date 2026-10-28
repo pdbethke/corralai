@@ -112,6 +112,39 @@ func UnitNoCoverageReason(p Plugin, inv Invocation) string {
 	return r.UnitNoCoverage
 }
 
+// EvidenceUnitCmd is unitCmd (a UnitRunCmd result) as the unit evidence
+// pass runs it: with the runner's evidence-only flags (Runner.EvidenceArgs),
+// or unchanged when its row has none. Grading never calls it.
+func EvidenceUnitCmd(p Plugin, inv Invocation, unitCmd []string) []string {
+	r, ok := RunnerFor(p, inv)
+	if !ok || r.EvidenceArgs == nil {
+		return unitCmd
+	}
+	return r.EvidenceArgs(slices.Clone(unitCmd))
+}
+
+// EvidenceNote is one sentence naming what the evidence pass changed in
+// argv's command (the words EvidenceArgs adds to the operator's own), for a
+// unit failure's reason: the operator's command may pass where the evidence
+// pass's does not. "" when the row has no evidence flags or argv already
+// carries them.
+func EvidenceNote(p Plugin, inv Invocation) string {
+	r, ok := RunnerFor(p, inv)
+	if !ok || r.EvidenceArgs == nil {
+		return ""
+	}
+	var added []string
+	for _, w := range r.EvidenceArgs(slices.Clone(inv.Argv)) {
+		if !slices.Contains(inv.Argv, w) {
+			added = append(added, w)
+		}
+	}
+	if len(added) == 0 {
+		return ""
+	}
+	return "run with " + strings.Join(added, " ") + ", which the evidence pass adds to the unit command"
+}
+
 // UnitName is a listed unit without the mark ParseUnitList gives one that
 // cannot run alone.
 func UnitName(unit string) string { return listedName(unit) }

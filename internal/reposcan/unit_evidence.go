@@ -82,7 +82,8 @@ const (
 )
 
 // CollectUnitEvidence lists the units inv collects and runs each one's
-// coverage command (CoverageCmd over UnitRunCmd) once, workers at a time.
+// coverage command (CoverageCmd over EvidenceUnitCmd over UnitRunCmd) once,
+// workers at a time.
 //
 // It never stretches its budget: ctx is the caller's deadline for the whole
 // pass, and a unit not yet started when it passes is recorded unitNotRunTimeLimit
@@ -146,7 +147,9 @@ func CollectUnitEvidence(ctx context.Context, runner commandRunner, files map[st
 			results[i].Err = fmt.Sprintf("not run: `%s` has no one-unit command for it", command)
 			continue
 		}
-		cov, ok := reporter.CoverageCmd(unitCmd)
+		// The evidence pass's own flags (vitest's threads pool) go on the
+		// unit command before coverage wraps it; grading never gets them.
+		cov, ok := reporter.CoverageCmd(lang.EvidenceUnitCmd(p, inv, unitCmd))
 		if !ok {
 			results[i].Err = "not run: its one-unit command has no coverage instrumentation"
 			continue
@@ -159,6 +162,7 @@ func CollectUnitEvidence(ctx context.Context, runner commandRunner, files map[st
 	}
 
 	noCoverage := lang.UnitNoCoverageReason(p, inv)
+	note := lang.EvidenceNote(p, inv)
 	announce(len(runnable), len(units))
 	jobs := make(chan int)
 	var wg sync.WaitGroup
@@ -167,7 +171,7 @@ func CollectUnitEvidence(ctx context.Context, runner commandRunner, files map[st
 		go func() {
 			defer wg.Done()
 			for i := range jobs {
-				r := runUnit(ctx, runner, files, reporter, cmds[i], modulePath, noCoverage)
+				r := runUnit(ctx, runner, files, reporter, cmds[i], modulePath, noCoverage, note)
 				r.Unit = results[i].Unit
 				results[i] = r
 			}
@@ -221,8 +225,15 @@ func (ev UnitEvidence) CutShort() int {
 // runUnit runs one unit's coverage command and reads its report. Every way
 // the run can fail to measure is an Err, never an empty Counts. noCoverage
 // is the runner's known cause for a report that names no project file at
-// all (lang.UnitNoCoverageReason), "" for none.
-func runUnit(ctx context.Context, runner commandRunner, files map[string]string, reporter lang.CoverageReporter, cmd []string, modulePath, noCoverage string) UnitResult {
+// all (lang.UnitNoCoverageReason), "" for none. note is what the evidence
+// pass changed in the operator's command (lang.EvidenceNote), "" for
+// nothing: a red unit's reason names it, because the operator's own run of
+// the same unit may be green without it.
+func runUnit(ctx context.Context, runner commandRunner, files map[string]string, reporter lang.CoverageReporter, cmd []string, modulePath, noCoverage, note string) UnitResult {
+	ran := ""
+	if note != "" {
+		ran = " (" + note + ")"
+	}
 	if err := ctx.Err(); err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
 			return UnitResult{Err: unitNotRunTimeLimit}
@@ -243,9 +254,9 @@ func runUnit(ctx context.Context, runner commandRunner, files map[string]string,
 		// toolchain the jail lacks — is not evidence, even when a report
 		// still parses: a failing unit can stop before the code it would
 		// have executed, so its zeros are not "never executed".
-		return UnitResult{Err: fmt.Sprintf("run failed: exited %d%s", exit, failureTail(stderr, lang.BeforeSuiteExit(out)))}
+		return UnitResult{Err: fmt.Sprintf("run failed: exited %d%s%s", exit, ran, failureTail(stderr, lang.BeforeSuiteExit(out)))}
 	case detailed && exit < 0:
-		return UnitResult{Err: "run failed: the process did not exit normally" + failureTail(stderr, lang.BeforeSuiteExit(out))}
+		return UnitResult{Err: "run failed: the process did not exit normally" + ran + failureTail(stderr, lang.BeforeSuiteExit(out))}
 	case truncated(out):
 		// Checked before parsing, as Preflight does: a report cut on a
 		// clean boundary parses as a partial map that looks complete.
@@ -269,7 +280,7 @@ func runUnit(ctx context.Context, runner commandRunner, files map[string]string,
 		// What the suite printed before its trailer says why it failed
 		// (stderr when the runner kept it apart); the report after it
 		// does not.
-		return UnitResult{Err: fmt.Sprintf("run failed: exit %d%s", rc, failureTail(stderr, lang.BeforeSuiteExit(out)))}
+		return UnitResult{Err: fmt.Sprintf("run failed: exit %d%s%s", rc, ran, failureTail(stderr, lang.BeforeSuiteExit(out)))}
 	}
 	if reason, unavailable := lang.CoverageUnavailable(out); unavailable {
 		return UnitResult{Err: unitCoverageUnavailable + reason}

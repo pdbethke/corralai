@@ -156,8 +156,9 @@ func (l *localExecutor) collectUnits(ctx context.Context, sources []string) repo
 // unitsCacheKey is the selection cache key a unit pass is stored under: the
 // tree (treeDigestOnce, as selection's), and a digest over the two command
 // shapes that produced the evidence — the unit listing argv, and the
-// coverage instrument wrapped around the operator's command, which is the
-// wrapper every one-unit command is run under. ok is false when either
+// coverage instrument wrapped around the operator's command with the
+// evidence pass's own flags (lang.EvidenceUnitCmd), which is the wrapper
+// and the flags every one-unit command is run under. ok is false when either
 // cannot be named: no listing (the pass refuses before running anything,
 // so there is nothing to cache) or a tree outside git.
 func (l *localExecutor) unitsCacheKey(plug lang.Plugin, inv lang.Invocation) (treeDigest, cmdDigest string, ok bool) {
@@ -169,7 +170,11 @@ func (l *localExecutor) unitsCacheKey(plug lang.Plugin, inv lang.Invocation) (tr
 	if !ok {
 		return "", "", false
 	}
-	covCmd, ok := reporter.CoverageCmd(inv.Argv)
+	// The evidence flags the pass adds (lang.EvidenceUnitCmd) are part of
+	// what produced the evidence: a vitest pass from before --pool=threads
+	// holds forks-pool units recorded clean without their worker's coverage,
+	// and must not be served for a pass that would run them in threads.
+	covCmd, ok := reporter.CoverageCmd(lang.EvidenceUnitCmd(plug, inv, inv.Argv))
 	if !ok {
 		return "", "", false
 	}

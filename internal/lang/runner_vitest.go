@@ -149,3 +149,14 @@ func vitestUnitsCmd(argv []string, units []string) ([]string, bool) {
 func vitestUnitCoruns(unit, other string) bool {
 	return unit != other && strings.Contains(strings.ToLower(other), strings.ToLower(filepath.Base(unit)))
 }
+
+// vitestEvidenceArgs runs a unit in the threads pool for the evidence pass
+// (Runner.EvidenceArgs says why the forks pool cannot be used). The
+// operator's own --pool, in either spelling, is removed and --pool=threads
+// goes last, so the flag is the command's one pool choice and the last
+// word whatever vitest makes of a repeated option. CLI --pool overrides a
+// project's configured pool (REA's forks projects ran threads with it on
+// vitest 5.0.3). --poolOptions and every other flag are left as written.
+func vitestEvidenceArgs(unitCmd []string) []string {
+	return append(withoutFlag(unitCmd, "--pool"), "--pool=threads")
+}

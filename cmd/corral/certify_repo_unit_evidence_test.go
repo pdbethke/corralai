@@ -703,3 +703,28 @@ func TestUnitPassCapsTheFailedUnitList(t *testing.T) {
 		t.Errorf("the cap must say how many lines it withheld:\n%s", s)
 	}
 }
+
+// The unit pass's cache key digests the coverage command the pass RUNS,
+// evidence flags included (lang.EvidenceUnitCmd): a vitest pass made before
+// --pool=threads was added recorded forks-pool units as clean evidence
+// holding only the main process's and subprocesses' coverage, and a key over
+// the operator's bare command would serve that pass again on the same tree.
+func TestUnitsCacheKeyDigestsTheEvidenceFlags(t *testing.T) {
+	ts, _ := lang.ByName("typescript")
+	inv := lang.Cmd([]string{"node", "./node_modules/vitest/vitest.mjs", "run"})
+	l := &localExecutor{treeDigestComputed: true, treeDigest: "tree"}
+	_, got, ok := l.unitsCacheKey(ts, inv)
+	if !ok {
+		t.Fatal("no key for a vitest command")
+	}
+	list, _ := lang.ListUnitsCmd(ts, inv)
+	reporter := ts.(lang.CoverageReporter)
+	runs, _ := reporter.CoverageCmd(lang.EvidenceUnitCmd(ts, inv, inv.Argv))
+	bare, _ := reporter.CoverageCmd(inv.Argv)
+	if want := unitsCmdDigest(list, runs); got != want {
+		t.Errorf("key digest = %s, want the digest of the command the pass runs (%s)", got, want)
+	}
+	if got == unitsCmdDigest(list, bare) {
+		t.Error("the key is the forks-era key: a pass made without --pool=threads would be served")
+	}
+}

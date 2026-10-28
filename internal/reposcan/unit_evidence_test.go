@@ -102,14 +102,16 @@ func newUnitFixture(t *testing.T, langName string, argv []string, listing string
 	return f
 }
 
-// unitCmd is the coverage command the pass runs for unit.
+// unitCmd is the coverage command the pass runs for unit: the one-unit
+// command with the runner's evidence-only flags (lang.EvidenceUnitCmd),
+// under coverage.
 func (f *unitFixture) unitCmd(unit string) []string {
 	f.t.Helper()
 	cmd, ok := lang.UnitRunCmd(f.p, f.inv, unit)
 	if !ok {
 		f.t.Fatalf("no one-unit command for %q", unit)
 	}
-	cov, ok := f.p.(lang.CoverageReporter).CoverageCmd(cmd)
+	cov, ok := f.p.(lang.CoverageReporter).CoverageCmd(lang.EvidenceUnitCmd(f.p, f.inv, cmd))
 	if !ok {
 		f.t.Fatalf("no coverage command for %v", cmd)
 	}
@@ -621,7 +623,7 @@ func TestUnitPassTakesOnlyAGreenSuite(t *testing.T) {
 		name, out, wantErr string
 	}{
 		{"green", "# suite-exit 0\n" + report, ""},
-		{"red", "# suite-exit 1\n" + report, "run failed: exit 1"},
+		{"red", "# suite-exit 1\n" + report, "run failed: exit 1 (run with --pool=threads, which the evidence pass adds to the unit command)"},
 		{"no status", report, "no suite exit status in the report"},
 	}
 	for _, tc := range cases {
@@ -731,11 +733,11 @@ func TestUnitPassShowsAFailedUnitsOutput(t *testing.T) {
 		wantErr string
 	}{
 		{"red suite, one stream", sandbox.EnumerateResult{Output: "AssertionError: expected 1\n    at alpha.test.ts:3\n# suite-exit 1\ncorral-js-coverage: v2\n7 10 src/x.ts\n"},
-			"run failed: exit 1: AssertionError: expected 1\n    at alpha.test.ts:3"},
+			"run failed: exit 1 (run with --pool=threads, which the evidence pass adds to the unit command): AssertionError: expected 1\n    at alpha.test.ts:3"},
 		{"red suite, stderr apart", sandbox.EnumerateResult{Output: "# suite-exit 1\ncorral-js-coverage: v2\n7 10 src/x.ts\n", Stderr: "TypeError: boom\n"},
-			"run failed: exit 1: TypeError: boom"},
+			"run failed: exit 1 (run with --pool=threads, which the evidence pass adds to the unit command): TypeError: boom"},
 		{"command failed", sandbox.EnumerateResult{Output: "sh: 1: go: not found\n# suite-exit 127\n", ExitCode: 127},
-			"run failed: exited 127: sh: 1: go: not found"},
+			"run failed: exited 127 (run with --pool=threads, which the evidence pass adds to the unit command): sh: 1: go: not found"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -877,5 +879,75 @@ func TestUnitEvidenceCutShortCountsOnlyTheDeadline(t *testing.T) {
 	}
 	if got := (UnitEvidence{Ran: true, Units: []UnitResult{ok}}).CutShort(); got != 0 {
 		t.Errorf("a pass the deadline never reached: CutShort() = %d, want 0", got)
+	}
+}
+
+// The evidence pass, and only the evidence pass, runs a vitest unit with
+// --pool=threads (lang.EvidenceUnitCmd): every unit command the jail
+// receives carries it, and the listing, which collects and runs nothing,
+// does not.
+func TestCollectUnitEvidenceUsesEvidenceArgs(t *testing.T) {
+	f := newUnitFixture(t, "typescript", []string{"vitest", "run"}, vitestTwoUnits)
+	f.answer("test/alpha.test.ts", sandbox.EnumerateResult{Output: jsReport("7 10 src/x.ts")})
+	f.answer("test/beta.test.ts", sandbox.EnumerateResult{Output: jsReport("2 10 src/x.ts")})
+
+	ev := f.collect(context.Background(), "/w", 2)
+	if !ev.Settled() {
+		t.Fatalf("ev = %+v, want both units green", ev)
+	}
+	units := 0
+	for _, k := range f.run.ran {
+		cmd := strings.Join(strings.Split(k, "\x00"), " ")
+		if k == argvKey(f.list) {
+			if strings.Contains(cmd, "--pool") {
+				t.Errorf("the listing ran with a pool flag: %q", cmd)
+			}
+			continue
+		}
+		units++
+		if !strings.Contains(cmd, "--pool=threads") {
+			t.Errorf("a unit ran without --pool=threads: %q", cmd)
+		}
+	}
+	if units != 2 {
+		t.Errorf("%d unit commands ran, want 2: %q", units, f.run.ran)
+	}
+}
+
+// A unit that is red under --pool=threads contributes nothing, and its
+// reason says the evidence pass ran it with that flag: the operator's own
+// run may be green in the forks pool, and a red unit is unreported (every
+// file then selects it) rather than graded on partial evidence.
+func TestThreadsRedUnitIsUnreportedNamingThePool(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		res  sandbox.EnumerateResult
+	}{
+		{"command exit", sandbox.EnumerateResult{Output: jsReport("9 10 src/w.ts"), Stderr: "Error: worker_threads unsupported", ExitCode: 1}},
+		{"suite exit", sandbox.EnumerateResult{Output: "FAIL tests\n# suite-exit 1\ncorral-js-coverage: v2\n9 10 src/w.ts\n"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newUnitFixture(t, "typescript", []string{"vitest", "run"}, vitestTwoUnits)
+			f.answer("test/alpha.test.ts", sandbox.EnumerateResult{Output: jsReport("7 10 src/x.ts")})
+			f.answer("test/beta.test.ts", c.res)
+			ev := f.collect(context.Background(), "/w", 1)
+			beta := unitByName(t, ev, "test/beta.test.ts")
+			if !strings.HasPrefix(beta.Err, "run failed:") || !strings.Contains(beta.Err, "--pool=threads") {
+				t.Errorf("beta.Err = %q, want a run failure naming --pool=threads", beta.Err)
+			}
+			if beta.Counts != nil {
+				t.Errorf("a red unit kept counts %+v", beta.Counts)
+			}
+			if ev.Settled() {
+				t.Error("a pass with a red unit is Settled")
+			}
+		})
+	}
+	// jest has no evidence flags, so its failure names none.
+	j := newUnitFixture(t, "typescript", []string{"jest"}, "corral-units-cwd /w\n[\"/w/test/alpha.test.ts\",\"/w/test/beta.test.ts\"]\n")
+	j.answer("test/alpha.test.ts", sandbox.EnumerateResult{Output: jsReport("7 10 src/x.ts")})
+	j.answer("test/beta.test.ts", sandbox.EnumerateResult{Output: jsReport(), ExitCode: 1})
+	if got := unitByName(t, j.collect(context.Background(), "/w", 1), "test/beta.test.ts").Err; strings.Contains(got, "(run with") {
+		t.Errorf("jest beta.Err = %q, want no evidence note", got)
 	}
 }

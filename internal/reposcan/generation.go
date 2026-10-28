@@ -295,9 +295,9 @@ package reposcan
 // mutant runs included, mounts a dependency directory (node_modules) as one
 // copy-on-write overlay instead of one read-only bind per top-level entry
 // (sandbox.Bind.PerEntry). The jail now sees the host's dependency tree as
-// it is: top-level dot-files are visible (the per-entry binds skipped every
-// dot-entry but .bin; top-level dot-directories other than .bin and .pnpm
-// are still masked empty), a write to an existing dependency file succeeds
+// it is: top-level dot-files and the .pnpm store are visible (the per-entry
+// binds skipped every dot-entry but .bin; top-level dot-directories that are
+// not symlinks, other than .bin and .pnpm, are still masked empty), a write to an existing dependency file succeeds
 // for the rest of that run where it was EROFS, and a top-level symlink that
 // leaves the directory (an npm-workspace link such as node_modules/pkg ->
 // ../packages/pkg, which the per-entry binds left out) is a symlink in the

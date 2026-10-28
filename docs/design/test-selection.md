@@ -588,7 +588,9 @@ the sandbox's argv (`bwrapIsolator.Wrap`, for every `PerEntry` bind), so on
 a bwrap that can overlay the baseline and every graded mutant run get it
 too. This section first described it as part of the pass only, which
 understated it. Against the per-entry binds, a graded run now sees
-top-level dot-files in `node_modules`, can write an existing dependency
+top-level dot-files in `node_modules` and its `.pnpm` store (so, read from
+the code and not yet run on a pnpm project, a package pnpm did not hoist
+to the top level now resolves), can write an existing dependency
 file for the rest of the run (it was EROFS), and follows a top-level
 symlink that leaves `node_modules` (an npm-workspace link such as
 `node_modules/pkg -> ../packages/pkg`, which the per-entry binds refused

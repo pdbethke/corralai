@@ -75,8 +75,10 @@ history of any release, `git log v0.3.4..v0.3.5`.
   above is not specific to the evidence pass: on a bwrap that can overlay,
   the baseline and every mutant run mount `node_modules` the same way.
   Against the per-entry read-only binds, such a run now sees top-level
-  dot-files in `node_modules` (the binds skipped every dot-entry but
-  `.bin`), can write an existing dependency file for the rest of the run
+  dot-files in `node_modules` and its `.pnpm` store (the binds skipped
+  every dot-entry but `.bin`, so, read from the code and not yet run on a
+  pnpm project, a package pnpm did not hoist to the top level did not
+  resolve), can write an existing dependency file for the rest of the run
   (it was EROFS), and follows a top-level symlink that leaves `node_modules`
   (an npm-workspace link such as `node_modules/pkg -> ../packages/pkg`,
   which the binds left out) to the workspace's copy of its target. A test

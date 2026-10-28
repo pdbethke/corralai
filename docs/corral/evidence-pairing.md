@@ -543,7 +543,8 @@ Three changes to how the pass runs its units, each measured on a shared
   and the units line or the deps line says so. **The dependency overlay is
   not specific to this pass:** the baseline and every graded mutant run on
   such a bwrap mount `node_modules` the same way, so they too see its
-  top-level dot-files, can write an existing dependency file for the rest
+  top-level dot-files and `.pnpm` store (so, read from the code and not yet
+  run on a pnpm project, a package pnpm did not hoist now resolves), can write an existing dependency file for the rest
   of the run (it was EROFS), and follow a top-level symlink that leaves
   `node_modules` (an npm-workspace link such as
   `node_modules/pkg -> ../packages/pkg`, which the per-entry binds left

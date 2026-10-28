@@ -283,7 +283,7 @@ var runners = []Runner{
 		FirstFailure: firstOf(vitestFailures), FailedTests: vitestFailures, DeselectCmd: vitestDeselectCmd,
 		ListUnits: vitestListUnits, ParseUnits: vitestParseUnits, UnitCmd: oneUnit(vitestUnitsCmd), UnitCoruns: vitestUnitCoruns,
 		UnitsCmd: vitestUnitsCmd, UnitsCoruns: eachUnitCoruns(vitestUnitCoruns), UnitForFile: fileUnitForFile, UnitNoun: "test files",
-		EvidenceArgs:   vitestEvidenceArgs,
+		EvidenceArgs: vitestEvidenceArgs, EvidenceCache: vitestEvidenceCache,
 		UnitNoCoverage: "no worker coverage: the run's V8 coverage named no project file, though corral ran the unit with --pool=threads; that is what vitest's forks pool gives (measured on vitest 3.2.7 and 5.0.3), so check whether the test file itself forces another pool",
 		Note:           "listing, one-test, one-file and several-file runs verified on vitest 3.2; the unit evidence pass runs each file with --pool=threads, because the forks pool wrote no worker coverage (measured on vitest 3.2.7 and 5.0.3); unit evidence counted through corral's vm source-map preload on vitest 3.2.7 and 5.0.3; vitest 1, 2 and 4 were not run",
 	},

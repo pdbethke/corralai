@@ -3,9 +3,14 @@
 package lang
 
 import (
+	"encoding/json"
+	"fmt"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"golang.org/x/mod/semver"
 )
 
 // vitestFilters are vitest's name filters, in both spellings it accepts.
@@ -159,4 +164,87 @@ func vitestUnitCoruns(unit, other string) bool {
 // vitest 5.0.3). --poolOptions and every other flag are left as written.
 func vitestEvidenceArgs(unitCmd []string) []string {
 	return append(withoutFlag(unitCmd, "--pool"), "--pool=threads")
+}
+
+// vitestEvidenceCache is vitest's row's EvidenceCache: one transform cache
+// (fsModuleCache) for every unit of an evidence pass, warmed by the first
+// unit and frozen for the rest, so a later unit reads the modules the
+// first one already transformed instead of transforming them again.
+// vitest keys each entry on the module's absolute path and content and on
+// the project's root, plugins, config files and NODE_ENV (vitest 5.0.3,
+// dist/chunks/index.DpLw24bj.js:7290-7340), so a unit whose file differs
+// never reads another's entry for it; every unit of a pass runs over one
+// seed at one path, so the paths match.
+var vitestEvidenceCache = &EvidenceCache{
+	Name:        "vitest transform cache",
+	Args:        func(dir string) []string { return []string{"--fsModuleCache", "--fsModuleCachePath", dir} },
+	Unsupported: vitestCacheUnsupported,
+}
+
+// vitestCacheFloor is the oldest vitest known to take --fsModuleCache and
+// --fsModuleCachePath on its command line. 5.0.3 lists both as top-level
+// CLI options (dist/chunks/cac.DfDGTQ9W.js:1160-1162) that override a
+// project's config (PROJECT_CLI_OVERRIDES, dist/chunks/index.DpLw24bj.js:
+// 12462-12463), and says they "were promoted to the top-level" from
+// `experimental` (index.DpLw24bj.js:14779-14780). 4.1.5 has fsModuleCache
+// only as experimental.fsModuleCache, with no CLI form of the path
+// (dist/chunks/cac.*.js:1211-1212). 5.0.0 to 5.0.2 were not read, so the
+// floor is the oldest version that was: 5.0.3.
+const vitestCacheFloor = "5.0.3"
+
+// vitestCacheUnsupported is why the vitest argv runs would not take the
+// cache's options, "" when it would: its version, read from the
+// package.json beside the entry script the command names
+// (node_modules/vitest/vitest.mjs), or node_modules/vitest's for a bare
+// vitest word. A version it cannot read is a reason, not a guess.
+func vitestCacheUnsupported(argv []string, read func(rel string) ([]byte, error)) string {
+	rel, ok := vitestPackageJSON(argv)
+	if !ok {
+		return "the command's vitest is outside the tree, so its version could not be read"
+	}
+	data, err := read(rel)
+	if err != nil {
+		return fmt.Sprintf("could not read %s, so the installed vitest's version is unknown: %v", rel, err)
+	}
+	var pkg struct {
+		Version *string `json:"version"`
+	}
+	if err := json.Unmarshal(data, &pkg); err != nil {
+		return fmt.Sprintf("could not parse %s, so the installed vitest's version is unknown: %v", rel, err)
+	}
+	if pkg.Version == nil || *pkg.Version == "" {
+		return rel + " names no version, so the installed vitest's version is unknown"
+	}
+	v := *pkg.Version
+	if !semver.IsValid("v" + v) {
+		return fmt.Sprintf("%s gives version %q, which is not a version corral can compare", rel, v)
+	}
+	if semver.Compare("v"+v, "v"+vitestCacheFloor) < 0 {
+		return fmt.Sprintf("vitest %s (%s) is older than %s, the oldest vitest known to take --fsModuleCache --fsModuleCachePath", v, rel, vitestCacheFloor)
+	}
+	return ""
+}
+
+// vitestPackageJSON is the tree-relative package.json of the vitest argv
+// runs; ok=false when the command names one outside the tree.
+func vitestPackageJSON(argv []string) (string, bool) {
+	const root = "node_modules/vitest/package.json"
+	i := vitestIndex(argv)
+	if i < 0 {
+		return root, true
+	}
+	a := path.Clean(filepath.ToSlash(argv[i]))
+	var rel string
+	switch b := path.Base(a); {
+	case b == "vitest.mjs" || b == "vitest.js":
+		rel = path.Join(path.Dir(a), "package.json")
+	case strings.HasSuffix(a, "node_modules/.bin/vitest"):
+		rel = strings.TrimSuffix(a, ".bin/vitest") + "vitest/package.json"
+	default:
+		return root, true
+	}
+	if path.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, "../") {
+		return "", false
+	}
+	return rel, true
 }

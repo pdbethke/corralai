@@ -148,6 +148,19 @@ type EvidenceCache struct {
 	Unsupported func(argv []string, read func(rel string) ([]byte, error)) string
 }
 
+// TreeRel is rel as a read of the tree (EvidenceCache.Unsupported's read)
+// names it: slash-separated and cleaned, so "./node_modules/x" and
+// "node_modules/x" are one file. ok=false for a path that is absolute or
+// climbs out of the tree. Every reader of the tree applies this one rule,
+// to the seed's files and to the dependency directories alike.
+func TreeRel(rel string) (string, bool) {
+	clean := path.Clean(filepath.ToSlash(rel))
+	if path.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, "../") {
+		return "", false
+	}
+	return clean, true
+}
+
 // EvidenceCacheFor is argv's runner's EvidenceCache, or nil when the row
 // shares none.
 func EvidenceCacheFor(p Plugin, inv Invocation) *EvidenceCache {

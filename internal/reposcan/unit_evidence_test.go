@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -1214,4 +1215,132 @@ func TestTheJailSeedsAndReadsItsTree(t *testing.T) {
 	if _, ok := j.(TreeReader); !ok {
 		t.Error("adequacy's jail is not a TreeReader")
 	}
+}
+
+// The pass's cache helpers, over hand-built caches: no row shares a cache
+// with options or a version gate today, so these are the only tests of
+// those branches until one does.
+func TestUnitPassCacheHelpers(t *testing.T) {
+	args := []string{"--cache", "--cache-dir", sandbox.CacheTarget}
+	named := &lang.EvidenceCache{Name: "transform cache", Env: "TC"}
+	if got, want := unitsCacheArgs("", named, args), "the evidence pass runs each unit with --cache --cache-dir /corral-cache (a shared transform cache, filled by the first unit and frozen for every later one)"; got != want {
+		t.Errorf("unitsCacheArgs with no note = %q, want %q", got, want)
+	}
+	if got, want := unitsCacheArgs("the evidence pass runs each unit with --pool=threads", named, args), "the evidence pass runs each unit with --pool=threads, and with --cache --cache-dir /corral-cache (a shared transform cache, filled by the first unit and frozen for every later one)"; got != want {
+		t.Errorf("unitsCacheArgs with a note = %q, want %q", got, want)
+	}
+
+	for _, c := range []struct {
+		cache *lang.EvidenceCache
+		want  string
+	}{
+		{named, "transform cache"},
+		{&lang.EvidenceCache{Env: "GOCACHE"}, "GOCACHE"},
+		{&lang.EvidenceCache{}, "tool cache"},
+	} {
+		if got := cacheName(c.cache); got != c.want {
+			t.Errorf("cacheName(%+v) = %q, want %q", c.cache, got, c.want)
+		}
+	}
+
+	argv := []string{"tool", "run"}
+	read := func(string) ([]byte, error) { return []byte("1.0.0"), nil }
+	var gotArgv []string
+	reads := 0
+	gate := func(why string) func([]string, func(string) ([]byte, error)) string {
+		return func(a []string, r func(string) ([]byte, error)) string {
+			gotArgv = a
+			if b, err := r("x"); err == nil && string(b) == "1.0.0" {
+				reads++
+			}
+			return why
+		}
+	}
+	noGate := &lang.EvidenceCache{Env: "TC"}
+	takes := &lang.EvidenceCache{Name: "c", Unsupported: gate("")}
+	refuses := &lang.EvidenceCache{Name: "c", Unsupported: gate("tool 0.9 is older than 1.0")}
+	if asked, why := askedCache(nil, argv, read); asked != nil || why != "" {
+		t.Errorf("askedCache(nil) = %+v, %q; want nil, \"\"", asked, why)
+	}
+	if asked, why := askedCache(noGate, argv, read); asked != noGate || why != "" {
+		t.Errorf("no Unsupported: askedCache = %+v, %q; want the cache, \"\"", asked, why)
+	}
+	if asked, why := askedCache(takes, argv, read); asked != takes || why != "" {
+		t.Errorf("Unsupported gives \"\": askedCache = %+v, %q; want the cache, \"\"", asked, why)
+	}
+	if asked, why := askedCache(refuses, argv, read); asked != nil || why != "tool 0.9 is older than 1.0" {
+		t.Errorf("Unsupported gives a reason: askedCache = %+v, %q; want nil and the reason", asked, why)
+	}
+	if !slices.Equal(gotArgv, argv) || reads != 2 {
+		t.Errorf("Unsupported saw argv %q and read %d times, want %q and 2", gotArgv, reads, argv)
+	}
+}
+
+// Changed is the note first, then every other sentence in order, however
+// the note was extended after a sentence was said: a shared cache's options
+// extend the note, and must neither drop nor repeat what was already said.
+func TestUnitsChangedKeepsEverySentence(t *testing.T) {
+	for _, c := range []struct {
+		note string
+		said []string
+		want string
+	}{
+		{"", nil, ""},
+		{"n", nil, "n"},
+		{"", []string{"a", "b"}, "a; b"},
+		{"n, and with x", []string{"a", "b"}, "n, and with x; a; b"},
+	} {
+		if got := unitsChanged(c.note, c.said); got != c.want {
+			t.Errorf("unitsChanged(%q, %q) = %q, want %q", c.note, c.said, got, c.want)
+		}
+	}
+}
+
+// treeFileReader names a file by lang.TreeRel's one rule whether or not
+// the runner can read further: "./x" is "x", and a path out of the tree is
+// refused rather than looked up.
+func TestTreeFileReaderOneRule(t *testing.T) {
+	files := map[string]string{"node_modules/t/package.json": "seeded"}
+	for name, runner := range map[string]commandRunner{
+		"seed only":   &unitFakeRunner{},
+		"tree reader": readingSeedFake{&seedingFake{unitFakeRunner: &unitFakeRunner{}}, map[string]string{"node_modules/u/package.json": "bound"}},
+	} {
+		read := treeFileReader(runner, files)
+		for _, rel := range []string{"node_modules/t/package.json", "./node_modules/t/package.json", "node_modules//t/package.json"} {
+			if b, err := read(rel); err != nil || string(b) != "seeded" {
+				t.Errorf("%s: read(%q) = %q, %v; want the seed's file", name, rel, b, err)
+			}
+		}
+		for _, rel := range []string{"../x", "/etc/passwd"} {
+			if b, err := read(rel); err == nil {
+				t.Errorf("%s: read(%q) = %q, want a refusal", name, rel, b)
+			}
+		}
+		if _, err := read("absent"); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("%s: read(absent) err = %v, want fs.ErrNotExist", name, err)
+		}
+	}
+}
+
+// readingSeedFake is a seedingFake that also reads the tree as its jail
+// sees it (lang.TreeRel's rule, the seed, then the dependency directories
+// mounted into it), as adequacy's jail does: tree is what those
+// directories hold.
+type readingSeedFake struct {
+	*seedingFake
+	tree map[string]string
+}
+
+func (r readingSeedFake) ReadTreeFile(files map[string]string, rel string) ([]byte, error) {
+	clean, ok := lang.TreeRel(rel)
+	if !ok {
+		return nil, fmt.Errorf("%q is not in the tree", rel)
+	}
+	if s, ok := files[clean]; ok {
+		return []byte(s), nil
+	}
+	if s, ok := r.tree[clean]; ok {
+		return []byte(s), nil
+	}
+	return nil, fs.ErrNotExist
 }

@@ -351,21 +351,25 @@ func (j bwrapJail) runIn(ctx context.Context, ws runWorkspace, cmd []string, max
 // ReadTreeFile reads one file of the tree a run over files sees, without
 // running anything: files' own text for rel, else the file at rel inside
 // the dependency directory this jail mounts there (the most specific
-// DepBind whose Rel holds rel), which is where node_modules is on a real
-// run. The unit evidence pass reads an installed tool's version this way
-// (lang.EvidenceCache.Unsupported). The read goes through an os.Root over
-// the directory, so a symlink that stays inside it (pnpm's
+// DepBind whose Rel holds rel). It is how a row's
+// lang.EvidenceCache.Unsupported reads the tree as the jail will see it —
+// an installed tool's own files live in the dependency directories, not
+// the seed. rel follows lang.TreeRel: one that is absolute or climbs out
+// of the tree is refused. The read goes through an os.Root over the
+// directory, so a symlink that stays inside it (pnpm's
 // node_modules/<pkg> -> .pnpm/...) is followed and one that leaves it is
-// refused, as is a rel that is absolute or climbs out of the tree. A rel
-// in neither is fs.ErrNotExist.
+// refused. A rel in neither is fs.ErrNotExist.
 func (j bwrapJail) ReadTreeFile(files map[string]string, rel string) ([]byte, error) {
-	clean := path.Clean(filepath.ToSlash(rel))
-	if path.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, "../") {
+	clean, ok := lang.TreeRel(rel)
+	if !ok {
 		return nil, fmt.Errorf("adequacy: %q is not a path inside the tree", rel)
 	}
 	if s, ok := files[clean]; ok {
 		return []byte(s), nil
 	}
+	// A bind's Rel is never the tree's root ("." or ""): loadRepoFiles
+	// binds only directories below it (rel != "."), and a root bind would
+	// be the whole tree, which the seed holds instead.
 	var bind *DepBind
 	for i, b := range j.binds {
 		r := path.Clean(b.Rel)

@@ -173,7 +173,11 @@ func CollectUnitEvidence(ctx context.Context, runner commandRunner, files map[st
 
 	noCoverage := lang.UnitNoCoverageReason(p, inv)
 	note := lang.EvidenceNote(p, inv)
-	changed := note
+	// said is every sentence the pass adds about how it ran its units,
+	// beyond what it changed in the command (note); Changed is note
+	// followed by them, built once at the end, so a later change to note
+	// (a shared cache's options) can never drop or repeat a sentence.
+	var said []string
 
 	// Every unit runs over the same tree, so a runner that can seed it
 	// (seedingRunner) writes it once, here, and each unit runs on a
@@ -188,30 +192,25 @@ func CollectUnitEvidence(ctx context.Context, runner commandRunner, files map[st
 		// A cache whose tool would not take its options (an installed
 		// version that predates them) is not asked for: the seed shares
 		// none, and the pass says why below.
-		asked, unsupported := cache, ""
-		if cache != nil && cache.Unsupported != nil {
-			if unsupported = cache.Unsupported(inv.Argv, treeFileReader(runner, files)); unsupported != "" {
-				asked = nil
-			}
-		}
+		asked, unsupported := askedCache(cache, inv.Argv, treeFileReader(runner, files))
 		s, err := sr.Seed(files, asked)
 		switch {
 		case err == nil:
 			seeded, unitRunner = s, s
 			switch {
 			case unsupported != "":
-				changed = joinChanged(changed, unitsUnsharedCache(cache, unsupported))
+				said = append(said, unitsUnsharedCache(cache, unsupported))
 			case cache != nil:
 				shared := s.Cache()
 				cacheTarget = shared.Target
 				if cacheTarget == "" {
-					changed = joinChanged(changed, unitsUnsharedCache(cache, shared.Unshared))
+					said = append(said, unitsUnsharedCache(cache, shared.Unshared))
 				}
 			}
 		case errors.Is(err, sandbox.ErrNoOverlay):
-			changed = joinChanged(changed, unitsFreshCopy(err))
+			said = append(said, unitsFreshCopy(err))
 			if cache != nil {
-				changed = joinChanged(changed, unitsUnsharedCache(cache, overlayRefuser(err)+" cannot overlay"))
+				said = append(said, unitsUnsharedCache(cache, overlayRefuser(err)+" cannot overlay"))
 			}
 		default:
 			for _, i := range runnable {
@@ -228,12 +227,9 @@ func CollectUnitEvidence(ctx context.Context, runner commandRunner, files map[st
 		// would not be the run the operator's command describes. They
 		// are words the operator did not write, so the note names them
 		// — on the scan line and in a red unit's reason — as the
-		// evidence flags are named. (On this path changed is still the
-		// note alone: every sentence added above is about a cache that
-		// was NOT shared.)
+		// evidence flags are named.
 		args := cache.Args(cacheTarget)
 		note = unitsCacheArgs(note, cache, args)
-		changed = note
 		for _, i := range runnable {
 			cov, ok := reporter.CoverageCmd(append(slices.Clone(evidenceCmds[i]), args...))
 			if !ok {
@@ -282,10 +278,10 @@ func CollectUnitEvidence(ctx context.Context, runner commandRunner, files map[st
 		// The evidence is whole either way; a seed left behind is the
 		// host's to clean up, and the operator is told where it is.
 		if err := seeded.Close(); err != nil {
-			changed = joinChanged(changed, fmt.Sprintf("the pass's seed could not be removed: %v", err))
+			said = append(said, fmt.Sprintf("the pass's seed could not be removed: %v", err))
 		}
 	}
-	return UnitEvidence{Ran: true, Units: results, Changed: changed}
+	return UnitEvidence{Ran: true, Units: results, Changed: unitsChanged(note, said)}
 }
 
 // seedingRunner is a commandRunner that can write the tree once for many
@@ -313,18 +309,49 @@ func (w warmingRunner) EnumerateDetailed(ctx context.Context, files map[string]s
 	return w.s.Warm(ctx, files, cmd)
 }
 
+// askedCache is the cache the pass asks its seed to share, and why it asks
+// for none when the cache's tool would not take its options (an installed
+// version that predates them, or one that cannot be read): cache itself
+// when it has no Unsupported or Unsupported gives no reason, else nil and
+// that reason. read is the tree as the jail will see it (treeFileReader).
+func askedCache(cache *lang.EvidenceCache, argv []string, read func(rel string) ([]byte, error)) (*lang.EvidenceCache, string) {
+	if cache == nil || cache.Unsupported == nil {
+		return cache, ""
+	}
+	if why := cache.Unsupported(argv, read); why != "" {
+		return nil, why
+	}
+	return cache, ""
+}
+
+// unitsChanged is UnitEvidence.Changed: what the pass changed in the
+// command (note, "" for nothing), then every other sentence it said about
+// how it ran its units, in order.
+func unitsChanged(note string, said []string) string {
+	changed := note
+	for _, s := range said {
+		changed = joinChanged(changed, s)
+	}
+	return changed
+}
+
 // treeFileReader reads a file of the tree a unit runs over, as the jail
-// will see it: the seed's own files, then, when the runner can
-// (TreeReader), the dependency directories it mounts into the jail, where
-// node_modules is on a real run. A runner that cannot gives
-// fs.ErrNotExist for anything outside the seed.
+// will see it: through the runner when it can (TreeReader: the seed's own
+// files, then the dependency directories it mounts into the jail, where
+// node_modules is on a real run), else from the seed's files alone. Both
+// name a file by lang.TreeRel's one rule. A file outside the seed, on a
+// runner that cannot read further, is fs.ErrNotExist.
 func treeFileReader(runner commandRunner, files map[string]string) func(rel string) ([]byte, error) {
 	return func(rel string) ([]byte, error) {
-		if s, ok := files[rel]; ok {
-			return []byte(s), nil
-		}
 		if tr, ok := runner.(TreeReader); ok {
 			return tr.ReadTreeFile(files, rel)
+		}
+		clean, ok := lang.TreeRel(rel)
+		if !ok {
+			return nil, fmt.Errorf("%q is not a path inside the tree", rel)
+		}
+		if s, ok := files[clean]; ok {
+			return []byte(s), nil
 		}
 		return nil, fs.ErrNotExist
 	}
@@ -347,7 +374,8 @@ func unitsCacheArgs(note string, cache *lang.EvidenceCache, args []string) strin
 	return note + ", and with " + what
 }
 
-// cacheName is what the pass calls a cache: its Name, else its Env.
+// cacheName is what the pass calls a cache: its Name, else its Env, else
+// "tool cache".
 func cacheName(cache *lang.EvidenceCache) string {
 	switch {
 	case cache.Name != "":

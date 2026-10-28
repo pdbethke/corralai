@@ -55,6 +55,8 @@ func TestReadTreeFile(t *testing.T) {
 		{"package.json", `{"name":"app"}`},
 		{"node_modules/seeded.txt", "from the seed"},
 		{"node_modules/vitest/package.json", `{"version":"5.0.3"}`},
+		{"./node_modules/vitest/package.json", `{"version":"5.0.3"}`},
+		{"./package.json", `{"name":"app"}`},
 		{"node_modules/vite/package.json", `{"version":"8.3.5"}`},
 		{"packages/a/node_modules/vitest/package.json", `{"version":"5.0.4"}`},
 	} {

@@ -224,8 +224,10 @@ sandbox, with network access for that step only.
   same way, for dependency trees the auto-detected set doesn't cover.
 - `--no-bind-deps` opts back into the pre-bind behavior: every dep dir is
   copied into the workspace seed instead, subject to the same size cap.
-- When anything is bound, the run prints `deps: bound N dir(s) read-only
-  (<names>) — not copied into the jail seed`.
+- When anything is bound, the run prints `deps: bound N dir(s), never
+  changed on the host — not copied into the jail seed: <name> (<how>), …`,
+  where `<how>` is `read-only`, `copy-on-write, writable in the run only`, or
+  `read-only, bound per entry: its filesystem cannot be overlaid`.
 
 **The honest backend caveat.** Binding a dep dir requires the backend to
 **relocate** it into the jail workspace — only `bwrap` (Linux default, via
@@ -233,7 +235,11 @@ sandbox, with network access for that step only.
 do that. `bwrap` binds cleanly with no size limit and no copy. A `bwrap` with
 `--tmp-overlay` (0.10 and later) mounts each dep dir as one copy-on-write
 overlay instead: the run can write inside it, every write vanishes with the
-run, and the host dir is never changed. `--jail
+run, and the host dir is never changed. Its cache directories (`.vite`,
+`.cache`: every dot-directory but `.bin` and `.pnpm`) start empty on every
+run, so no result depends on a cache already on the host. A dep dir on a
+filesystem that cannot be overlaid (NFS, FUSE, ecryptfs, another overlay)
+is bound read-only per entry, and the deps line says so. `--jail
 container` is more restricted: containers remap the host uid, so a container
 process can't read a dep dir it doesn't have world-read permission on —
 `--jail container` binds only **world-readable** dep dirs; anything more

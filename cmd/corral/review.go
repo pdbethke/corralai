@@ -587,8 +587,8 @@ func newJailReproducer(iso sandbox.Isolator, root, commit, scope string, timeout
 	var bound, unbound []string
 	_, every, _ := loadRepoFiles(root, loadOpts{BackendName: "bwrap", NoFiles: true}) // every dependency dir, bindable or not
 	for _, d := range every {
-		if slices.ContainsFunc(binds, func(b adequacy.DepBind) bool { return b.Rel == d.Rel }) {
-			bound = append(bound, d.Rel)
+		if i := slices.IndexFunc(binds, func(b adequacy.DepBind) bool { return b.Rel == d.Rel }); i >= 0 {
+			bound = append(bound, d.Rel+" ("+depMountWords(iso, binds[i].Host)+")")
 		} else {
 			unbound = append(unbound, d.Rel)
 		}
@@ -610,7 +610,7 @@ func newJailReproducer(iso sandbox.Isolator, root, commit, scope string, timeout
 	}
 	note := "jail (" + iso.Name() + ", offline: the tree at the commit"
 	if len(bound) > 0 {
-		note += "; " + strings.Join(bound, ", ") + " bound read-only"
+		note += "; bound, never changed on the host: " + strings.Join(bound, ", ")
 	}
 	if len(unbound) > 0 {
 		note += "; not mounted: " + strings.Join(unbound, ", ")

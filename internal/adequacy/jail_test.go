@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -423,9 +424,29 @@ func overlayJailOrSkip(t *testing.T) sandbox.Isolator {
 		t.Skipf("no sandbox backend available (bwrap): %v", err)
 	}
 	if !sandbox.Overlays(backend) {
-		t.Skipf("the %s backend on this host cannot overlay a seed", backend.Name())
+		t.Skipf("%s cannot overlay; overlay path unexercised", backendVersion(backend))
 	}
 	return backend
+}
+
+// overlayDirOrSkip skips unless backend overlays a dependency directory on
+// dir's filesystem (sandbox.OverlaysDir).
+func overlayDirOrSkip(t *testing.T, backend sandbox.Isolator, dir string) {
+	t.Helper()
+	if !sandbox.OverlaysDir(backend, dir) {
+		t.Skipf("%s cannot overlay a dependency directory on the filesystem of %s; dependency overlay path unexercised", backendVersion(backend), dir)
+	}
+}
+
+// backendVersion names the backend for a skip message: bwrap's own
+// --version line when it is bwrap.
+func backendVersion(backend sandbox.Isolator) string {
+	if backend.Name() == "bwrap" {
+		if out, err := exec.Command("bwrap", "--version").Output(); err == nil {
+			return strings.TrimSpace(string(out))
+		}
+	}
+	return backend.Name()
 }
 
 func seedOrFatal(t *testing.T, e Enumerator, files map[string]string) SeededJail {
@@ -491,6 +512,7 @@ func TestSeededJailWritesDoNotLeak(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(nm, "pkg", "index.js"), []byte("dep"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	overlayDirOrSkip(t, backend, nm)
 	e := NewEnumerator(backend, 30*time.Second, WithReadOnlyBinds([]DepBind{{Host: nm, Rel: "node_modules"}}))
 	files := map[string]string{"a.txt": "x"}
 	s := seedOrFatal(t, e, files)
@@ -570,6 +592,7 @@ func TestSeededJailDependencySymlinkReachesNothing(t *testing.T) {
 	if err := os.Symlink(secret, filepath.Join(nm, "evil")); err != nil {
 		t.Fatal(err)
 	}
+	overlayDirOrSkip(t, backend, nm)
 	e := NewEnumerator(backend, 30*time.Second, WithReadOnlyBinds([]DepBind{{Host: nm, Rel: "node_modules"}}))
 	files := map[string]string{"a.txt": "x"}
 	s := seedOrFatal(t, e, files)
@@ -627,5 +650,44 @@ func TestEnumeratorOffersReposcansSeed(t *testing.T) {
 		Seed(files map[string]string) (sandbox.SeededRunner, error)
 	}); !ok {
 		t.Error("the jail enumerator has no Seed(map[string]string) (sandbox.SeededRunner, error)")
+	}
+}
+
+// An overlaid dependency directory's cache directories start empty on every
+// run, as they did under the per-entry binds: a host node_modules/.vite
+// (vitest's results cache) is not what the jail sees, a write into it does
+// not reach the host, and dot-FILES and .pnpm stay visible.
+func TestOverlaidDependencyCacheStartsEmpty(t *testing.T) {
+	backend := overlayJailOrSkip(t)
+	nm := filepath.Join(t.TempDir(), "node_modules")
+	for _, d := range []string{".vite", ".pnpm"} {
+		if err := os.MkdirAll(filepath.Join(nm, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, body := range map[string]string{".vite/x": "cached", ".pnpm/store": "s", ".package-lock.json": "lock"} {
+		if err := os.WriteFile(filepath.Join(nm, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	overlayDirOrSkip(t, backend, nm)
+	e := NewEnumerator(backend, 30*time.Second, WithReadOnlyBinds([]DepBind{{Host: nm, Rel: "node_modules"}}))
+	files := map[string]string{"a.txt": "x"}
+	script := "test -d node_modules/.vite && test ! -e node_modules/.vite/x && echo y > node_modules/.vite/y && cat node_modules/.package-lock.json node_modules/.pnpm/store"
+	for name, run := range map[string]func() (sandbox.EnumerateResult, error){
+		"fresh copy": func() (sandbox.EnumerateResult, error) {
+			return e.(bwrapJail).EnumerateDetailed(context.Background(), files, []string{"sh", "-c", script})
+		},
+		"seed": func() (sandbox.EnumerateResult, error) {
+			return seedOrFatal(t, e, files).EnumerateDetailed(context.Background(), files, []string{"sh", "-c", script})
+		},
+	} {
+		res, err := run()
+		if err != nil || res.ExitCode != 0 || strings.TrimSpace(res.Output) != "locks" {
+			t.Errorf("%s: %+v err=%v, want an empty writable .vite and visible .package-lock.json and .pnpm", name, res, err)
+		}
+		if _, err := os.Stat(filepath.Join(nm, ".vite", "y")); err == nil {
+			t.Errorf("%s: a write into node_modules/.vite reached the host", name)
+		}
 	}
 }

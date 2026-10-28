@@ -2637,9 +2637,9 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		if len(depBinds) > 0 {
 			names := make([]string, 0, len(depBinds))
 			for _, b := range depBinds {
-				names = append(names, b.Rel)
+				names = append(names, b.Rel+" ("+depMountWords(in.iso, b.Host)+")")
 			}
-			fmt.Fprintf(in.stdout, "deps: bound %d dir(s) read-only (%s) — not copied into the jail seed\n", len(depBinds), strings.Join(names, ", "))
+			fmt.Fprintf(in.stdout, "deps: bound %d dir(s), never changed on the host — not copied into the jail seed: %s\n", len(depBinds), strings.Join(names, ", "))
 		}
 	} else {
 		w.codeKey = filepath.Base(in.codePath)
@@ -2651,6 +2651,22 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		w.jailEnum = advpool.JailEnumerator{Jail: enumerator}
 	}
 	return w, nil
+}
+
+// depMountWords is how iso mounts the dependency directory at host, for the
+// deps line and review's jail note: one copy-on-write overlay (the run may
+// write, the writes are discarded with it), read-only per entry because the
+// directory's filesystem cannot be an overlay's lower layer although this
+// bwrap overlays, or read-only (a backend that does not overlay).
+func depMountWords(iso sandbox.Isolator, host string) string {
+	switch {
+	case sandbox.OverlaysDir(iso, host):
+		return "copy-on-write, writable in the run only"
+	case sandbox.Overlays(iso):
+		return "read-only, bound per entry: its filesystem cannot be overlaid"
+	default:
+		return "read-only"
+	}
 }
 
 // localSwarmAutoCap keeps a default (no --swarm) run polite: even on a

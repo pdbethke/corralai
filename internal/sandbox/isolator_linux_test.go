@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestBwrapWrapNetOffByDefault(t *testing.T) {
@@ -184,7 +185,7 @@ func TestBwrapArgvPerEntryBecomesOneOverlay(t *testing.T) {
 	}
 	opts := Options{Workspace: "/w", ReadOnlyBinds: []Bind{{Host: host, Target: "/w/node_modules", PerEntry: true}}}
 
-	argv, err := (bwrapIsolator{overlay: true}).Wrap("true", opts, nil)
+	argv, err := overlayIso(func(string) bool { return true }).Wrap("true", opts, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,8 +230,8 @@ func TestBwrapArgvPerEntryBecomesOneOverlay(t *testing.T) {
 func TestBwrapArgvSeedLower(t *testing.T) {
 	const s = "/tmp/corral-seed"
 	opts := Options{Workspace: s, SeedLower: s,
-		ReadOnlyBinds: []Bind{{Host: "/proj/node_modules", Target: s + "/node_modules", PerEntry: true}}}
-	argv, err := (bwrapIsolator{overlay: true}).Wrap("true", opts, nil)
+		ReadOnlyBinds: []Bind{{Host: t.TempDir(), Target: s + "/node_modules", PerEntry: true}}}
+	argv, err := overlayIso(func(string) bool { return true }).Wrap("true", opts, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +257,7 @@ func TestBwrapArgvSeedLower(t *testing.T) {
 		t.Error("a bwrap that cannot overlay wrapped a seeded workspace")
 	}
 	// The seed is the workspace, at its own path; anything else is refused.
-	if _, err := (bwrapIsolator{overlay: true}).Wrap("true", Options{Workspace: "/elsewhere", SeedLower: s}, nil); err == nil {
+	if _, err := overlayIso(func(string) bool { return true }).Wrap("true", Options{Workspace: "/elsewhere", SeedLower: s}, nil); err == nil {
 		t.Error("a seed at a path other than the workspace was wrapped")
 	}
 }
@@ -271,5 +272,142 @@ func TestBwrapOverlayProbeFailsClosed(t *testing.T) {
 	t.Setenv("PATH", bin+":/usr/bin:/bin")
 	if probeOverlay() {
 		t.Error("probeOverlay() = true for a bwrap that refuses --overlay-src")
+	}
+}
+
+// overlayIso is a bwrap that overlays, whose per-filesystem lower probe is
+// probe (the real one runs bwrap).
+func overlayIso(probe func(string) bool) bwrapIsolator {
+	return bwrapIsolator{overlay: true, lowers: newLowerCache(probe)}
+}
+
+// An overlaid dependency directory gets every top-level dot-DIRECTORY but
+// .bin and .pnpm masked by an empty tmpfs, after the overlay: a host cache
+// (.vite holds vitest's results) never reaches a graded run, as under the
+// per-entry binds. Dot-files, .bin, .pnpm and a symlinked dot-entry are
+// not masked.
+func TestBwrapArgvOverlayMasksCacheDirs(t *testing.T) {
+	host := t.TempDir()
+	for _, d := range []string{"pkg", ".bin", ".pnpm", ".vite", ".cache"} {
+		if err := os.MkdirAll(filepath.Join(host, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(host, ".package-lock.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(host, "pkg"), filepath.Join(host, ".linked")); err != nil {
+		t.Fatal(err)
+	}
+	opts := Options{Workspace: "/w", ReadOnlyBinds: []Bind{{Host: host, Target: "/w/node_modules", PerEntry: true}}}
+	argv, err := overlayIso(func(string) bool { return true }).Wrap("true", opts, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ov := -1
+	for i := range argv {
+		if argv[i] == "--tmp-overlay" && argv[i+1] == "/w/node_modules" {
+			ov = i
+		}
+	}
+	masked := map[string]int{}
+	for i := range argv {
+		if argv[i] == "--tmpfs" && strings.HasPrefix(argv[i+1], "/w/node_modules/") {
+			masked[strings.TrimPrefix(argv[i+1], "/w/node_modules/")] = i
+		}
+	}
+	for _, want := range []string{".vite", ".cache"} {
+		i, ok := masked[want]
+		if !ok || ov < 0 || i < ov {
+			t.Errorf("%s: masked at %d (ok=%v), overlay at %d: want a --tmpfs after the overlay", want, i, ok, ov)
+		}
+	}
+	for _, not := range []string{".bin", ".pnpm", ".package-lock.json", ".linked", "pkg"} {
+		if _, ok := masked[not]; ok {
+			t.Errorf("%s was masked", not)
+		}
+	}
+}
+
+// A dependency directory on a filesystem overlayfs refuses as a lower keeps
+// its per-entry binds, while the bwrap overlays everything else.
+func TestBwrapArgvDependencyOnARefusingFilesystemStaysPerEntry(t *testing.T) {
+	host := t.TempDir()
+	for _, d := range []string{"a", "b"} {
+		if err := os.MkdirAll(filepath.Join(host, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	opts := Options{Workspace: "/w", ReadOnlyBinds: []Bind{{Host: host, Target: "/w/node_modules", PerEntry: true}}}
+	iso := overlayIso(func(string) bool { return false })
+	argv, err := iso.Wrap("true", opts, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if argvHas(argv, "--overlay-src", host) || !argvHas(argv, "--ro-bind", filepath.Join(host, "a"), "/w/node_modules/a") {
+		t.Errorf("want per-entry binds and no overlay: %v", argv)
+	}
+	if OverlaysDir(iso, host) {
+		t.Error("OverlaysDir = true for a refusing filesystem")
+	}
+	// An overlaying isolator without its lower probe is a construction bug.
+	if _, err := (bwrapIsolator{overlay: true}).Wrap("true", opts, nil); err == nil {
+		t.Error("an overlaying isolator with no lower probe wrapped a run")
+	}
+}
+
+// The lower probe runs once per filesystem (st_dev), however many
+// directories on it ask.
+func TestLowerCacheProbesOncePerFilesystem(t *testing.T) {
+	root := t.TempDir()
+	a, b := filepath.Join(root, "a"), filepath.Join(root, "b")
+	for _, d := range []string{a, b} {
+		if err := os.Mkdir(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	calls := 0
+	c := newLowerCache(func(string) bool { calls++; return true })
+	for range 3 {
+		if !c.overlays(a) || !c.overlays(b) {
+			t.Fatal("overlays = false")
+		}
+	}
+	if calls != 1 {
+		t.Errorf("probe ran %d times for one filesystem, want 1", calls)
+	}
+	if c.overlays(filepath.Join(root, "missing")) {
+		t.Error("a directory that does not exist overlays")
+	}
+}
+
+// The real lower probe says no for a bwrap that refuses the overlay, and
+// for one that hangs, within its timeout.
+func TestBwrapLowerProbeFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	for _, c := range []struct{ name, script string }{
+		{"refuses", "#!/bin/sh\necho 'bwrap: Unknown option --overlay-src' >&2\nexit 1\n"},
+		{"hangs", "#!/bin/sh\nexec sleep 60\n"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			bin := t.TempDir()
+			if err := os.WriteFile(filepath.Join(bin, "bwrap"), []byte(c.script), 0o755); err != nil { // #nosec G306 -- a test's fake executable
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", bin+":/usr/bin:/bin")
+			old := probeTimeout
+			probeTimeout = 500 * time.Millisecond
+			t.Cleanup(func() { probeTimeout = old })
+			start := time.Now()
+			if probeLower(dir) {
+				t.Error("probeLower = true")
+			}
+			if probeOverlay() {
+				t.Error("probeOverlay = true")
+			}
+			if d := time.Since(start); d > 5*time.Second {
+				t.Errorf("the probes took %s", d)
+			}
+		})
 	}
 }

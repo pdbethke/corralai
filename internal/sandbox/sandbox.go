@@ -50,17 +50,20 @@ type Bind struct {
 	// the very failure this avoids, while .bin holds the executables the test
 	// command needs.
 	//
-	// On a bwrap that overlays (bwrapIsolator.overlay), a PerEntry bind is
-	// instead ONE copy-on-write overlay of Host at Target: the same paths,
-	// writable, with every write in a per-run tmpfs upper layer and Host
-	// unchanged. That differs from the per-entry binds in three ways, all
-	// deliberate: a write to an existing dependency file succeeds for the
-	// rest of that run (it was EROFS); dot-entries are visible, so a cache
-	// already on the host (node_modules/.vite) is read and written
-	// copy-on-write rather than started empty; and a symlink in Host is a
-	// symlink in the jail, resolved there, where a link leaving Host reaches
-	// only what the jail mounts (the per-entry binds refused such a link,
-	// because a bind follows its source).
+	// On a bwrap that overlays, a PerEntry bind whose Host's filesystem can
+	// be an overlay's lower layer (OverlaysDir) is instead ONE copy-on-write
+	// overlay of Host at Target, with every top-level dot-DIRECTORY but .bin
+	// and .pnpm masked by an empty tmpfs: the same paths, writable, every
+	// write in a per-run upper layer, Host unchanged. Against the per-entry
+	// binds: a write to an existing dependency file succeeds for the rest of
+	// that run (it was EROFS); a cache directory (.vite, .cache) still starts
+	// empty on every run, so no graded result reads the host's cache; .pnpm
+	// (pnpm's store, which its entries link into) and dot-FILES such as
+	// .package-lock.json are visible, as they are on the host; and a symlink
+	// in Host is a symlink in the jail, resolved there, where a link leaving
+	// Host reaches only what the jail mounts (the per-entry binds refused
+	// such a link, because a bind follows its source). A Host on a
+	// filesystem overlayfs refuses as a lower keeps the per-entry binds.
 	PerEntry bool
 }
 
@@ -124,10 +127,13 @@ type Options struct {
 	KeepTail bool
 	Backend  Isolator // isolation backend; nil => execution is disabled (used from Task 2)
 
-	// ReadOnlyBinds are host directories mounted read-only into the jail at
-	// Target (an absolute path under Workspace), so large read-only trees
-	// (node_modules, vendor, .venv) are visible to the command without being
-	// copied into the workspace. The sandboxed process can never write them.
+	// ReadOnlyBinds are host directories mounted into the jail at Target (an
+	// absolute path under Workspace), so large trees (node_modules, vendor,
+	// .venv) are visible to the command without being copied into the
+	// workspace. The sandboxed process can never change them on the host:
+	// each is read-only in the jail, or (a PerEntry bind on a bwrap that
+	// overlays it, see Bind.PerEntry) writable copy-on-write, its writes
+	// discarded with the run.
 	ReadOnlyBinds []Bind
 
 	// SeedLower, when set, is a seed directory the run sees through a
@@ -178,6 +184,18 @@ type overlayer interface{ overlays() bool }
 func Overlays(iso Isolator) bool {
 	o, ok := iso.(overlayer)
 	return ok && o.overlays()
+}
+
+// dirOverlayer is the optional capability OverlaysDir reads.
+type dirOverlayer interface{ overlaysDir(host string) bool }
+
+// OverlaysDir reports whether iso mounts a PerEntry bind of host as one
+// copy-on-write overlay (Bind.PerEntry): it overlays at all, and host's
+// filesystem can be an overlay's lower layer (probed once per filesystem).
+// False means the bind is read-only, one mount per entry.
+func OverlaysDir(iso Isolator, host string) bool {
+	o, ok := iso.(dirOverlayer)
+	return ok && o.overlaysDir(host)
 }
 
 // Result is the outcome of a Run.

@@ -6,12 +6,17 @@ package sandbox
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
+	"sync"
+	"syscall"
+	"time"
 )
 
 // rlimitPrelude is prepended to every bwrap command as a coarse fork-bomb and
@@ -30,11 +35,85 @@ type bwrapIsolator struct {
 	// copy-on-write overlay instead of one --ro-bind per entry, and a
 	// seeded workspace (Options.SeedLower) can be run at all.
 	overlay bool
+	// lowers answers, per filesystem, whether a dependency directory there
+	// can be an overlay's lower layer. The probe above proves overlayfs on
+	// the temp dir's filesystem only, and a repository's node_modules can sit
+	// on one overlayfs refuses as a lower (NFS, FUSE, ecryptfs, another
+	// overlayfs); a dependency bind on such a filesystem keeps its per-entry
+	// binds. Required whenever overlay is true (Wrap refuses otherwise).
+	lowers *lowerCache
 }
 
 func (bwrapIsolator) Name() string { return "bwrap" }
 
 func (b bwrapIsolator) overlays() bool { return b.overlay }
+
+// overlaysDir reports whether a PerEntry bind of host is one overlay: the
+// bwrap overlays at all, and host's filesystem can be a lower layer.
+func (b bwrapIsolator) overlaysDir(host string) bool {
+	return b.overlay && b.lowers != nil && b.lowers.overlays(host)
+}
+
+// lowerCache is the per-filesystem answer to "can a directory here be an
+// overlay's lower layer", keyed by st_dev so each filesystem is probed once
+// for the isolator's lifetime, however many runs and binds ask.
+type lowerCache struct {
+	mu    sync.Mutex
+	byDev map[uint64]bool
+	probe func(dir string) bool
+}
+
+func newLowerCache(probe func(dir string) bool) *lowerCache {
+	return &lowerCache{byDev: map[uint64]bool{}, probe: probe}
+}
+
+// overlays answers for dir's filesystem. A dir that cannot be stat'ed is
+// false and not cached: its bind expands as per-entry binds do, to what can
+// be read.
+func (c *lowerCache) overlays(dir string) bool {
+	fi, err := os.Stat(dir)
+	if err != nil {
+		return false
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return false
+	}
+	dev := uint64(st.Dev) // #nosec G115 -- a device number, compared for identity only
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if v, seen := c.byDev[dev]; seen {
+		return v
+	}
+	v := c.probe(dir)
+	c.byDev[dev] = v
+	return v
+}
+
+// cacheDirMasks is the --tmpfs masks laid over an overlaid dependency
+// directory: one per top-level dot-DIRECTORY of host, except .bin (the
+// executables the test command runs) and .pnpm (pnpm's store, which every
+// top-level entry links into). The per-entry binds never showed a
+// dot-entry, so a tool cache there (vitest's results under .vite, .cache)
+// started empty on every run; masked, it still does, and a graded result
+// never depends on what the host's cache holds. Dot-FILES stay visible (a
+// lockfile such as .package-lock.json is the tree's own record, not a
+// cache). A symlinked dot-entry is not masked: bwrap would follow it.
+func cacheDirMasks(host, target string) ([]string, error) {
+	ents, err := os.ReadDir(host)
+	if err != nil {
+		return nil, err
+	}
+	var argv []string
+	for _, e := range ents {
+		name := e.Name()
+		if !strings.HasPrefix(name, ".") || name == ".bin" || name == ".pnpm" || !e.IsDir() {
+			continue
+		}
+		argv = append(argv, "--tmpfs", path.Join(target, name))
+	}
+	return argv, nil
+}
 
 func (bwrapIsolator) Preflight() error {
 	if _, err := exec.LookPath("bwrap"); err != nil {
@@ -52,6 +131,9 @@ func (bwrapIsolator) Preflight() error {
 func (b bwrapIsolator) Wrap(command string, opts Options, env []string) ([]string, error) {
 	if opts.Workspace == "" {
 		return nil, errors.New("bwrap: workspace required")
+	}
+	if b.overlay && b.lowers == nil {
+		return nil, errors.New("bwrap: an overlaying isolator built without its per-filesystem probe")
 	}
 	if opts.SeedLower != "" {
 		if !b.overlay {
@@ -176,9 +258,13 @@ func (b bwrapIsolator) Wrap(command string, opts Options, env []string) ([]strin
 		// creates a mountpoint only when its parent already exists and is
 		// writable, and an overlay or bind made before the workspace mount
 		// would be hidden under it.
-		if bnd.PerEntry && b.overlay {
-			argv = append(argv, "--overlay-src", bnd.Host, "--tmp-overlay", bnd.Target)
-			continue
+		if bnd.PerEntry && b.overlaysDir(bnd.Host) {
+			// The cache masks come after the overlay they cover.
+			if masks, err := cacheDirMasks(bnd.Host, bnd.Target); err == nil {
+				argv = append(argv, "--overlay-src", bnd.Host, "--tmp-overlay", bnd.Target)
+				argv = append(argv, masks...)
+				continue
+			}
 		}
 		if bnd.PerEntry {
 			for _, e := range perEntryBinds(bnd) {
@@ -213,7 +299,27 @@ func newBwrapIsolator() (Isolator, error) {
 		return nil, err
 	}
 	b.overlay = probeOverlay()
+	b.lowers = newLowerCache(probeLower)
 	return b, nil
+}
+
+// probeTimeout bounds each overlay probe: a bwrap that hangs must not hang
+// the isolator's construction or a run's argv. A probe that times out is
+// a no.
+var probeTimeout = 10 * time.Second
+
+// probeLower reports whether dir can be an overlay's lower layer on this
+// host: it is mounted read-only as one, at a path in the probe's own tmpfs,
+// and listed. Nothing is written to dir's filesystem.
+func probeLower(dir string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "bwrap", "--unshare-all", "--die-with-parent", "--new-session", // #nosec G204 -- fixed argv; dir is a dependency directory corral already binds
+		"--ro-bind", "/", "/", "--tmpfs", "/tmp",
+		"--overlay-src", dir, "--tmp-overlay", "/tmp/corral-lower-probe",
+		"--", "ls", "/tmp/corral-lower-probe")
+	cmd.Stdout = nil
+	return cmd.Run() == nil
 }
 
 // probeOverlay reports whether this host's bwrap can do what a seeded run
@@ -232,7 +338,9 @@ func probeOverlay() bool {
 	if err := os.WriteFile(filepath.Join(dir, "lower"), []byte("x"), 0o600); err != nil {
 		return false
 	}
-	cmd := exec.Command("bwrap", "--unshare-all", "--die-with-parent", "--new-session", // #nosec G204 -- fixed argv; dir is our own MkdirTemp
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "bwrap", "--unshare-all", "--die-with-parent", "--new-session", // #nosec G204 -- fixed argv; dir is our own MkdirTemp
 		"--ro-bind", "/", "/", "--tmpfs", "/tmp",
 		"--overlay-src", dir, "--tmp-overlay", dir, "--chdir", dir,
 		"--", "sh", "-c", "test -f lower && echo y > upper")

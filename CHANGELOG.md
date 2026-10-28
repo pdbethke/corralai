@@ -9,6 +9,79 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [Unreleased]
+
+### Fixed
+
+- **The unit evidence pass recorded partial coverage as clean evidence on
+  vitest projects that use the forks pool.** The forks pool ends its workers
+  with SIGTERM, and a worker ended that way writes no V8 coverage. A unit
+  whose test spawned a subprocess, or whose configuration the main process
+  imported, still named some project files (the ones those processes wrote),
+  so it passed as a successful unit holding none of the worker's coverage.
+  On REA (vitest 5.0.3, a copy holding three of its test files, the jail, 3
+  workers), `hopperClient.protocol.test.ts`, `ciQualification.test.ts` and
+  `ghidraEndpointLifetime.test.ts` executed 1, 4 and 13 source files under
+  forks and 40, 11 and 59 under `--pool=threads` (n=1 for forks, n=3 for
+  threads, identical each run). In REA's earlier forks-era map, all 87
+  forks-project units marked successful had this shape. The pass now runs
+  every vitest unit with `--pool=threads` itself, replacing any `--pool` the
+  operator wrote. It says so once per pass, on `certify --repo`'s units line
+  and on `corral tests map`'s `evidence:` line
+  (`the evidence pass runs each unit with --pool=threads`, plus `in place of
+  --pool=forks` when it replaced one), and in the reason of any unit that
+  failed. Grading is unchanged: mutants still run the operator's own
+  command. A unit that is red under threads is reported with no evidence
+  rather than counted from partial coverage. An unreported unit is selected
+  for every file, so it costs time, never a wrong selection. One known case:
+  REA's `cli-boundary` project sets `execArgv: --max-old-space-size=384`,
+  which a worker thread refuses, so all 154 of its units are now unreported.
+  **Maps and evidence passes made before this fix under-select on forks-pool
+  vitest projects:** a file that a unit's worker executed may be missing
+  that unit. The unit-pass cache key now includes the flags the pass adds, so
+  a cached forks-era pass is not reused. This is also a one-time cache miss:
+  `reposcan.VerdictGeneration` is now 37.
+
+### Changed
+
+- **The unit evidence pass is faster on a bwrap that can overlay.** On such
+  a bwrap (`--tmp-overlay`, 0.10 and later), the pass copies the tree into
+  the jail once per pass instead of once per unit. Each unit runs on its own
+  copy-on-write overlay of that seed, and its writes go away with the run.
+  Each dependency directory (`node_modules`) is mounted as one copy-on-write
+  overlay instead of one read-only bind per entry. Its top-level cache
+  directories (every dot-directory except `.bin` and `.pnpm`) start empty on
+  every run. Whether a dependency directory can be overlaid is checked once
+  per filesystem. A directory that cannot be overlaid (NFS, FUSE, ecryptfs,
+  another overlay) keeps per-entry read-only binds, and the deps line says so.
+  A bwrap that cannot overlay at all keeps a fresh copy per unit, and the
+  units line says `units ran on a fresh copy each (this bwrap cannot
+  overlay)`. Measured on REA's full map (2,186 units, 8 workers, the
+  jail, a shared 24-core box, n=1 per run): **36m54s** before this change (load
+  mean 10.0), **29m22s** and **30m45s** after it (load means 10.4 and 11.2).
+  The same number of units produced evidence in each (1,640, 1,641 and
+  1,640). One unit flipped from red to green, and this is deliberate:
+  REA's `dependencyInstall.test.ts` reads `node_modules/.package-lock.json`,
+  which the per-entry binds never mounted (they skipped dot-entries), and
+  the overlay shows it as it is on the host. At 16 workers the same map
+  took 20m42s (n=1, load mean 21.9), but under that load three units went
+  red: two timed out and one failed its own wall-clock assertion.
+- **Go units in the evidence pass share one build cache, and never a cached
+  result.** The first unit runs with a `GOCACHE` the pass owns, and its
+  result is that unit's evidence. Every later unit gets that cache as a
+  read-only overlay. Every go unit runs with `-count=1`, replacing any
+  `-count` the operator wrote, because a shared cache also holds test
+  results and `go test` would replay one as a run that never happened.
+  Measured on corral's own packages at one worker (n=3 each):
+  `internal/testmap` took 6.21 s with an empty cache and 1.96 s with the
+  shared one, and `internal/lang` took 15.07 s and 11.13 s. Over corral's whole map
+  (99 units, 8 workers), two runs took 60 s and 90 s (load means 9.0
+  and 14.1), against 480 s for the build just before the change on the same
+  copy. That 480 s run had a load mean of 93.3, so it shows the maps are
+  identical (1,935 edges in each), not how much faster the change is. When
+  no cache can be shared, the units line says `each unit started from an
+  empty GOCACHE (no shared cache: <why>)`.
+
 ## [v1.0.0-rc.29] — 2026-10-26
 
 ### Added

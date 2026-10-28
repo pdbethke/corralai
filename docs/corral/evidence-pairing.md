@@ -516,3 +516,38 @@ two corral runs whose kill rates differ by 0.10 with overlapping intervals.
 Captures: the controller's scratchpad `evidence-proof/r27/` (`run-A.out`,
 `run-B.out`, `survivor-check.json`, `stryker/rea-config.out`,
 `stryker/wholefile.out` and their JSON reports).
+
+## How the pass runs units, and REA's full map (2026-10-28)
+
+Three changes to how the pass runs its units, each measured on a shared
+24-core workstation, n=1 per run, with each run's load given:
+
+- **vitest units run with `--pool=threads`,** replacing any `--pool` the
+  operator wrote (see the correction above). Grading still runs the
+  operator's command. The units line names the change once per pass. REA's
+  full map (2,186 units, the jail, 8 workers) went from 763 units with
+  evidence under forks to 1,640 under threads. A unit that is red under
+  threads has no evidence and is selected for every file. All 154 units of
+  REA's `cli-boundary` project are in that state, because its
+  `execArgv: --max-old-space-size=384` is refused by a worker thread.
+- **One seed per pass, and one overlay per dependency directory,** on a bwrap
+  with `--tmp-overlay`. Before this, every unit got its own copy of the tree
+  and 381 read-only binds for REA's `node_modules`. The same map took 36m54s
+  before (load mean 10.0), and 29m22s and 30m45s after (load means 10.4 and
+  11.2). One unit, `dependencyInstall.test.ts`, went from red to green,
+  because the overlay shows `node_modules/.package-lock.json`, which the
+  per-entry binds did not mount. Cache directories inside `node_modules`
+  (`.vite`, `.cache`) still start empty on every run. Where the bwrap or a
+  dependency directory's filesystem cannot overlay, the old mounts are used,
+  and the units line or the deps line says so.
+- **Go units share one `GOCACHE` per pass and run with `-count=1`,** so a
+  cached test result is never replayed as a run. Over corral's own map (99
+  units, 8 workers), two runs took 60 s and 90 s (load means 9.0 and
+  14.1) with edges identical to the build before the change. That build's
+  run on the same copy took 480 s, but at a load mean of 93.3, so it is not
+  a clean measure of the gain.
+
+Reasons and rejected alternatives are in
+[`docs/design/test-selection.md`](../design/test-selection.md#evidence-pass-mechanics),
+including vitest's transform cache, which was measured slower on REA and
+dropped.

@@ -9,8 +9,11 @@ import (
 	"github.com/pdbethke/corralai/internal/lang"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
+	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/pdbethke/corralai/internal/sandbox"
 )
@@ -285,7 +288,30 @@ func (j bwrapJail) runInJailCapturing(ctx context.Context, files map[string]stri
 		return sandbox.Result{}, err
 	}
 	defer os.RemoveAll(dir) // #nosec G104 -- best-effort cleanup of our own disposable temp dir
+	return j.runIn(ctx, runWorkspace{dir: dir}, cmd, maxOutput, keepTail)
+}
 
+// runWorkspace is where one jailed run's tree is: dir, written for this run
+// alone (a fresh copy, bound writable), or a seed several runs share
+// (seeded: overlaid copy-on-write at its own path, see Seed).
+type runWorkspace struct {
+	dir    string
+	seeded bool
+}
+
+// runIn runs cmd in ws. It is the one place a jailed run is assembled —
+// binds, toolchain, env, timeout, capture, timeout classification — for a
+// fresh copy and a seed alike, so the two can never become two different
+// runs.
+func (j bwrapJail) runIn(ctx context.Context, ws runWorkspace, cmd []string, maxOutput int, keepTail bool) (sandbox.Result, error) {
+	if len(cmd) == 0 {
+		return sandbox.Result{}, errors.New("adequacy: empty command")
+	}
+	dir := ws.dir
+	seedLower := ""
+	if ws.seeded {
+		seedLower = dir
+	}
 	roBinds, berr := j.resolveBinds(dir)
 	if berr != nil {
 		return sandbox.Result{}, berr
@@ -304,6 +330,7 @@ func (j bwrapJail) runInJailCapturing(ctx context.Context, files map[string]stri
 		Env:           envWithDepBinPaths(sandbox.MinimalEnv(), roBinds),
 		MaxOutput:     maxOutput, // 0 => sandbox.Run's own 16 KiB default
 		KeepTail:      keepTail,
+		SeedLower:     seedLower,
 	})
 	if err != nil {
 		if res.TimedOut {
@@ -312,6 +339,100 @@ func (j bwrapJail) runInJailCapturing(ctx context.Context, files map[string]stri
 		return res, err
 	}
 	return res, nil
+}
+
+// ErrNoOverlay is Seed's refusal on a backend that cannot overlay a seed
+// (sandbox.ErrNoOverlay, named here for adequacy's callers).
+var ErrNoOverlay = sandbox.ErrNoOverlay
+
+// SeededJail is a jail's runs over one seeded tree: Enumerate and
+// EnumerateDetailed as the jail's own, over the seed instead of a fresh copy
+// each, until Close removes the seed. An alias of sandbox.SeededRunner, so
+// reposcan names the same type without importing this package.
+type SeededJail = sandbox.SeededRunner
+
+// Seed writes files once into a seed directory and returns the runs over
+// it. Each run sees the seed overlaid copy-on-write at the seed's own path
+// (sandbox.Options.SeedLower): what it writes lands in its own tmpfs upper
+// layer and is gone when it ends, so runs never see each other's writes and
+// may run concurrently, and every path a run prints is what a fresh copy at
+// that path prints. Per run, that saves writing the whole tree (91 MiB of
+// text for REA) and removing it again, and the tmpfs space and inodes those
+// copies held at once: at 12 or more workers a copy per run exhausted
+// REA's tmpfs, and every unit failed ENOSPC.
+//
+// The returned runs accept only the very map that was seeded — the same
+// map value, not an equal one — and refuse any other before running
+// anything, so a seed can never answer for a tree it does not hold.
+//
+// Seed refuses with ErrNoOverlay, writing nothing, when the backend cannot
+// overlay (sandbox.Overlays): the caller runs on a fresh copy per run and
+// says so.
+func (j bwrapJail) Seed(files map[string]string) (SeededJail, error) {
+	if j.backend == nil {
+		return nil, errors.New("adequacy: no sandbox backend — refusing to run untrusted test+code unsandboxed")
+	}
+	if !sandbox.Overlays(j.backend) {
+		return nil, &sandbox.NoOverlayError{Backend: j.backend.Name()}
+	}
+	dir, err := j.writeWorkspace(files)
+	if err != nil {
+		return nil, err
+	}
+	return &seededJail{j: j, dir: dir, files: reflect.ValueOf(files).UnsafePointer()}, nil
+}
+
+// seededJail is Seed's SeededJail. Runs hold mu for reading for their whole
+// duration and Close takes it for writing, so the seed is never removed
+// from under a run that has it mounted.
+type seededJail struct {
+	j      bwrapJail
+	dir    string
+	files  unsafe.Pointer // the seeded map's identity, never dereferenced
+	mu     sync.RWMutex
+	closed bool
+}
+
+func (s *seededJail) run(ctx context.Context, files map[string]string, cmd []string) (sandbox.Result, error) {
+	if reflect.ValueOf(files).UnsafePointer() != s.files {
+		return sandbox.Result{}, errors.New("adequacy: a seeded jail runs only the tree it was seeded with, and was handed another")
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed {
+		return sandbox.Result{}, errors.New("adequacy: the seeded jail is closed")
+	}
+	return s.j.runIn(ctx, runWorkspace{dir: s.dir, seeded: true}, cmd, s.j.maxOutput, false)
+}
+
+// Enumerate is bwrapJail.Enumerate over the seed.
+func (s *seededJail) Enumerate(ctx context.Context, files map[string]string, cmd []string) (string, error) {
+	res, err := s.run(ctx, files, cmd)
+	if err != nil {
+		return "", err
+	}
+	return res.Output, nil
+}
+
+// EnumerateDetailed is bwrapJail.EnumerateDetailed over the seed.
+func (s *seededJail) EnumerateDetailed(ctx context.Context, files map[string]string, cmd []string) (sandbox.EnumerateResult, error) {
+	res, err := s.run(ctx, files, cmd)
+	return sandbox.EnumerateResult{Output: res.Output, ExitCode: res.ExitCode}, err
+}
+
+// Close waits for every run in progress, then removes the seed. Runs after
+// it are refused. A second Close does nothing.
+func (s *seededJail) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+	s.closed = true
+	if err := os.RemoveAll(s.dir); err != nil {
+		return fmt.Errorf("adequacy: remove the seed %s: %w", s.dir, err)
+	}
+	return nil
 }
 
 // toolchainBinds is the read-only binds that make cmd's own toolchain

@@ -230,7 +230,10 @@ sandbox, with network access for that step only.
 **The honest backend caveat.** Binding a dep dir requires the backend to
 **relocate** it into the jail workspace — only `bwrap` (Linux default, via
 `--ro-bind Host Target`) and `--jail container` (via `-v Host:Target:ro`) can
-do that. `bwrap` binds cleanly with no size limit and no copy. `--jail
+do that. `bwrap` binds cleanly with no size limit and no copy. A `bwrap` with
+`--tmp-overlay` (0.10 and later) mounts each dep dir as one copy-on-write
+overlay instead: the run can write inside it, every write vanishes with the
+run, and the host dir is never changed. `--jail
 container` is more restricted: containers remap the host uid, so a container
 process can't read a dep dir it doesn't have world-read permission on —
 `--jail container` binds only **world-readable** dep dirs; anything more

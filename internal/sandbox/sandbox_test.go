@@ -4,6 +4,8 @@ package sandbox
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -197,5 +199,20 @@ func TestDeadlineStillClassifiesAsTimeout(t *testing.T) {
 	}
 	if !res.TimedOut {
 		t.Errorf("TimedOut is false on a deadline-exceeded run — Score would take the plain-error path and never run the baseline re-probe, so a genuinely non-terminating mutant would go unrecorded as a kill")
+	}
+}
+
+// A seeded workspace is safe only on a backend that overlays it: on any
+// other (none, the container) the run would write into the seed itself, and
+// every later run would see those writes. Run refuses, and the command
+// never runs.
+func TestRunRefusesASeedOnABackendThatCannotOverlay(t *testing.T) {
+	ws := t.TempDir()
+	r := Run(context.Background(), "echo x > leaked", Options{Workspace: ws, SeedLower: ws, Backend: noneIsolator{}})
+	if r.Err == "" || r.ExitCode != -1 {
+		t.Errorf("Run = %+v, want a refusal", r)
+	}
+	if _, err := os.Stat(filepath.Join(ws, "leaked")); err == nil {
+		t.Error("the command ran and wrote into the seed")
 	}
 }

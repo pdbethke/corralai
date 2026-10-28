@@ -12,6 +12,12 @@ import (
 // containerIsolator runs commands inside a container via docker or podman.
 // It is a thin wrapper: the container image is responsible for the actual
 // toolchain; this type only enforces the isolation flags.
+//
+// It has no overlay (it does not implement overlayer), so it is never given
+// a seeded workspace (Options.SeedLower: Run refuses one with ErrNoOverlay)
+// and a PerEntry dependency bind stays one read-only volume per entry. Every
+// run on it writes a fresh copy of the tree, as it always has; only bwrap
+// changed.
 type containerIsolator struct {
 	runtime string // "docker" or "podman" (or any OCI-compatible CLI)
 	image   string // e.g. "ubuntu:24.04" or a project-specific agent image

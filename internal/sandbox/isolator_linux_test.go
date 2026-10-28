@@ -5,7 +5,10 @@
 package sandbox
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -154,5 +157,119 @@ func TestBwrapWrapReadsPinnedEnv(t *testing.T) {
 	}
 	if !slices.Equal(got["PATH"], []string{"/host/bin"}) {
 		t.Errorf("PATH = %q, bwrap forwards the host PATH", got["PATH"])
+	}
+}
+
+func countPair(argv []string, a, b string) int {
+	n := 0
+	for i := 0; i+1 < len(argv); i++ {
+		if argv[i] == a && argv[i+1] == b {
+			n++
+		}
+	}
+	return n
+}
+
+// A PerEntry dependency bind is one copy-on-write overlay when the bwrap can
+// overlay, in place of one --ro-bind per top-level entry: REA's node_modules
+// was 381 binds and 2.4 s of jail start per run (median, n=7 replays) against
+// 0.04 s as one overlay. Without overlay support it stays today's per-entry
+// binds, unchanged.
+func TestBwrapArgvPerEntryBecomesOneOverlay(t *testing.T) {
+	host := t.TempDir()
+	for _, d := range []string{"a", "b", "c"} {
+		if err := os.MkdirAll(filepath.Join(host, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	opts := Options{Workspace: "/w", ReadOnlyBinds: []Bind{{Host: host, Target: "/w/node_modules", PerEntry: true}}}
+
+	argv, err := (bwrapIsolator{overlay: true}).Wrap("true", opts, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := countPair(argv, "--overlay-src", host); n != 1 {
+		t.Errorf("--overlay-src %s appears %d times, want 1: %v", host, n, argv)
+	}
+	if n := countPair(argv, "--tmp-overlay", "/w/node_modules"); n != 1 {
+		t.Errorf("--tmp-overlay /w/node_modules appears %d times, want 1: %v", n, argv)
+	}
+	for i, a := range argv {
+		if a == "--ro-bind" && strings.HasPrefix(argv[i+1], host) {
+			t.Errorf("a per-entry --ro-bind survived the overlay: %v", argv[i:i+3])
+		}
+	}
+	// The overlay's mountpoint is inside the workspace, so it must follow
+	// the workspace mount, for the reason the per-entry binds must.
+	ws := slices.Index(argv, "--bind")
+	ov := slices.Index(argv, "--overlay-src")
+	if ws < 0 || ov < ws {
+		t.Errorf("the dependency overlay (at %d) must follow the workspace bind (at %d)", ov, ws)
+	}
+
+	argv, err = (bwrapIsolator{}).Wrap("true", opts, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ro := 0
+	for i, a := range argv {
+		if a == "--ro-bind" && strings.HasPrefix(argv[i+1], host) {
+			ro++
+		}
+	}
+	if ro != 3 || argvHas(argv, "--overlay-src") {
+		t.Errorf("without overlay: %d per-entry --ro-binds (want 3) and overlay=%v: %v", ro, argvHas(argv, "--overlay-src"), argv)
+	}
+}
+
+// A seeded workspace is a copy-on-write overlay of the seed at the seed's
+// own path: every path the run prints (coverage reports above all) is what
+// a fresh copy at that path would print, and nothing the run writes reaches
+// the seed.
+func TestBwrapArgvSeedLower(t *testing.T) {
+	const s = "/tmp/corral-seed"
+	opts := Options{Workspace: s, SeedLower: s,
+		ReadOnlyBinds: []Bind{{Host: "/proj/node_modules", Target: s + "/node_modules", PerEntry: true}}}
+	argv, err := (bwrapIsolator{overlay: true}).Wrap("true", opts, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !argvHas(argv, "--overlay-src", s, "--tmp-overlay", s, "--chdir", s) {
+		t.Errorf("want --overlay-src S --tmp-overlay S --chdir S: %v", argv)
+	}
+	if argvHas(argv, "--bind", s, s) {
+		t.Errorf("a seeded workspace must not be bound writable: %v", argv)
+	}
+	seed := slices.Index(argv, "--tmp-overlay")
+	dep := -1
+	for i := range argv {
+		if argv[i] == "--tmp-overlay" && i+1 < len(argv) && argv[i+1] == s+"/node_modules" {
+			dep = i
+		}
+	}
+	if seed < 0 || dep < seed {
+		t.Errorf("the dependency overlay (at %d) must follow the seed overlay (at %d): %v", dep, seed, argv)
+	}
+
+	// Never a writable bind of the seed in place of an overlay.
+	if _, err := (bwrapIsolator{}).Wrap("true", opts, nil); err == nil {
+		t.Error("a bwrap that cannot overlay wrapped a seeded workspace")
+	}
+	// The seed is the workspace, at its own path; anything else is refused.
+	if _, err := (bwrapIsolator{overlay: true}).Wrap("true", Options{Workspace: "/elsewhere", SeedLower: s}, nil); err == nil {
+		t.Error("a seed at a path other than the workspace was wrapped")
+	}
+}
+
+// The overlay probe says no for a bwrap that refuses --tmp-overlay: a bwrap
+// older than 0.10 (Ubuntu 24.04 ships 0.9) keeps today's per-entry binds.
+func TestBwrapOverlayProbeFailsClosed(t *testing.T) {
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "bwrap"), []byte("#!/bin/sh\necho 'bwrap: Unknown option --overlay-src' >&2\nexit 1\n"), 0o755); err != nil { // #nosec G306 -- a test's fake executable
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":/usr/bin:/bin")
+	if probeOverlay() {
+		t.Error("probeOverlay() = true for a bwrap that refuses --overlay-src")
 	}
 }

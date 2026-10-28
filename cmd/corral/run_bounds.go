@@ -73,7 +73,7 @@ const seedLimitBuiltin = int64(seedLimitBuiltinMiB) << 20
 // every jailed run — each baseline, mutant, authored test and evidence unit —
 // writes all of it to a fresh directory under $TMPDIR and removes it after
 // (adequacy's writeWorkspace / runInJailCapturing).
-const seedLimitHelp = "MiB of repository text the jail is seeded with before the repository is refused as too large (without this flag: 64). Counted over every text file the seed copies: files over 1 MiB, binaries outside test fixtures, .git, build output and bound dependency dirs are not counted. The cost of raising it: the seed is held in memory once per language per run, and EVERY jailed run (each baseline, mutant and evidence unit) writes the whole seed to its own fresh directory under $TMPDIR and removes it afterwards, so the disk in use is the seed times the runs in flight at once"
+const seedLimitHelp = "MiB of repository text the jail is seeded with before the repository is refused as too large (without this flag: 64). Counted over every text file the seed copies: files over 1 MiB, binaries outside test fixtures, .git, build output and bound dependency dirs are not counted. The cost of raising it: the seed is held in memory once per language per run, and every baseline and mutant run writes the whole seed to its own fresh directory under $TMPDIR and removes it afterwards, so the disk in use is the seed times the runs in flight at once. The unit evidence pass writes it once and overlays it copy-on-write for each unit when bwrap has --tmp-overlay (0.10 and later), and otherwise also writes one per unit, and says so"
 
 // evidenceTimeoutHelp is --evidence-timeout's help, shared by certify --repo
 // and corral tests map, which run the same pass.

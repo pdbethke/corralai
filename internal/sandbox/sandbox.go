@@ -49,6 +49,18 @@ type Bind struct {
 	// exists on the host would otherwise be re-mounted read-only and reproduce
 	// the very failure this avoids, while .bin holds the executables the test
 	// command needs.
+	//
+	// On a bwrap that overlays (bwrapIsolator.overlay), a PerEntry bind is
+	// instead ONE copy-on-write overlay of Host at Target: the same paths,
+	// writable, with every write in a per-run tmpfs upper layer and Host
+	// unchanged. That differs from the per-entry binds in three ways, all
+	// deliberate: a write to an existing dependency file succeeds for the
+	// rest of that run (it was EROFS); dot-entries are visible, so a cache
+	// already on the host (node_modules/.vite) is read and written
+	// copy-on-write rather than started empty; and a symlink in Host is a
+	// symlink in the jail, resolved there, where a link leaving Host reaches
+	// only what the jail mounts (the per-entry binds refused such a link,
+	// because a bind follows its source).
 	PerEntry bool
 }
 
@@ -117,6 +129,55 @@ type Options struct {
 	// (node_modules, vendor, .venv) are visible to the command without being
 	// copied into the workspace. The sandboxed process can never write them.
 	ReadOnlyBinds []Bind
+
+	// SeedLower, when set, is a seed directory the run sees through a
+	// copy-on-write overlay in place of a writable bind: the run reads the
+	// seed, and everything it writes lands in a private tmpfs upper layer
+	// that is gone when the run ends, so one seed serves any number of runs,
+	// concurrently, and none of them sees another's writes. It must equal
+	// Workspace: the jail sees the seed at its own host path, so every path
+	// a run prints (coverage reports above all) is what a fresh copy at that
+	// path prints. Only a backend that Overlays may be given one; Run refuses
+	// any other, because there the run would write into the seed itself.
+	SeedLower string
+}
+
+// ErrNoOverlay is returned when a seeded workspace (Options.SeedLower) is
+// asked of a backend that cannot overlay one: the container backend, darwin,
+// none, or a bwrap older than 0.10 (no --tmp-overlay). The caller runs on a
+// fresh copy per run instead, and says so.
+var ErrNoOverlay = errors.New("this backend cannot overlay a seeded workspace")
+
+// NoOverlayError is ErrNoOverlay naming the backend that refused, so the
+// caller's sentence names it too (errors.Is(err, ErrNoOverlay) holds).
+type NoOverlayError struct{ Backend string }
+
+func (e *NoOverlayError) Error() string { return e.Backend + " backend: " + ErrNoOverlay.Error() }
+
+// Is makes a NoOverlayError match ErrNoOverlay.
+func (e *NoOverlayError) Is(target error) bool { return target == ErrNoOverlay }
+
+// SeededRunner runs commands over one seeded tree (adequacy's Seed) until
+// Close removes the seed. Its Enumerate pair is the commandRunner seam
+// reposcan reads (Enumerate, and EnumerateDetailed for the exit status), and
+// accepts only the very map it was seeded with. Declared here, beside
+// EnumerateResult and for the same reason: adequacy implements it and
+// reposcan consumes it, and neither imports the other.
+type SeededRunner interface {
+	Enumerate(ctx context.Context, files map[string]string, cmd []string) (string, error)
+	EnumerateDetailed(ctx context.Context, files map[string]string, cmd []string) (EnumerateResult, error)
+	Close() error
+}
+
+// overlayer is the optional Isolator capability Options.SeedLower needs.
+type overlayer interface{ overlays() bool }
+
+// Overlays reports whether iso can run a seeded workspace (Options.
+// SeedLower). Only bwrap can, and only when its construction-time probe
+// mounted a --tmp-overlay on this host.
+func Overlays(iso Isolator) bool {
+	o, ok := iso.(overlayer)
+	return ok && o.overlays()
 }
 
 // Result is the outcome of a Run.
@@ -331,6 +392,11 @@ func Run(ctx context.Context, command string, opts Options) Result {
 
 	if opts.Backend == nil {
 		return Result{ExitCode: -1, Err: "execution disabled: no isolation backend"}
+	}
+	if opts.SeedLower != "" && !Overlays(opts.Backend) {
+		// Here, and not only in each backend's Wrap: a backend that knows
+		// nothing of SeedLower would bind Workspace (the seed) writable.
+		return Result{ExitCode: -1, Err: (&NoOverlayError{Backend: opts.Backend.Name()}).Error()}
 	}
 	argv, werr := opts.Backend.Wrap(command, opts, env)
 	if werr != nil {

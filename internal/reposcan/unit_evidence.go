@@ -169,6 +169,28 @@ func CollectUnitEvidence(ctx context.Context, runner commandRunner, files map[st
 
 	noCoverage := lang.UnitNoCoverageReason(p, inv)
 	note := lang.EvidenceNote(p, inv)
+	changed := note
+
+	// Every unit runs over the same tree, so a runner that can seed it
+	// (seedingRunner) writes it once, here, and each unit runs on a
+	// copy-on-write overlay of that seed instead of a fresh copy of its own.
+	unitRunner := runner
+	var seeded sandbox.SeededRunner
+	if sr, ok := runner.(seedingRunner); ok {
+		s, err := sr.Seed(files)
+		switch {
+		case err == nil:
+			seeded, unitRunner = s, s
+		case errors.Is(err, sandbox.ErrNoOverlay):
+			changed = joinChanged(changed, unitsFreshCopy(err))
+		default:
+			for _, i := range runnable {
+				results[i].Err = unitCouldNotRun + err.Error()
+			}
+			return UnitEvidence{Units: results, Note: fmt.Sprintf("%s: the unit pass could not seed the tree its units run over: %v", p.Name(), err)}
+		}
+	}
+
 	announce(len(runnable), len(units))
 	jobs := make(chan int)
 	var wg sync.WaitGroup
@@ -177,7 +199,7 @@ func CollectUnitEvidence(ctx context.Context, runner commandRunner, files map[st
 		go func() {
 			defer wg.Done()
 			for i := range jobs {
-				r := runUnit(ctx, runner, files, reporter, cmds[i], modulePath, noCoverage, note)
+				r := runUnit(ctx, unitRunner, files, reporter, cmds[i], modulePath, noCoverage, note)
 				r.Unit = results[i].Unit
 				results[i] = r
 			}
@@ -188,7 +210,50 @@ func CollectUnitEvidence(ctx context.Context, runner commandRunner, files map[st
 	}
 	close(jobs)
 	wg.Wait()
-	return UnitEvidence{Ran: true, Units: results, Changed: note}
+	if seeded != nil {
+		// The evidence is whole either way; a seed left behind is the
+		// host's to clean up, and the operator is told where it is.
+		if err := seeded.Close(); err != nil {
+			changed = joinChanged(changed, fmt.Sprintf("the pass's seed could not be removed: %v", err))
+		}
+	}
+	return UnitEvidence{Ran: true, Units: results, Changed: changed}
+}
+
+// seedingRunner is a commandRunner that can write the tree once for many
+// runs (adequacy's bwrapJail.Seed): the SeededRunner it returns runs each
+// command on a copy-on-write overlay of that one seed, for the very files
+// map it was given and no other, until Close. Seed returns
+// sandbox.ErrNoOverlay when the backend cannot overlay, and the pass then
+// runs each unit on a fresh copy, as every run did before, and says so
+// (unitsFreshCopy).
+type seedingRunner interface {
+	Seed(files map[string]string) (sandbox.SeededRunner, error)
+}
+
+// unitsFreshCopy is said, once per pass, of a pass whose runner could not
+// seed its units' tree (err, an ErrNoOverlay): each unit wrote a full copy
+// of the tree, which costs the tree's size in tmpfs per worker (at 12 or
+// more workers that exhausted REA's tmpfs, and every unit failed ENOSPC).
+// It names the backend that refused when the error does.
+func unitsFreshCopy(err error) string {
+	who := "this backend"
+	var no *sandbox.NoOverlayError
+	if errors.As(err, &no) {
+		who = "the " + no.Backend + " backend"
+		if no.Backend == "bwrap" {
+			who = "this bwrap"
+		}
+	}
+	return "units ran on a fresh copy each (" + who + " cannot overlay)"
+}
+
+// joinChanged appends one sentence to UnitEvidence.Changed.
+func joinChanged(changed, more string) string {
+	if changed == "" {
+		return more
+	}
+	return changed + "; " + more
 }
 
 // Settled reports whether this pass may be kept for a later scan of the

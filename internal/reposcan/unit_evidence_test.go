@@ -5,6 +5,7 @@ package reposcan
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -965,5 +966,123 @@ func TestThreadsRedUnitIsUnreportedNamingThePool(t *testing.T) {
 	j.answer("test/beta.test.ts", sandbox.EnumerateResult{Output: jsReport(), ExitCode: 1})
 	if got := unitByName(t, j.collect(context.Background(), "/w", 1), "test/beta.test.ts").Err; strings.Contains(got, "evidence pass") {
 		t.Errorf("jest beta.Err = %q, want no evidence note", got)
+	}
+}
+
+// seedingFake is a runner that offers Seed: the units run through the
+// seeded runner it returns, and the counts say how often each was used.
+type seedingFake struct {
+	*unitFakeRunner
+	seedErr    error
+	seeds      int
+	closes     int
+	seededRuns int
+	// ranAtClose is how many commands had run when Close was called.
+	ranAtClose int
+}
+
+func (s *seedingFake) Seed(files map[string]string) (sandbox.SeededRunner, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.seeds++
+	if s.seedErr != nil {
+		return nil, s.seedErr
+	}
+	return seededFake{s}, nil
+}
+
+type seededFake struct{ p *seedingFake }
+
+func (f seededFake) Enumerate(ctx context.Context, files map[string]string, cmd []string) (string, error) {
+	r, err := f.EnumerateDetailed(ctx, files, cmd)
+	return r.Output, err
+}
+
+func (f seededFake) EnumerateDetailed(ctx context.Context, files map[string]string, cmd []string) (sandbox.EnumerateResult, error) {
+	f.p.mu.Lock()
+	f.p.seededRuns++
+	f.p.mu.Unlock()
+	return f.p.unitFakeRunner.EnumerateDetailed(ctx, files, cmd)
+}
+
+func (f seededFake) Close() error {
+	f.p.mu.Lock()
+	defer f.p.mu.Unlock()
+	f.p.closes++
+	f.p.ranAtClose = len(f.p.ran)
+	return nil
+}
+
+// A runner that can seed is seeded once per pass, after the listing: every
+// unit runs through the one seed, which is closed once, after the last
+// unit. A runner whose bwrap cannot overlay still runs every unit, on a
+// fresh copy each, and the pass says so where it says what else it
+// changed (Changed), never in Note, which marks a pass that did not run.
+func TestCollectUnitEvidenceSeedsOnce(t *testing.T) {
+	collect := func(f *unitFixture, run *seedingFake) UnitEvidence {
+		return CollectUnitEvidence(context.Background(), run, map[string]string{}, f.p, f.inv, "/w", 2, func(int, int) {})
+	}
+	f := newUnitFixture(t, "typescript", []string{"vitest", "run"}, vitestTwoUnits)
+	f.answer("test/alpha.test.ts", sandbox.EnumerateResult{Output: jsReport("7 10 src/x.ts")})
+	f.answer("test/beta.test.ts", sandbox.EnumerateResult{Output: jsReport("2 10 src/x.ts")})
+
+	run := &seedingFake{unitFakeRunner: f.run}
+	ev := collect(f, run)
+	if !ev.Settled() {
+		t.Fatalf("ev = %+v, want both units green", ev)
+	}
+	if run.seeds != 1 || run.closes != 1 {
+		t.Errorf("Seed called %d times and Close %d, want 1 and 1", run.seeds, run.closes)
+	}
+	if run.seededRuns != 2 {
+		t.Errorf("%d commands ran through the seed, want the 2 units", run.seededRuns)
+	}
+	if len(run.ran) != 3 || run.ranAtClose != 3 {
+		t.Errorf("%d commands ran, %d before Close, want the listing and 2 units, all before Close", len(run.ran), run.ranAtClose)
+	}
+	if strings.Contains(ev.Changed, "fresh copy") {
+		t.Errorf("Changed = %q on a pass that ran on a seed", ev.Changed)
+	}
+
+	nf := newUnitFixture(t, "typescript", []string{"vitest", "run"}, vitestTwoUnits)
+	nf.answer("test/alpha.test.ts", sandbox.EnumerateResult{Output: jsReport("7 10 src/x.ts")})
+	nf.answer("test/beta.test.ts", sandbox.EnumerateResult{Output: jsReport("2 10 src/x.ts")})
+	norun := &seedingFake{unitFakeRunner: nf.run, seedErr: fmt.Errorf("wrapped: %w", &sandbox.NoOverlayError{Backend: "bwrap"})}
+	ev = collect(nf, norun)
+	if !ev.Settled() || ev.Note != "" {
+		t.Fatalf("without overlay: ev = %+v, want both units green and no Note", ev)
+	}
+	if norun.seededRuns != 0 || len(norun.ran) != 3 {
+		t.Errorf("without overlay: %d seeded runs and %d runs, want 0 and 3", norun.seededRuns, len(norun.ran))
+	}
+	want := "the evidence pass runs each unit with --pool=threads; units ran on a fresh copy each (this bwrap cannot overlay)"
+	if ev.Changed != want {
+		t.Errorf("without overlay: Changed = %q, want %q", ev.Changed, want)
+	}
+
+	// The sentence names the backend that could not overlay.
+	cf := newUnitFixture(t, "typescript", []string{"vitest", "run"}, vitestTwoUnits)
+	cf.answer("test/alpha.test.ts", sandbox.EnumerateResult{Output: jsReport("7 10 src/x.ts")})
+	cf.answer("test/beta.test.ts", sandbox.EnumerateResult{Output: jsReport("2 10 src/x.ts")})
+	ev = collect(cf, &seedingFake{unitFakeRunner: cf.run, seedErr: &sandbox.NoOverlayError{Backend: "container"}})
+	if !strings.HasSuffix(ev.Changed, "units ran on a fresh copy each (the container backend cannot overlay)") {
+		t.Errorf("container: Changed = %q", ev.Changed)
+	}
+
+	// Any other seeding failure stops the pass, and says why; no unit is
+	// left looking like it ran.
+	bf := newUnitFixture(t, "typescript", []string{"vitest", "run"}, vitestTwoUnits)
+	broken := &seedingFake{unitFakeRunner: bf.run, seedErr: errors.New("no space left on device")}
+	ev = collect(bf, broken)
+	if ev.Ran || !strings.Contains(ev.Note, "no space left on device") {
+		t.Errorf("a failed seed: ev = %+v, want a pass that did not run, saying why", ev)
+	}
+	for _, u := range ev.Units {
+		if u.Err == "" {
+			t.Errorf("unit %s has no Err in a pass that never ran it", u.Unit)
+		}
+	}
+	if len(broken.ran) != 1 {
+		t.Errorf("a failed seed ran %d commands, want only the listing", len(broken.ran))
 	}
 }

@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -1171,9 +1170,7 @@ func TestCollectUnitEvidenceSeedsOnce(t *testing.T) {
 	if norun.seededRuns != 0 || len(norun.ran) != 3 {
 		t.Errorf("without overlay: %d seeded runs and %d runs, want 0 and 3", norun.seededRuns, len(norun.ran))
 	}
-	// vitest's row shares a transform cache, so the pass also says it was
-	// not shared, as it does for go's GOCACHE.
-	want := "the evidence pass runs each unit with --pool=threads; units ran on a fresh copy each (this bwrap cannot overlay); each unit started from an empty vitest transform cache (no shared cache: this bwrap cannot overlay)"
+	want := "the evidence pass runs each unit with --pool=threads; units ran on a fresh copy each (this bwrap cannot overlay)"
 	if ev.Changed != want {
 		t.Errorf("without overlay: Changed = %q, want %q", ev.Changed, want)
 	}
@@ -1183,7 +1180,7 @@ func TestCollectUnitEvidenceSeedsOnce(t *testing.T) {
 	cf.answer("test/alpha.test.ts", sandbox.EnumerateResult{Output: jsReport("7 10 src/x.ts")})
 	cf.answer("test/beta.test.ts", sandbox.EnumerateResult{Output: jsReport("2 10 src/x.ts")})
 	ev = collect(cf, &seedingFake{unitFakeRunner: cf.run, seedErr: &sandbox.NoOverlayError{Backend: "container"}})
-	if !strings.Contains(ev.Changed, "units ran on a fresh copy each (the container backend cannot overlay)") {
+	if !strings.HasSuffix(ev.Changed, "units ran on a fresh copy each (the container backend cannot overlay)") {
 		t.Errorf("container: Changed = %q", ev.Changed)
 	}
 
@@ -1202,142 +1199,6 @@ func TestCollectUnitEvidenceSeedsOnce(t *testing.T) {
 	}
 	if len(broken.ran) != 1 {
 		t.Errorf("a failed seed ran %d commands, want only the listing", len(broken.ran))
-	}
-}
-
-// readingSeedFake is a seedingFake that also reads the tree as its jail
-// sees it (the seed, then the dependency directories mounted into it), as
-// adequacy's jail does: tree is what those directories hold.
-type readingSeedFake struct {
-	*seedingFake
-	tree map[string]string
-}
-
-func (r readingSeedFake) ReadTreeFile(files map[string]string, rel string) ([]byte, error) {
-	if s, ok := files[rel]; ok {
-		return []byte(s), nil
-	}
-	if s, ok := r.tree[rel]; ok {
-		return []byte(s), nil
-	}
-	return nil, fs.ErrNotExist
-}
-
-// A vitest pass shares one transform cache among its units when the
-// installed vitest takes --fsModuleCache --fsModuleCachePath: each unit
-// command carries them AFTER --pool=threads, the first unit runs once with
-// the cache writable and every later unit with it frozen, and the pass
-// says so — on the scan line and in a red unit's reason. The version is
-// read from the tree the jail sees; a vitest below the floor, or one whose
-// version cannot be read, gets no cache options at all, and the pass says
-// why. A seed that cannot share the cache runs every unit without them.
-func TestCollectUnitEvidenceVitestCacheArgs(t *testing.T) {
-	const pkgJSON = "node_modules/vitest/package.json"
-	cacheArgs := []string{"--fsModuleCache", "--fsModuleCachePath", sandbox.CacheTarget}
-	ts, _ := lang.ByName("typescript")
-	reporter := ts.(lang.CoverageReporter)
-	cachedCmd := func(f *unitFixture, unit string) []string {
-		cmd, _ := lang.UnitRunCmd(f.p, f.inv, unit)
-		ev := lang.EvidenceUnitCmd(f.p, f.inv, cmd)
-		cov, ok := reporter.CoverageCmd(append(slices.Clone(ev), cacheArgs...))
-		if !ok {
-			t.Fatalf("no coverage command for %q", ev)
-		}
-		return cov
-	}
-	fixture := func(betaExit int) *unitFixture {
-		f := newUnitFixture(t, "typescript", []string{"vitest", "run"}, vitestTwoUnits)
-		for _, cmd := range []func(string) []string{f.unitCmd, func(u string) []string { return cachedCmd(f, u) }} {
-			f.run.res[argvKey(cmd("test/alpha.test.ts"))] = sandbox.EnumerateResult{Output: jsReport("7 10 src/x.ts")}
-			f.run.res[argvKey(cmd("test/beta.test.ts"))] = sandbox.EnumerateResult{Output: jsReport("2 10 src/x.ts"), ExitCode: betaExit}
-		}
-		return f
-	}
-	collect := func(f *unitFixture, run commandRunner, files map[string]string) UnitEvidence {
-		return CollectUnitEvidence(context.Background(), run, files, f.p, f.inv, "/w", 2, func(int, int) {})
-	}
-	pkg := func(v string) map[string]string {
-		return map[string]string{pkgJSON: `{"name":"vitest","version":"` + v + `"}`}
-	}
-	const sharedSentence = "the evidence pass runs each unit with --pool=threads, and with --fsModuleCache --fsModuleCachePath /corral-cache (a shared vitest transform cache, filled by the first unit and frozen for every later one)"
-
-	// Shared: the version is read from the seed's own files.
-	f := fixture(0)
-	run := &seedingFake{unitFakeRunner: f.run, shareCache: true}
-	ev := collect(f, run, pkg("5.0.3"))
-	if !ev.Settled() {
-		t.Fatalf("ev = %+v, want both units green", ev)
-	}
-	if run.cacheAsked == nil || run.cacheAsked.Args == nil {
-		t.Errorf("Seed was asked to share %+v, want vitest's cache", run.cacheAsked)
-	}
-	alpha := strings.Join(cachedCmd(f, "test/alpha.test.ts"), " ")
-	if p, c := strings.Index(alpha, "--pool=threads"), strings.Index(alpha, "--fsModuleCache"); p < 0 || c < p {
-		t.Errorf("unit command %q, want --fsModuleCache after --pool=threads", alpha)
-	}
-	want := []string{"warm " + argvKey(cachedCmd(f, "test/alpha.test.ts")), "frozen " + argvKey(cachedCmd(f, "test/beta.test.ts"))}
-	if !slices.Equal(run.calls, want) {
-		t.Errorf("seeded runs = %q, want the first unit warm and the rest frozen, each with the cache options: %q", run.calls, want)
-	}
-	if ev.Changed != sharedSentence {
-		t.Errorf("Changed = %q, want %q", ev.Changed, sharedSentence)
-	}
-
-	// A red unit's reason names the cache options too: the operator's own
-	// run never had them.
-	rf := fixture(1)
-	ev = collect(rf, &seedingFake{unitFakeRunner: rf.run, shareCache: true}, pkg("5.0.3"))
-	if beta := unitByName(t, ev, "test/beta.test.ts"); !strings.Contains(beta.Err, "--fsModuleCachePath /corral-cache") {
-		t.Errorf("red beta.Err = %q, want it to name the cache options", beta.Err)
-	}
-
-	// Shared: the version is read from a dependency directory mounted into
-	// the jail, which is where node_modules is on a real run.
-	df := fixture(0)
-	drun := readingSeedFake{&seedingFake{unitFakeRunner: df.run, shareCache: true}, pkg("5.0.4")}
-	if ev := collect(df, drun, map[string]string{}); !ev.Settled() || ev.Changed != sharedSentence {
-		t.Errorf("from a dependency dir: ev = %+v, want both green and Changed %q", ev, sharedSentence)
-	}
-
-	// Not shared: no cache options on any command, no warm run, and the
-	// pass says why.
-	for _, c := range []struct {
-		name  string
-		run   func(*unitFixture) commandRunner
-		files map[string]string
-		why   string
-	}{
-		{"below the floor", func(f *unitFixture) commandRunner { return &seedingFake{unitFakeRunner: f.run, shareCache: true} }, pkg("4.1.5"),
-			"each unit started from an empty vitest transform cache (no shared cache: vitest 4.1.5 (node_modules/vitest/package.json) is older than 5.0.3, the oldest vitest known to take --fsModuleCache --fsModuleCachePath)"},
-		{"unreadable", func(f *unitFixture) commandRunner { return &seedingFake{unitFakeRunner: f.run, shareCache: true} }, map[string]string{},
-			"each unit started from an empty vitest transform cache (no shared cache: could not read node_modules/vitest/package.json, so the installed vitest's version is unknown: file does not exist)"},
-		{"seed shares none", func(f *unitFixture) commandRunner {
-			return &seedingFake{unitFakeRunner: f.run, unshared: "this bwrap cannot overlay a directory on the filesystem of /tmp"}
-		}, pkg("5.0.3"),
-			"each unit started from an empty vitest transform cache (no shared cache: this bwrap cannot overlay a directory on the filesystem of /tmp)"},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			f := fixture(0)
-			r := c.run(f)
-			ev := collect(f, r, c.files)
-			if !ev.Settled() {
-				t.Fatalf("ev = %+v, want both units green", ev)
-			}
-			wantChanged := "the evidence pass runs each unit with --pool=threads; " + c.why
-			if ev.Changed != wantChanged {
-				t.Errorf("Changed = %q, want %q", ev.Changed, wantChanged)
-			}
-			sf := r.(*seedingFake)
-			if c.name != "seed shares none" && sf.cacheAsked != nil {
-				t.Errorf("Seed was asked to share %+v, want none", sf.cacheAsked)
-			}
-			want := []string{"frozen " + argvKey(f.unitCmd("test/alpha.test.ts")), "frozen " + argvKey(f.unitCmd("test/beta.test.ts"))}
-			got := slices.Clone(sf.calls)
-			slices.Sort(got)
-			if !slices.Equal(got, want) {
-				t.Errorf("seeded runs = %q, want both units without cache options and no warm run: %q", got, want)
-			}
-		})
 	}
 }
 

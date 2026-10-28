@@ -3,9 +3,7 @@
 package lang
 
 import (
-	"io/fs"
 	"slices"
-	"strings"
 	"testing"
 )
 
@@ -110,79 +108,5 @@ func TestVitestEvidenceArgsThreadsPool(t *testing.T) {
 	}
 	if got := EvidenceNote(ts, Cmd([]string{"jest"})); got != "" {
 		t.Errorf("jest EvidenceNote = %q, want \"\"", got)
-	}
-}
-
-// The unit evidence pass shares one vitest transform cache among its
-// units: --fsModuleCache --fsModuleCachePath <dir>, a pair of options
-// vitest takes on its command line only from 5.0 (4.1 has them under
-// `experimental` alone). Whether the installed vitest takes them is read
-// from its package.json — the one beside the entry script the command
-// runs, else node_modules/vitest's — never learned by running it and
-// reading an error. A version below the floor, an unreadable file or one
-// with no version gives no cache, and the reason names what was read.
-func TestVitestEvidenceCache(t *testing.T) {
-	ts, _ := ByName("typescript")
-	c := EvidenceCacheFor(ts, Cmd([]string{"vitest", "run"}))
-	if c == nil || c.Env != "" || c.Args == nil || c.Unsupported == nil || c.Name == "" {
-		t.Fatalf("EvidenceCacheFor(vitest) = %+v, want a named cache with Args and a version gate, no Env", c)
-	}
-	if got, want := c.Args("/corral-cache"), []string{"--fsModuleCache", "--fsModuleCachePath", "/corral-cache"}; !slices.Equal(got, want) {
-		t.Errorf("Args = %q, want %q", got, want)
-	}
-	pkg := func(version string) string { return `{"name":"vitest","version":"` + version + `","type":"module"}` }
-	reader := func(files map[string]string, asked *[]string) func(string) ([]byte, error) {
-		return func(rel string) ([]byte, error) {
-			*asked = append(*asked, rel)
-			s, ok := files[rel]
-			if !ok {
-				return nil, fs.ErrNotExist
-			}
-			return []byte(s), nil
-		}
-	}
-	const root = "node_modules/vitest/package.json"
-	for _, k := range []struct {
-		name    string
-		argv    []string
-		files   map[string]string
-		path    string
-		wantWhy string // "" = the cache is used; else a substring of the reason
-	}{
-		{"floor", []string{"vitest", "run"}, map[string]string{root: pkg("5.0.3")}, root, ""},
-		{"above", []string{"vitest", "run"}, map[string]string{root: pkg("5.1.0")}, root, ""},
-		{"next major", []string{"vitest", "run"}, map[string]string{root: pkg("6.0.0")}, root, ""},
-		{"entry script", []string{"node", "./node_modules/vitest/vitest.mjs", "run"}, map[string]string{root: pkg("5.0.4")}, root, ""},
-		{"nested entry script", []string{"node", "packages/a/node_modules/vitest/vitest.mjs", "run"},
-			map[string]string{"packages/a/node_modules/vitest/package.json": pkg("5.0.3"), root: pkg("4.1.5")}, "packages/a/node_modules/vitest/package.json", ""},
-		{"4.1 has it only under experimental", []string{"vitest", "run"}, map[string]string{root: pkg("4.1.5")}, root, "vitest 4.1.5 (" + root + ") is older than 5.0.3"},
-		{"a prerelease of the floor", []string{"vitest", "run"}, map[string]string{root: pkg("5.0.3-beta.1")}, root, "vitest 5.0.3-beta.1"},
-		{"unreadable", []string{"vitest", "run"}, map[string]string{}, root, "could not read " + root},
-		{"no version", []string{"vitest", "run"}, map[string]string{root: `{"name":"vitest"}`}, root, root + " names no version"},
-		{"not a version", []string{"vitest", "run"}, map[string]string{root: pkg("next")}, root, `version "next"`},
-		{"not json", []string{"vitest", "run"}, map[string]string{root: "nope"}, root, "could not parse " + root},
-		{"absolute entry script", []string{"node", "/opt/vitest/node_modules/vitest/vitest.mjs", "run"}, map[string]string{root: pkg("5.0.3")}, "", "outside the tree"},
-	} {
-		t.Run(k.name, func(t *testing.T) {
-			var asked []string
-			why := c.Unsupported(k.argv, reader(k.files, &asked))
-			switch {
-			case k.wantWhy == "" && why != "":
-				t.Errorf("Unsupported = %q, want the cache used", why)
-			case k.wantWhy != "" && !strings.Contains(why, k.wantWhy):
-				t.Errorf("Unsupported = %q, want it to say %q", why, k.wantWhy)
-			}
-			if k.path != "" && (len(asked) != 1 || asked[0] != k.path) {
-				t.Errorf("read %q, want only %q", asked, k.path)
-			}
-			if k.path == "" && len(asked) != 0 {
-				t.Errorf("read %q, want nothing read", asked)
-			}
-		})
-	}
-	// A row with a cache but no gate (go) and a row with no cache (jest).
-	g, _ := ByName("go")
-	if gc := EvidenceCacheFor(g, Cmd([]string{"go", "test", "./..."})); gc == nil || gc.Unsupported != nil {
-		t.Errorf("go cache = %+v, want one with no version gate", gc)
 	}
 }

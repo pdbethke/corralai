@@ -506,9 +506,9 @@ Some figures below are carried by the commit messages that made the
 changes: 99cdebfe, 761549e6, 33786970, 0b3aeb2d, 2a56d7f8 and 7ab00ef9. The
 rest come from an unpublished session record of measurements taken on the
 maintainer's workstation, a 24-core box. Each figure is n=1 unless stated
-otherwise. The box was shared with other work throughout, and load is given
-where it was recorded per run. Where it was not, the one-minute load
-average over the measuring session ranged from 4.6 to 23.
+otherwise. The box was shared with other work throughout. A run's load is
+given beside it where it was recorded, and a figure whose load was not
+recorded says so.
 
 ### vitest units run in the threads pool
 
@@ -616,15 +616,19 @@ after the review fixes, 30m45s (load mean 11.2), against 36m54s (load mean
 10.0) for the threads map before it. Those maps had 1,641 and 1,640 units with
 evidence against 1,640, so this comparison is like with like. Between the
 threads map and the 29m22s run, edges differed only by `dependencyInstall`
-and by executed-count drift in 33 units green in both. For scale, the 29m22s
-run and the 16-worker run below, made by one binary at load means 10.4 and
-21.9, differed in 37 such units. In the 30m45s run, one wall-clock test (`routeProperties`, `< 2000` ms) went red. At
+and by executed-count drift in 33 units green in both. The nearest noise
+control is not a clean one: the 29m22s run and the 16-worker run below, made
+by one binary but at 8 and 16 workers (load means 10.4 and 21.9), differed
+in 37 such units. So the 33 units are comparable to drift seen with no code
+change, though not measured against a same-settings repeat. In the 30m45s
+run, one wall-clock test (`routeProperties`, `< 2000` ms) went red. At
 16 workers the map took 20m42s (load mean 21.9) with no ENOSPC. Under
 that load three units went red: two timed out and one was the same
 wall-clock test.
 
 **Known gap.** The real-bwrap overlay tests are expected to skip in CI
-(bwrap 0.9.0 from ubuntu-latest's apt; not yet observed in a CI run), with a
+(the bubblewrap ubuntu-latest's apt installs: 0.9.0 on ubuntu-24.04; not
+yet checked in a CI run), with a
 SKIP reason that says the overlay path was not exercised. They have run, and
 passed, only on a machine whose bwrap can overlay: 0.11.1 on the workstation
 they were run on.

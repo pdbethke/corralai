@@ -60,12 +60,14 @@ history of any release, `git log v0.3.4..v0.3.5`.
   jail, a shared 24-core box, n=1 per run): **36m54s** before this change (load
   mean 10.0), **29m22s** and **30m45s** after it (load means 10.4 and 11.2).
   About the same number of units produced evidence in each (1,640, 1,641 and
-  1,640). In the 30m45s run, one wall-clock test
+  1,640). One change in evidence is caused by the overlay, and it is
+  deliberate: REA's `dependencyInstall.test.ts` reads
+  `node_modules/.package-lock.json`, which the per-entry binds never mounted
+  (they skipped dot-entries), so it was red before and is green under the
+  overlay, which shows the file as it is on the host. Separately, run-to-run
+  noise: in the 30m45s run one wall-clock test
   (`javascriptStaticAnalysis.routeProperties.test.ts`, `< 2000` ms) went
-  red. One unit flipped from red to green, and this is deliberate:
-  REA's `dependencyInstall.test.ts` reads `node_modules/.package-lock.json`,
-  which the per-entry binds never mounted (they skipped dot-entries), and
-  the overlay shows it as it is on the host. At 16 workers the same map
+  red, where it had been green in the 29m22s run. At 16 workers the same map
   took 20m42s (n=1, load mean 21.9), but under that load three units went
   red: two timed out and one failed its own wall-clock assertion.
 - **Go units in the evidence pass share one build cache, and never a cached

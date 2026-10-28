@@ -540,7 +540,18 @@ Three changes to how the pass runs its units, each measured on a shared
   (`.vite`, `.cache`: every dot-directory that is not a symlink, except
   `.bin` and `.pnpm`) still start empty on every run. Where the bwrap or a
   dependency directory's filesystem cannot overlay, the old mounts are used,
-  and the units line or the deps line says so.
+  and the units line or the deps line says so. **The dependency overlay is
+  not specific to this pass:** the baseline and every graded mutant run on
+  such a bwrap mount `node_modules` the same way, so they too see its
+  top-level dot-files, can write an existing dependency file for the rest
+  of the run (it was EROFS), and follow a top-level symlink that leaves
+  `node_modules` (an npm-workspace link such as
+  `node_modules/pkg -> ../packages/pkg`, which the per-entry binds left
+  out) to the workspace's copy of its target. That can move a verdict;
+  `dependencyInstall.test.ts` is the measured case (in this pass). It is
+  kept on purpose, because the jail should see the dependency tree the host
+  has. (This bullet first read as if the overlay were the evidence pass's
+  alone.)
 - **Go units share one `GOCACHE` per pass and run with `-count=1`,** so a
   cached test result is never replayed as a run. Over corral's own map (99
   units, 8 workers), two runs took 60 s and 90 s (load means 9.0 and

@@ -583,6 +583,25 @@ time. Each dependency directory becomes one `--overlay-src Host
 --tmp-overlay Target` instead of per-entry binds. In both cases the unit can
 write, the write goes away with the run, and the host is never changed.
 
+**The dependency overlay is not the evidence pass's alone.** It is built in
+the sandbox's argv (`bwrapIsolator.Wrap`, for every `PerEntry` bind), so on
+a bwrap that can overlay the baseline and every graded mutant run get it
+too. This section first described it as part of the pass only, which
+understated it. Against the per-entry binds, a graded run now sees
+top-level dot-files in `node_modules`, can write an existing dependency
+file for the rest of the run (it was EROFS), and follows a top-level
+symlink that leaves `node_modules` (an npm-workspace link such as
+`node_modules/pkg -> ../packages/pkg`, which the per-entry binds refused
+because a bind follows its source) to the workspace's copy of its target.
+Each can move a verdict. The alternative was to keep per-entry binds for
+graded runs and overlay only the pass. It was rejected: the overlay shows
+the jail the dependency tree the host has, which is the tree the
+operator's own test command runs against, and the per-entry binds' omission
+of dot-files was a side effect of avoiding EROFS on caches, not a decision
+about what a test may read. The cost is that a verdict on such a project
+can differ from one graded before this change, which
+`reposcan.VerdictGeneration` 37 records.
+
 The overlay's view of `node_modules` is the real one, dot-entries included.
 That brought two consequences:
 
@@ -606,7 +625,11 @@ another overlayfs. So each dependency directory's filesystem is probed once
 (cached by `st_dev`), and a refusal keeps that directory on per-entry binds.
 The deps line names the mount for each directory: `copy-on-write, writable
 in the run only`, `read-only, bound per entry: its filesystem cannot be
-overlaid`, or `read-only`. A bwrap that cannot overlay at all (bwrap 0.9 has
+overlaid`, `read-only`, or `not mounted: it could not be read`. That last is
+a directory that cannot be listed: its cache masks cannot be computed, so
+it is not overlaid, and its per-entry binds expand to nothing. The deps line
+and the mount read one decision (`dirOverlay` in the bwrap isolator), so the
+line cannot say copy-on-write for a directory the run mounted another way. A bwrap that cannot overlay at all (bwrap 0.9 has
 no `--tmp-overlay`) keeps a fresh copy per unit. `Changed` then says `units
 ran on a fresh copy each (this bwrap cannot overlay)`, and the container
 backend is named in place of "this bwrap" where it applies.

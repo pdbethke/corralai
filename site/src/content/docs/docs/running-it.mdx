@@ -226,8 +226,9 @@ sandbox, with network access for that step only.
   copied into the workspace seed instead, subject to the same size cap.
 - When anything is bound, the run prints `deps: bound N dir(s), never
   changed on the host — not copied into the jail seed: <name> (<how>), …`,
-  where `<how>` is `read-only`, `copy-on-write, writable in the run only`, or
-  `read-only, bound per entry: its filesystem cannot be overlaid`.
+  where `<how>` is `read-only`, `copy-on-write, writable in the run only`,
+  `read-only, bound per entry: its filesystem cannot be overlaid`, or
+  `not mounted: it could not be read`.
 
 **The honest backend caveat.** Binding a dep dir requires the backend to
 **relocate** it into the jail workspace — only `bwrap` (Linux default, via

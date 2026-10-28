@@ -289,6 +289,25 @@ package reposcan
 // the file. "36" never left its branch; bumped anyway, because a dev box's
 // cache holds "36" verdicts graded on that evidence. Verdict unchanged;
 // behaviour bump.
+//
+// Riding along in "37", and not confined to the evidence pass: on a bwrap
+// that overlays (0.10 and later), EVERY jailed run, baseline and graded
+// mutant runs included, mounts a dependency directory (node_modules) as one
+// copy-on-write overlay instead of one read-only bind per top-level entry
+// (sandbox.Bind.PerEntry). The jail now sees the host's dependency tree as
+// it is: top-level dot-files are visible (the per-entry binds skipped every
+// dot-entry but .bin; top-level dot-directories other than .bin and .pnpm
+// are still masked empty), a write to an existing dependency file succeeds
+// for the rest of that run where it was EROFS, and a top-level symlink that
+// leaves the directory (an npm-workspace link such as node_modules/pkg ->
+// ../packages/pkg, which the per-entry binds left out) is a symlink in the
+// jail, resolved there, so a relative one reaches the workspace's copy of
+// its target. Any of these can move a verdict. Measured: REA's
+// dependencyInstall.test.ts reads node_modules/.package-lock.json and was
+// red under the per-entry binds, green under the overlay. Kept on graded
+// runs deliberately, because the jail should see the dependency tree the
+// host has; a "36" or earlier verdict on such a project was graded without
+// it.
 const VerdictGeneration = "37"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every

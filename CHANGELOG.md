@@ -70,11 +70,37 @@ history of any release, `git log v0.3.4..v0.3.5`.
   red, where it had been green in the 29m22s run. At 16 workers the same map
   took 20m42s (n=1, load mean 21.9), but under that load three units went
   red: two timed out and one failed its own wall-clock assertion.
+- **The dependency overlay applies to every jailed run, graded runs
+  included, and can move a verdict.** The mount described in the bullet
+  above is not specific to the evidence pass: on a bwrap that can overlay,
+  the baseline and every mutant run mount `node_modules` the same way.
+  Against the per-entry read-only binds, such a run now sees top-level
+  dot-files in `node_modules` (the binds skipped every dot-entry but
+  `.bin`), can write an existing dependency file for the rest of the run
+  (it was EROFS), and follows a top-level symlink that leaves `node_modules`
+  (an npm-workspace link such as `node_modules/pkg -> ../packages/pkg`,
+  which the binds left out) to the workspace's copy of its target. A test
+  that depends on any of these can change result between this release and
+  the last; the measured case is REA's `dependencyInstall.test.ts` above,
+  red under the binds and green under the overlay (measured in the evidence
+  pass, not in a graded run). It is kept on graded runs on purpose: the
+  jail should see the dependency tree the host has. A bwrap older than 0.10,
+  a dependency directory whose filesystem cannot be overlaid, and
+  `--jail container` keep the per-entry binds. A dependency directory that
+  cannot be listed is not overlaid either (its cache directories could not
+  be masked); no backend mounts it, and the deps line now says `not mounted:
+  it could not be read` where it used to name a mount. Covered by
+  `reposcan.VerdictGeneration` 37. (This changelog first described the
+  overlay under the evidence pass alone, which understated what it
+  changes.)
 - **Go units in the evidence pass share one build cache, and never a cached
   result.** The first unit runs with a `GOCACHE` the pass owns, and its
   result is that unit's evidence. Every later unit gets that cache as a
-  read-only overlay. Every go unit runs with `-count=1`, replacing any
-  `-count` the operator wrote, because a shared cache also holds test
+  copy-on-write overlay: it reads the cache, and its writes are discarded
+  with the run, so no unit changes what another reads. (This said
+  "read-only overlay"; a unit can write the cache, and the write is
+  thrown away.) Every go unit runs with `-count=1`, replacing any `-count`
+  the operator wrote, because a shared cache also holds test
   results and `go test` would replay one as a run that never happened.
   Measured on corral's own packages at one worker (n=3 each, load not
   recorded per run):

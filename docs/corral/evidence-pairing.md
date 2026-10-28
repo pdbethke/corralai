@@ -537,7 +537,8 @@ Three changes to how the pass runs its units, each measured on a shared
   11.2). One unit, `dependencyInstall.test.ts`, went from red to green,
   because the overlay shows `node_modules/.package-lock.json`, which the
   per-entry binds did not mount. Cache directories inside `node_modules`
-  (`.vite`, `.cache`) still start empty on every run. Where the bwrap or a
+  (`.vite`, `.cache`: every dot-directory that is not a symlink, except
+  `.bin` and `.pnpm`) still start empty on every run. Where the bwrap or a
   dependency directory's filesystem cannot overlay, the old mounts are used,
   and the units line or the deps line says so.
 - **Go units share one `GOCACHE` per pass and run with `-count=1`,** so a

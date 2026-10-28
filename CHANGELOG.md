@@ -50,8 +50,8 @@ history of any release, `git log v0.3.4..v0.3.5`.
   copy-on-write overlay of that seed, and its writes go away with the run.
   Each dependency directory (`node_modules`) is mounted as one copy-on-write
   overlay instead of one read-only bind per entry. Its top-level cache
-  directories (every dot-directory except `.bin` and `.pnpm`) start empty on
-  every run. Whether a dependency directory can be overlaid is checked once
+  directories (every dot-directory that is not a symlink, except `.bin` and
+  `.pnpm`) start empty on every run. Whether a dependency directory can be overlaid is checked once
   per filesystem. A directory that cannot be overlaid (NFS, FUSE, ecryptfs,
   another overlay) keeps per-entry read-only binds, and the deps line says so.
   A bwrap that cannot overlay at all keeps a fresh copy per unit, and the
@@ -59,8 +59,10 @@ history of any release, `git log v0.3.4..v0.3.5`.
   overlay)`. Measured on REA's full map (2,186 units, 8 workers, the
   jail, a shared 24-core box, n=1 per run): **36m54s** before this change (load
   mean 10.0), **29m22s** and **30m45s** after it (load means 10.4 and 11.2).
-  The same number of units produced evidence in each (1,640, 1,641 and
-  1,640). One unit flipped from red to green, and this is deliberate:
+  About the same number of units produced evidence in each (1,640, 1,641 and
+  1,640). In the 30m45s run, one wall-clock test
+  (`javascriptStaticAnalysis.routeProperties.test.ts`, `< 2000` ms) went
+  red. One unit flipped from red to green, and this is deliberate:
   REA's `dependencyInstall.test.ts` reads `node_modules/.package-lock.json`,
   which the per-entry binds never mounted (they skipped dot-entries), and
   the overlay shows it as it is on the host. At 16 workers the same map
@@ -72,7 +74,8 @@ history of any release, `git log v0.3.4..v0.3.5`.
   read-only overlay. Every go unit runs with `-count=1`, replacing any
   `-count` the operator wrote, because a shared cache also holds test
   results and `go test` would replay one as a run that never happened.
-  Measured on corral's own packages at one worker (n=3 each):
+  Measured on corral's own packages at one worker (n=3 each, load not
+  recorded per run):
   `internal/testmap` took 6.21 s with an empty cache and 1.96 s with the
   shared one, and `internal/lang` took 15.07 s and 11.13 s. Over corral's whole map
   (99 units, 8 workers), two runs took 60 s and 90 s (load means 9.0
@@ -185,7 +188,9 @@ history of any release, `git log v0.3.4..v0.3.5`.
 ### Changed
 
 - **`VerdictGeneration` is now 34, so every cached verdict is measured once
-  more.** Three things in this release can move a verdict: jest and vitest
+  more.** (This said 34 until 2026-10-28; the tag's
+  `internal/reposcan/generation.go` is 35, so the number is 35.) Three
+  things in this release can move a verdict: jest and vitest
   one-test and salvage commands refuse a name filter bundled into short
   options (`-ct foo`), which a 33 verdict's commands accepted; pre-flight
   results changed (a file with no executable lines is omitted rather than

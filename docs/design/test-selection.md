@@ -491,16 +491,24 @@ parked follow-up, not yet built.
 
 ## Evidence pass mechanics
 
-Written 2026-10-28. The unit evidence pass (the one `certify --repo` runs,
+**Status:** Unreleased (written 2026-10-28, on `feat/test-selection`).
+
+The unit evidence pass (the one `certify --repo` runs,
 and `corral tests map`) lists the units the operator's command collects. It
 runs each unit alone, under coverage, in the jail, and keeps a unit's
-coverage only when that unit's own suite exited 0. Four changes were made to
-how it runs. The first fixes what the pass measured, and the other three
-change only what the pass costs. Measured figures below come from the
-evidence speed-ups work (`.superpowers/sdd/2026-10-27-evidence-speedups/`,
-gitignored) and from the commit messages that cite them. Every one is n=1
-unless stated otherwise, and the box was shared with other work throughout,
-so each run's load is given beside it.
+coverage only when that unit's own suite exited 0. Four changes were tried.
+Three shipped. The first fixes what the pass measured. The second and third
+cut what the pass costs, and the second also changes one REA unit's evidence
+(below). The fourth, a shared vitest transform cache, was measured slower and
+dropped.
+
+Some figures below are carried by the commit messages that made the
+changes: 99cdebfe, 761549e6, 33786970, 0b3aeb2d, 2a56d7f8 and 7ab00ef9. The
+rest come from an unpublished session record of measurements taken on the
+maintainer's workstation, a 24-core box. Each figure is n=1 unless stated
+otherwise. The box was shared with other work throughout, and load is given
+where it was recorded per run. Where it was not, the one-minute load
+average over the measuring session ranged from 4.6 to 23.
 
 ### vitest units run in the threads pool
 
@@ -560,10 +568,11 @@ two costs, both measured:
 
 - **Jail start.** REA's `node_modules` has 381 entries. Replaying the
   recorded bwrap argv with `true` as the command took 2.44 s median (n=7,
-  383 `--ro-bind`s). With `node_modules` as one mount it took 0.04 s, and
-  the cost grew with concurrency. Over a 16-file sample, jail start was 0.93 s
-  median at one worker and 2.5 s at eight, the largest fixed cost per unit.
-  The seed write was 0.18 s and 0.26 s.
+  383 `--ro-bind`s, load not recorded). With `node_modules` as one mount it
+  took 0.04 s, and the cost grew with concurrency. Over a 16-file sample
+  (n=3 reps at each worker count, load not recorded per run), jail start
+  was 0.93 s median at one worker and 2.5 s at eight, the largest fixed
+  cost per unit. The seed write was 0.18 s and 0.26 s.
 - **ENOSPC.** At 12, 16 and 24 workers, every unit failed with ENOSPC: the
   tmpfs ran out of inodes. Each seed is about 8k inodes, and other sessions
   had 994k of the 1,048,576 in use. A copy per run is a hazard in itself.
@@ -578,7 +587,8 @@ The overlay's view of `node_modules` is the real one, dot-entries included.
 That brought two consequences:
 
 - **Host caches are masked.** Every top-level dot-directory of an overlaid
-  dependency directory gets `--tmpfs`, except `.bin` and `.pnpm`. pnpm's
+  dependency directory that is not a symlink gets `--tmpfs`, except `.bin`
+  and `.pnpm`. pnpm's
   `.pnpm` is the store that every top-level entry links into, not a cache,
   so masking it would break every pnpm install. So `.vite` (which holds
   vitest's results) and `.cache` start empty on every run, as they did
@@ -587,8 +597,8 @@ That brought two consequences:
   reads `node_modules/.package-lock.json`. Under per-entry binds, which
   skipped dot-entries, it failed with ENOENT. Under the overlay it is green.
   The per-entry binds skipped dot-entries only to avoid EROFS on cache
-  directories, and copy-on-write removes that reason. The test is green on
-  the host, so green in the jail is the more faithful answer.
+  directories, and copy-on-write removes that reason. The host's tree has
+  that file, and the jail now sees what the host sees.
 
 **Whether to overlay is decided per filesystem.** A probe on corral's temp
 directory says nothing about a `node_modules` on NFS, FUSE, ecryptfs or
@@ -604,24 +614,26 @@ backend is named in place of "this bwrap" where it applies.
 **Measured** on REA's full map, 8 workers: 29m22s (load mean 10.4) and,
 after the review fixes, 30m45s (load mean 11.2), against 36m54s (load mean
 10.0) for the threads map before it. Those maps had 1,641 and 1,640 units with
-evidence against 1,640, so this comparison is like with like. Edges differed
-only by `dependencyInstall` and by executed-count drift in 33 green units,
-the same scale as the 37 units that differed between two runs of one
-binary. In the second
-run, one wall-clock test (`routeProperties`, `< 2000` ms) went red. At
+evidence against 1,640, so this comparison is like with like. Between the
+threads map and the 29m22s run, edges differed only by `dependencyInstall`
+and by executed-count drift in 33 units green in both. For scale, the 29m22s
+run and the 16-worker run below, made by one binary at load means 10.4 and
+21.9, differed in 37 such units. In the 30m45s run, one wall-clock test (`routeProperties`, `< 2000` ms) went red. At
 16 workers the map took 20m42s (load mean 21.9) with no ENOSPC. Under
 that load three units went red: two timed out and one was the same
 wall-clock test.
 
-**Known gap.** GitHub's ubuntu-24.04 runners ship bwrap 0.9.0, so every
-real-bwrap overlay test is skipped in CI, with a SKIP reason that says the
-overlay path was not exercised. Those tests run, and pass, only on a machine
-whose bwrap can overlay (0.11.1 here).
+**Known gap.** The real-bwrap overlay tests are expected to skip in CI
+(bwrap 0.9.0 from ubuntu-latest's apt; not yet observed in a CI run), with a
+SKIP reason that says the overlay path was not exercised. They have run, and
+passed, only on a machine whose bwrap can overlay: 0.11.1 on the workstation
+they were run on.
 
 ### Frozen caches, and `-count=1`
 
 Every jailed Go unit used to start from an empty `GOCACHE` and rebuild the
-standard library and the module's dependencies. At one worker (n=3 each),
+standard library and the module's dependencies. At one worker (n=3 each,
+load not recorded per run),
 `internal/testmap` took 6.21 s that way and 1.96 s with a warm cache, and
 `internal/lang` took 15.07 s and 11.13 s.
 
@@ -645,8 +657,8 @@ runs again.
 **Measured** over corral's own map (99 units, 8 workers): 60 s and 90 s
 (load means 9.0 and 14.1), against 480 s for the build before the change on
 the same copy. The maps were identical, 1,935 edges each. That 480 s run had
-a load mean of 93.3, and a map saved earlier took 8m24s with its load not
-recorded. So these runs establish that the evidence is unchanged and the
+a load mean of 93.3, and a map saved earlier took 8m23s (503 s) with its
+load not recorded. So these runs establish that the evidence is unchanged and the
 pass got faster. They do not establish by how much.
 
 When no cache can be shared, `Changed` says `each unit started from an empty
@@ -656,12 +668,13 @@ GOCACHE (no shared cache: <why>)`.
 `--fsModuleCache --fsModuleCachePath <dir>`. A prototype warmed on the very
 files it then ran, so every lookup hit, cut a 16-file sample's summed
 per-unit time (without its one 70 s file) from 52.8 s to 34.8 s at eight
-workers (n=3). Extrapolated, that was an estimate of
+workers (n=3 each, load not recorded per run). Extrapolated, that was an estimate of
 about 24 minutes for REA's map. The real row was measured on REA's full map at
 8 workers, with the runs alternated: 30m50s and 30m36s with the cache,
 30m08s without (load means 11.3, 11.6 and 10.8). That is 1.9% slower, against
 a keep-or-drop gate of 10% faster, so the row was reverted. The cache was in
-use: it grew during the warm unit, and the scan line named it. The likely
+use: in a 3-unit smoke run it grew during the warm unit, and the full runs'
+scan lines named it. The likely
 reason, inferred and not measured per unit, is that a cache warmed by one
 unit holds only that unit's module graph, and transform was a small share of
 a unit's time (one unit: `Duration 7.50s (tests 85%, transform 10%, import

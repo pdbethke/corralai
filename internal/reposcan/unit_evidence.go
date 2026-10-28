@@ -62,6 +62,12 @@ type UnitEvidence struct {
 	Ran   bool
 	Units []UnitResult
 	Note  string
+	// Changed is what the pass changed in the operator's command to run
+	// each unit (lang.EvidenceNote: vitest's threads pool), "" for nothing.
+	// It is set on a pass that ran, every unit green or not, so the scan
+	// line can say once that the evidence came from a command the operator
+	// did not write. It is not Note, which says why a pass did NOT run.
+	Changed string `json:",omitempty"`
 }
 
 // Reasons a unit contributes nothing. They are written into UnitResult.Err
@@ -182,7 +188,7 @@ func CollectUnitEvidence(ctx context.Context, runner commandRunner, files map[st
 	}
 	close(jobs)
 	wg.Wait()
-	return UnitEvidence{Ran: true, Units: results}
+	return UnitEvidence{Ran: true, Units: results, Changed: note}
 }
 
 // Settled reports whether this pass may be kept for a later scan of the

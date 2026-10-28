@@ -623,7 +623,7 @@ func TestUnitPassTakesOnlyAGreenSuite(t *testing.T) {
 		name, out, wantErr string
 	}{
 		{"green", "# suite-exit 0\n" + report, ""},
-		{"red", "# suite-exit 1\n" + report, "run failed: exit 1 (run with --pool=threads, which the evidence pass adds to the unit command)"},
+		{"red", "# suite-exit 1\n" + report, "run failed: exit 1 (the evidence pass runs each unit with --pool=threads)"},
 		{"no status", report, "no suite exit status in the report"},
 	}
 	for _, tc := range cases {
@@ -733,11 +733,11 @@ func TestUnitPassShowsAFailedUnitsOutput(t *testing.T) {
 		wantErr string
 	}{
 		{"red suite, one stream", sandbox.EnumerateResult{Output: "AssertionError: expected 1\n    at alpha.test.ts:3\n# suite-exit 1\ncorral-js-coverage: v2\n7 10 src/x.ts\n"},
-			"run failed: exit 1 (run with --pool=threads, which the evidence pass adds to the unit command): AssertionError: expected 1\n    at alpha.test.ts:3"},
+			"run failed: exit 1 (the evidence pass runs each unit with --pool=threads): AssertionError: expected 1\n    at alpha.test.ts:3"},
 		{"red suite, stderr apart", sandbox.EnumerateResult{Output: "# suite-exit 1\ncorral-js-coverage: v2\n7 10 src/x.ts\n", Stderr: "TypeError: boom\n"},
-			"run failed: exit 1 (run with --pool=threads, which the evidence pass adds to the unit command): TypeError: boom"},
+			"run failed: exit 1 (the evidence pass runs each unit with --pool=threads): TypeError: boom"},
 		{"command failed", sandbox.EnumerateResult{Output: "sh: 1: go: not found\n# suite-exit 127\n", ExitCode: 127},
-			"run failed: exited 127 (run with --pool=threads, which the evidence pass adds to the unit command): sh: 1: go: not found"},
+			"run failed: exited 127 (the evidence pass runs each unit with --pool=threads): sh: 1: go: not found"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -912,6 +912,22 @@ func TestCollectUnitEvidenceUsesEvidenceArgs(t *testing.T) {
 	if units != 2 {
 		t.Errorf("%d unit commands ran, want 2: %q", units, f.run.ran)
 	}
+	// Every unit green, and the pass still says, once, that it ran them in
+	// a pool the operator's command did not name.
+	if want := "the evidence pass runs each unit with --pool=threads"; ev.Changed != want {
+		t.Errorf("ev.Changed = %q, want %q", ev.Changed, want)
+	}
+	if ev.Note != "" {
+		t.Errorf("ev.Note = %q on a pass that ran: Note says why a pass did not", ev.Note)
+	}
+
+	// The operator's own threads pool: nothing changed, nothing said.
+	same := newUnitFixture(t, "typescript", []string{"vitest", "run", "--pool=threads"}, vitestTwoUnits)
+	same.answer("test/alpha.test.ts", sandbox.EnumerateResult{Output: jsReport("7 10 src/x.ts")})
+	same.answer("test/beta.test.ts", sandbox.EnumerateResult{Output: jsReport("2 10 src/x.ts")})
+	if got := same.collect(context.Background(), "/w", 1).Changed; got != "" {
+		t.Errorf("Changed for a threads command = %q, want \"\"", got)
+	}
 }
 
 // A unit that is red under --pool=threads contributes nothing, and its
@@ -947,7 +963,7 @@ func TestThreadsRedUnitIsUnreportedNamingThePool(t *testing.T) {
 	j := newUnitFixture(t, "typescript", []string{"jest"}, "corral-units-cwd /w\n[\"/w/test/alpha.test.ts\",\"/w/test/beta.test.ts\"]\n")
 	j.answer("test/alpha.test.ts", sandbox.EnumerateResult{Output: jsReport("7 10 src/x.ts")})
 	j.answer("test/beta.test.ts", sandbox.EnumerateResult{Output: jsReport(), ExitCode: 1})
-	if got := unitByName(t, j.collect(context.Background(), "/w", 1), "test/beta.test.ts").Err; strings.Contains(got, "(run with") {
+	if got := unitByName(t, j.collect(context.Background(), "/w", 1), "test/beta.test.ts").Err; strings.Contains(got, "evidence pass") {
 		t.Errorf("jest beta.Err = %q, want no evidence note", got)
 	}
 }

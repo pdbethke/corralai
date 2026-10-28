@@ -728,3 +728,22 @@ func TestUnitsCacheKeyDigestsTheEvidenceFlags(t *testing.T) {
 		t.Error("the key is the forks-era key: a pass made without --pool=threads would be served")
 	}
 }
+
+// The scan's units line says once what the evidence pass changed in the
+// operator's command, even when every unit was green, and says nothing when
+// it changed nothing.
+func TestUnitPassLineSaysWhatTheEvidencePassChanged(t *testing.T) {
+	const changed = "the evidence pass runs each unit with --pool=threads in place of --pool=forks"
+	green := reposcan.UnitEvidence{Ran: true, Units: []reposcan.UnitResult{{Unit: "a.test.ts"}}, Changed: changed}
+	var b bytes.Buffer
+	printUnitPass(&b, &localExecutor{units: green, unitWorkers: 1})
+	if got := strings.Count(b.String(), changed); got != 1 {
+		t.Errorf("the units line names the change %d time(s), want once:\n%s", got, b.String())
+	}
+	green.Changed = ""
+	b.Reset()
+	printUnitPass(&b, &localExecutor{units: green, unitWorkers: 1})
+	if strings.Contains(b.String(), "evidence pass runs") {
+		t.Errorf("a pass that changed nothing says it did:\n%s", b.String())
+	}
+}

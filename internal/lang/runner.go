@@ -139,17 +139,17 @@ type Runner struct {
 	// command unchanged; the field is optional per runner, so the parity
 	// table holds no entry for it. Callers go through EvidenceUnitCmd and
 	// EvidenceNote, never the field. It must also accept the operator's own
-	// argv: EvidenceNote applies it there to name the words it adds, and the
-	// unit pass's cache key digests it over that argv.
+	// argv: EvidenceNote applies it there to name what it adds and
+	// replaces, and the unit pass's cache key digests it over that argv.
 	//
 	// vitest sets it because its forks pool SIGTERMs its workers, which then
 	// write no V8 coverage: the pass recorded only what the main process
 	// and subprocesses wrote, and called the unit clean. Measured
 	// 2026-10-27 on vitest 5.0.3: three forks-pool units executed 1, 4 and
-	// 13 source files that way, and 40, 11 and 59 with --pool=threads. A
-	// SIGTERM handler calling v8.takeCoverage recovered worker coverage for
-	// 30 and then 84 of 93 files on two runs of the same batch, so it is
-	// not a fix.
+	// 13 source files that way (n=1), and 40, 11 and 59 with --pool=threads
+	// (n=3, identical each run). A SIGTERM handler calling v8.takeCoverage
+	// recovered worker coverage for 30 and then 84 of 93 files on two runs
+	// of the same batch, so it is not a fix.
 	EvidenceArgs func(unitCmd []string) []string
 	// Disclose is what the scan line says about running this runner in
 	// repoDir; PreflightBin is the binary that must be on PATH.

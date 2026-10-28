@@ -124,25 +124,62 @@ func EvidenceUnitCmd(p Plugin, inv Invocation, unitCmd []string) []string {
 }
 
 // EvidenceNote is one sentence naming what the evidence pass changed in
-// argv's command (the words EvidenceArgs adds to the operator's own), for a
-// unit failure's reason: the operator's command may pass where the evidence
-// pass's does not. "" when the row has no evidence flags or argv already
-// carries them.
+// argv's command, for the scan line and for a unit failure's reason (the
+// operator's own run of a unit may pass where the evidence pass's does
+// not): the words EvidenceArgs adds, and the operator's words they replace.
+// It compares meaning, not spelling: `--pool threads` and `--pool=threads`
+// are the same choice, so a command already carrying the pass's flags gets
+// "" — as does a row with no evidence flags.
 func EvidenceNote(p Plugin, inv Invocation) string {
 	r, ok := RunnerFor(p, inv)
 	if !ok || r.EvidenceArgs == nil {
 		return ""
 	}
-	var added []string
-	for _, w := range r.EvidenceArgs(slices.Clone(inv.Argv)) {
-		if !slices.Contains(inv.Argv, w) {
-			added = append(added, w)
-		}
-	}
+	added, replaced := evidenceChange(inv.Argv, r.EvidenceArgs(slices.Clone(inv.Argv)))
 	if len(added) == 0 {
 		return ""
 	}
-	return "run with " + strings.Join(added, " ") + ", which the evidence pass adds to the unit command"
+	note := "the evidence pass runs each unit with " + strings.Join(added, " ")
+	if len(replaced) > 0 {
+		note += " in place of " + strings.Join(replaced, " ")
+	}
+	return note
+}
+
+// evidenceChange is what turning before into after added and replaced, by
+// meaning. A long flag the change removed, followed by a word the change
+// also removed, is one option written in two words (`--pool forks`), so it
+// is compared as `--pool=forks` and named as the operator wrote it.
+func evidenceChange(before, after []string) (added, replaced []string) {
+	kept := map[string]bool{}
+	for _, w := range after {
+		kept[w] = true
+	}
+	type option struct{ written, meaning string }
+	var opts []option
+	for i := 0; i < len(before); i++ {
+		w := before[i]
+		if strings.HasPrefix(w, "--") && !strings.Contains(w, "=") && !kept[w] &&
+			i+1 < len(before) && !strings.HasPrefix(before[i+1], "-") && !kept[before[i+1]] {
+			opts = append(opts, option{w + " " + before[i+1], w + "=" + before[i+1]})
+			i++
+			continue
+		}
+		opts = append(opts, option{w, w})
+	}
+	had := map[string]bool{}
+	for _, o := range opts {
+		had[o.meaning] = true
+		if !kept[o.meaning] {
+			replaced = append(replaced, o.written)
+		}
+	}
+	for _, w := range after {
+		if !had[w] {
+			added = append(added, w)
+		}
+	}
+	return added, replaced
 }
 
 // UnitName is a listed unit without the mark ParseUnitList gives one that

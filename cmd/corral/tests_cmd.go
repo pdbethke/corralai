@@ -186,6 +186,11 @@ func runTestsMap(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	printTestsMap(stdout, m)
+	// The evidence came from a command the operator did not write; said
+	// once, whether every unit was green or not (lang.EvidenceNote).
+	if unitPass && ex.units.Changed != "" {
+		fmt.Fprintf(stdout, "evidence: %s\n", ex.units.Changed)
+	}
 	// The units the evidence bound cut are among the "no evidence" above;
 	// this says which bound and the flag that raises it.
 	if cut := ex.units.CutShort(); unitPass && cut > 0 {

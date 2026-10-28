@@ -299,6 +299,11 @@ func printUnitPass(w io.Writer, ex *localExecutor) {
 		basis = "reused — tree unchanged since an earlier scan (cached evidence)" + ex.evidenceTimeoutUnused("cached evidence, no run")
 	}
 	fmt.Fprintf(w, "  units: %d run, %d failed (%s)\n", len(ev.Units), unitPassFailed(ev), basis)
+	// Said once, green or red: the evidence came from a command the
+	// operator did not write (lang.EvidenceNote).
+	if ev.Changed != "" {
+		fmt.Fprintf(w, "  units: %s\n", ev.Changed)
+	}
 	// The one failure more time would fix, said with the bound and the flag
 	// that raises it: a large suite that meets the bound otherwise reads as
 	// a list of "not run (time limit)" with no way past it named.

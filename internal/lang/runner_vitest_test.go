@@ -4,7 +4,6 @@ package lang
 
 import (
 	"slices"
-	"strings"
 	"testing"
 )
 
@@ -85,12 +84,22 @@ func TestVitestEvidenceArgsThreadsPool(t *testing.T) {
 			t.Errorf("EvidenceUnitCmd(%q) = %q, want %q", c.unit, got, c.want)
 		}
 	}
-	if got := EvidenceNote(ts, Cmd([]string{"vitest", "run"})); !strings.Contains(got, "--pool=threads") {
-		t.Errorf("EvidenceNote = %q, want it to name --pool=threads", got)
-	}
-	// Already threads: the pass changed nothing, and says nothing.
-	if got := EvidenceNote(ts, Cmd([]string{"vitest", "run", "--pool=threads"})); got != "" {
-		t.Errorf("EvidenceNote for a threads command = %q, want \"\"", got)
+	// The note says what the pass changed in the operator's command, by
+	// meaning: a replaced pool is named, and the operator's own threads
+	// pool, in either spelling, is no change at all.
+	for _, c := range []struct {
+		argv []string
+		want string
+	}{
+		{[]string{"vitest", "run"}, "the evidence pass runs each unit with --pool=threads"},
+		{[]string{"vitest", "run", "--pool=forks"}, "the evidence pass runs each unit with --pool=threads in place of --pool=forks"},
+		{[]string{"vitest", "run", "--pool", "forks"}, "the evidence pass runs each unit with --pool=threads in place of --pool forks"},
+		{[]string{"vitest", "run", "--pool=threads"}, ""},
+		{[]string{"vitest", "run", "--pool", "threads"}, ""},
+	} {
+		if got := EvidenceNote(ts, Cmd(c.argv)); got != c.want {
+			t.Errorf("EvidenceNote(%q) = %q, want %q", c.argv, got, c.want)
+		}
 	}
 	// A row without the field leaves the command alone and has no note.
 	jest := []string{"jest", "tests/a.test.ts"}

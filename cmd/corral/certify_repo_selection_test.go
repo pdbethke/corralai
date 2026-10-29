@@ -186,3 +186,21 @@ func TestARedPythonBaselineIsRetriedWithoutTheTestThatFailedInTheEvidenceRun(t *
 		t.Errorf("the run does not say what it did:\n%s", out.String())
 	}
 }
+
+// The scan says once that tests failed in the instrumented run and what
+// became of them; a green run says nothing.
+func TestFailedInEvidenceLine(t *testing.T) {
+	py, _ := lang.ByName("python")
+	ev := reposcan.NewSelectionEvidence(py, py.TestCmd(), []byte(`{"format":"corral-selection-3","tests":3,`+
+		`"failed":["tests/test_a.py::test_red","tests/test_b.py::test_red2"],"files":{`+
+		`"pkg/a.py":{"tests":["tests/test_a.py::test_x"],"lines":{"0":[[1,1]]},"static":[],"statements":2}}}`))
+	want := "2 tests failed in the instrumented run; their coverage is not used, and they run with every file's selection and every mutant (tests/test_a.py::test_red, tests/test_b.py::test_red2)"
+	if got := failedInEvidenceLine(ev.Map); got != want {
+		t.Errorf("line = %q, want %q", got, want)
+	}
+	green := reposcan.NewSelectionEvidence(py, py.TestCmd(), []byte(`{"format":"corral-selection-3","tests":1,"files":{`+
+		`"pkg/a.py":{"tests":["tests/test_a.py::test_x"],"lines":{"0":[[1,1]]},"static":[],"statements":2}}}`))
+	if got := failedInEvidenceLine(green.Map); got != "" {
+		t.Errorf("a green run printed %q", got)
+	}
+}

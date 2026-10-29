@@ -1097,6 +1097,9 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 				}
 				fmt.Fprintf(stdout, "  selection: grading by the WHOLE suite — %s%s\n", ex.selection.Note, unused)
 			}
+			if line := failedInEvidenceLine(ex.selection.Map); ex.selection.Ran && line != "" {
+				fmt.Fprintf(stdout, "  selection: %s\n", line)
+			}
 			// SCAN-SCOPED: this instrumented run happens ONCE, for the whole
 			// repo, before any per-file driver exists — the driver has no
 			// notion of it (see RunSpec.SelectionDuration's doc), so it is
@@ -4124,6 +4127,39 @@ func unitEvidenceLine(f reposcan.WeakFile) string {
 	return fmt.Sprintf("graded by %s of %s%s (%s)", groupThousands(f.SelectedTests), groupThousands(f.SuiteTests), noun, detail)
 }
 
+// failedInEvidenceLine says, once per scan, that tests failed in the
+// instrumented run and what was done with them: kept out of the evidence and
+// added to every file's selection. The unit pass says the same of its
+// failed units ("units: N run, M failed"); without this line a run whose
+// evidence held red tests would read exactly like one whose suite was green.
+// "" when none failed.
+func failedInEvidenceLine(m testmap.Map) string {
+	red := m.Unreported()
+	if len(red) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s failed in the instrumented run; their coverage is not used, and they run with every file's selection and every mutant (%s)",
+		pluralCount(len(red), "test", "tests"), redUnitsNames(red))
+}
+
+// pluralCount is "1 test" or "3 tests".
+func pluralCount(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return fmt.Sprintf("%d %s", n, many)
+}
+
+// redUnitsNames is the first few of names and how many more, so a long list
+// stays one line.
+func redUnitsNames(names []string) string {
+	const shown = 3
+	if len(names) <= shown {
+		return strings.Join(names, ", ")
+	}
+	return fmt.Sprintf("%s and %d more", strings.Join(names[:shown], ", "), len(names)-shown)
+}
+
 // cautionDetail is what a file's selection line adds when the selection is
 // not only what the evidence chose: how many nodes (units, or tests) were
 // added because they reported no evidence, and how many that failed
@@ -5774,17 +5810,11 @@ func (l *localExecutor) redUnitRetry(j reposcan.Job, sel lang.Selection) (lang.S
 // redUnitsPhrase names the units a red baseline is retried without: how
 // many, and the first few by name, so 545 of them stay one line.
 func redUnitsPhrase(red []string) string {
-	const shown = 3
 	noun := "units that failed"
 	if len(red) == 1 {
 		noun = "unit that failed"
 	}
-	names := red
-	more := ""
-	if len(red) > shown {
-		names, more = red[:shown], fmt.Sprintf(" and %d more", len(red)-shown)
-	}
-	return fmt.Sprintf("%d %s unmutated in the evidence pass (%s%s)", len(red), noun, strings.Join(names, ", "), more)
+	return fmt.Sprintf("%d %s unmutated in the evidence pass (%s)", len(red), noun, redUnitsNames(red))
 }
 
 // pronounFor is "it" for one unit and "them" for several.

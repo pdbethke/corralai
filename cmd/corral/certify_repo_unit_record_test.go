@@ -43,6 +43,11 @@ func TestUnitEvidenceReportLine(t *testing.T) {
 			"graded by 4 of 2,186 test files (unit evidence; 545 units that failed unmutated left out after the baseline failed with them: run failed: exit 1)"},
 		{"one red unit left out", reposcan.WeakFile{SelectedTests: 3, SuiteTests: 12, UnitNoun: "packages", Excluded: 1, ExcludedReason: "run failed: exit 1"},
 			"graded by 3 of 12 packages (unit evidence; 1 unit that failed unmutated left out after the baseline failed with it: run failed: exit 1)"},
+		// A compiler's reason runs to many lines; the file's line keeps the
+		// first (the verdict and the ledger keep it whole).
+		{"multi-line reason", reposcan.WeakFile{SelectedTests: 1, SuiteTests: 99, UnitNoun: "packages", Excluded: 18,
+			ExcludedReason: "run failed: exit 1: # github.com/smacker/go-tree-sitter/php\nparser.c:1:10: fatal error\nFAIL"},
+			"graded by 1 of 99 packages (unit evidence; 18 units that failed unmutated left out after the baseline failed with them: run failed: exit 1: # github.com/smacker/go-tree-sitter/php …)\n"},
 		{"rust", reposcan.WeakFile{SelectedTests: 1, SuiteTests: 7, UnitNoun: "test targets"},
 			"graded by 1 of 7 test targets (unit evidence)"},
 	}

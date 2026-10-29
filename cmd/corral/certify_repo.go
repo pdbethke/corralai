@@ -4122,19 +4122,30 @@ func unitEvidenceLine(f reposcan.WeakFile) string {
 		if f.Unreported == 1 {
 			word = "unit"
 		}
-		detail += fmt.Sprintf("; %d %s with no evidence added: %s", f.Unreported, word, f.UnreportedReason)
+		detail += fmt.Sprintf("; %d %s with no evidence added: %s", f.Unreported, word, firstLineOf(f.UnreportedReason))
 	}
 	if f.Excluded > 0 {
 		word, it := "units", "them"
 		if f.Excluded == 1 {
 			word, it = "unit", "it"
 		}
-		detail += fmt.Sprintf("; %d %s that failed unmutated left out after the baseline failed with %s: %s", f.Excluded, word, it, f.ExcludedReason)
+		detail += fmt.Sprintf("; %d %s that failed unmutated left out after the baseline failed with %s: %s", f.Excluded, word, it, firstLineOf(f.ExcludedReason))
 	}
 	if noun != "" {
 		noun = " " + noun
 	}
 	return fmt.Sprintf("graded by %s of %s%s (%s)", groupThousands(f.SelectedTests), groupThousands(f.SuiteTests), noun, detail)
+}
+
+// firstLineOf is a unit's reason as the file's line can hold it: its first
+// line, marked "…" when there was more. A failed unit's reason carries the
+// runner's own output (a compiler's error runs to a dozen lines), which the
+// verdict and the ledger keep whole.
+func firstLineOf(reason string) string {
+	if first, _, more := strings.Cut(reason, "\n"); more {
+		return strings.TrimRight(first, " ") + " …"
+	}
+	return reason
 }
 
 // groupThousands renders n with a comma between thousands ("1,339"), for the

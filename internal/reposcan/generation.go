@@ -313,9 +313,11 @@ package reposcan
 // its selection whose own run FAILED on unmutated code in the unit pass
 // (reposcan.WithoutRedUnits). Every unit that reported no evidence joins
 // every selection, so one such unit made every file's baseline red: measured
-// on REA (545 of 2,186 units red in the jail, its acceptance tests needing a
-// gitignored build) and on corral's own Go tree (18 of 99), where a "37"
-// scan graded nothing. A retry with a stably green baseline is graded, and
+// on REA (545 of 2,186 units red in the jail) and on corral's own Go tree (18
+// of 99), where a "37" scan graded nothing. (This note first blamed REA's
+// gitignored build output; the jail's copy does not filter gitignored files.
+// Read from the code, not yet run: REA's acceptance tests import a dist/ file
+// over the seed's silent 1 MiB per-file limit.) A retry with a stably green baseline is graded, and
 // its verdict says how many units it left out and the first one's reason
 // (TestSelection.Excluded, ExcludedReason; nested, so outside the shallow
 // fingerprint). A unit the time limit cut, never ran alone, or could not

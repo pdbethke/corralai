@@ -46,9 +46,12 @@ history of any release, `git log v0.3.4..v0.3.5`.
   partial evidence never under-selects. A unit that reports none because its
   own run failed on unmutated code therefore put a failing test in every
   file's selection, and every baseline was red. On REA (545 of 2,186 units
-  red in the jail: its acceptance tests need a build output that is
-  gitignored, so never reaches the jail) and on corral's own Go tree (18 of
-  99) a `certify --repo` run graded nothing. Now a file whose baseline is red
+  red in the jail) and on corral's own Go tree (18 of 99) a `certify --repo`
+  run graded nothing. (This entry first said REA's acceptance tests were red
+  because their gitignored build output never reaches the jail. That was
+  wrong: the jail's copy does not filter gitignored files. Read from the
+  code and not yet run: they import `dist/cli-runtime/cli.js`, which is over
+  the 1 MiB per-file limit the jail's copy silently skips.) Now a file whose baseline is red
   is retried once without the units whose run failed in the evidence pass;
   if that baseline is green, two runs out of two, the file is graded by it.
   Only a unit that ran and failed is left out: one the time limit cut, one

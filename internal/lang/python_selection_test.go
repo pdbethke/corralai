@@ -5,6 +5,7 @@ package lang
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -39,10 +40,15 @@ func TestPythonInstrumentDerivesFromOperatorCommand(t *testing.T) {
 		// that warning fails every test at setup (flask: 985 errors, every
 		// file "uncovered").
 		"COVERAGE_CORE=ctrace COVERAGE_FILE=",
-		// The suite must PASS: exit 1 (tests failed/errored) is refused, so
-		// selection cannot grade a suite the whole-suite baseline would
-		// refuse (#164).
-		`[ "$rc" -eq 0 ] || exit "$rc"`,
+		// Exit 1 (tests failed) is the ONE non-zero exit kept, and only
+		// because the failed tests are named (the corral_failed plugin) and
+		// join every selection, so a narrowed baseline still runs them: the
+		// property #164 protects. Every other exit (2 interrupted or a
+		// collection error, 4 usage, 5 nothing collected) still refuses.
+		// (Until 2026-10-29 any non-zero exit refused, which threw away
+		// spec-kit's 13,445 green tests' evidence for 2 red ones.)
+		`[ "$rc" -eq 0 ] || [ "$rc" -eq 1 ] || exit "$rc"`,
+		"-p corral_failed",
 		// The evidence is reduced INSIDE the run to {file: [node ids]} — the
 		// full coverage-json with contexts was 411 MB on flask (#165).
 		`"format": "corral-selection-3"`,
@@ -53,7 +59,7 @@ func TestPythonInstrumentDerivesFromOperatorCommand(t *testing.T) {
 		}
 	}
 	if strings.Contains(script, "coverage json") || strings.Contains(script, "0|1)") {
-		t.Errorf("script must neither emit the full coverage json nor accept a failing suite:\n%s", script)
+		t.Errorf("script must neither emit the full coverage json nor accept a failing suite unnamed:\n%s", script)
 	}
 }
 
@@ -87,7 +93,7 @@ func TestPythonInstrumentSourceRootsEmitsPerRootCovFlags(t *testing.T) {
 	// the pinned C tracer — this only ever changes the --cov flag(s).
 	for _, want := range []string{
 		"COVERAGE_CORE=ctrace COVERAGE_FILE=",
-		`[ "$rc" -eq 0 ] || exit "$rc"`,
+		`[ "$rc" -eq 0 ] || [ "$rc" -eq 1 ] || exit "$rc"`,
 		`"format": "corral-selection-3"`,
 		"--cov-context=test --cov-report= -p no:cacheprovider",
 	} {
@@ -245,5 +251,69 @@ func TestPythonDiagnoseSelectionFailureNamesMissingPytestCov(t *testing.T) {
 func TestPythonDiagnoseSelectionFailureRecognizesNothingElse(t *testing.T) {
 	if hint := (pyPlugin{}).DiagnoseSelectionFailure("some unrelated failure text"); hint != "" {
 		t.Errorf("hint = %q, want empty for text it does not recognize", hint)
+	}
+}
+
+// A failing test no longer throws the run's evidence away: the run keeps the
+// coverage of the tests that passed and NAMES the ones that failed, by exact
+// node id, so selection can add them to every file's selection (#164: a
+// failing test must never silently leave a narrowed baseline). A run that
+// failed for any other reason (here, a collection error: exit 2) still
+// exits non-zero with no document. Runs the real script, so it needs
+// pytest-cov.
+func TestPythonInstrumentKeepsEvidenceAndNamesFailedTests(t *testing.T) {
+	if out, err := exec.Command(pythonBin(), "-c", "import pytest_cov").CombinedOutput(); err != nil {
+		t.Skipf("SKIP: pytest-cov is not importable by %s (%s): the instrumented script cannot run here", pythonBin(), strings.TrimSpace(string(out)))
+	}
+	root := t.TempDir()
+	write := func(rel, body string) {
+		t.Helper()
+		p := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("calc.py", "def add(a, b):\n    return a + b\n\ndef sub(a, b):\n    return a - b\n")
+	write("tests/test_calc.py", "from calc import add, sub\n\ndef test_add():\n    assert add(1, 2) == 3\n\nclass TestSub:\n    def test_sub(self):\n        assert sub(3, 1) == 99\n")
+	run := func() ([]byte, int) {
+		cmd, ok := pyPlugin{}.InstrumentSourceRoots([]string{pythonBin(), "-m", "pytest", "-q"}, []string{"."})
+		if !ok {
+			t.Fatal("Instrument refused a plain pytest command")
+		}
+		c := exec.Command(cmd[0], cmd[1:]...) //nolint:gosec // test-built script
+		c.Dir = root
+		c.Env = append(os.Environ(), "PYTHONPATH="+root)
+		out, err := c.Output()
+		code := 0
+		if ee, ok := err.(*exec.ExitError); ok {
+			code = ee.ExitCode()
+		} else if err != nil {
+			t.Fatal(err)
+		}
+		return out, code
+	}
+
+	out, code := run()
+	if code != 0 {
+		t.Fatalf("a run whose only failure is a failing test must reduce and exit 0, got %d:\n%s", code, out)
+	}
+	doc, err := pyPlugin{}.Evidence(out)
+	if err != nil {
+		t.Fatalf("Evidence: %v\n%s", err, out)
+	}
+	if want := []string{"tests/test_calc.py::TestSub::test_sub"}; !reflect.DeepEqual(doc.Failed, want) {
+		t.Errorf("Failed = %v, want %v", doc.Failed, want)
+	}
+	if _, ok := doc.Files["calc.py"].Tests["tests/test_calc.py::test_add"]; !ok {
+		t.Errorf("the passing test's coverage was not kept: %+v", doc.Files["calc.py"])
+	}
+
+	// Negative control: a collection error is not "tests failed".
+	write("tests/test_broken.py", "import does_not_exist\n")
+	if out, code := run(); code == 0 {
+		t.Errorf("a collection error must still refuse the run, got exit 0:\n%s", out)
 	}
 }

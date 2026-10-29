@@ -4117,24 +4117,36 @@ func unitEvidenceLine(f reposcan.WeakFile) string {
 	if noun == "" {
 		detail += "; the runner row names no unit noun"
 	}
-	if f.Unreported > 0 {
-		word := "units"
-		if f.Unreported == 1 {
-			word = "unit"
-		}
-		detail += fmt.Sprintf("; %d %s with no evidence added: %s", f.Unreported, word, firstLineOf(f.UnreportedReason))
-	}
-	if f.Excluded > 0 {
-		word, it := "units", "them"
-		if f.Excluded == 1 {
-			word, it = "unit", "it"
-		}
-		detail += fmt.Sprintf("; %d %s that failed unmutated left out after the baseline failed with %s: %s", f.Excluded, word, it, firstLineOf(f.ExcludedReason))
-	}
+	detail += cautionDetail(f, "unit", "units")
 	if noun != "" {
 		noun = " " + noun
 	}
 	return fmt.Sprintf("graded by %s of %s%s (%s)", groupThousands(f.SelectedTests), groupThousands(f.SuiteTests), noun, detail)
+}
+
+// cautionDetail is what a file's selection line adds when the selection is
+// not only what the evidence chose: how many nodes (units, or tests) were
+// added because they reported no evidence, and how many that failed
+// unmutated were left out after the baseline failed with them, each with
+// the first one's reason. "" when neither, so a line without either is
+// byte-identical to what it was.
+func cautionDetail(f reposcan.WeakFile, one, many string) string {
+	var out string
+	if f.Unreported > 0 {
+		word := many
+		if f.Unreported == 1 {
+			word = one
+		}
+		out += fmt.Sprintf("; %d %s with no evidence added: %s", f.Unreported, word, firstLineOf(f.UnreportedReason))
+	}
+	if f.Excluded > 0 {
+		word, it := many, "them"
+		if f.Excluded == 1 {
+			word, it = one, "it"
+		}
+		out += fmt.Sprintf("; %d %s that failed unmutated left out after the baseline failed with %s: %s", f.Excluded, word, it, firstLineOf(f.ExcludedReason))
+	}
+	return out
 }
 
 // firstLineOf is a unit's reason as the file's line can hold it: its first
@@ -4252,21 +4264,21 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 		// to take 234 for the number every mutant survived, when the true
 		// figure may be 3. The method is the verdict's own, never stamped
 		// here, so the label cannot outlive the measurement it names.
-		fmt.Fprintf(w, "   graded by %d of %d tests — %d to %d per mutant, median %d (%s%s)",
+		fmt.Fprintf(w, "   graded by %d of %d tests — %d to %d per mutant, median %d (%s%s%s)",
 			f.SelectedTests, f.SuiteTests,
 			f.TestsPerMutant.Min, f.TestsPerMutant.Max, f.TestsPerMutant.Median,
-			f.SelectionMethod, selectionRuleBreakdown(f.Rules))
+			f.SelectionMethod, selectionRuleBreakdown(f.Rules), cautionDetail(f, "test", "tests"))
 	case f.SelectionMethod != "" && !f.Uncovered && f.PerMutant:
 		// Per-mutant, but no mutant was graded — every one was rejected by
 		// the compile gate, which leaves the spread at {0,0,0}. "0 to 0 per
 		// mutant, median 0" would report a range as measured when nothing
 		// was measured at all, so the line says which measurement it is and
 		// then says it found nothing to measure.
-		fmt.Fprintf(w, "   graded by %d of %d tests (%s; no mutant graded)", f.SelectedTests, f.SuiteTests, f.SelectionMethod)
+		fmt.Fprintf(w, "   graded by %d of %d tests (%s; no mutant graded%s)", f.SelectedTests, f.SuiteTests, f.SelectionMethod, cautionDetail(f, "test", "tests"))
 	case f.SelectionMethod == testmap.MethodUnitEvidence && !f.Uncovered:
 		fmt.Fprint(w, "   "+unitEvidenceLine(f))
 	case f.SelectionMethod != "" && !f.Uncovered:
-		fmt.Fprintf(w, "   graded by %d of %d tests (%s)", f.SelectedTests, f.SuiteTests, f.SelectionMethod)
+		fmt.Fprintf(w, "   graded by %d of %d tests (%s%s)", f.SelectedTests, f.SuiteTests, f.SelectionMethod, cautionDetail(f, "test", "tests"))
 	case f.SelectionMethod != "" && f.ImportOnly:
 		// Checked before the plain Uncovered case, same reason as the
 		// marker above: "none execute it" would be the same false claim in
@@ -5732,14 +5744,15 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 	return res, nil
 }
 
-// redUnitRetry is the job's selection again without the units in sel whose
-// own run FAILED on unmutated code in the unit pass, with those units named
-// on its Excluded and returned; nil when there are none (or the selection is
-// not one the unit pass made), so a red baseline has nothing to retry
-// without. A retry the engine refuses comes back with its Fallback set and
-// is not run. See reposcan.WithoutRedUnits.
+// redUnitRetry is the job's selection again without the units (or, for
+// per-test evidence, the tests) in sel whose own run FAILED on unmutated
+// code in the evidence pass, with them named on its Excluded and returned;
+// nil when there are none (or the selection is not one evidence made), so a
+// red baseline has nothing to retry without. A retry the engine refuses
+// comes back with its Fallback set and is not run. See
+// reposcan.WithoutRedUnits.
 func (l *localExecutor) redUnitRetry(j reposcan.Job, sel lang.Selection) (lang.Selection, []string) {
-	if sel.Method != testmap.MethodUnitEvidence || !l.units.Ran {
+	if sel.Method != testmap.MethodUnitEvidence && sel.Method != testmap.MethodCoverageContext {
 		return lang.Selection{}, nil
 	}
 	p, ok := lang.ByName(j.Lang)
@@ -5750,7 +5763,7 @@ func (l *localExecutor) redUnitRetry(j reposcan.Job, sel lang.Selection) (lang.S
 	if len(base) == 0 {
 		base = p.TestCmd()
 	}
-	retry, red := reposcan.WithoutRedUnits(l.unitMap, p, l.repoDir, j.Path, j.TestPath, base, sel)
+	retry, red := reposcan.WithoutRedUnits(l.mapFor(j), p, l.repoDir, j.Path, j.TestPath, base, sel)
 	if red == nil {
 		return lang.Selection{}, nil
 	}

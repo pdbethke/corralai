@@ -144,6 +144,11 @@ func SelectExcluding(m Map, r lang.Runner, testCmd []string, repoRoot, codePath,
 		return sel, nil
 	}
 
+	for _, id := range ids {
+		if m.Tests[id].Err != "" {
+			sel.Always = append(sel.Always, id)
+		}
+	}
 	if argvLen(ids) > MaxArgv {
 		units, err := widenByNode(m, ids)
 		if err != nil {
@@ -159,7 +164,7 @@ func SelectExcluding(m Map, r lang.Runner, testCmd []string, repoRoot, codePath,
 		// Python's selector did with it, and its behaviour does not move
 		// (ledger ruling, Task 5). Only a unit-grain set, which had no earlier
 		// answer, refuses over the cap.
-		sel.Lines, sel.Static = nil, nil
+		sel.Lines, sel.Static, sel.Always = nil, nil, nil
 		ids = units
 	}
 	cmd, ok := r.TestsCmd(base, ids)
@@ -200,12 +205,13 @@ func selectedIDs(m Map, grain, want string, sel *lang.Selection, exclude map[str
 			sel.Lines[e.Test] = append(sel.Lines[e.Test], e.Lines...)
 		}
 	}
-	if grain == GrainUnit {
-		for _, id := range m.Unreported() {
-			if !seen[id] && !exclude[id] {
-				seen[id] = true
-				ids = append(ids, id)
-			}
+	// Every unreported node joins every selection: a unit whose own run
+	// reported nothing, and a test that failed in the coverage-context run
+	// (#164: a failing test never silently leaves a narrowed baseline).
+	for _, id := range m.Unreported() {
+		if !seen[id] && !exclude[id] {
+			seen[id] = true
+			ids = append(ids, id)
 		}
 	}
 	return ids, nil
@@ -238,7 +244,7 @@ func Uncovered(m Map) (uncovered, unselectedButGraded []string) {
 			uncovered = append(uncovered, p)
 			continue
 		}
-		if grain == GrainUnit && len(ids) == len(m.Unreported()) {
+		if len(ids) == len(m.Unreported()) {
 			// Every selected id is an unreported unit: no unit that reported
 			// selected the file (the reverse can only coincide when a
 			// reporting unit also selects, which adds an id).
@@ -273,7 +279,7 @@ func someUnitReported(m Map) error {
 func UnreportedIn(m Map, sel lang.Selection) int {
 	n := 0
 	for _, id := range sel.Tests {
-		if node, ok := m.Tests[id]; ok && node.Grain == GrainUnit && node.Err != "" {
+		if node, ok := m.Tests[id]; ok && node.Err != "" {
 			n++
 		}
 	}
@@ -285,7 +291,7 @@ func UnreportedIn(m Map, sel lang.Selection) int {
 // scan line can say why units were added. "" when there is none.
 func FirstUnreportedReason(m Map, sel lang.Selection) string {
 	for _, id := range sel.Tests {
-		if node, ok := m.Tests[id]; ok && node.Grain == GrainUnit && node.Err != "" {
+		if node, ok := m.Tests[id]; ok && node.Err != "" {
 			return node.Err
 		}
 	}
@@ -300,7 +306,7 @@ func FirstUnreportedReason(m Map, sel lang.Selection) string {
 func RanRedIn(m Map, sel lang.Selection, red func(Node) bool) []string {
 	var out []string
 	for _, id := range sel.Tests {
-		if node, ok := m.Tests[id]; ok && node.Grain == GrainUnit && node.Err != "" && red(node) {
+		if node, ok := m.Tests[id]; ok && node.Err != "" && red(node) {
 			out = append(out, id)
 		}
 	}
@@ -419,6 +425,13 @@ func ForSpan(sel lang.Selection, r lang.Runner, span lang.LineRange) (cmd []stri
 	// This reorders exactly the ids selected above, so "did any selected test
 	// fail" — the verdict — cannot move.
 	sortBySpanCoverage(ids, sel, span)
+	// Tests with no line evidence to narrow by (Selection.Always) run for
+	// every span, after the ones the evidence ranks.
+	for _, id := range sel.Always {
+		if !slices.Contains(ids, id) {
+			ids = append(ids, id)
+		}
+	}
 	if argvLen(ids) > MaxArgv {
 		if r.TestUnit == nil {
 			return file(lang.SpanRuleFile)

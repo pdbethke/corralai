@@ -286,3 +286,36 @@ func TestWithoutRedUnitsDropsOnlyUnitsWhoseRunFailed(t *testing.T) {
 		t.Errorf("no red unit: dropped = %v, want nil", dropped)
 	}
 }
+
+// A coverage-context document that names failed tests builds a map in which
+// each is a node whose own run FAILED (the reason WithoutRedUnits keys on)
+// with no edge — a failing test's coverage is not evidence — so it joins
+// every selection, and a red baseline may be retried without it.
+func TestBuildSelectionMapMarksFailedTestsRedAndDropsTheirCoverage(t *testing.T) {
+	py, _ := lang.ByName("python")
+	argv := []string{"python3", "-m", "pytest", "-q"}
+	raw := []byte(`{"format":"corral-selection-3","tests":2,"failed":["tests/test_calc.py::test_red"],"files":{"calc.py":{` +
+		`"tests":["tests/test_calc.py::test_green","tests/test_calc.py::test_red"],` +
+		`"lines":{"0":[[1,2]],"1":[[4,5]]},"static":[],"statements":4}}}`)
+	m, err := BuildSelectionMap(py, argv, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	red := m.Tests["tests/test_calc.py::test_red"]
+	if !strings.HasPrefix(red.Err, unitRunFailed) || red.Grain != testmap.GrainTest {
+		t.Errorf("failed test node = %+v, want a red test-grain node", red)
+	}
+	for _, e := range m.Edges {
+		if e.Test == "tests/test_calc.py::test_red" {
+			t.Errorf("the failed test kept an edge: %+v", e)
+		}
+	}
+	sel := (SelectionEvidence{Ran: true, Map: m}).For(py, "", "calc.py", "tests/test_calc.py", argv)
+	if !reflect.DeepEqual(sel.Tests, []string{"tests/test_calc.py::test_green", "tests/test_calc.py::test_red"}) || !reflect.DeepEqual(sel.Always, []string{"tests/test_calc.py::test_red"}) {
+		t.Fatalf("selection %+v, want the green test plus the red one, always run", sel)
+	}
+	retry, dropped := WithoutRedUnits(m, py, "", "calc.py", "tests/test_calc.py", argv, sel)
+	if !reflect.DeepEqual(dropped, []string{"tests/test_calc.py::test_red"}) || !reflect.DeepEqual(retry.Tests, []string{"tests/test_calc.py::test_green"}) || retry.Always != nil {
+		t.Errorf("retry %+v dropped %v, want the green test alone", retry, dropped)
+	}
+}

@@ -321,7 +321,13 @@ package reposcan
 // fingerprint). A unit the time limit cut, never ran alone, or could not
 // start is not red and stays. "37" never left its branch; bumped because a
 // "37" result for such a file is an ungradable the retry can now grade.
-// Behaviour bump.
+// Riding along in "38": Python's instrumented run keeps its evidence when
+// tests fail (pytest exit 1 only, with every failure named by node id),
+// where any failure used to discard all of it (spec-kit: 2 failures under
+// coverage, 13,445 passes, every file graded whole-suite). A failed test
+// has no edge and joins every selection and every mutant's command
+// (Selection.Always), so a "37" whole-suite Python verdict can now be a
+// narrowed one. Behaviour bump.
 const VerdictGeneration = "38"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every

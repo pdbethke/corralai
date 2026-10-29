@@ -1299,13 +1299,40 @@ func (pyPlugin) instrument(testCmd []string, sourceRoots []string) (cmd []string
 		}
 		covFlags = strings.Join(parts, " ")
 	}
-	script := `f=$(mktemp) && trap 'rm -f "$f"' EXIT && ` +
+	// Exit 1 ("tests failed") is the one failing exit kept, and only when
+	// the corral_failed plugin named every failure by node id: those tests
+	// go into the document, and selection adds them to every file's
+	// selection, so a narrowed baseline runs them exactly as the whole
+	// suite would — the property #164 protects. A 1 with nothing named,
+	// and every other exit (2 interrupted or a collection error, 3
+	// internal, 4 usage, 5 nothing collected), still refuses the run.
+	// (Any non-zero exit refused until 2026-10-29: spec-kit's two tests
+	// that fail only under coverage threw away 13,445 green tests'
+	// evidence.)
+	script := `f=$(mktemp) && d=$(mktemp -d) && trap 'rm -rf "$f" "$d"' EXIT && ` +
+		`cat > "$d/corral_failed.py" <<'PYF'` + "\n" + pyFailedPlugin + "PYF\n" +
+		`CORRAL_FAILED="$d/failed" PYTHONPATH="$d${PYTHONPATH:+:$PYTHONPATH}" ` +
 		`COVERAGE_CORE=ctrace COVERAGE_FILE="$f" ` + qi + " -m " + strings.Join(q, " ") +
-		" " + covFlags + ` --cov-context=test --cov-report= -p no:cacheprovider` +
-		`; rc=$?; [ "$rc" -eq 0 ] || exit "$rc"; ` +
-		`COVERAGE_CORE=ctrace COVERAGE_FILE="$f" ` + qi + " - <<'PY'\n" + pySelectionReducer + "PY\n"
+		" " + covFlags + ` --cov-context=test --cov-report= -p no:cacheprovider -p corral_failed` +
+		`; rc=$?; [ "$rc" -eq 0 ] || [ "$rc" -eq 1 ] || exit "$rc"; ` +
+		`[ "$rc" -eq 0 ] || [ -s "$d/failed" ] || exit "$rc"; ` +
+		`CORRAL_FAILED="$d/failed" COVERAGE_CORE=ctrace COVERAGE_FILE="$f" ` + qi + " - <<'PY'\n" + pySelectionReducer + "PY\n"
 	return []string{"sh", "-c", script}, true
 }
+
+// pyFailedPlugin is the pytest plugin the instrumented run loads (-p
+// corral_failed, from a temp dir on PYTHONPATH): it appends the node id of
+// every test whose setup, call or teardown failed to $CORRAL_FAILED, which
+// the reducer reads back. pytest's own exit code says THAT tests failed;
+// only the run itself can say exactly which, by node id, the identity the
+// evidence keys every test by.
+const pyFailedPlugin = `import os
+
+def pytest_runtest_logreport(report):
+    if report.failed:
+        with open(os.environ["CORRAL_FAILED"], "a") as out:
+            out.write(report.nodeid + "\n")
+`
 
 // pySelectionReducer runs after the instrumented suite, in the same shell,
 // against the data file the run wrote. It emits ONE compact JSON document:
@@ -1366,7 +1393,11 @@ for path in data.measured_files():
         "static": ranges(static),
         "statements": num_statements,
     }
-json.dump({"format": "corral-selection-3", "tests": len(tests), "files": files}, sys.stdout, separators=(",", ":"))
+failed = []
+if os.path.exists(os.environ.get("CORRAL_FAILED", "")):
+    with open(os.environ["CORRAL_FAILED"]) as f:
+        failed = sorted({line.strip() for line in f if line.strip()})
+json.dump({"format": "corral-selection-3", "tests": len(tests), "files": files, "failed": failed}, sys.stdout, separators=(",", ":"))
 `
 
 // shellArg renders one Instrument argv element for inclusion in its sh -c
@@ -1412,6 +1443,12 @@ const pySelectionFormat = "corral-selection-3"
 type pySelectionEvidence struct {
 	Format string `json:"format"`
 	Tests  int    `json:"tests"`
+	// Failed is the node ids of the tests that failed in the run (the
+	// corral_failed plugin). Absent from every document written before it
+	// existed, which is correct: that script refused any run with a
+	// failure, so such a document had none. That is why the format stamp
+	// did not move.
+	Failed []string `json:"failed"`
 	// Files is decoded in a second step, after Format has been checked, so
 	// a document of another shape is refused BY NAME rather than with an
 	// unmarshal error about a field it was never meant to have.
@@ -1493,7 +1530,7 @@ func (pyPlugin) Evidence(evidence []byte) (EvidenceDoc, error) {
 	if err != nil {
 		return EvidenceDoc{}, err
 	}
-	doc := EvidenceDoc{Of: rep.Tests, Files: make(map[string]FileEvidence, len(rep.Files))}
+	doc := EvidenceDoc{Of: rep.Tests, Files: make(map[string]FileEvidence, len(rep.Files)), Failed: rep.Failed}
 	for path, f := range rep.Files {
 		tests := make(map[string][]LineRange, len(f.Tests))
 		for _, id := range f.Tests {

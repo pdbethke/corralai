@@ -77,7 +77,37 @@ func BuildSelectionMap(p lang.Plugin, testCmd []string, raw []byte) (testmap.Map
 	}
 	m := testmap.FromEvidence(doc, func(path string) (string, bool) { return lang.AlignEvidencePath(path, "") }, row.TestUnit)
 	m.Lang, m.Runner, m.Command = p.Name(), row.ID, append([]string{}, testCmd...)
+	markFailedTests(&m, doc.Failed, row.TestUnit)
 	return m, nil
+}
+
+// failedInEvidenceRun is the reason a test that failed in the instrumented
+// run carries on its node: a "run failed" reason, like a unit's whose own
+// run failed, so WithoutRedUnits may retry a red baseline without it.
+const failedInEvidenceRun = unitRunFailed + "failed in the instrumented evidence run"
+
+// markFailedTests makes every test the evidence run saw fail a node whose
+// own run failed, with no edge. A failing test can stop before the code it
+// would have run, so its coverage is not evidence — the unit pass's rule
+// for a red unit — and as an unreported node it joins every selection and
+// every mutant's command (testmap.Select, Selection.Always), so it never
+// silently leaves a narrowed baseline (#164).
+func markFailedTests(m *testmap.Map, failed []string, unitOf func(string) string) {
+	if len(failed) == 0 {
+		return
+	}
+	red := make(map[string]bool, len(failed))
+	for _, id := range failed {
+		red[id] = true
+		m.Tests[id] = testmap.Node{ID: id, Grain: testmap.GrainTest, Unit: unitOf(id), Err: failedInEvidenceRun}
+	}
+	kept := m.Edges[:0]
+	for _, e := range m.Edges {
+		if !red[e.Test] {
+			kept = append(kept, e)
+		}
+	}
+	m.Edges = kept
 }
 
 // NewSelectionEvidence is evidence a caller already holds — the selection

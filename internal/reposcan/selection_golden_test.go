@@ -113,13 +113,13 @@ func TestProductionSelectionMatchesPythonGolden(t *testing.T) {
 				t.Fatalf("the golden holds no Select/%s", c.name)
 			}
 			sel := NewSelectionEvidence(py, c.cmd, c.evidence).For(py, c.root, c.code, c.test, c.cmd)
-			// Excluded postdates the golden and only the baseline retry sets
-			// it: nil here, and left out of the text (see testmap's
+			// Excluded and Always postdate the golden and no recorded case
+			// sets either: nil here, and left out of the text (see testmap's
 			// TestEngineMatchesPythonSelector).
-			if sel.Excluded != nil {
-				t.Fatalf("Excluded = %v, but only the baseline retry sets it", sel.Excluded)
+			if sel.Excluded != nil || sel.Always != nil {
+				t.Fatalf("Excluded = %v, Always = %v, but no recorded Python case sets either", sel.Excluded, sel.Always)
 			}
-			got := renderGolden(strings.Replace(fmt.Sprintf("%#v", sel), ", Excluded:[]string(nil)}", "}", 1))
+			got := renderGolden(strings.Replace(fmt.Sprintf("%#v", sel), ", Always:[]string(nil), Excluded:[]string(nil)}", "}", 1))
 			if sel.Fallback != "" {
 				got = "error: " + goldenErrText(sel.Fallback)
 			}

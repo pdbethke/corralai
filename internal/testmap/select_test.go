@@ -5,6 +5,7 @@ package testmap
 import (
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -262,5 +263,59 @@ func TestUncoveredSkipsStatementlessAndStaticFiles(t *testing.T) {
 	unc, graded = Uncovered(m)
 	if len(unc) != 0 || len(graded) != 1 || graded[0] != "real.ts" {
 		t.Errorf("with an unreported unit: uncovered %v, graded %v; want only real.ts graded", unc, graded)
+	}
+}
+
+// A test that FAILED in the coverage-context run (a node with an Err) is a
+// test-grain unreported node: its coverage is not evidence, so it has no
+// edge, and like an unreported unit it joins every file's selection (#164:
+// a failing test must never silently leave a narrowed baseline). Every
+// mutant's per-span command runs it too (Selection.Always), since no line
+// evidence says which spans it reaches; a file no other test executes is
+// then graded by it alone, not "uncovered".
+func TestSelectTestGrainAddsFailedTestsToEverySelectionAndEverySpan(t *testing.T) {
+	r := pytestRow(t)
+	m := Map{Schema: Schema, Lang: "python", Runner: "pytest", Method: MethodCoverageContext, Of: 3,
+		Sources: map[string]Source{"a.py": {HasStatements: true}, "b.py": {HasStatements: true}},
+		Tests: map[string]Node{
+			"tests/test_a.py::test_one": {ID: "tests/test_a.py::test_one", Grain: GrainTest, Unit: "tests/test_a.py"},
+			"tests/test_a.py::test_two": {ID: "tests/test_a.py::test_two", Grain: GrainTest, Unit: "tests/test_a.py"},
+			"tests/test_x.py::test_red": {ID: "tests/test_x.py::test_red", Grain: GrainTest, Unit: "tests/test_x.py", Err: "run failed: failed in the instrumented evidence run"},
+		},
+		Edges: []Edge{
+			{Test: "tests/test_a.py::test_one", Source: "a.py", Lines: []lang.LineRange{{Start: 1, End: 2}}, Executed: 2},
+			{Test: "tests/test_a.py::test_two", Source: "a.py", Lines: []lang.LineRange{{Start: 5, End: 6}}, Executed: 2},
+		}}
+	argv := []string{"pytest"}
+
+	sel, err := Select(m, r, argv, "", "a.py", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"tests/test_a.py::test_one", "tests/test_a.py::test_two", "tests/test_x.py::test_red"}
+	if !reflect.DeepEqual(sel.Tests, want) || !reflect.DeepEqual(sel.Always, []string{"tests/test_x.py::test_red"}) || UnreportedIn(m, sel) != 1 {
+		t.Fatalf("Tests=%v Always=%v Unreported=%d; want %v with the failed test always run", sel.Tests, sel.Always, UnreportedIn(m, sel), want)
+	}
+	_, tests, rule := ForSpan(sel, r, lang.LineRange{Start: 1, End: 1})
+	if rule != lang.SpanRuleLines || !reflect.DeepEqual(tests, []string{"tests/test_a.py::test_one", "tests/test_x.py::test_red"}) {
+		t.Errorf("span 1: rule=%s tests=%v, want the test reaching it plus the failed one", rule, tests)
+	}
+
+	// b.py: no passing test executes it, so the failed test grades it.
+	only, err := Select(m, r, argv, "", "b.py", "")
+	if err != nil || !reflect.DeepEqual(only.Tests, []string{"tests/test_x.py::test_red"}) {
+		t.Errorf("b.py: %+v err=%v, want the failed test alone", only, err)
+	}
+	unc, _ := Uncovered(m)
+	if slices.Contains(unc, "b.py") {
+		t.Errorf("b.py is graded by the failed test, so it is not uncovered: %v", unc)
+	}
+
+	// Negative control: no failed test, Always is nil and nothing changes.
+	clean := m
+	clean.Tests = map[string]Node{"tests/test_a.py::test_one": m.Tests["tests/test_a.py::test_one"], "tests/test_a.py::test_two": m.Tests["tests/test_a.py::test_two"]}
+	s, err := Select(clean, r, argv, "", "a.py", "")
+	if err != nil || s.Always != nil || len(s.Tests) != 2 {
+		t.Errorf("all green: %+v err=%v", s, err)
 	}
 }

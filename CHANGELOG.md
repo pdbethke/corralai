@@ -62,6 +62,17 @@ history of any release, `git log v0.3.4..v0.3.5`.
   (`selectionExcluded`) and `corral scans` carry the count. A retry that is
   still red is not graded, and says it was tried.
   `reposcan.VerdictGeneration` is now 38.
+- **A single failing Python test threw away all of a run's selection
+  evidence.** The instrumented pytest run refused any non-zero exit, so on
+  github/spec-kit, where 2 tests fail only under coverage and 13,445 pass,
+  every file was graded by the whole suite (7 to 13 minutes a mutant). The
+  run now keeps its evidence when pytest exits 1 ("tests failed"), provided
+  a small plugin it loads (`-p corral_failed`) has named every failed test
+  by node id; any other non-zero exit still refuses it. A failed test's
+  coverage is not used: it is added to every file's selection and to every
+  mutant's command instead, so a narrowed baseline still runs it, as the
+  whole suite would. If it makes a baseline red, the retry above leaves it
+  out and says so.
 
 ### Changed
 

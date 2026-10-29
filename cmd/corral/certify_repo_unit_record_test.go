@@ -74,6 +74,24 @@ func TestCoverageContextReportLineIsUnchanged(t *testing.T) {
 	}
 }
 
+// A coverage-context file graded with tests that failed in the evidence run,
+// or after a retry that left them out, says so in tests, not units; a file
+// with neither is the line it always was (TestCoverageContextReportLineIsUnchanged).
+func TestCoverageContextLineSaysWhatTheSelectionAddedAndLeftOut(t *testing.T) {
+	var b bytes.Buffer
+	printWeakFile(&b, reposcan.WeakFile{Path: "a.py", KillRate: 0.5, Survivors: 1, SelectionMethod: "coverage-context",
+		SelectedTests: 14, SuiteTests: 13447, Excluded: 2, ExcludedReason: "run failed: failed in the instrumented evidence run"})
+	if want := "graded by 14 of 13447 tests (coverage-context; 2 tests that failed unmutated left out after the baseline failed with them: run failed: failed in the instrumented evidence run)"; !strings.Contains(b.String(), want) {
+		t.Errorf("line %q lacks %q", b.String(), want)
+	}
+	b.Reset()
+	printWeakFile(&b, reposcan.WeakFile{Path: "a.py", KillRate: 0.5, Survivors: 1, SelectionMethod: "coverage-context",
+		SelectedTests: 16, SuiteTests: 13447, Unreported: 1, UnreportedReason: "run failed: failed in the instrumented evidence run"})
+	if want := "(coverage-context; 1 test with no evidence added: run failed: failed in the instrumented evidence run)"; !strings.Contains(b.String(), want) {
+		t.Errorf("line %q lacks %q", b.String(), want)
+	}
+}
+
 // An authored refusal prints on its own line, beginning with the words the
 // reader greps for, and only when there is one.
 func TestAuthoredFallbackPrintsOnItsOwnLine(t *testing.T) {

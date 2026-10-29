@@ -515,6 +515,13 @@ type Selection struct {
 	// what ForSpan narrows by.
 	Lines  map[string][]LineRange
 	Static []LineRange
+	// Always is the selected tests that run for EVERY mutant whatever its
+	// span, because no line evidence says which spans they reach: tests that
+	// failed in the coverage-context run, whose coverage is not evidence,
+	// added for caution (testmap.Select). ForSpan keeps them in each
+	// per-mutant command. Nil when there are none, and for a unit selection,
+	// which is never narrowed by line.
+	Always []string
 	// Excluded is the units left OUT of this selection because their own
 	// run failed on unmutated code in the evidence pass, and a baseline that
 	// held them was red (the baseline retry, reposcan.WithoutRedUnits). It
@@ -584,6 +591,11 @@ type EvidenceDoc struct {
 	Of int
 	// Files is keyed by the path exactly as the evidence stores it.
 	Files map[string]FileEvidence
+	// Failed is the ids of the tests that failed in the evidence run. A
+	// failing test's coverage is not evidence (it may stop before the code
+	// it would have run), so the map keeps no edge for it and adds it to
+	// every selection instead. Nil when every test passed.
+	Failed []string
 }
 
 // FileEvidence is what the run recorded for one source file. A test listed

@@ -327,7 +327,11 @@ package reposcan
 // coverage, 13,445 passes, every file graded whole-suite). A failed test
 // has no edge and joins every selection and every mutant's command
 // (Selection.Always), so a "37" whole-suite Python verdict can now be a
-// narrowed one. Behaviour bump.
+// narrowed one. And a TypeScript file of a repo where JavaScript and
+// TypeScript share one unit-pass run (one vitest command; the map is named
+// "javascript") is now graded by its units (SameEvidenceRun) where every
+// "37" verdict for one graded it by the whole suite: REA's 1,784 auditable
+// TypeScript files. Behaviour bump.
 const VerdictGeneration = "38"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every

@@ -4,6 +4,7 @@ package reposcan
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -111,7 +112,7 @@ func unitMap(ev UnitEvidence, uf UnitFiles) testmap.Map {
 // language, a map naming no runner row (refused by name, never re-detected
 // from the command — no defaults), or anything the engine refuses.
 func UnitSelectionFor(m testmap.Map, p lang.Plugin, repoRoot, codePath, testPath string, testCmd []string) lang.Selection {
-	if m.Lang != p.Name() {
+	if !SameEvidenceRun(m, p) {
 		return lang.Selection{Fallback: fmt.Sprintf("the unit pass ran for %s, so it has no evidence about %s file %s", m.Lang, p.Name(), codePath)}
 	}
 	if why := NoRunnerRow(m); why != "" {
@@ -126,6 +127,32 @@ func UnitSelectionFor(m testmap.Map, p lang.Plugin, repoRoot, codePath, testPath
 		return lang.Selection{Fallback: err.Error()}
 	}
 	return sel
+}
+
+// SameEvidenceRun reports whether m's evidence answers for p's files: m was
+// built for p's language, or for a language whose instrumented command for
+// m's command is p's own, byte for byte — one run collecting both, as one
+// vitest command collects JavaScript and TypeScript. It is the criterion the
+// scan uses to run such languages once (cmd/corral's pickPreflightLanguage),
+// which then names the map after only one of them; refusing the other made
+// every TypeScript file of a mixed repo grade whole-suite (REA: 1,784 of
+// 1,881 auditable files).
+func SameEvidenceRun(m testmap.Map, p lang.Plugin) bool {
+	if m.Lang == p.Name() {
+		return true
+	}
+	mp, ok := lang.ByName(m.Lang)
+	if !ok {
+		return false
+	}
+	a, aok := mp.(lang.CoverageReporter)
+	b, bok := p.(lang.CoverageReporter)
+	if !aok || !bok {
+		return false
+	}
+	ca, aok := a.CoverageCmd(m.Command)
+	cb, bok := b.CoverageCmd(m.Command)
+	return aok && bok && slices.Equal(ca, cb)
 }
 
 // WithoutRedUnits answers codePath again with the units of sel whose own run

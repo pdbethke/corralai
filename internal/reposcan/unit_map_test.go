@@ -216,11 +216,36 @@ func TestUnitSelectionForRefusesAMapNamingNoRunner(t *testing.T) {
 		t.Errorf("selection = %+v, want a whole-suite fallback naming the missing runner row", sel)
 	}
 
-	// The map answers for its own language only.
-	js, _ := lang.ByName("javascript")
+	// The map answers for its own language, and for no language whose
+	// instrumented command is a different run: a Go file is not answered
+	// from a vitest map. (Until 2026-10-29 this said "its own language
+	// only", which also refused the language that SHARES the run — see
+	// TestUnitSelectionForAnswersEveryLanguageOfTheSameRun.)
+	golang, _ := lang.ByName("go")
 	m.Runner = "vitest"
-	if sel := UnitSelectionFor(m, js, "", "src/x.ts", "", argv); sel.Method != "" || !strings.Contains(sel.Fallback, "typescript") {
-		t.Errorf("a javascript file read from a typescript map: %+v", sel)
+	if sel := UnitSelectionFor(m, golang, "", "x.go", "", argv); sel.Method != "" || !strings.Contains(sel.Fallback, "typescript") {
+		t.Errorf("a go file read from a typescript map: %+v", sel)
+	}
+}
+
+// JavaScript and TypeScript share one instrumented run (one vitest command
+// collects both), so the scan runs it once and names the map after the
+// first of them alphabetically: "javascript". A TypeScript file must be
+// answered from that map like a JavaScript one. It was refused, so every
+// TypeScript file of a mixed repo graded whole-suite though the evidence
+// paired it: on REA, 1,784 of 1,881 auditable files.
+func TestUnitSelectionForAnswersEveryLanguageOfTheSameRun(t *testing.T) {
+	js, _ := lang.ByName("javascript")
+	ts, _ := lang.ByName("typescript")
+	argv := []string{"vitest", "run"}
+	m := MapFromUnits(unitMapEvidence(), unitMapFiles(ts), lang.Cmd(argv), js)
+	if m.Lang != "javascript" {
+		t.Fatalf("fixture: map lang %q", m.Lang)
+	}
+	sel := UnitSelectionFor(m, ts, "", "src/x.ts", "test/alpha.test.ts", argv)
+	want := []string{"test/alpha.test.ts", "test/beta.test.ts", "test/broken.test.ts"}
+	if sel.Fallback != "" || sel.Method != testmap.MethodUnitEvidence || !reflect.DeepEqual(sel.Tests, want) {
+		t.Errorf("a typescript file from the shared javascript map: %+v, want %v", sel, want)
 	}
 }
 

@@ -73,6 +73,15 @@ history of any release, `git log v0.3.4..v0.3.5`.
   mutant's command instead, so a narrowed baseline still runs it, as the
   whole suite would. If it makes a baseline red, the retry above leaves it
   out and says so.
+- **TypeScript files in a repository that also has JavaScript were graded
+  by the whole suite, despite their evidence.** JavaScript and TypeScript
+  share one unit-evidence run (one vitest command collects both), which the
+  scan names after the first language alphabetically, `javascript`; a
+  TypeScript file was then refused with "the unit pass ran for javascript,
+  so it has no evidence about typescript file …". On REA that was 1,784 of
+  its 1,881 auditable files, including every top-ranked one. A unit map now
+  answers for every language whose instrumented command is the same run,
+  and still for no other.
 
 ### Changed
 

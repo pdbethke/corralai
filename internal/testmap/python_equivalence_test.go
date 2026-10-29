@@ -237,7 +237,13 @@ func observe(t *testing.T, o observer, live []byte) map[string]string {
 		if c.wantEmpty != (len(sel.Tests) == 0) {
 			t.Fatalf("%s: Tests = %v, case says empty=%v", key, sel.Tests, c.wantEmpty)
 		}
-		out[key] = render(fmt.Sprintf("%#v", sel))
+		// Excluded (the baseline retry's left-out units) postdates the golden
+		// and no Python selection sets it: it must be nil here, and is then
+		// left out of the text so the recorded answers stay byte-identical.
+		if sel.Excluded != nil {
+			t.Fatalf("%s: Excluded = %v, but only the baseline retry sets it", key, sel.Excluded)
+		}
+		out[key] = render(strings.Replace(fmt.Sprintf("%#v", sel), ", Excluded:[]string(nil)}", "}", 1))
 		// The selection must also narrow and take the authored test.
 		narrow(key, sel, withCarried(c.cmd), c.root)
 	}

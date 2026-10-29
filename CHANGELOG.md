@@ -41,6 +41,27 @@ history of any release, `git log v0.3.4..v0.3.5`.
   that unit. The unit-pass cache key now includes the flags the pass adds, so
   a cached forks-era pass is not reused. This is also a one-time cache miss:
   `reposcan.VerdictGeneration` is now 37.
+- **One test already failing in the jail made every file ungradable.** A
+  unit that reports no evidence is added to every file's selection, so
+  partial evidence never under-selects. A unit that reports none because its
+  own run failed on unmutated code therefore put a failing test in every
+  file's selection, and every baseline was red. On REA (545 of 2,186 units
+  red in the jail: its acceptance tests need a build output that is
+  gitignored, so never reaches the jail) and on corral's own Go tree (18 of
+  99) a `certify --repo` run graded nothing. Now a file whose baseline is red
+  is retried once without the units whose run failed in the evidence pass;
+  if that baseline is green, two runs out of two, the file is graded by it.
+  Only a unit that ran and failed is left out: one the time limit cut, one
+  never run alone, or one whose jail did not start proved nothing and stays.
+  A failing unit can kill no mutant, but it may pass under your own command
+  where it failed under the pass's (vitest runs under `--pool=threads` in
+  the pass), so the run says what it did, per file:
+  `baseline failed with N units that failed unmutated in the evidence pass
+  (…); retried without them: green — graded without them`, and the file's
+  line, the ledger row (`selection_excluded`), the attestation
+  (`selectionExcluded`) and `corral scans` carry the count. A retry that is
+  still red is not graded, and says it was tried.
+  `reposcan.VerdictGeneration` is now 38.
 
 ### Changed
 

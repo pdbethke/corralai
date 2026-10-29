@@ -51,6 +51,8 @@ func fullVerdict() Verdict {
 			Rules:            map[string]int{"span": 6},
 			AuthoredAlone:    true,
 			Unreported:       2,
+			Excluded:         3,
+			ExcludedReason:   "run failed: exit 1",
 			AuthoredFallback: "advpool: the authored test could not run alone",
 		},
 		Concurrency: Concurrency{Trees: 6, Note: "bounded by cores", Shared: []string{".venv"}},

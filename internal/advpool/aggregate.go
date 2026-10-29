@@ -58,6 +58,8 @@ func verdictFromSpec(rs RunSpec) Verdict {
 			// the units that will run, not a number the selection claimed.
 			Unreported:       testmap.UnreportedIn(rs.SelectionMap, rs.Selection),
 			UnreportedReason: testmap.FirstUnreportedReason(rs.SelectionMap, rs.Selection),
+			Excluded:         len(rs.Selection.Excluded),
+			ExcludedReason:   excludedReason(rs),
 			UnitNoun:         unitNounOf(rs),
 		},
 		// Concurrency rides straight through — including onto a timed-out
@@ -93,6 +95,15 @@ func verdictFromSpec(rs RunSpec) Verdict {
 		// Verdict.AuthoredLanding.
 		AuthoredLanding: rs.Landing.AppendTo(),
 	}
+}
+
+// excludedReason is the first excluded unit's own reason from the map the
+// selection was made from, "" when nothing was excluded.
+func excludedReason(rs RunSpec) string {
+	if len(rs.Selection.Excluded) == 0 {
+		return ""
+	}
+	return rs.SelectionMap.Tests[rs.Selection.Excluded[0]].Err
 }
 
 // timingWith overlays the phases the DRIVER measured onto the ones the SPEC

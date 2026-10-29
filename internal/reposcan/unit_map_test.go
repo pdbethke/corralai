@@ -252,3 +252,37 @@ func TestUnitSelectionForSelectsUnitsThatLoadedOrCouldNotCount(t *testing.T) {
 		t.Errorf("index covering units for x = %d (ok %v), want 1: an uncounted or loaded-only unit is not a covering unit", n, ok)
 	}
 }
+
+// A red baseline's retry. WithoutRedUnits answers the same file again with
+// the units whose own run FAILED in the pass left out, and names them. Only
+// "run failed" is red: a unit the time limit cut or whose jail never started
+// proved nothing about the code, so it stays. A selection holding no red
+// unit has nothing to retry without, and says so by returning no units.
+func TestWithoutRedUnitsDropsOnlyUnitsWhoseRunFailed(t *testing.T) {
+	p, _ := lang.Detect("a.ts")
+	argv := []string{"vitest", "run"}
+	ev := unitMapEvidence()
+	ev.Units[2].Err = unitRunFailed + "exit 1"
+	ev.Units = append(ev.Units, UnitResult{Unit: "test/late.test.ts", Err: unitNotRunTimeLimit})
+	files := fileUnitLanding(p, "test/alpha.test.ts", "test/beta.test.ts", "test/broken.test.ts", "test/late.test.ts", "src/x.ts", "src/y.ts", "src/z.ts")
+	m := MapFromUnits(ev, files, lang.Cmd(argv), p)
+
+	sel := UnitSelectionFor(m, p, "", "src/x.ts", "test/alpha.test.ts", argv)
+	retry, dropped := WithoutRedUnits(m, p, "", "src/x.ts", "test/alpha.test.ts", argv, sel)
+	if !reflect.DeepEqual(dropped, []string{"test/broken.test.ts"}) {
+		t.Fatalf("dropped = %v, want the one unit whose run failed", dropped)
+	}
+	want := []string{"test/alpha.test.ts", "test/beta.test.ts", "test/late.test.ts"}
+	if retry.Fallback != "" || retry.Method != testmap.MethodUnitEvidence || !reflect.DeepEqual(retry.Tests, want) {
+		t.Errorf("retry = %+v, want %v through the engine", retry, want)
+	}
+
+	// Negative control: no red unit, nothing to retry.
+	ev = unitMapEvidence()
+	ev.Units[2].Err = unitNotRunTimeLimit
+	clean := MapFromUnits(ev, unitMapFiles(p), lang.Cmd(argv), p)
+	s := UnitSelectionFor(clean, p, "", "src/x.ts", "test/alpha.test.ts", argv)
+	if _, dropped := WithoutRedUnits(clean, p, "", "src/x.ts", "test/alpha.test.ts", argv, s); dropped != nil {
+		t.Errorf("no red unit: dropped = %v, want nil", dropped)
+	}
+}

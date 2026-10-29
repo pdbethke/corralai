@@ -446,6 +446,14 @@ type TestSelection struct {
 	// selection's order), verbatim, so the scan line can say WHY units were
 	// added and not only how many. Empty when Unreported is zero.
 	UnreportedReason string `json:"unreported_reason,omitempty"`
+	// Excluded is how many units were left OUT of the selection because
+	// their own run failed on unmutated code in the evidence pass and the
+	// baseline that held them was red (lang.Selection.Excluded). A red unit
+	// can kill no mutant, so the file was graded without it; the count says
+	// the exam is not the one the evidence chose. ExcludedReason is the first
+	// one's reason, verbatim. Zero and empty when nothing was left out.
+	Excluded       int    `json:"excluded,omitempty"`
+	ExcludedReason string `json:"excluded_reason,omitempty"`
 	// UnitNoun is what a unit of this selection is called on the scan line
 	// ("test files", "packages", "test targets"): the runner row's own
 	// UnitNoun, copied here because the line is printed from the verdict and

@@ -4124,6 +4124,13 @@ func unitEvidenceLine(f reposcan.WeakFile) string {
 		}
 		detail += fmt.Sprintf("; %d %s with no evidence added: %s", f.Unreported, word, f.UnreportedReason)
 	}
+	if f.Excluded > 0 {
+		word, it := "units", "them"
+		if f.Excluded == 1 {
+			word, it = "unit", "it"
+		}
+		detail += fmt.Sprintf("; %d %s that failed unmutated left out after the baseline failed with %s: %s", f.Excluded, word, it, f.ExcludedReason)
+	}
 	if noun != "" {
 		noun = " " + noun
 	}
@@ -5580,6 +5587,45 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 	// the entire LLM bill, for every file, to reach an answer the first two
 	// runs already gave. The BaselineFailed handling below stays as the
 	// backstop for anything this misses.
+	// A red baseline may be red only because a unit that already failed on
+	// unmutated code in the evidence pass sits in this file's selection for
+	// caution (every unreported unit joins every selection). Such a unit
+	// can kill no mutant, so the file is retried ONCE without it, and graded
+	// by the retry only if its baseline is stably green. The retry's
+	// selection, naming what it left out, replaces the job's everywhere, so
+	// the pool's every later command is built from the exam that passed.
+	if stable && !rec.last {
+		if retry, red := l.redUnitRetry(j, in.selection); red != nil {
+			what := redUnitsPhrase(red)
+			if retry.Fallback != "" {
+				l.note("%s: baseline failed with %s; cannot retry without %s: %s\n", j.Path, what, pronounFor(red), retry.Fallback)
+			} else {
+				release()
+				retryIn := in
+				retryIn.selection = retry
+				retryIn.checkArgv = l.testCmd(j, retry)
+				r2, c2, err := l.newBaseline(ctx, retryIn)
+				if err != nil {
+					return reposcan.FileResult{}, l.fail(j, err)
+				}
+				runner, cleanup, released = r2, c2, false
+				rec = &recordingBaseline{inner: runner}
+				if stable, err = reposcan.CheckBaselineStable(rec, l.baselineRuns); err != nil {
+					return reposcan.FileResult{}, l.fail(j, err)
+				}
+				switch {
+				case !stable:
+					l.note("%s: baseline failed with %s; retried without %s: unstable — not graded\n", j.Path, what, pronounFor(red))
+					return reposcan.FileResult{Gradable: false, Reason: reposcan.ReasonFlakyBaseline}, nil
+				case rec.last:
+					l.note("%s: baseline failed with %s; retried without %s: green — graded without %s\n", j.Path, what, pronounFor(red), pronounFor(red))
+					in = retryIn
+				default:
+					l.note("%s: baseline failed with %s; retried without %s: still red\n", j.Path, what, pronounFor(red))
+				}
+			}
+		}
+	}
 	if !rec.last {
 		// Print the runner's OWN output, not just the fact of failure. Twice in
 		// one day a paid audit dead-ended here with nothing to go on: a Python
@@ -5673,6 +5719,56 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 		l.note("%s: kill rate %.2f (%d survivor(s))\n", j.Path, v.DevKillRate, v.Survivors)
 	}
 	return res, nil
+}
+
+// redUnitRetry is the job's selection again without the units in sel whose
+// own run FAILED on unmutated code in the unit pass, with those units named
+// on its Excluded and returned; nil when there are none (or the selection is
+// not one the unit pass made), so a red baseline has nothing to retry
+// without. A retry the engine refuses comes back with its Fallback set and
+// is not run. See reposcan.WithoutRedUnits.
+func (l *localExecutor) redUnitRetry(j reposcan.Job, sel lang.Selection) (lang.Selection, []string) {
+	if sel.Method != testmap.MethodUnitEvidence || !l.units.Ran {
+		return lang.Selection{}, nil
+	}
+	p, ok := lang.ByName(j.Lang)
+	if !ok {
+		return lang.Selection{}, nil
+	}
+	base := l.checkArgv
+	if len(base) == 0 {
+		base = p.TestCmd()
+	}
+	retry, red := reposcan.WithoutRedUnits(l.unitMap, p, l.repoDir, j.Path, j.TestPath, base, sel)
+	if red == nil {
+		return lang.Selection{}, nil
+	}
+	retry.Excluded = red
+	return retry, red
+}
+
+// redUnitsPhrase names the units a red baseline is retried without: how
+// many, and the first few by name, so 545 of them stay one line.
+func redUnitsPhrase(red []string) string {
+	const shown = 3
+	noun := "units that failed"
+	if len(red) == 1 {
+		noun = "unit that failed"
+	}
+	names := red
+	more := ""
+	if len(red) > shown {
+		names, more = red[:shown], fmt.Sprintf(" and %d more", len(red)-shown)
+	}
+	return fmt.Sprintf("%d %s unmutated in the evidence pass (%s%s)", len(red), noun, strings.Join(names, ", "), more)
+}
+
+// pronounFor is "it" for one unit and "them" for several.
+func pronounFor(red []string) string {
+	if len(red) == 1 {
+		return "it"
+	}
+	return "them"
 }
 
 // selectionFor answers ONE job from the scan's single instrumented run: which
@@ -5980,6 +6076,7 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 			// whether the authored pass ran the whole command: both change
 			// what the signed rate answers.
 			SelectionUnreported: f.Unreported,
+			SelectionExcluded:   f.Excluded,
 			AuthoredFallback:    f.AuthoredFallback,
 			Uncovered:           f.Uncovered,
 			// And at which grain: a signed rate averaged over mutants that

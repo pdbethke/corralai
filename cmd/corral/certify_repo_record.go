@@ -279,6 +279,7 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 				// pass ran the whole command: both change what the rate
 				// above means, so both ride beside it.
 				SelectionUnreported: r.Verdict.TestSelection.Unreported,
+				SelectionExcluded:   r.Verdict.TestSelection.Excluded,
 				AuthoredFallback:    r.Verdict.TestSelection.AuthoredFallback,
 				WriterMode:          r.Verdict.WriterMode,
 				// Uncovered also makes the store write kill_rate NULL (see

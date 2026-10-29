@@ -371,3 +371,126 @@ func TestUnitGradingLineNeverClaimsWhatFilesDoNotGet(t *testing.T) {
 		t.Errorf("pass with no note: line = %q, want the reason selectionFor gives", got)
 	}
 }
+
+// argvBaseline is a baseline that is red exactly when its command names one
+// of the red units, and records every command it was built with.
+type argvBaseline struct{ green bool }
+
+func (b *argvBaseline) RunBaseline() (bool, error) { return b.green, nil }
+
+// redUnitExecutor is a unit-graded executor over the fixture where src/a.ts
+// is executed by tests/one, tests/four's own run FAILED and tests/five was
+// cut by the time limit — so both are in src/a.ts's selection for caution —
+// and whose baseline is red whenever its command runs any of red.
+func redUnitExecutor(t *testing.T, red []string, cmds *[][]string, audited *localAuditInput, out io.Writer) *localExecutor {
+	t.Helper()
+	root := unitGradingFixture(t)
+	ex := unitGradedExecutor(t, root, reposcan.UnitEvidence{Ran: true, Units: []reposcan.UnitResult{
+		unitRun("tests/one.test.ts", map[string]lang.LineCounts{"src/a.ts": {Executed: 3, Executable: 4}}),
+		unitRun("tests/two.test.ts", map[string]lang.LineCounts{"src/b.ts": {Executed: 1, Executable: 2}}),
+		unitRun("tests/three.test.ts", map[string]lang.LineCounts{"src/c.ts": {Executed: 1, Executable: 2}}),
+		{Unit: "tests/four.test.ts", Err: "run failed: exit 1 (needs dist/)"},
+		{Unit: "tests/five.test.ts", Err: "not run (time limit)"},
+	}})
+	ex.progress = out
+	ex.newBaseline = func(_ context.Context, in localAuditInput) (reposcan.BaselineRunner, func(), error) {
+		*cmds = append(*cmds, slices.Clone(in.checkArgv))
+		green := true
+		for _, u := range red {
+			if slices.Contains(in.checkArgv, u) {
+				green = false
+			}
+		}
+		return &argvBaseline{green: green}, func() {}, nil
+	}
+	ex.audit = func(_ context.Context, in localAuditInput) (advpool.Verdict, error) {
+		*audited = in
+		return advpool.Verdict{DevScored: true, DevKillRate: 1, TestSelection: advpool.TestSelection{Excluded: len(in.selection.Excluded)}}, nil
+	}
+	return ex
+}
+
+// THE RETRY. A file's baseline is red because a unit whose own run already
+// failed unmutated was added to its selection for caution. The file is
+// retried once without that unit — only that one: the unit the time limit
+// cut proved nothing and stays — and, the retry's baseline green, graded by
+// it. The audit gets the retry's selection (so every later command is built
+// from it) with the left-out unit named, and the run says so.
+func TestARedBaselineIsRetriedWithoutUnitsThatFailedUnmutated(t *testing.T) {
+	var cmds [][]string
+	var in localAuditInput
+	var out strings.Builder
+	ex := redUnitExecutor(t, []string{"tests/four.test.ts"}, &cmds, &in, &out)
+
+	res, err := ex.Execute(context.Background(), tsJob("src/a.ts", "tests/one.test.ts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Gradable {
+		t.Fatalf("the retry's baseline was green, yet the file was not graded: %+v\n%s", res, out.String())
+	}
+	retry := vitestUnitsCmd(t, "tests/five.test.ts", "tests/one.test.ts")
+	if len(cmds) != 2 || !slices.Contains(cmds[0], "tests/four.test.ts") || !reflect.DeepEqual(cmds[1], retry) {
+		t.Fatalf("baseline commands = %v, want the evidence's selection then %v", cmds, retry)
+	}
+	if !reflect.DeepEqual(in.checkArgv, retry) || !reflect.DeepEqual(in.selection.Excluded, []string{"tests/four.test.ts"}) ||
+		slices.Contains(in.selection.Tests, "tests/four.test.ts") {
+		t.Errorf("audit input: checkArgv=%v selection=%+v, want the retry's command and selection naming the left-out unit", in.checkArgv, in.selection)
+	}
+	for _, want := range []string{"src/a.ts: baseline failed with 1 unit that failed unmutated in the evidence pass", "tests/four.test.ts", "retried without it: green"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("run output lacks %q:\n%s", want, out.String())
+		}
+	}
+}
+
+// A retry whose baseline is still red is a red baseline: not graded, and the
+// run says the retry was tried, so the operator is not left thinking the red
+// units were the cause.
+func TestARetryThatIsStillRedIsNotGraded(t *testing.T) {
+	var cmds [][]string
+	var in localAuditInput
+	var out strings.Builder
+	ex := redUnitExecutor(t, []string{"tests/four.test.ts", "tests/one.test.ts"}, &cmds, &in, &out)
+
+	res, err := ex.Execute(context.Background(), tsJob("src/a.ts", "tests/one.test.ts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Gradable || res.Reason != reposcan.ReasonBaselineFailed || in.codePath != "" {
+		t.Errorf("result %+v (audited %q), want baseline-failed and no audit", res, in.codePath)
+	}
+	if len(cmds) != 2 || !strings.Contains(out.String(), "retried without it: still red") {
+		t.Errorf("commands %v; output:\n%s", cmds, out.String())
+	}
+}
+
+// Negative control: a red baseline with no unit that failed unmutated in its
+// selection has nothing to retry without, and is not retried.
+func TestARedBaselineWithNoRedUnitIsNotRetried(t *testing.T) {
+	var cmds [][]string
+	var in localAuditInput
+	var out strings.Builder
+	ex := redUnitExecutor(t, []string{"tests/two.test.ts"}, &cmds, &in, &out)
+
+	res, err := ex.Execute(context.Background(), tsJob("src/b.ts", "tests/two.test.ts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// src/b.ts's selection is tests/two plus the two unreported units; only
+	// tests/four is red, and the baseline is red for tests/two's sake, so the
+	// retry (without four) is still red.
+	if res.Gradable || len(cmds) != 2 {
+		t.Fatalf("result %+v after %d baseline(s)", res, len(cmds))
+	}
+	cmds = nil
+	ex2 := redUnitExecutor(t, []string{"tests/two.test.ts"}, &cmds, &in, &out)
+	ex2.unitMap.Tests["tests/four.test.ts"] = testmap.Node{ID: "tests/four.test.ts", Grain: testmap.GrainUnit, Err: "could not run: bwrap failed"}
+	res, err = ex2.Execute(context.Background(), tsJob("src/b.ts", "tests/two.test.ts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Gradable || len(cmds) != 1 || strings.Contains(out.String(), "retried") && strings.Count(out.String(), "retried") > 1 {
+		t.Errorf("no red unit: %d baseline(s), result %+v; output:\n%s", len(cmds), res, out.String())
+	}
+}

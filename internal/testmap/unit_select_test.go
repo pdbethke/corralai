@@ -147,3 +147,66 @@ func TestSelectUnitGrainSelectsLoadingAndUncountingUnits(t *testing.T) {
 		t.Errorf("Tests=%v err=%v, want the executing, loading and uncounting units %v", sel.Tests, err, want)
 	}
 }
+
+// The baseline retry. A unit whose own run failed on unmutated code can kill
+// no mutant, and as an unreported unit it sits in every selection, so one
+// red unit turns every file's baseline red. SelectExcluding is Select with
+// the units the caller names left out of the unreported set — and only out
+// of it: an excluded unit with a selecting edge is still selected (an edge
+// is evidence it ran green), and the corun guard still sees every listed
+// unit, so a command that would also run an excluded unit is refused rather
+// than quietly running it.
+func TestSelectExcludingLeavesOutOnlyTheNamedUnreportedUnits(t *testing.T) {
+	r := jestRow(t)
+	m := unitMap([]string{"test/a.test.js", "test/b.test.js", "test/c.test.js", "test/d.test.js"}, "test/a.test.js")
+	m = failUnit(m, "test/c.test.js", "run failed: exit 1")
+	m = failUnit(m, "test/d.test.js", "not run (time limit)")
+
+	sel, err := SelectExcluding(m, r, jestArgv, "", "src/a.js", "", map[string]bool{"test/c.test.js": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	units := []string{"test/a.test.js", "test/d.test.js"}
+	want, _ := r.UnitsCmd(jestArgv, units)
+	if !reflect.DeepEqual(sel.Tests, units) || !reflect.DeepEqual(sel.Cmd, want) || UnreportedIn(m, sel) != 1 {
+		t.Errorf("Tests=%v Cmd=%v Unreported=%d; want %v run by %v with the time-limited unit still counted", sel.Tests, sel.Cmd, UnreportedIn(m, sel), units, want)
+	}
+	if got := FirstUnreportedReason(m, sel); got != "not run (time limit)" {
+		t.Errorf("FirstUnreportedReason = %q, want the remaining unit's reason", got)
+	}
+
+	// An excluded id that is not unreported is not taken out: its edge is
+	// the evidence, and exclusion only ever drops caution.
+	keep, err := SelectExcluding(m, r, jestArgv, "", "src/a.js", "", map[string]bool{"test/a.test.js": true, "test/c.test.js": true})
+	if err != nil || !reflect.DeepEqual(keep.Tests, units) {
+		t.Errorf("excluding a reporting unit: Tests=%v err=%v, want %v", keep.Tests, err, units)
+	}
+
+	// Negative control: nil excludes nothing, exactly Select.
+	all, err := SelectExcluding(m, r, jestArgv, "", "src/a.js", "", nil)
+	plain, perr := Select(m, r, jestArgv, "", "src/a.js", "")
+	if err != nil || perr != nil || !reflect.DeepEqual(all, plain) {
+		t.Errorf("nil exclusion: %+v (%v), Select: %+v (%v)", all, err, plain, perr)
+	}
+}
+
+// RanRedIn names the units of a selection that are there only because their
+// own run FAILED — the ones a red baseline can be retried without. A unit
+// cut by the time limit, never run alone, or whose jail could not start
+// proved nothing about the code and is not offered.
+func TestRanRedInNamesOnlyUnitsWhoseRunFailed(t *testing.T) {
+	r := jestRow(t)
+	m := unitMap([]string{"test/a.test.js", "test/b.test.js", "test/c.test.js", "test/d.test.js", "test/e.test.js"}, "test/a.test.js")
+	m = failUnit(m, "test/b.test.js", "run failed: exited 1")
+	m = failUnit(m, "test/c.test.js", "not run (time limit)")
+	m = failUnit(m, "test/d.test.js", "could not run: bwrap: no permission")
+	m = failUnit(m, "test/e.test.js", "run failed: the process did not exit normally")
+	sel, err := Select(m, r, jestArgv, "", "src/a.js", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := RanRedIn(m, sel, func(n Node) bool { return strings.HasPrefix(n.Err, "run failed: ") })
+	if want := []string{"test/b.test.js", "test/e.test.js"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("RanRedIn = %v, want %v", got, want)
+	}
+}

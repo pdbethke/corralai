@@ -308,7 +308,21 @@ package reposcan
 // runs deliberately, because the jail should see the dependency tree the
 // host has; a "36" or earlier verdict on such a project was graded without
 // it.
-const VerdictGeneration = "37"
+//
+// "38" (2026-10-29): a red baseline is retried once without the units in
+// its selection whose own run FAILED on unmutated code in the unit pass
+// (reposcan.WithoutRedUnits). Every unit that reported no evidence joins
+// every selection, so one such unit made every file's baseline red: measured
+// on REA (545 of 2,186 units red in the jail, its acceptance tests needing a
+// gitignored build) and on corral's own Go tree (18 of 99), where a "37"
+// scan graded nothing. A retry with a stably green baseline is graded, and
+// its verdict says how many units it left out and the first one's reason
+// (TestSelection.Excluded, ExcludedReason; nested, so outside the shallow
+// fingerprint). A unit the time limit cut, never ran alone, or could not
+// start is not red and stays. "37" never left its branch; bumped because a
+// "37" result for such a file is an ungradable the retry can now grade.
+// Behaviour bump.
+const VerdictGeneration = "38"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

@@ -515,6 +515,12 @@ type Selection struct {
 	// what ForSpan narrows by.
 	Lines  map[string][]LineRange
 	Static []LineRange
+	// Excluded is the units left OUT of this selection because their own
+	// run failed on unmutated code in the evidence pass, and a baseline that
+	// held them was red (the baseline retry, reposcan.WithoutRedUnits). It
+	// is nil for every selection the evidence chose unaided; a non-nil one
+	// is a different exam, which the verdict discloses.
+	Excluded []string
 }
 
 // NarrowableByLine reports whether the Selection's line evidence can actually

@@ -580,16 +580,26 @@ func scanFileSelectionWith(f scanstore.File, sp mutantSpread) string {
 	case f.Uncovered:
 		return "UNCOVERED"
 	case f.TestSelection != "" && sp.ok:
-		return fmt.Sprintf("%s %d/%d, %d–%d/mutant", f.TestSelection, f.SelectedTests, f.SuiteTests, sp.min, sp.max)
+		return fmt.Sprintf("%s %d/%d, %d–%d/mutant", f.TestSelection, f.SelectedTests, f.SuiteTests, sp.min, sp.max) + excludedSuffix(f)
 	case f.TestSelection != "" && f.SelectionUnreported > 0:
-		return fmt.Sprintf("%s %d/%d (%d unreported)", f.TestSelection, f.SelectedTests, f.SuiteTests, f.SelectionUnreported)
+		return fmt.Sprintf("%s %d/%d (%d unreported)", f.TestSelection, f.SelectedTests, f.SuiteTests, f.SelectionUnreported) + excludedSuffix(f)
 	case f.TestSelection != "":
-		return fmt.Sprintf("%s %d/%d", f.TestSelection, f.SelectedTests, f.SuiteTests)
+		return fmt.Sprintf("%s %d/%d", f.TestSelection, f.SelectedTests, f.SuiteTests) + excludedSuffix(f)
 	case f.SelectionFallback != "":
 		return fmt.Sprintf("whole-suite (%s)", f.SelectionFallback)
 	default:
 		return "—"
 	}
+}
+
+// excludedSuffix is the scans column's note that units which failed
+// unmutated were left out after the baseline failed with them: the rate is
+// not the exam the evidence chose. "" when none were.
+func excludedSuffix(f scanstore.File) string {
+	if f.SelectionExcluded == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" (%d red left out)", f.SelectionExcluded)
 }
 
 // formatKillRate renders a *float64 kill rate, keeping NULL distinct from

@@ -82,6 +82,11 @@ const (
 	unitTruncated         = "report truncated"
 	unitNotAlone          = "not run: its one-unit form would also run another unit"
 	unitNoSuiteExit       = "no suite exit status in the report"
+	// unitRunFailed prefixes every reason for a unit that RAN and failed on
+	// unmutated code: a red test, a build error, a process that did not exit
+	// normally. It is the one reason that proves the unit red in the jail,
+	// which is what WithoutRedUnits keys on.
+	unitRunFailed = "run failed: "
 	// unitCouldNotRun prefixes a runner's own error: the unit never ran,
 	// for a reason outside the tree (a jail that could not start).
 	unitCouldNotRun = "could not run: "
@@ -498,9 +503,9 @@ func runUnit(ctx context.Context, runner commandRunner, files map[string]string,
 		// toolchain the jail lacks — is not evidence, even when a report
 		// still parses: a failing unit can stop before the code it would
 		// have executed, so its zeros are not "never executed".
-		return UnitResult{Err: fmt.Sprintf("run failed: exited %d%s%s", exit, ran, failureTail(stderr, lang.BeforeSuiteExit(out)))}
+		return UnitResult{Err: fmt.Sprintf(unitRunFailed+"exited %d%s%s", exit, ran, failureTail(stderr, lang.BeforeSuiteExit(out)))}
 	case detailed && exit < 0:
-		return UnitResult{Err: "run failed: the process did not exit normally" + ran + failureTail(stderr, lang.BeforeSuiteExit(out))}
+		return UnitResult{Err: unitRunFailed + "the process did not exit normally" + ran + failureTail(stderr, lang.BeforeSuiteExit(out))}
 	case truncated(out):
 		// Checked before parsing, as Preflight does: a report cut on a
 		// clean boundary parses as a partial map that looks complete.
@@ -524,7 +529,7 @@ func runUnit(ctx context.Context, runner commandRunner, files map[string]string,
 		// What the suite printed before its trailer says why it failed
 		// (stderr when the runner kept it apart); the report after it
 		// does not.
-		return UnitResult{Err: fmt.Sprintf("run failed: exit %d%s%s", rc, ran, failureTail(stderr, lang.BeforeSuiteExit(out)))}
+		return UnitResult{Err: fmt.Sprintf(unitRunFailed+"exit %d%s%s", rc, ran, failureTail(stderr, lang.BeforeSuiteExit(out)))}
 	}
 	if reason, unavailable := lang.CoverageUnavailable(out); unavailable {
 		return UnitResult{Err: unitCoverageUnavailable + reason}

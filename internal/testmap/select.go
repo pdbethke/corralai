@@ -77,6 +77,19 @@ func grainOf(m Map) (string, error) {
 // than joining a directory testCmd already names), or testCmd for a row
 // whose arguments narrow as they are.
 func Select(m Map, r lang.Runner, testCmd []string, repoRoot, codePath, testPath string) (lang.Selection, error) {
+	return SelectExcluding(m, r, testCmd, repoRoot, codePath, testPath, nil)
+}
+
+// SelectExcluding is Select with the unreported units named in exclude left
+// out of the selection. It exists for one caller: a file whose baseline is
+// red because a unit that already failed on unmutated code was added to its
+// selection for caution (a red unit can kill no mutant, and every selection
+// holds every unreported unit, so one red unit makes every baseline red).
+// Exclusion only ever drops caution: a unit with a selecting edge to the file
+// is selected whatever exclude says, since the edge is evidence it ran green,
+// and the corun guard still sees every listed unit, so a command that would
+// also run an excluded unit is refused, not run. nil excludes nothing.
+func SelectExcluding(m Map, r lang.Runner, testCmd []string, repoRoot, codePath, testPath string, exclude map[string]bool) (lang.Selection, error) {
 	grain, err := grainOf(m)
 	if err != nil {
 		return lang.Selection{}, err
@@ -113,7 +126,7 @@ func Select(m Map, r lang.Runner, testCmd []string, repoRoot, codePath, testPath
 			sel.Static = slices.Clone(src.Static)
 		}
 	}
-	ids, err := selectedIDs(m, grain, want, &sel)
+	ids, err := selectedIDs(m, grain, want, &sel, exclude)
 	if err != nil {
 		return lang.Selection{}, err
 	}
@@ -163,8 +176,9 @@ func Select(m Map, r lang.Runner, testCmd []string, repoRoot, codePath, testPath
 // nothing), plus, in a unit map, every unreported unit. It is the one
 // predicate behind Select and Uncovered, so a summary of a map cannot call a
 // file uncovered that grading would select units for. When sel is non-nil, a
-// test-grain edge's lines are recorded on it.
-func selectedIDs(m Map, grain, want string, sel *lang.Selection) ([]string, error) {
+// test-grain edge's lines are recorded on it. An unreported unit in exclude
+// is not added (SelectExcluding); an edge's unit always is.
+func selectedIDs(m Map, grain, want string, sel *lang.Selection, exclude map[string]bool) ([]string, error) {
 	seen := map[string]bool{}
 	var ids []string
 	for _, e := range m.EdgesTo(want) {
@@ -188,7 +202,7 @@ func selectedIDs(m Map, grain, want string, sel *lang.Selection) ([]string, erro
 	}
 	if grain == GrainUnit {
 		for _, id := range m.Unreported() {
-			if !seen[id] {
+			if !seen[id] && !exclude[id] {
 				seen[id] = true
 				ids = append(ids, id)
 			}
@@ -216,7 +230,7 @@ func Uncovered(m Map) (uncovered, unselectedButGraded []string) {
 		if !src.HasStatements || src.HasStatic {
 			continue
 		}
-		ids, err := selectedIDs(m, grain, p, nil)
+		ids, err := selectedIDs(m, grain, p, nil, nil)
 		if err != nil {
 			continue
 		}
@@ -276,6 +290,21 @@ func FirstUnreportedReason(m Map, sel lang.Selection) string {
 		}
 	}
 	return ""
+}
+
+// RanRedIn is the units of sel that are there only because they reported no
+// evidence AND whose own run failed, by red's reading of a node's Err, in the
+// selection's order. red is the caller's because the wording of a unit's
+// reason belongs to the pass that wrote it (reposcan), not to the map. These
+// are the units a red baseline may be retried without (SelectExcluding).
+func RanRedIn(m Map, sel lang.Selection, red func(Node) bool) []string {
+	var out []string
+	for _, id := range sel.Tests {
+		if node, ok := m.Tests[id]; ok && node.Grain == GrainUnit && node.Err != "" && red(node) {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // canRun refuses a row with no command for the map's grain, before any

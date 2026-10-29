@@ -128,6 +128,36 @@ func UnitSelectionFor(m testmap.Map, p lang.Plugin, repoRoot, codePath, testPath
 	return sel
 }
 
+// WithoutRedUnits answers codePath again with the units of sel whose own run
+// FAILED in the unit pass left out, and names them; nil when sel holds none,
+// so there is nothing to retry without. It is for a file whose baseline is
+// red: such a unit was added to every selection because it reported no
+// evidence, and a unit already red on unmutated code can kill no mutant, so
+// it can only make the baseline red. A unit the pass cut, never ran alone, or
+// could not start (no "run failed" reason) proved nothing about the code and
+// stays. The caller must run the retry's baseline before trusting it, and
+// disclose the dropped units: the operator's own command may run them green
+// where the pass's command did not (lang.EvidenceNote).
+func WithoutRedUnits(m testmap.Map, p lang.Plugin, repoRoot, codePath, testPath string, testCmd []string, sel lang.Selection) (lang.Selection, []string) {
+	red := testmap.RanRedIn(m, sel, func(n testmap.Node) bool { return strings.HasPrefix(n.Err, unitRunFailed) })
+	if len(red) == 0 {
+		return lang.Selection{}, nil
+	}
+	r, err := lang.RunnerByID(p, m.Runner)
+	if err != nil {
+		return lang.Selection{Fallback: err.Error()}, red
+	}
+	exclude := make(map[string]bool, len(red))
+	for _, id := range red {
+		exclude[id] = true
+	}
+	retry, err := testmap.SelectExcluding(m, r, testCmd, repoRoot, codePath, testPath, exclude)
+	if err != nil {
+		return lang.Selection{Fallback: err.Error()}, red
+	}
+	return retry, red
+}
+
 // NoRunnerRow is why a unit map can select nothing for want of a runner row
 // to run its units with, or "" when it names one. The one wording, so the
 // scan's selection line and each file's fallback say the same thing.

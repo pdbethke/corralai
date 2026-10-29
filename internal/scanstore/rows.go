@@ -261,8 +261,11 @@ type File struct {
 	// because they reported no evidence, and why the authored pass graded by
 	// the run's whole command. omitempty, so a row without either is
 	// byte-identical to what it was before they existed.
-	SelectionUnreported int    `json:",omitempty"`
-	AuthoredFallback    string `json:",omitempty"`
+	SelectionUnreported int `json:",omitempty"`
+	// SelectionExcluded mirrors advpool.TestSelection.Excluded: units that
+	// failed unmutated, left out after the baseline failed with them.
+	SelectionExcluded int    `json:",omitempty"`
+	AuthoredFallback  string `json:",omitempty"`
 	// WriterMode mirrors advpool.Verdict.WriterMode: whether this file's
 	// survivors were attacked by one writer call each ("per-survivor") or by
 	// one call carrying them all ("batched"). NULL — never one of the two

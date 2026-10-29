@@ -59,8 +59,12 @@ type Row struct {
 	// authored test alone or beside the selection. Both omitempty, so every
 	// row without them marshals to the bytes it always did and needs no new
 	// ledger format (same reason as CoveringUnits).
-	SelectionUnreported int    `json:"selection_unreported,omitempty"`
-	AuthoredFallback    string `json:"authored_fallback,omitempty"`
+	SelectionUnreported int `json:"selection_unreported,omitempty"`
+	// SelectionExcluded is how many units that failed unmutated in the
+	// evidence pass were left out after the baseline failed with them (the
+	// baseline retry). omitempty for the same reason as the two above.
+	SelectionExcluded int    `json:"selection_excluded,omitempty"`
+	AuthoredFallback  string `json:"authored_fallback,omitempty"`
 	// WriterMode is HOW the writer seat attacked this file's survivors:
 	// "per-survivor" or "batched". EMPTY reaches the warehouse as NULL, never
 	// as either spelling — a run that named no mode, or a row pushed by a

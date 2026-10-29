@@ -150,6 +150,12 @@ type WeakFile struct {
 	UnreportedReason string
 	UnitNoun         string
 	AuthoredFallback string
+	// Excluded and ExcludedReason mirror advpool.TestSelection's: how many
+	// units that failed unmutated were left out after the baseline failed
+	// with them, and the first one's reason. The line must say it, or a rate
+	// graded without them reads as the exam the evidence chose.
+	Excluded       int
+	ExcludedReason string
 	// WriterMode and WriterCalls mirror advpool.Verdict.WriterMode and the
 	// test-writer's own entry in advpool.Verdict.ModelCalls: whether this
 	// file's survivors were attacked one call each ("per-survivor") or all in
@@ -597,6 +603,8 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 			SelectionFallback:   r.Verdict.TestSelection.Fallback,
 			Unreported:          r.Verdict.TestSelection.Unreported,
 			UnreportedReason:    r.Verdict.TestSelection.UnreportedReason,
+			Excluded:            r.Verdict.TestSelection.Excluded,
+			ExcludedReason:      r.Verdict.TestSelection.ExcludedReason,
 			UnitNoun:            r.Verdict.TestSelection.UnitNoun,
 			AuthoredFallback:    r.Verdict.TestSelection.AuthoredFallback,
 			AuthoredExtra:       r.Verdict.AuthoredExtra,

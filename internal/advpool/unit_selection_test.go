@@ -240,3 +240,36 @@ func TestUnitNounAndFirstReasonReachTheVerdict(t *testing.T) {
 		t.Errorf("nothing unreported, yet UnreportedReason = %q", v.TestSelection.UnreportedReason)
 	}
 }
+
+// The baseline retry, on the record. A selection that left out units whose
+// run failed unmutated (lang.Selection.Excluded) is a different exam from
+// the one the evidence chose, so how many were left out, and the first
+// one's reason, reach the verdict at both construction sites and its wire
+// form. A selection that left out nothing counts nothing.
+func TestExcludedRedUnitsReachTheVerdict(t *testing.T) {
+	m := vitestUnitMap([]string{"tests/one.test.ts", "tests/two.test.ts", "tests/three.test.ts"}, "tests/one.test.ts")
+	n := m.Tests["tests/three.test.ts"]
+	n.Err = "run failed: exit 1 (needs dist/)"
+	m.Tests["tests/three.test.ts"] = n
+	rs := unitRunSpec(t, m, "src/one.ts", "tests/one.test.ts")
+	rs.Selection.Excluded = []string{"tests/three.test.ts"}
+
+	converged := verdictFromSpec(rs)
+	timedOut := (&Driver{}).timeoutVerdict(&runState{rs: rs})
+	for name, v := range map[string]Verdict{"converged": converged, "timeout": timedOut} {
+		if v.TestSelection.Excluded != 1 || v.TestSelection.ExcludedReason != "run failed: exit 1 (needs dist/)" {
+			t.Errorf("%s verdict: %+v, want 1 excluded with the unit's own reason", name, v.TestSelection)
+		}
+		b, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(b), `"excluded":1`) || !strings.Contains(string(b), `"excluded_reason":"run failed: exit 1 (needs dist/)"`) {
+			t.Errorf("%s verdict_json does not carry the exclusion: %s", name, b)
+		}
+	}
+	rs.Selection.Excluded = nil
+	if v := verdictFromSpec(rs); v.TestSelection.Excluded != 0 || v.TestSelection.ExcludedReason != "" {
+		t.Errorf("nothing excluded, yet %+v", v.TestSelection)
+	}
+}

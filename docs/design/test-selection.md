@@ -2,8 +2,13 @@
 
 # Test selection: which tests grade a file, and why the record says
 
-**Status:** shipped, 2026-08-29. Coverage-guided selection is the default for
-Python; `--scope-tests` is removed.
+**Status:** shipped for Python 2026-08-29 (`--scope-tests` removed then).
+Unreleased on `feat/test-selection` (2026-10-30): selection is the default for
+every language, from one selection engine (`internal/testmap`). Python reads
+per-test coverage contexts; every other language reads the unit evidence pass
+(each test unit run alone under coverage). Where a runner has no unit form
+(mocha, minitest), the file is graded by the whole suite and the record says
+so. The table under "Per-language evidence" says which.
 
 ## The cost expression, and today's measurement
 
@@ -69,6 +74,17 @@ narrowed baseline passes, and a kill rate is reported for a suite the
 whole-suite baseline would have refused (#164). Selection is a subset of the
 whole suite's guarantees only when the whole suite is green.
 
+(Corrected 2026-10-29. The rule above refused ANY non-zero exit, and on
+github/spec-kit that threw away a whole run's evidence over 2 failures among
+13,447 tests: every file fell back to the whole suite, 0 evidence-paired. The
+run now keeps its evidence on pytest's exit 1 only when a plugin corral adds
+to the run (`corral_failed`) named every failed test. Those tests get no
+edges and join every file's selection and every mutant's command, so #164's
+property holds: a failing test never silently leaves a narrowed baseline. Any
+other non-zero exit, or a failure the plugin did not name, still refuses. On
+spec-kit: evidence-paired 0 → 154, candidates 121 → 275 (dry runs, 13m34s and
+12m33s).)
+
 The scan bounds the evidence run separately from the coverage pre-flight —
 `selectionMaxOutput` (64 MiB, ~50× the measured v2 payload) and
 `selectionTimeout` (15 min, ~11× requests) in `cmd/corral/certify_repo.go`.
@@ -127,15 +143,74 @@ and an uncovered file prints its own marker rather than a number:
 | language | evidence today | mechanism | status |
 |---|---|---|---|
 | Python | coverage contexts | `pytest-cov`, one instrumented run of the whole suite, per-test contexts read back per file | shipped |
-| JavaScript / TypeScript | module graph | the harness's own dependency graph from source file to spec file | next, not built |
-| Go | package dependencies | the package graph already used for compile-checking | next, not built |
-| Ruby | none | no evidence source identified yet | whole-suite, disclosed |
+| JavaScript / TypeScript | unit evidence | each test file run alone under coverage (vitest, run in the threads pool; jest; `node --test`); mocha has no unit form, so whole suite, disclosed; one run answers both languages | unreleased |
+| Go | unit evidence | each package's tests run alone under `-coverprofile` | unreleased |
+| Ruby | unit evidence (rspec) | each spec file run alone under coverage; minitest has no unit form, so whole suite, disclosed | unreleased |
+| PHP | unit evidence | each test file run alone under pcov/Xdebug | unreleased |
+| Rust | unit evidence | each Cargo target run alone | unreleased |
+
+(This table said JavaScript/TypeScript would select by "the harness's own
+dependency graph" and Go by "the package graph", both "next, not built". Neither
+was built. Both were replaced by execution evidence, for the reason
+"Why selection is by execution evidence only" gives: an import proves a test
+mentions a file, not that it runs it. The live per-runner answer is generated:
+[`docs/corral/language-support.md`](../corral/language-support.md).)
+
+Unit evidence carries one rule Python's does not need: a unit that reported no
+evidence (its run failed, the time limit cut it, it could not run alone) is in
+**every** file's selection, because nothing says which files it would have
+reached. That keeps selection a subset of the whole suite's guarantees, and it
+has a cost measured below: a unit that failed unmutated makes every baseline
+red, so a red baseline is retried once without the units whose own run failed
+in the evidence pass, and graded only if that retry is stably green.
 
 A language without a selector, a project without the required tool
 (`pytest-cov` absent, say), or a run whose evidence cannot be read all fall
 back to the whole suite, and the fallback reason is recorded verbatim —
 `no selector for ruby`, or the read error — rather than silently grading
 against nothing.
+
+## Measured on real repositories (2026-10-29 and 2026-10-30)
+
+Every run below is `certify --repo` (or its free `--dry-run`) on the
+maintainer's 24-core workstation, in the bwrap jail, n=1, on subscription seats
+(`--writer-model codex --mutant-model claude-code:claude-sonnet-5-5
+--critic-model claude-code:claude-haiku-5-5`), the box shared with other work.
+Third-party repositories first. No REA run has been graded yet, and each try
+is listed because each found a defect.
+
+**morluto/rea @ 87a5be3** (TypeScript, vitest, 2,186 test files; `--top 1
+--seed-limit 128 --evidence-timeout 45m -- node ./node_modules/vitest/vitest.mjs
+run`). Evidence pass about 30 minutes; the file chosen each time was
+`src/server/createServer.ts`.
+
+| try | binary | outcome | what it found | fixed in |
+|---|---|---|---|---|
+| 3 | 575f956a | COULD-NOT-GRADE, 1h27m | 545 units that failed alone in the jail were put in every selection, so every baseline was red | 42b8e89e (retry once without them) |
+| 4 | 42b8e89e | COULD-NOT-GRADE, 1h30m, no retry | the unit map is named `javascript`, and a TypeScript file was refused it, so it was graded by the whole suite | b96bb69a |
+| 5 | b96bb69a | COULD-NOT-GRADE, 1h30m, no retry | the acceptance tests failed because the jail copy silently dropped `dist/cli-runtime/cli.js` (2.7 MiB) under a 1 MiB per-file limit; confirmed by running one acceptance file on the host with and without it (36 of 36 pass; 23 fail) | a43780bb, 4fd1d387 (limit removed, left-out files recorded) |
+| 6 | 4fd1d387 | COULD-NOT-GRADE, 1h45m | units with no evidence fell from 547 to 321 and the acceptance tests passed, but the baseline still failed and its printed output was the first 64 KiB, cut before vitest names what failed; no word on the retry | f61675fd (show the tail; say why no retry) |
+
+REA's built output is a further question this branch does not answer: its
+acceptance tests run `dist/`, which is built on the host and never rebuilt per
+mutant, so a source mutant cannot reach them. That is the build-step design
+that follows this branch.
+
+**github/spec-kit @ 2a23a84** (Python, 13,447 tests). Dry runs only. The
+instrumented run had 2 failures, so the old exit rule threw its evidence away:
+evidence-paired 0, every file whole-suite (13m34s). After 895d11e9:
+evidence-paired 154, candidates 121 → 275 (12m33s).
+
+**The foreign sweep** (`scripts/foreign-sweep.sh`, 8 SHA-pinned repos, dry run):
+all 9 rows match `testdata/foreign-sweep-expected.tsv` on this branch.
+
+**corral's own Go tree — a mechanics check, not evidence.** An auditor
+grading itself proves nothing to anyone else; this run shows only that the
+retry works end to end. `internal/testmap/select.go` at df7fabff: 18 of 99
+units failed alone in the jail, the baseline was retried without them and was
+green, kill rate 0.81 (29 of 36 graded, 95% CI 0.65–0.90), 7 survivors, all 7
+proven by an authored test. 11m49s; dev pass median 21 s per mutant. Load
+was high from unrelated work (1-minute 20.9 at the start).
 
 ## The authored-test consequence
 

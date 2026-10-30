@@ -747,3 +747,26 @@ func TestUnitPassLineSaysWhatTheEvidencePassChanged(t *testing.T) {
 		t.Errorf("a pass that changed nothing says it did:\n%s", b.String())
 	}
 }
+
+// Units red only with the evidence pass's change, and green as the
+// operator's command runs them, are counted on their own line: they are
+// among the units with no evidence, but they are not red, and the scan says
+// they stay in every selection.
+func TestUnitPassLineCountsUnitsGreenAsWritten(t *testing.T) {
+	ev := reposcan.UnitEvidence{Ran: true, Units: []reposcan.UnitResult{
+		{Unit: "a.test.ts"},
+		{Unit: "b.test.ts", Err: "not measured: red with the evidence pass's change (x), green as the operator's command runs it, which took no coverage"},
+		{Unit: "c.test.ts", Err: "run failed: exit 1"},
+	}}
+	var b bytes.Buffer
+	printUnitPass(&b, &localExecutor{units: ev, unitWorkers: 1})
+	if want := "units: 1 unit(s) red only with the evidence pass's change are green as your command runs them: they stay in every file's selection and run with every mutant"; !strings.Contains(b.String(), want) {
+		t.Errorf("output lacks %q:\n%s", want, b.String())
+	}
+	ev.Units = ev.Units[:1]
+	b.Reset()
+	printUnitPass(&b, &localExecutor{units: ev, unitWorkers: 1})
+	if strings.Contains(b.String(), "green as your command") {
+		t.Errorf("a pass with none says it had some:\n%s", b.String())
+	}
+}

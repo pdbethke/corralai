@@ -13,6 +13,30 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ### Fixed
 
+- **A large unit selection was graded by the whole suite.** A unit-grain
+  selection over 32 KiB of command line (a readability cap) was refused, and
+  the file fell back to every unit: REA's seventh run selected 850 units
+  (44,997 bytes) and was graded by all 2,186, with a red baseline nothing
+  could be retried without. A unit selection is now refused only past
+  96 KiB, what the jail's one `sh -c` argument can carry on Linux (128 KiB,
+  less the jail's prelude and quoting; a test executes it). A widened
+  test-grain set past that bound is refused rather than run, since run it
+  could only fail to exec and read as a red baseline.
+- **A unit red only under the evidence pass's own flags was treated as red.**
+  vitest units run in the threads pool for the evidence pass, and a test
+  that calls `process.chdir()` (REA's `cliJsonPaths.test.ts`) fails there
+  and nowhere else. A unit the pass finds red is now run once more exactly
+  as your command runs it; green that way, it is not red, so the
+  red-baseline retry never leaves it out. That run takes no coverage, so the
+  unit reports no evidence and runs with every file; the scan line counts
+  such units.
+- **A failing baseline printed the start of its output, not the failures.**
+  The baseline kept the first 64 KiB, and on REA that was passing tests, cut
+  before vitest's failure summary. It now keeps the last 64 KiB, in the same
+  one run. A red baseline that is not retried also says why: graded by the
+  whole suite (with the reason), or no unit in its selection failed in the
+  evidence pass.
+
 - **The jail's copy of a repository left files out without saying so.** Any
   file over 1 MiB, and any file that is not UTF-8 text outside a test tree,
   was skipped, and a test that read one failed on unmutated code with nothing

@@ -310,6 +310,9 @@ func printUnitPass(w io.Writer, ex *localExecutor) {
 	if cut := ev.CutShort(); cut > 0 {
 		fmt.Fprintf(w, "  units: %s\n", evidenceCutNote(cut, ex.evidenceTimeout))
 	}
+	if n := ev.GreenAsWritten(); n > 0 {
+		fmt.Fprintf(w, "  units: %d unit(s) red only with the evidence pass's change are green as your command runs them: they stay in every file's selection and run with every mutant\n", n)
+	}
 	// Capped as printEvidencePairings caps its list: on a large suite that
 	// hits the time limit every unit has a line, and the full list is the
 	// count line above plus --dry-run --json (ruling R30).

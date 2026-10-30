@@ -87,6 +87,14 @@ const (
 	// normally. It is the one reason that proves the unit red in the jail,
 	// which is what WithoutRedUnits keys on.
 	unitRunFailed = "run failed: "
+	// unitGreenAsWritten is a unit red only with the evidence pass's change
+	// to its command (vitest's --pool=threads: REA's cliJsonPaths.test.ts
+	// calls process.chdir(), which threads forbid), and green when run
+	// again exactly as the operator's command runs it (recheckAsWritten).
+	// It is not red, so the red-baseline retry never leaves it out; that
+	// run took no coverage, so it reports no evidence and runs with every
+	// file.
+	unitGreenAsWritten = "not measured: red with the evidence pass's change (%s), green as the operator's command runs it, which took no coverage"
 	// unitCouldNotRun prefixes a runner's own error: the unit never ran,
 	// for a reason outside the tree (a jail that could not start).
 	unitCouldNotRun = "could not run: "
@@ -147,6 +155,9 @@ func CollectUnitEvidence(ctx context.Context, runner commandRunner, files map[st
 
 	results := make([]UnitResult, len(units))
 	cmds := make([][]string, len(units))
+	// asWritten is each unit's one-unit command as the operator's command
+	// runs it, for recheckAsWritten.
+	asWritten := make([][]string, len(units))
 	evidenceCmds := make([][]string, len(units))
 	var runnable []int
 	for i, u := range units {
@@ -163,6 +174,7 @@ func CollectUnitEvidence(ctx context.Context, runner commandRunner, files map[st
 		}
 		// The evidence pass's own flags (vitest's threads pool) go on the
 		// unit command before coverage wraps it; grading never gets them.
+		asWritten[i] = unitCmd
 		evidenceCmds[i] = lang.EvidenceUnitCmd(p, inv, unitCmd)
 		cov, ok := reporter.CoverageCmd(evidenceCmds[i])
 		if !ok {
@@ -257,6 +269,7 @@ func CollectUnitEvidence(ctx context.Context, runner commandRunner, files map[st
 		// Every later unit sees the cache frozen.
 		first := runnable[0]
 		r := runUnit(ctx, warmingRunner{seeded}, files, reporter, cmds[first], modulePath, noCoverage, note)
+		r = recheckAsWritten(ctx, unitRunner, files, r, asWritten[first], note)
 		r.Unit = results[first].Unit
 		results[first] = r
 		frozen = runnable[1:]
@@ -269,6 +282,7 @@ func CollectUnitEvidence(ctx context.Context, runner commandRunner, files map[st
 			defer wg.Done()
 			for i := range jobs {
 				r := runUnit(ctx, unitRunner, files, reporter, cmds[i], modulePath, noCoverage, note)
+				r = recheckAsWritten(ctx, unitRunner, files, r, asWritten[i], note)
 				r.Unit = results[i].Unit
 				results[i] = r
 			}
@@ -455,6 +469,20 @@ func (ev UnitEvidence) Settled() bool {
 	return true
 }
 
+// GreenAsWritten is how many units were red only with the evidence pass's
+// change to their command and green as the operator's command runs them
+// (unitGreenAsWritten).
+func (ev UnitEvidence) GreenAsWritten() int {
+	prefix, _, _ := strings.Cut(unitGreenAsWritten, "(")
+	n := 0
+	for _, u := range ev.Units {
+		if strings.HasPrefix(u.Err, prefix) {
+			n++
+		}
+	}
+	return n
+}
+
 // CutShort is how many units the pass's own deadline cut: never started
 // before it passed (unitNotRunTimeLimit) or stopped by it mid-run
 // (unitTimedOut). It is the one number an operator can act on by giving the
@@ -553,6 +581,26 @@ func runUnit(ctx context.Context, runner commandRunner, files map[string]string,
 		return UnitResult{Err: fmt.Sprintf("unparseable: %v", err)}
 	}
 	return UnitResult{Counts: counts, Uncounted: lang.UncountedCoverage(out), Loaded: lang.LoadedCoverage(out)}
+}
+
+// recheckAsWritten runs a unit that the evidence pass found red once more,
+// exactly as the operator's command runs it, when the pass had changed its
+// command (note, lang.EvidenceNote): red only with that change, it is not a
+// red unit, and is recorded unitGreenAsWritten. Red both ways, a run that
+// errs, or a pass that changed nothing keeps r as it is. The rerun takes no
+// coverage: the change exists because the operator's own form can lose it
+// (vitest's forks pool ends workers before they write any), so coverage from
+// it could not be shown complete, and a unit with incomplete edges would
+// under-select.
+func recheckAsWritten(ctx context.Context, runner commandRunner, files map[string]string, r UnitResult, cmd []string, note string) UnitResult {
+	if note == "" || cmd == nil || !strings.HasPrefix(r.Err, unitRunFailed) {
+		return r
+	}
+	_, exit, _, err := runSelectionCmd(ctx, runner, files, cmd)
+	if err != nil || exit != 0 {
+		return r
+	}
+	return UnitResult{Err: fmt.Sprintf(unitGreenAsWritten, note)}
 }
 
 // truncated reports whether out ends with the runner's truncation marker.

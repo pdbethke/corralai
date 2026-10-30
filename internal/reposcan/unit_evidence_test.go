@@ -1344,3 +1344,53 @@ func (r readingSeedFake) ReadTreeFile(files map[string]string, rel string) ([]by
 	}
 	return nil, fs.ErrNotExist
 }
+
+// answerAsWritten answers unit's one-unit command exactly as the operator's
+// command runs it: no evidence-pass flags, no coverage.
+func (f *unitFixture) answerAsWritten(unit string, res sandbox.EnumerateResult) {
+	f.t.Helper()
+	cmd, ok := lang.UnitRunCmd(f.p, f.inv, unit)
+	if !ok {
+		f.t.Fatalf("no one-unit command for %q", unit)
+	}
+	f.run.res[argvKey(cmd)] = res
+}
+
+// REA's cliJsonPaths.test.ts calls process.chdir(), which vitest's threads
+// pool forbids: red in the evidence pass only because the pass ran it with
+// --pool=threads (2026-10-30). Run again as the operator's command runs it,
+// it passes, so it is not a red unit: the red-baseline retry must not leave
+// it out, and its run there measured no coverage, so it reports no evidence
+// and runs with every file. A unit red both ways stays red.
+func TestUnitPassRechecksARedUnitAsTheOperatorRunsIt(t *testing.T) {
+	f := newUnitFixture(t, "typescript", []string{"vitest", "run"}, vitestTwoUnits)
+	f.answer("test/alpha.test.ts", sandbox.EnumerateResult{Output: "# suite-exit 1\ncorral-js-coverage: v2\n", ExitCode: 0})
+	f.answerAsWritten("test/alpha.test.ts", sandbox.EnumerateResult{ExitCode: 0})
+	f.answer("test/beta.test.ts", sandbox.EnumerateResult{Output: "# suite-exit 1\ncorral-js-coverage: v2\n", ExitCode: 0})
+	f.answerAsWritten("test/beta.test.ts", sandbox.EnumerateResult{ExitCode: 1})
+
+	ev := f.collect(context.Background(), "/w", 1)
+	alpha := unitByName(t, ev, "test/alpha.test.ts")
+	if strings.HasPrefix(alpha.Err, unitRunFailed) || !strings.Contains(alpha.Err, "green as the operator's command runs it") || !strings.Contains(alpha.Err, "--pool=threads") || alpha.Counts != nil {
+		t.Errorf("alpha = %+v, want a non-red reason naming the evidence pass's change, and no evidence", alpha)
+	}
+	if beta := unitByName(t, ev, "test/beta.test.ts"); !strings.HasPrefix(beta.Err, unitRunFailed) {
+		t.Errorf("beta, red both ways, Err = %q, want it still red", beta.Err)
+	}
+}
+
+// A runner whose evidence pass changes nothing in the command has nothing to
+// recheck: a red unit there is red as written, and is not run twice.
+func TestUnitPassDoesNotRecheckWhenThePassChangedNothing(t *testing.T) {
+	f := newUnitFixture(t, "typescript", []string{"jest"}, "corral-units-cwd /w\n[\"/w/test/alpha.test.ts\",\"/w/test/beta.test.ts\"]\n")
+	if lang.EvidenceNote(f.p, f.inv) != "" {
+		t.Fatalf("jest's evidence pass changes its command (%q); this control needs a runner whose pass changes nothing", lang.EvidenceNote(f.p, f.inv))
+	}
+	f.answer("test/alpha.test.ts", sandbox.EnumerateResult{Output: "# suite-exit 1\n", ExitCode: 0})
+	f.answer("test/beta.test.ts", sandbox.EnumerateResult{Output: "# suite-exit 1\n", ExitCode: 0})
+	f.collect(context.Background(), "/w", 1)
+	cmd, _ := lang.UnitRunCmd(f.p, f.inv, "test/alpha.test.ts")
+	if f.run.didRun(cmd) {
+		t.Error("a red unit was rerun although the evidence pass changed nothing in its command")
+	}
+}

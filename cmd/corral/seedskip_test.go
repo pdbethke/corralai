@@ -195,3 +195,19 @@ func TestSeedSkipsLineSaysEachReason(t *testing.T) {
 		}
 	}
 }
+
+// A repo scan builds one seed per language over the same tree, and REA's run
+// printed the same left-out line twice (2026-10-30). The scan's seed output
+// says a line once; a different line still prints.
+func TestOnceLinesSaysEachLineOnce(t *testing.T) {
+	var out bytes.Buffer
+	w := newOnceLines(&out)
+	for _, s := range []string{"a\n", "b\n", "a\n"} {
+		if _, err := io.WriteString(w, s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if out.String() != "a\nb\n" {
+		t.Errorf("out = %q, want each line once", out.String())
+	}
+}

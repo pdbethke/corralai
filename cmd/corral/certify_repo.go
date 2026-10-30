@@ -5325,11 +5325,14 @@ func newLocalExecutorWithJail(repoDir string, checkArgv []string, substrate, jai
 	// The scan exposes no --bind-dir/--no-bind-deps: nil/false are the
 	// documented defaults (auto-detected dep dirs are bound, nothing extra).
 	if substrate != substrateWorkspace {
+		// One seed per language over the same tree: what they say in
+		// common (the files the copy leaves out) is said once per scan.
+		seedOut := newOnceLines(l.progress)
 		l.seeds = newSeedCache(func(langName string) (repoSeed, error) {
 			if l.jailErr != nil {
 				return repoSeed{cleanup: func() {}}, l.jailErr
 			}
-			return buildRepoSeed("corral certify --repo", repoDir, langName, l.iso, nil, false, l.seedLimit, l.progress)
+			return buildRepoSeed("corral certify --repo", repoDir, langName, l.iso, nil, false, l.seedLimit, seedOut)
 		})
 	}
 	return l

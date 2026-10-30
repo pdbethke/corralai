@@ -11,6 +11,7 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"sync"
 	"unicode/utf8"
 )
 
@@ -122,4 +123,28 @@ func seedSkippedJSON(skipped []seedSkip) string {
 	}
 	b, _ := json.Marshal(out) // strings only: always marshals
 	return string(b)
+}
+
+// onceLines passes each distinct write through once. A repo scan's seeds
+// (one per language, over the same tree) write through it, so the left-out
+// line two languages share is said once per scan. Each write is one line:
+// buildRepoSeed's notes are written whole.
+type onceLines struct {
+	mu   sync.Mutex
+	w    io.Writer
+	seen map[string]bool
+}
+
+func newOnceLines(w io.Writer) *onceLines {
+	return &onceLines{w: w, seen: map[string]bool{}}
+}
+
+func (o *onceLines) Write(p []byte) (int, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.seen[string(p)] {
+		return len(p), nil
+	}
+	o.seen[string(p)] = true
+	return o.w.Write(p)
 }

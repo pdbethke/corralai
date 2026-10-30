@@ -13,6 +13,17 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ### Fixed
 
+- **Every file of a repository with units that cannot run alone was graded
+  by the whole suite.** vitest runs every file a filter is a substring of,
+  and a unit selection whose command would also run an unnamed unit was
+  refused, so the file fell back to every unit. Every selection holds the
+  units that reported no evidence, and on REA those included 120 that cannot
+  run alone, so every file was graded by all 2,186 units and no red unit
+  could be retried without (REA's ninth run named the unit). A graded
+  selection now names each unit its command would also run, until nothing
+  new comes in; the authored test's own pass still refuses, since that test
+  proves a survivor only by killing it alone, and a retry whose command
+  would bring back a unit it left out as red is refused, naming it.
 - **A large unit selection was graded by the whole suite.** A unit-grain
   selection over 32 KiB of command line (a readability cap) was refused, and
   the file fell back to every unit: REA's seventh run selected 850 units

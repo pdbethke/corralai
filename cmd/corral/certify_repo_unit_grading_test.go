@@ -176,10 +176,13 @@ func TestNoReportedUnitGradesWholeSuite(t *testing.T) {
 	}
 }
 
-// Never run a set nobody chose. vitest runs every file a filter is a
-// substring of, so a selection naming tests/a.test.ts would also run
-// tests/xa.test.ts: the file grades whole-suite, and the reason names it.
-func TestCorunningSelectionGradesWholeSuite(t *testing.T) {
+// Never run a set nobody named. vitest runs every file a filter is a
+// substring of, so a selection naming tests/a.test.ts also runs
+// tests/xa.test.ts: the selection names both, and the command runs exactly
+// them. (Corrected 2026-10-30: this test pinned a whole-suite fallback, which
+// on REA graded every file by all 2,186 units, because every selection held
+// units that cannot run alone. See testmap.unitsCmd.)
+func TestCorunningSelectionNamesTheUnitItAlsoRuns(t *testing.T) {
 	root := t.TempDir()
 	mustWrite(t, filepath.Join(root, "src", "a.ts"), "export const a = 1;\n")
 	mustWrite(t, filepath.Join(root, "tests", "a.test.ts"), "test('a', () => {});\n")
@@ -190,11 +193,11 @@ func TestCorunningSelectionGradesWholeSuite(t *testing.T) {
 	}})
 	job := tsJob("src/a.ts", "tests/a.test.ts")
 	sel := ex.selectionFor(job)
-	if sel.Method != "" || !strings.Contains(sel.Fallback, "tests/xa.test.ts") {
-		t.Fatalf("selection = %+v, want whole-suite naming the unit it would also run", sel)
+	if sel.Method != testmap.MethodUnitEvidence || !reflect.DeepEqual(sel.Tests, []string{"tests/a.test.ts", "tests/xa.test.ts"}) {
+		t.Fatalf("selection = %+v, want unit evidence naming tests/a.test.ts and the tests/xa.test.ts it also runs", sel)
 	}
-	if got := ex.testCmd(job, sel); !reflect.DeepEqual(got, unitGradingArgv) {
-		t.Errorf("dev command = %v, want the whole command", got)
+	if got := ex.testCmd(job, sel); reflect.DeepEqual(got, unitGradingArgv) {
+		t.Errorf("dev command = %v, want the selection's command, not the whole suite", got)
 	}
 }
 

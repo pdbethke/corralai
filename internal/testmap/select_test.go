@@ -208,13 +208,36 @@ func TestMaxCommandBytesFitsOneShellArgument(t *testing.T) {
 	}
 }
 
-// Never run a set nobody chose: a unit selection whose command would also
-// collect a listed unit it does not name is refused, naming that unit.
-func TestSelectUnitGrainRefusesACorunningSelection(t *testing.T) {
+// Never run a set nobody named: a unit selection whose command would also
+// collect a listed unit names that unit too.
+//
+// (Corrected 2026-10-30. This test pinned a REFUSAL, and a refused unit
+// selection is graded by the whole suite: on REA every file's selection held
+// the 120 units that cannot run alone, each of which coruns another, so every
+// file was graded by all 2,186 units and no red unit could be retried
+// without. The set is now chosen: a unit the command would run anyway is
+// added to the selection by name, until nothing new comes in, so the record
+// names exactly what ran. Running a unit more than the evidence asked for
+// never hides a mutant the selection would have caught.)
+func TestSelectUnitGrainNamesTheUnitsItsCommandWouldAlsoRun(t *testing.T) {
 	m := unitMap([]string{"a.test.js", "sub/a.test.js", "b.test.js"}, "a.test.js")
-	_, err := Select(m, jestRow(t), jestArgv, "", "src/a.js", "")
-	if err == nil || !strings.Contains(err.Error(), "sub/a.test.js") {
-		t.Errorf("a selection that coruns sub/a.test.js must refuse naming it, got %v", err)
+	sel, err := Select(m, jestRow(t), jestArgv, "", "src/a.js", "")
+	if err != nil {
+		t.Fatalf("a selection that coruns sub/a.test.js must name it, not refuse: %v", err)
+	}
+	if !reflect.DeepEqual(sel.Tests, []string{"a.test.js", "sub/a.test.js"}) {
+		t.Errorf("Tests = %v, want a.test.js and the sub/a.test.js its command also runs", sel.Tests)
+	}
+}
+
+// The red-baseline retry leaves a red unit out; a unit its command would
+// run anyway is never added back, since that retry would be red again for
+// the same unit. Such a retry is refused, naming the unit.
+func TestSelectExcludingRefusesWhenACorunBringsBackAnExcludedUnit(t *testing.T) {
+	m := unitMap([]string{"a.test.js", "sub/a.test.js", "b.test.js"}, "a.test.js")
+	_, err := SelectExcluding(m, jestRow(t), jestArgv, "", "src/a.js", "", map[string]bool{"sub/a.test.js": true})
+	if err == nil || !strings.Contains(err.Error(), "sub/a.test.js") || !strings.Contains(err.Error(), "left out") {
+		t.Errorf("a retry whose command would run an excluded unit must refuse naming it, got %v", err)
 	}
 }
 

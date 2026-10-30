@@ -152,11 +152,11 @@ func SelectExcluding(m Map, r lang.Runner, testCmd []string, repoRoot, codePath,
 	sort.Strings(ids)
 
 	if grain == GrainUnit {
-		cmd, err := unitsCmd(m, r, base, ids)
+		cmd, ran, err := unitsCmd(m, r, base, ids, true, exclude)
 		if err != nil {
 			return lang.Selection{}, err
 		}
-		sel.Tests, sel.Cmd = ids, cmd
+		sel.Tests, sel.Cmd = ran, cmd
 		return sel, nil
 	}
 
@@ -347,22 +347,43 @@ func canRun(r lang.Runner, grain string) error {
 	return nil
 }
 
-// unitsCmd is the command running exactly units: refused over the argv cap,
-// when the row would also run a listed unit nobody named, and wherever the
-// row's UnitsCmd refuses (a name filter in argv, a launcher with no
-// arguments).
-func unitsCmd(m Map, r lang.Runner, argv, units []string) ([]string, error) {
-	if n := argvLen(units); n > MaxCommandBytes {
-		return nil, fmt.Errorf("testmap: %d selected units take %d bytes of command line, over the %d bytes the jail's one shell argument can carry, and a unit has nothing coarser to widen to", len(units), n, MaxCommandBytes)
+// unitsCmd is the command running units, and the units it runs. With
+// closed, those are units plus every listed unit the row would also run
+// (UnitsCoruns), added by name until nothing new comes in, so the selection
+// names exactly what runs; a unit added that way that exclude left out (the
+// red-baseline retry) refuses the command rather than run it again. Without
+// closed, a command that would also run an unnamed unit is refused: the
+// authored pass, whose test must kill alone. Refused too past
+// MaxCommandBytes, and wherever the row's UnitsCmd refuses (a name filter in
+// argv, a launcher with no arguments).
+//
+// It used to refuse any command that would also run an unnamed unit. On REA
+// (2026-10-30) that graded every file by the whole suite: every selection
+// held the 120 units that cannot run alone, each running another.
+func unitsCmd(m Map, r lang.Runner, argv, units []string, closed bool, exclude map[string]bool) ([]string, []string, error) {
+	units = slices.Clone(units)
+	for {
+		other, ok := corunsUnnamed(m, r, units)
+		if !ok {
+			break
+		}
+		if !closed {
+			return nil, nil, fmt.Errorf("testmap: running the selected units with the %s runner would also run %q, which no evidence selected", r.ID, other)
+		}
+		if exclude[other] {
+			return nil, nil, fmt.Errorf("testmap: running the selected units with the %s runner would also run %q, which the retry left out as red", r.ID, other)
+		}
+		units = append(units, other)
+		sort.Strings(units)
 	}
-	if other, ok := corunsUnnamed(m, r, units); ok {
-		return nil, fmt.Errorf("testmap: running the selected units with the %s runner would also run %q, which no evidence selected", r.ID, other)
+	if n := argvLen(units); n > MaxCommandBytes {
+		return nil, nil, fmt.Errorf("testmap: %d selected units take %d bytes of command line, over the %d bytes the jail's one shell argument can carry, and a unit has nothing coarser to widen to", len(units), n, MaxCommandBytes)
 	}
 	cmd, ok := r.UnitsCmd(argv, units)
 	if !ok {
-		return nil, fmt.Errorf("testmap: the %s runner cannot run exactly the selected units %v from %v", r.ID, units, argv)
+		return nil, nil, fmt.Errorf("testmap: the %s runner cannot run exactly the selected units %v from %v", r.ID, units, argv)
 	}
-	return cmd, nil
+	return cmd, units, nil
 }
 
 // corunsUnnamed is the first listed unit (in id order, so the reason is
@@ -560,7 +581,11 @@ func AuthoredTestCmd(m Map, sel lang.Selection, r lang.Runner, testCmd []string,
 			units = append(units, u)
 		}
 		sort.Strings(units)
-		return unitsCmd(m, r, testCmd, units)
+		// Strict, never closed over coruns: the authored test proves a
+		// survivor only by killing it alone, and a unit added beside it
+		// could make the kill and be credited to it.
+		cmd, _, err := unitsCmd(m, r, testCmd, units, false, nil)
+		return cmd, err
 	}
 
 	base := sel.Cmd

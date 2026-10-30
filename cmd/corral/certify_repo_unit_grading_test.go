@@ -490,7 +490,30 @@ func TestARedBaselineWithNoRedUnitIsNotRetried(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Gradable || len(cmds) != 1 || strings.Contains(out.String(), "retried") && strings.Count(out.String(), "retried") > 1 {
+	if res.Gradable || len(cmds) != 1 || strings.Count(out.String(), "retried without") > 1 {
 		t.Errorf("no red unit: %d baseline(s), result %+v; output:\n%s", len(cmds), res, out.String())
+	}
+}
+
+// A red baseline that is not retried says why, rather than leaving the
+// operator to wonder whether the retry ran: REA's sixth run (2026-10-30) was
+// red with units that had failed unmutated in its evidence pass, and printed
+// nothing about a retry either way.
+func TestARedBaselineThatIsNotRetriedSaysWhy(t *testing.T) {
+	var cmds [][]string
+	var in localAuditInput
+	var out strings.Builder
+	ex := redUnitExecutor(t, []string{"tests/two.test.ts"}, &cmds, &in, &out)
+	ex.unitMap.Tests["tests/four.test.ts"] = testmap.Node{ID: "tests/four.test.ts", Grain: testmap.GrainUnit, Err: "could not run: bwrap failed"}
+	if _, err := ex.Execute(context.Background(), tsJob("src/b.ts", "tests/two.test.ts")); err != nil {
+		t.Fatal(err)
+	}
+	if want := "src/b.ts: baseline failed; not retried: no unit in its selection failed unmutated in the evidence pass"; !strings.Contains(out.String(), want) {
+		t.Errorf("output lacks %q:\n%s", want, out.String())
+	}
+
+	_, red, why := ex.redUnitRetry(tsJob("src/b.ts", "tests/two.test.ts"), lang.Selection{Fallback: "the evidence never saw it"})
+	if red != nil || why != "it was graded by the whole suite (the evidence never saw it), not by a selection to retry without" {
+		t.Errorf("whole-suite file: red %v, why %q", red, why)
 	}
 }

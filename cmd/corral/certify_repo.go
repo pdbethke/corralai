@@ -5667,7 +5667,9 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 	// selection, naming what it left out, replaces the job's everywhere, so
 	// the pool's every later command is built from the exam that passed.
 	if stable && !rec.last {
-		if retry, red := l.redUnitRetry(j, in.selection); red != nil {
+		if retry, red, why := l.redUnitRetry(j, in.selection); red == nil {
+			l.note("%s: baseline failed; not retried: %s\n", j.Path, why)
+		} else {
 			what := redUnitsPhrase(red)
 			if retry.Fallback != "" {
 				l.note("%s: baseline failed with %s; cannot retry without %s: %s\n", j.Path, what, pronounFor(red), retry.Fallback)
@@ -5797,16 +5799,20 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 // per-test evidence, the tests) in sel whose own run FAILED on unmutated
 // code in the evidence pass, with them named on its Excluded and returned;
 // nil when there are none (or the selection is not one evidence made), so a
-// red baseline has nothing to retry without. A retry the engine refuses
-// comes back with its Fallback set and is not run. See
-// reposcan.WithoutRedUnits.
-func (l *localExecutor) redUnitRetry(j reposcan.Job, sel lang.Selection) (lang.Selection, []string) {
+// red baseline has nothing to retry without, and then why, for the run to
+// say. A retry the engine refuses comes back with its Fallback set and is
+// not run. See reposcan.WithoutRedUnits.
+func (l *localExecutor) redUnitRetry(j reposcan.Job, sel lang.Selection) (lang.Selection, []string, string) {
 	if sel.Method != testmap.MethodUnitEvidence && sel.Method != testmap.MethodCoverageContext {
-		return lang.Selection{}, nil
+		why := "it was graded by the whole suite, not by a selection to retry without"
+		if sel.Fallback != "" {
+			why = fmt.Sprintf("it was graded by the whole suite (%s), not by a selection to retry without", sel.Fallback)
+		}
+		return lang.Selection{}, nil, why
 	}
 	p, ok := lang.ByName(j.Lang)
 	if !ok {
-		return lang.Selection{}, nil
+		return lang.Selection{}, nil, fmt.Sprintf("no language plugin is named %q", j.Lang)
 	}
 	base := l.checkArgv
 	if len(base) == 0 {
@@ -5814,10 +5820,10 @@ func (l *localExecutor) redUnitRetry(j reposcan.Job, sel lang.Selection) (lang.S
 	}
 	retry, red := reposcan.WithoutRedUnits(l.mapFor(j), p, l.repoDir, j.Path, j.TestPath, base, sel)
 	if red == nil {
-		return lang.Selection{}, nil
+		return lang.Selection{}, nil, "no unit in its selection failed unmutated in the evidence pass"
 	}
 	retry.Excluded = red
-	return retry, red
+	return retry, red, ""
 }
 
 // redUnitsPhrase names the units a red baseline is retried without: how

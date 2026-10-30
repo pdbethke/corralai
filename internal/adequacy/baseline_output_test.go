@@ -92,3 +92,38 @@ type plainFakeJail struct{ pass bool }
 func (p *plainFakeJail) RunTest(ctx context.Context, files map[string]string, testCmd []string) (bool, error) {
 	return p.pass, nil
 }
+
+// detailedFakeJail is a jail with both captures, as bwrapJail has: the verbose
+// one keeps the HEAD of a long run, the detailed one its TAIL.
+type detailedFakeJail struct {
+	verboseFakeJail
+	tail string
+}
+
+func (d *detailedFakeJail) RunTestDetailed(ctx context.Context, files map[string]string, testCmd []string) (bool, []byte, error) {
+	d.calls++
+	return d.pass, []byte(d.tail), nil
+}
+
+// REA's sixth run (2026-10-30) failed its baseline and printed 64 KiB of
+// passing acceptance tests, cut off before vitest's failure summary: the
+// verbose capture keeps a run's HEAD, and a runner names what failed at the
+// END. The baseline is read from the tail-keeping capture when the jail has
+// one, still in one run.
+func TestScore_FailingBaselineCarriesTheTailOfItsOutput(t *testing.T) {
+	jail := &detailedFakeJail{
+		verboseFakeJail: verboseFakeJail{pass: false, output: "✓ a passing banner"},
+		tail:            "FAIL src/cliJsonPaths.test.ts > keeps POSIX symlink-parent traversal",
+	}
+	rep, err := adequacy.Score(context.Background(), jail, nil, "a.ts", "code",
+		[]adequacy.Mutant{{ID: "m1", Replace: "x"}}, []string{"vitest", "run"})
+	if err != nil {
+		t.Fatalf("Score: %v", err)
+	}
+	if !strings.Contains(rep.BaselineOutput, "FAIL src/cliJsonPaths.test.ts") {
+		t.Fatalf("BaselineOutput = %q, want the tail that names the failing test", rep.BaselineOutput)
+	}
+	if jail.calls != 1 {
+		t.Fatalf("baseline took %d jail runs, want 1", jail.calls)
+	}
+}

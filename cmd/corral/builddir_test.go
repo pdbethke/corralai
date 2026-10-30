@@ -81,7 +81,7 @@ func TestLoadRepoFilesSkipsCargoTargetBesideManifest(t *testing.T) {
 	mustWrite(t, filepath.Join(root, "member", "src", "lib.rs"), "pub fn f() {}\n")
 	mustWrite(t, filepath.Join(root, "py", "target", "__init__.py"), "x = 1\n")
 
-	files, _, err := loadRepoFiles(root, loadOpts{BackendName: "bwrap", SeedLimit: seedLimitBuiltin})
+	files, _, _, err := loadRepoFiles(root, loadOpts{BackendName: "bwrap", SeedLimit: seedLimitBuiltin})
 	if err != nil {
 		t.Fatalf("loadRepoFiles: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestLoadRepoFilesBindsCrateVendorDir(t *testing.T) {
 	mustWrite(t, filepath.Join(root, "Cargo.toml"), "[package]\nname = \"x\"\n")
 	mustWrite(t, filepath.Join(root, "vendor", "libc", "Cargo.toml"), "[package]\nname = \"libc\"\n")
 
-	files, binds, err := loadRepoFiles(root, loadOpts{BackendName: "bwrap", SeedLimit: seedLimitBuiltin})
+	files, binds, _, err := loadRepoFiles(root, loadOpts{BackendName: "bwrap", SeedLimit: seedLimitBuiltin})
 	if err != nil {
 		t.Fatalf("loadRepoFiles: %v", err)
 	}

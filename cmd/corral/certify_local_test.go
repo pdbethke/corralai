@@ -134,7 +134,7 @@ func TestLoadRepoFiles_SkipsGitBinaryAndKeysRepoRelative(t *testing.T) {
 	write(".git/config", []byte("[core]\n"))
 	write("logo.bin", []byte{0xff, 0xfe, 0x00, 0x01}) // invalid UTF-8 -> skipped
 
-	files, _, err := loadRepoFiles(root, loadOpts{SeedLimit: seedLimitBuiltin})
+	files, _, _, err := loadRepoFiles(root, loadOpts{SeedLimit: seedLimitBuiltin})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1205,7 +1205,7 @@ func TestLoadRepoFiles_BindDirEscape_FailsClosed(t *testing.T) {
 
 	cases := []string{"../escape", "..", "/etc"}
 	for _, bad := range cases {
-		_, _, err := loadRepoFiles(root, loadOpts{ExtraBindDir: []string{bad}, SeedLimit: seedLimitBuiltin})
+		_, _, _, err := loadRepoFiles(root, loadOpts{ExtraBindDir: []string{bad}, SeedLimit: seedLimitBuiltin})
 		if err == nil {
 			t.Fatalf("--bind-dir %q: expected a fail-closed error, got nil", bad)
 		}

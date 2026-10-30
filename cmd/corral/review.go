@@ -567,7 +567,7 @@ func newJailReproducer(iso sandbox.Isolator, root, commit, scope string, timeout
 		return nil, nil, err
 	}
 	cleanup := func() { seed.cleanup(); removeTree() }
-	_, deps, err := loadRepoFiles(root, loadOpts{BackendName: iso.Name(), NoFiles: true})
+	_, deps, _, err := loadRepoFiles(root, loadOpts{BackendName: iso.Name(), NoFiles: true})
 	if err != nil {
 		cleanup()
 		return nil, nil, fmt.Errorf("finding the dependency directories in %s: %w", root, err)
@@ -585,7 +585,7 @@ func newJailReproducer(iso sandbox.Isolator, root, commit, scope string, timeout
 	// (sandbox-exec; a dir the container's user cannot read) is neither
 	// bound nor copied: said on stderr and on the record, never implied.
 	var bound, unbound []string
-	_, every, _ := loadRepoFiles(root, loadOpts{BackendName: "bwrap", NoFiles: true}) // every dependency dir, bindable or not
+	_, every, _, _ := loadRepoFiles(root, loadOpts{BackendName: "bwrap", NoFiles: true}) // every dependency dir, bindable or not
 	for _, d := range every {
 		if i := slices.IndexFunc(binds, func(b adequacy.DepBind) bool { return b.Rel == d.Rel }); i >= 0 {
 			bound = append(bound, d.Rel+" ("+depMountWords(iso, binds[i].Host)+")")

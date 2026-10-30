@@ -34,7 +34,7 @@ func TestLoadRepoFilesBindsDepDirs(t *testing.T) {
 	} // 80 MiB
 	writeTree(t, root, tree)
 
-	files, binds, err := loadRepoFiles(root, loadOpts{BackendName: "bwrap", SeedLimit: seedLimitBuiltin})
+	files, binds, _, err := loadRepoFiles(root, loadOpts{BackendName: "bwrap", SeedLimit: seedLimitBuiltin})
 	if err != nil {
 		t.Fatalf("should NOT hit the cap (node_modules bound, not copied): %v", err)
 	}
@@ -62,7 +62,7 @@ func TestLoadRepoFilesNoBindDepsCopiesAndHitsCap(t *testing.T) {
 		tree[fmt.Sprintf("node_modules/pkg%d/i.js", i)] = big
 	}
 	writeTree(t, root, tree)
-	_, _, err := loadRepoFiles(root, loadOpts{BackendName: "bwrap", NoBindDeps: true, SeedLimit: seedLimitBuiltin})
+	_, _, _, err := loadRepoFiles(root, loadOpts{BackendName: "bwrap", NoBindDeps: true, SeedLimit: seedLimitBuiltin})
 	if err == nil {
 		t.Fatal("with --no-bind-deps the 80 MiB node_modules is copied and must hit the 64 MiB cap")
 	}
@@ -71,7 +71,7 @@ func TestLoadRepoFilesNoBindDepsCopiesAndHitsCap(t *testing.T) {
 func TestLoadRepoFilesExtraBindDir(t *testing.T) {
 	root := t.TempDir()
 	writeTree(t, root, map[string]string{"src/a.go": "x", "thirdparty/lib.go": "y"})
-	_, binds, err := loadRepoFiles(root, loadOpts{BackendName: "bwrap", ExtraBindDir: []string{"thirdparty"}, SeedLimit: seedLimitBuiltin})
+	_, binds, _, err := loadRepoFiles(root, loadOpts{BackendName: "bwrap", ExtraBindDir: []string{"thirdparty"}, SeedLimit: seedLimitBuiltin})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestLoadRepoFilesContainerBackendCopiesNonWorldReadableDep(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	files, binds, err := loadRepoFiles(root, loadOpts{BackendName: "container", SeedLimit: seedLimitBuiltin})
+	files, binds, _, err := loadRepoFiles(root, loadOpts{BackendName: "container", SeedLimit: seedLimitBuiltin})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestLoadRepoFilesSandboxExecBackendCopiesDeps(t *testing.T) {
 		"node_modules/pkg/i.js": "dep code",
 	})
 
-	files, binds, err := loadRepoFiles(root, loadOpts{BackendName: "sandbox-exec", SeedLimit: seedLimitBuiltin})
+	files, binds, _, err := loadRepoFiles(root, loadOpts{BackendName: "sandbox-exec", SeedLimit: seedLimitBuiltin})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -152,7 +152,7 @@ func TestLoadRepoFilesBindDirNonCanonicalMatches(t *testing.T) {
 		t.Run(entry, func(t *testing.T) {
 			root := t.TempDir()
 			writeTree(t, root, map[string]string{"src/a.go": "x", "thirdparty/lib.go": "y"})
-			_, binds, err := loadRepoFiles(root, loadOpts{BackendName: "bwrap", ExtraBindDir: []string{entry}, SeedLimit: seedLimitBuiltin})
+			_, binds, _, err := loadRepoFiles(root, loadOpts{BackendName: "bwrap", ExtraBindDir: []string{entry}, SeedLimit: seedLimitBuiltin})
 			if err != nil {
 				t.Fatal(err)
 			}

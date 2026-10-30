@@ -38,7 +38,7 @@ func TestLoadRepoFilesSeedLimitIsTheCallersBound(t *testing.T) {
 	root := t.TempDir()
 	seedOverOneMiB(t, root)
 
-	_, _, err := loadRepoFiles(root, loadOpts{BackendName: "bwrap", SeedLimit: 1 << 20})
+	_, _, _, err := loadRepoFiles(root, loadOpts{BackendName: "bwrap", SeedLimit: 1 << 20})
 	if err == nil {
 		t.Fatal("1.2 MiB of text was seeded under a 1 MiB limit")
 	}
@@ -48,7 +48,7 @@ func TestLoadRepoFilesSeedLimitIsTheCallersBound(t *testing.T) {
 		}
 	}
 
-	files, _, err := loadRepoFiles(root, loadOpts{BackendName: "bwrap", SeedLimit: 2 << 20})
+	files, _, _, err := loadRepoFiles(root, loadOpts{BackendName: "bwrap", SeedLimit: 2 << 20})
 	if err != nil {
 		t.Fatalf("a 2 MiB limit refused 1.2 MiB of text: %v", err)
 	}
@@ -62,11 +62,11 @@ func TestLoadRepoFilesSeedLimitIsTheCallersBound(t *testing.T) {
 func TestLoadRepoFilesRefusesToSeedWithNoLimit(t *testing.T) {
 	root := t.TempDir()
 	mustWrite(t, filepath.Join(root, "a.txt"), "a\n")
-	if _, _, err := loadRepoFiles(root, loadOpts{BackendName: "bwrap"}); err == nil {
+	if _, _, _, err := loadRepoFiles(root, loadOpts{BackendName: "bwrap"}); err == nil {
 		t.Fatal("loadRepoFiles seeded a tree with no limit named")
 	}
 	// Collecting binds reads no file, so it needs no limit.
-	if _, _, err := loadRepoFiles(root, loadOpts{BackendName: "bwrap", NoFiles: true}); err != nil {
+	if _, _, _, err := loadRepoFiles(root, loadOpts{BackendName: "bwrap", NoFiles: true}); err != nil {
 		t.Fatalf("a bind-only walk refused for want of a seed limit: %v", err)
 	}
 }

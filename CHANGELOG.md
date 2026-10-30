@@ -13,6 +13,14 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ### Fixed
 
+- **The jail's copy of a repository left files out without saying so.** Any
+  file over 1 MiB, and any file that is not UTF-8 text outside a test tree,
+  was skipped, and a test that read one failed on unmutated code with nothing
+  to say why. REA's acceptance tests run its built
+  `dist/cli-runtime/cli.js` (2.7 MiB), and five `certify --repo` runs ended
+  COULD-NOT-GRADE before the cause was found. The run now prints one line
+  naming what the copy leaves out, by reason, largest first.
+
 - **The unit evidence pass recorded partial coverage as clean evidence on
   vitest projects that use the forks pool.** The forks pool ends its workers
   with SIGTERM, and a worker ended that way writes no V8 coverage. A unit
@@ -51,7 +59,11 @@ history of any release, `git log v0.3.4..v0.3.5`.
   because their gitignored build output never reaches the jail. That was
   wrong: the jail's copy does not filter gitignored files. Read from the
   code and not yet run: they import `dist/cli-runtime/cli.js`, which is over
-  the 1 MiB per-file limit the jail's copy silently skips.) Now a file whose baseline is red
+  the 1 MiB per-file limit the jail's copy silently skips. Since run: one
+  acceptance test file passes 36 of 36 with that file present and fails 23
+  without it. The retry below does not rescue REA, because its acceptance
+  units were never run alone in the evidence pass, so none of them is a unit
+  that ran and failed.) Now a file whose baseline is red
   is retried once without the units whose run failed in the evidence pass;
   if that baseline is green, two runs out of two, the file is graded by it.
   Only a unit that ran and failed is left out: one the time limit cut, one

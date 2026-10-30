@@ -65,10 +65,13 @@ func buildRepoSeed(cmdName, repoDir, langName string, iso sandbox.Isolator, bind
 	if iso != nil {
 		backendName = iso.Name()
 	}
-	files, binds, lerr := loadRepoFiles(seedDir, buildLoadOpts(backendName, bindDirs, noBindDeps, seedLimit))
+	files, binds, skipped, lerr := loadRepoFiles(seedDir, buildLoadOpts(backendName, bindDirs, noBindDeps, seedLimit))
 	if lerr != nil {
 		cleanup()
 		return repoSeed{cleanup: func() {}}, fmt.Errorf("reading --repo-dir %s: %v", repoDir, lerr)
+	}
+	if len(skipped) > 0 {
+		_, _ = io.WriteString(out, seedSkipsLine(cmdName, skipped))
 	}
 	return repoSeed{seedDir: seedDir, files: files, binds: binds, cleanup: cleanup}, nil
 }
@@ -416,18 +419,22 @@ func worldReadableDir(dir string) bool {
 // every jailed run writes the whole seed to disk. The keys are exactly
 // the paths a mutant overlay and the project's own test command reference
 // (e.g. `more_itertools/recipes.py`, `tests/test_recipes.py`).
-func loadRepoFiles(root string, opts loadOpts) (map[string]string, []adequacy.DepBind, error) {
+//
+// It also returns every file it left out for its size or because it is not
+// text, so the run can say what the jail copy lacks: a test that reads one of
+// them fails on unmutated code, and until 2026-10-29 nothing said why.
+func loadRepoFiles(root string, opts loadOpts) (map[string]string, []adequacy.DepBind, []seedSkip, error) {
 	const maxFile = 1 << 20 // 1 MiB per file
 	// Every language's test directories, built once for the walk's
 	// fixture carve-out below.
 	testRules := lang.AllTestRules()
 	if !opts.NoFiles && opts.SeedLimit <= 0 {
-		return nil, nil, fmt.Errorf("no jail seed limit was given (loadOpts.SeedLimit is %d); the caller must name one", opts.SeedLimit)
+		return nil, nil, nil, fmt.Errorf("no jail seed limit was given (loadOpts.SeedLimit is %d); the caller must name one", opts.SeedLimit)
 	}
 
 	rootAbs, aerr := filepath.Abs(root)
 	if aerr != nil {
-		return nil, nil, aerr
+		return nil, nil, nil, aerr
 	}
 	opts.rootAbs = rootAbs
 
@@ -449,20 +456,20 @@ func loadRepoFiles(root string, opts loadOpts) (map[string]string, []adequacy.De
 		// no error — the opposite of fail-closed.
 		clean := filepath.Clean(filepath.FromSlash(e))
 		if filepath.IsAbs(e) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-			return nil, nil, fmt.Errorf("--bind-dir %s: must be a path inside --repo-dir (not absolute or escaping with ..)", e)
+			return nil, nil, nil, fmt.Errorf("--bind-dir %s: must be a path inside --repo-dir (not absolute or escaping with ..)", e)
 		}
 		fi, serr := os.Lstat(filepath.Join(rootAbs, clean))
 		if serr != nil {
-			return nil, nil, fmt.Errorf("--bind-dir %s: %w", e, serr)
+			return nil, nil, nil, fmt.Errorf("--bind-dir %s: %w", e, serr)
 		}
 		if fi.Mode()&os.ModeSymlink != 0 {
 			// A symlinked entry would pass a following os.Stat but the walk
 			// skips symlinked dirs — so it would bind nothing, silently. Reject
 			// it loudly (and it keeps out-of-repo symlink targets from binding).
-			return nil, nil, fmt.Errorf("--bind-dir %s: is a symlink; only a real directory inside --repo-dir can be bound", e)
+			return nil, nil, nil, fmt.Errorf("--bind-dir %s: is a symlink; only a real directory inside --repo-dir can be bound", e)
 		}
 		if !fi.IsDir() {
-			return nil, nil, fmt.Errorf("--bind-dir %s: not a directory", e)
+			return nil, nil, nil, fmt.Errorf("--bind-dir %s: not a directory", e)
 		}
 		norm := filepath.ToSlash(clean)
 		normalized = append(normalized, norm)
@@ -474,12 +481,13 @@ func loadRepoFiles(root string, opts loadOpts) (map[string]string, []adequacy.De
 	// /etc/passwd into the jail workspace (gosec G122 / CWE-367 TOCTOU).
 	r, err := os.OpenRoot(root)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	defer func() { _ = r.Close() }()
 
 	files := make(map[string]string)
 	var binds []adequacy.DepBind
+	var skipped []seedSkip
 	var total int64
 	// overAt is the file that first took the seed past its limit. The walk
 	// goes on MEASURING after it (and keeps nothing), so the refusal can
@@ -517,6 +525,7 @@ func loadRepoFiles(root string, opts loadOpts) (map[string]string, []adequacy.De
 			return ierr
 		}
 		if info.Size() > maxFile {
+			skipped = append(skipped, seedSkip{Path: rel, Size: info.Size(), Why: skipOverSize})
 			return nil
 		}
 		f, oerr := r.Open(rel) // root-scoped: cannot escape the repo dir
@@ -546,6 +555,7 @@ func loadRepoFiles(root string, opts loadOpts) (map[string]string, []adequacy.De
 			// tree is not — and mirrors the same `testdata` carve-out the
 			// test-surface digest already makes, for the same reason.
 			// maxFile and the seed limit still bound it.
+			skipped = append(skipped, seedSkip{Path: rel, Size: int64(len(b)), Why: skipNotText})
 			return nil
 		}
 		total += int64(len(b))
@@ -559,10 +569,10 @@ func loadRepoFiles(root string, opts loadOpts) (map[string]string, []adequacy.De
 		return nil
 	})
 	if walkErr != nil {
-		return nil, nil, walkErr
+		return nil, nil, nil, walkErr
 	}
 	if overAt != "" {
-		return nil, nil, fmt.Errorf("repo has %.1f MiB of text to seed the jail workspace, over the %d MiB seed limit (passed at %s); --seed-limit <MiB> raises it, at the cost of writing that much to $TMPDIR for every jailed run in flight", float64(total)/(1<<20), opts.SeedLimit>>20, overAt)
+		return nil, nil, nil, fmt.Errorf("repo has %.1f MiB of text to seed the jail workspace, over the %d MiB seed limit (passed at %s); --seed-limit <MiB> raises it, at the cost of writing that much to $TMPDIR for every jailed run in flight", float64(total)/(1<<20), opts.SeedLimit>>20, overAt)
 	}
-	return files, binds, nil
+	return files, binds, skipped, nil
 }

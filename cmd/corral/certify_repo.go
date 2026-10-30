@@ -1792,7 +1792,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			Passed:    boolPtr(exitCode == 0),
 			PushedBy:  auditpush.PushedByCertify,
 			TreeDirty: auditedTreeDirty, RepoIdentity: repoIdentity(*repoDir),
-			Sandbox: ex.sandboxIdentity(),
+			Sandbox: ex.sandboxIdentity(), SeedSkipped: ex.seedSkipped(),
 		})
 	// The hunks onto the mutant rows: `code` is the mutant's source, and
 	// the custody rule already withholds it (BlankUnpushedSource) unless
@@ -5340,6 +5340,16 @@ func newLocalExecutorWithJail(repoDir string, checkArgv []string, substrate, jai
 // like the provider-key preflight: discovering it per file would report every
 // file as ungradable for a reason the first job could have stated instantly.
 func (l *localExecutor) preflight() error { return l.jailErr }
+
+// seedSkipped is what every seed the scan built left out as not text, as
+// the ledger's JSON text; "" for a dry run, the workspace substrate (no
+// seed) and a scan whose copies left out nothing.
+func (l *localExecutor) seedSkipped() string {
+	if l == nil || l.seeds == nil {
+		return ""
+	}
+	return seedSkippedJSON(l.seeds.skipped())
+}
 
 // sandboxIdentity is the jail the scan ran in; zero for a dry run (no
 // executor) and for the workspace substrate.

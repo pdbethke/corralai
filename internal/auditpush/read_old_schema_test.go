@@ -27,7 +27,7 @@ func TestReadingAWarehouseThatPredatesTheLateScanColumns(t *testing.T) {
 	}
 	// corral_scans as the previous release left it: every column but the
 	// two this branch added.
-	for _, col := range []string{"tree_dirty", "repo_identity", "sandbox_backend", "sandbox_image"} {
+	for _, col := range []string{"tree_dirty", "repo_identity", "sandbox_backend", "sandbox_image", "seed_skipped"} {
 		if _, err := db.Exec("ALTER TABLE corral_scans DROP COLUMN " + col); err != nil {
 			t.Fatal(err)
 		}
@@ -53,6 +53,9 @@ func TestReadingAWarehouseThatPredatesTheLateScanColumns(t *testing.T) {
 	s, ok, err := readScanRow(db, "repo = ? AND scan_id = ?", "r", int64(7))
 	if err != nil || !ok {
 		t.Fatalf("readScanRow on a pre-migration warehouse: ok=%v err=%v", ok, err)
+	}
+	if s.SeedSkipped != "" {
+		t.Fatalf("an absent seed_skipped column must read as not recorded, got %q", s.SeedSkipped)
 	}
 	if s.SandboxBackend != "" || s.SandboxImage != "" {
 		t.Fatalf("an absent sandbox column must read as not recorded, got %q %q", s.SandboxBackend, s.SandboxImage)

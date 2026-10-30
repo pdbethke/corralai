@@ -18,8 +18,16 @@ history of any release, `git log v0.3.4..v0.3.5`.
   was skipped, and a test that read one failed on unmutated code with nothing
   to say why. REA's acceptance tests run its built
   `dist/cli-runtime/cli.js` (2.7 MiB), and five `certify --repo` runs ended
-  COULD-NOT-GRADE before the cause was found. The run now prints one line
-  naming what the copy leaves out, by reason, largest first.
+  COULD-NOT-GRADE before the cause was found.
+  - The 1 MiB per-file limit is gone. Libraries over 1 MiB are ordinary, and
+    the limit protected nothing the total did not: `--seed-limit` still bounds
+    the copy and refuses loudly. A tree with large text files now copies them,
+    and may need a larger `--seed-limit`. A file bigger than the remaining
+    room is measured as a stream, never held whole.
+  - A file left out because it is not text is named on the run's output (one
+    line, largest first) and recorded on the ledger entry
+    (`ScanRow.SeedSkipped`, warehouse column `seed_skipped`), by `certify
+    --repo` and `certify --local`, and the record page lists it.
 
 - **The unit evidence pass recorded partial coverage as clean evidence on
   vitest projects that use the forks pool.** The forks pool ends its workers

@@ -411,6 +411,9 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 	// --record-mutants decides only whether the set is ALSO written to a file.
 	rc := newMutantSetRecorder()
 	mutantSink := rc.sink
+	// seedSkipped is what the jail's copy left out as not text, handed back
+	// by the audit (localAuditInput.seedSink) for the ledger entry.
+	var seedSkipped []seedSkip
 	// interruptRefused: the run was stopped and refused its record, so the
 	// mutant set — partial, or empty — is not written either.
 	interruptRefused := false
@@ -500,7 +503,8 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 		repo: subjectRepo, commit: subjectCommit, subjectResolved: true,
 
 		presetMutants: presetMutants, mutantSink: mutantSink,
-		prior: loadedPrior,
+		seedSink: func(s []seedSkip) { seedSkipped = s },
+		prior:    loadedPrior,
 
 		matrix: *matrixFlag, record: rec, bugCatchDB: bugCatchDBPath, criticScoreDB: criticScoreDBPath,
 		mutantAttemptsDB: mutantAttemptsDBPath,
@@ -533,7 +537,8 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 	if b, berr := localEntryBundle(in, verdict, measured, startedAt, localRunFacts{
 		treeDirty: auditedTreeDirty, repoIdentity: subjectIdentity,
 		mutantsFrom: mutantsFromSHA, recorder: rc,
-		sandbox: localSandboxIdentity(*jailFlag, stderr),
+		sandbox:     localSandboxIdentity(*jailFlag, stderr),
+		seedSkipped: seedSkippedJSON(seedSkipped),
 	}); berr != nil {
 		fmt.Fprintf(stderr, "corral certify --local: no ledger entry written: %v\n", berr)
 	} else {
@@ -757,6 +762,10 @@ type localAuditInput struct {
 	// vendoring and the tree walk twice for every audited file. Nil (the
 	// `certify --local` position) means this run builds — and owns — its own.
 	seed *repoSeed
+	// seedSink, when non-nil, is handed what the jail's copy left out as not
+	// text, once the run has its seed: certify --local records it on its
+	// ledger entry (a repo scan reads its seedCache instead).
+	seedSink func([]seedSkip)
 
 	// iso, when non-nil, is a pre-resolved sandbox shared across a scan's
 	// jobs. Resolving probes the backend, which is a scan-wide constant —
@@ -1225,7 +1234,7 @@ func prepareAuditJail(ctx context.Context, in localAuditInput, plug lang.Plugin,
 		code: code, devTest: devTest, checkArgv: in.checkArgv, inv: inv,
 		baseArgv: in.baseArgv, selection: in.selection, selectionMap: in.selectionMap,
 		bindDirFlag: in.bindDirs, noBindDepsFlag: in.noBindDeps, seedLimit: in.seedLimit, stdout: stdout,
-		seed: in.seed, substrate: in.substrate, mutantConcurrency: in.mutantConcurrency,
+		seed: in.seed, seedSink: in.seedSink, substrate: in.substrate, mutantConcurrency: in.mutantConcurrency,
 		concurrency: in.concurrency, pool: in.pool, noFailFast: in.noFailFast,
 	})
 	if err != nil {
@@ -2280,8 +2289,9 @@ type jailWiringInput struct {
 	noBindDepsFlag bool
 	seedLimit      int64 // localAuditInput.seedLimit
 	stdout         io.Writer
-	seed           *repoSeed // non-nil: use this prebuilt, SHARED seed instead of building one
-	substrate      string    // "" or substrateJail = the bwrap jail (today's behavior); substrateWorkspace = mutate repoDir in place, no jail
+	seed           *repoSeed        // non-nil: use this prebuilt, SHARED seed instead of building one
+	seedSink       func([]seedSkip) // localAuditInput.seedSink
+	substrate      string           // "" or substrateJail = the bwrap jail (today's behavior); substrateWorkspace = mutate repoDir in place, no jail
 	// mutantConcurrency is how many mutants this file scores at once — on
 	// the jail substrate, that many disposable jails; on the workspace
 	// substrate, that many PRIVATE TREES in the pool. See
@@ -2600,6 +2610,9 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 				return w, serr
 			}
 			w.cleanup = seed.cleanup
+		}
+		if in.seedSink != nil {
+			in.seedSink(seed.skipped)
 		}
 		depBinds := seed.binds
 		w.depBinds = depBinds

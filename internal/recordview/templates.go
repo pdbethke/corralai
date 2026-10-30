@@ -355,6 +355,7 @@ longer stands as the record{{if .RetractedReason}}: {{.RetractedReason}}{{end}}.
   <dt>corral</dt><dd class="mono">{{.Scan.CorralVersion}}</dd>
   <dt>substrate</dt><dd>{{.Scan.Substrate}}{{with .Scan.SandboxBackend}} <span class="small">· {{.}}</span>{{end}}</dd>
   {{with .Scan.SandboxImage}}<dt>image</dt><dd class="mono small">{{.}}</dd>{{end}}
+  {{if or .LeftOut .LeftOutRaw}}<dt>left out</dt><dd class="small">not text, so not in the jail's copy: <span class="mono">{{range .LeftOut}}{{.}}<br>{{end}}{{.LeftOutRaw}}</span>{{with .LeftOutMore}}and {{.}} more{{end}}</dd>{{end}}
   {{if .Seats}}<dt>seats</dt><dd class="mono small">{{range .Seats}}{{.}}<br>{{end}}</dd>{{end}}
   {{if .Scan.ModelCalls}}<dt>tokens</dt><dd>{{thousands .Scan.InputTokens}} in, {{thousands .Scan.OutputTokens}} out, {{.Scan.ModelCalls}} calls</dd>{{end}}
   {{with .Scan.StartedAt}}<dt>started</dt><dd>{{stamp .}}</dd>{{end}}

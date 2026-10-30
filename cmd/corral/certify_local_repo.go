@@ -35,6 +35,8 @@ type repoSeed struct {
 	seedDir string
 	files   map[string]string
 	binds   []adequacy.DepBind
+	// skipped is what loadRepoFiles left out as not text.
+	skipped []seedSkip
 	cleanup func()
 }
 
@@ -73,7 +75,7 @@ func buildRepoSeed(cmdName, repoDir, langName string, iso sandbox.Isolator, bind
 	if len(skipped) > 0 {
 		_, _ = io.WriteString(out, seedSkipsLine(cmdName, skipped))
 	}
-	return repoSeed{seedDir: seedDir, files: files, binds: binds, cleanup: cleanup}, nil
+	return repoSeed{seedDir: seedDir, files: files, binds: binds, skipped: skipped, cleanup: cleanup}, nil
 }
 
 // vendorTimeout bounds one vendoring step. It downloads a repository's whole
@@ -413,18 +415,21 @@ func worldReadableDir(dir string) bool {
 // workspace — plus the dependency dirs (treedirs.SharedDependencies, and any
 // --bind-dir entries) it detected and excluded from that seed so they can be
 // bind-mounted read-only instead of copied. It skips
-// .git, every language-declared build directory (isBuildDir), files over 1 MiB (data/fixtures, not source), and anything that
+// .git, every language-declared build directory (isBuildDir) and anything that
 // isn't valid UTF-8 (binaries the text-only jail can't carry), and refuses a
 // tree over opts.SeedLimit so a huge checkout can't blow up the workspace —
 // every jailed run writes the whole seed to disk. The keys are exactly
 // the paths a mutant overlay and the project's own test command reference
 // (e.g. `more_itertools/recipes.py`, `tests/test_recipes.py`).
 //
-// It also returns every file it left out for its size or because it is not
-// text, so the run can say what the jail copy lacks: a test that reads one of
-// them fails on unmutated code, and until 2026-10-29 nothing said why.
+// It also returns every file it left out because it is not text, so the run
+// can say what the jail copy lacks: a test that reads one fails on unmutated
+// code. There is no per-file size limit. A 1 MiB one, meant to keep out
+// "data, not source", left out REA's built dist/cli-runtime/cli.js (2.7 MiB)
+// without a word, and the acceptance tests that run it failed every baseline
+// (2026-10-29). Libraries over 1 MiB are ordinary. The total (SeedLimit) is
+// what bounds the disk every jailed run writes, and it refuses loudly.
 func loadRepoFiles(root string, opts loadOpts) (map[string]string, []adequacy.DepBind, []seedSkip, error) {
-	const maxFile = 1 << 20 // 1 MiB per file
 	// Every language's test directories, built once for the walk's
 	// fixture carve-out below.
 	testRules := lang.AllTestRules()
@@ -524,13 +529,29 @@ func loadRepoFiles(root string, opts loadOpts) (map[string]string, []adequacy.De
 		if ierr != nil {
 			return ierr
 		}
-		if info.Size() > maxFile {
-			skipped = append(skipped, seedSkip{Path: rel, Size: info.Size(), Why: skipOverSize})
-			return nil
-		}
 		f, oerr := r.Open(rel) // root-scoped: cannot escape the repo dir
 		if oerr != nil {
 			return oerr
+		}
+		if overAt != "" || info.Size() > opts.SeedLimit-total {
+			// Over the seed's remaining room: the walk is refusing, and
+			// only measures from here (streamText), so a file bigger than
+			// memory is never held. A binary is still left out, not counted.
+			n, text, serr := streamText(f)
+			_ = f.Close()
+			if serr != nil {
+				return serr
+			}
+			if !text && !underTestdata(rel) && !pairing.InTestTree(testRules, rel) {
+				skipped = append(skipped, seedSkip{Path: rel, Size: n})
+				return nil
+			}
+			total += n
+			if overAt == "" {
+				overAt = rel
+				files = nil // what was kept is never used; let it go now
+			}
+			return nil
 		}
 		b, rerr := io.ReadAll(f)
 		_ = f.Close()
@@ -554,8 +575,8 @@ func loadRepoFiles(root string, opts loadOpts) (map[string]string, []adequacy.De
 			// of what the suite measures, an arbitrary binary elsewhere in the
 			// tree is not — and mirrors the same `testdata` carve-out the
 			// test-surface digest already makes, for the same reason.
-			// maxFile and the seed limit still bound it.
-			skipped = append(skipped, seedSkip{Path: rel, Size: int64(len(b)), Why: skipNotText})
+			// The seed limit still bounds a fixture kept this way.
+			skipped = append(skipped, seedSkip{Path: rel, Size: int64(len(b))})
 			return nil
 		}
 		total += int64(len(b))

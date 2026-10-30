@@ -3,6 +3,8 @@
 package recordview
 
 import (
+	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -229,6 +231,37 @@ func TestEntryBannerSaysWhoSignedAndDoesNotCallAFailureUnchecked(t *testing.T) {
 	nokey := render(auditpush.ChainCheck{Signed: true})
 	if !strings.Contains(nokey, "not checked (no key given)") {
 		t.Error("with no key the page must say signatures were not checked")
+	}
+}
+
+// A scan whose jail copy left files out names them, the first ten and a
+// count; one that left nothing out shows no row; text that does not parse is
+// shown as recorded, never dropped.
+func TestAScanPageNamesWhatTheJailCopyLeftOut(t *testing.T) {
+	var paths []string
+	for i := 0; i < 12; i++ {
+		paths = append(paths, fmt.Sprintf("assets/f%02d.png", i))
+	}
+	raw, _ := json.Marshal(paths)
+	e := warpLikeScan("eeeeeeeeeeee0000", true)
+	e.Bundle.Scan.SeedSkipped = string(raw)
+	_, page := renderOne(t, []auditpush.LedgerEntry{e})
+	p := page("eeeeeeeeeeee")
+	if !strings.Contains(p, "assets/f09.png") || strings.Contains(p, "assets/f10.png") || !strings.Contains(p, "and 2 more") {
+		t.Error("the page must name the first ten left-out files and count the rest")
+	}
+
+	bad := warpLikeScan("ffffffffffff0000", true)
+	bad.Bundle.Scan.SeedSkipped = "not json"
+	_, page = renderOne(t, []auditpush.LedgerEntry{bad})
+	if !strings.Contains(page("ffffffffffff"), "not json") {
+		t.Error("unparseable left-out text must be shown as recorded")
+	}
+
+	none := warpLikeScan("abababababab0000", true)
+	_, page = renderOne(t, []auditpush.LedgerEntry{none})
+	if strings.Contains(page("abababababab"), "<dt>left out</dt>") {
+		t.Error("a scan that left nothing out must not show the row")
 	}
 }
 

@@ -75,6 +75,9 @@ type bundleMeta struct {
 	RepoIdentity string
 	// Sandbox is which jail ran the scan (zero under --substrate workspace).
 	Sandbox sandbox.Identity
+	// SeedSkipped is what the jail's copy left out as not text, as
+	// ScanRow.SeedSkipped's JSON text (seedSkippedJSON).
+	SeedSkipped string
 }
 
 // buildBundle maps one recorded scan — its header and all four row grains —
@@ -137,6 +140,7 @@ func buildBundle(
 			Identity:   auditpush.Identity{Author: scan.Author, Committer: scan.Committer, CoAuthors: scan.CoAuthors},
 			TreeDirty:  meta.TreeDirty, RepoIdentity: meta.RepoIdentity,
 			SandboxBackend: meta.Sandbox.Backend, SandboxImage: meta.Sandbox.Image,
+			SeedSkipped: meta.SeedSkipped,
 		},
 		Files:        buildAuditRows(files, scanID, meta),
 		Mutants:      buildMutantRows(mutants, scanID, meta),

@@ -204,7 +204,7 @@ var scanRowColumns = []string{
 	"engine_version", "model_set", "top", "all_candidates", "total_files",
 	"preflight_ran", "preflight_note", "finished_at", "entry_hash",
 	"author", "committer", "co_authors", "scope", "tree_dirty", "repo_identity",
-	"sandbox_backend", "sandbox_image",
+	"sandbox_backend", "sandbox_image", "seed_skipped",
 }
 
 // scanRowSelectList is scanRowColumns as a SELECT list for the corral_scans
@@ -253,7 +253,7 @@ func readScanRow(db *sql.DB, where string, args ...any) (ScanRow, bool, error) {
 	var scanPassed, allCandidates, preflightRan sql.NullBool
 	var scanStarted, scanFinished sql.NullTime
 	var engineVersion, modelSet, preflightNote, entryHash sql.NullString
-	var author, committer, coAuthors, scope, repoIdentity, sandboxBackend, sandboxImage sql.NullString
+	var author, committer, coAuthors, scope, repoIdentity, sandboxBackend, sandboxImage, seedSkipped sql.NullString
 	var treeDirty sql.NullBool
 	var top, totalFiles sql.NullInt64
 	// NULL header tokens: a scan none of whose calls was metered
@@ -268,7 +268,7 @@ func readScanRow(db *sql.DB, where string, args ...any) (ScanRow, bool, error) {
 		&rekorLogIndex, &rekorUUID, &scanStarted, &pushedBy, &scanUID,
 		&engineVersion, &modelSet, &top, &allCandidates, &totalFiles,
 		&preflightRan, &preflightNote, &scanFinished, &entryHash,
-		&author, &committer, &coAuthors, &scope, &treeDirty, &repoIdentity, &sandboxBackend, &sandboxImage,
+		&author, &committer, &coAuthors, &scope, &treeDirty, &repoIdentity, &sandboxBackend, &sandboxImage, &seedSkipped,
 	); err != nil {
 		if err == sql.ErrNoRows {
 			return ScanRow{}, false, nil
@@ -300,6 +300,7 @@ func readScanRow(db *sql.DB, where string, args ...any) (ScanRow, bool, error) {
 	s.Scope = scope.String
 	s.RepoIdentity = repoIdentity.String
 	s.SandboxBackend, s.SandboxImage = sandboxBackend.String, sandboxImage.String
+	s.SeedSkipped = seedSkipped.String
 	if treeDirty.Valid {
 		v := treeDirty.Bool
 		s.TreeDirty = &v

@@ -318,7 +318,9 @@ package reposcan
 // gitignored build output; the jail's copy does not filter gitignored files.
 // Read from the code, not yet run: REA's acceptance tests import a dist/ file
 // over the seed's silent 1 MiB per-file limit. Since run: confirmed, and the
-// retry does not rescue REA, whose acceptance units never ran alone.) A retry with a stably green baseline is graded, and
+// retry does not rescue REA, whose acceptance units never ran alone. The
+// per-file limit is gone in this generation too, so a file graded under
+// "37" may have been graded without a large file its tests read.) A retry with a stably green baseline is graded, and
 // its verdict says how many units it left out and the first one's reason
 // (TestSelection.Excluded, ExcludedReason; nested, so outside the shallow
 // fingerprint). A unit the time limit cut, never ran alone, or could not

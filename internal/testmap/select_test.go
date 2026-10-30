@@ -4,7 +4,9 @@ package testmap
 
 import (
 	"fmt"
+	"os/exec"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -132,15 +134,77 @@ func TestSelectOverTheCapWidensThenRefuses(t *testing.T) {
 		t.Errorf("want the 2000 files, over the cap: %d %v", len(ws.Tests), ws.Tests[:1])
 	}
 
-	// Unit grain over the cap: nothing to widen to, so it refuses.
+	// Unit grain over what the jail can carry: nothing to widen to, so it
+	// refuses, naming that limit.
 	var listed []string
-	for i := 0; i < 2000; i++ {
+	for i := 0; i < 4000; i++ {
 		listed = append(listed, fmt.Sprintf("test/u%04d_%s.test.js", i, strings.Repeat("z", 20)))
 	}
 	um := unitMap(listed, listed...)
 	_, err = Select(um, jestRow(t), jestArgv, "", "src/a.js", "")
-	if err == nil || !strings.Contains(err.Error(), fmt.Sprint(MaxArgv)) {
-		t.Errorf("unit grain over the cap must refuse naming the cap, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprint(MaxCommandBytes)) {
+		t.Errorf("unit grain over the command limit must refuse naming it, got %v", err)
+	}
+}
+
+// REA's seventh run (2026-10-30) selected 850 units, 44,997 bytes: over the
+// 32 KiB readability cap, so the unit-grain selection was refused and the
+// file was graded by the WHOLE suite, 2,186 units, with no red unit it could
+// be retried without. A unit selection is now refused only past what the
+// jail's one `sh -c` string can carry (MaxCommandBytes); the 32 KiB cap still
+// decides when a test-grain set widens to its files.
+func TestSelectUnitGrainCarriesASelectionPastTheReadabilityCap(t *testing.T) {
+	var listed []string
+	for i := 0; i < 850; i++ {
+		listed = append(listed, fmt.Sprintf("tests/boundary/area%03d/someLongTestName%03d.test.ts", i%40, i))
+	}
+	if n := argvLen(listed); n <= MaxArgv || n >= MaxCommandBytes {
+		t.Fatalf("fixture is %d bytes; want between %d and %d", n, MaxArgv, MaxCommandBytes)
+	}
+	um := unitMap(listed, listed...)
+	sel, err := Select(um, jestRow(t), jestArgv, "", "src/a.js", "")
+	if err != nil || len(sel.Tests) != 850 {
+		t.Fatalf("an 850-unit selection under the command limit must select, got %d tests, err %v", len(sel.Tests), err)
+	}
+}
+
+// A widened test-grain set past what the jail can carry is refused rather
+// than run: run, its `sh -c` string fails to exec (E2BIG) and reads as a red
+// baseline that the code never caused.
+func TestSelectRefusesAWidenedSetPastTheCommandLimit(t *testing.T) {
+	py := pytestRow(t)
+	wide := Map{Schema: Schema, Lang: "python", Method: MethodCoverageContext, Of: 4000,
+		Sources: map[string]Source{"pkg/calc.py": {HasStatements: true}}, Tests: map[string]Node{}}
+	for i := 0; i < 4000; i++ {
+		id := fmt.Sprintf("tests/test_%04d_%s.py::t", i, strings.Repeat("y", 20))
+		wide.Tests[id] = Node{ID: id, Grain: GrainTest, Unit: py.TestUnit(id)}
+		wide.Edges = append(wide.Edges, Edge{Test: id, Source: "pkg/calc.py"})
+	}
+	_, err := Select(wide, py, []string{"pytest"}, "", "pkg/calc.py", "")
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprint(MaxCommandBytes)) {
+		t.Errorf("a widened set over the command limit must refuse naming it, got %v", err)
+	}
+}
+
+// MaxCommandBytes is what the kernel actually accepts: the jail's command
+// reaches it as ONE argument of `sh -c`, after the jail's prelude and every
+// argument quoted. Executed, not assumed; the control past Linux's
+// 128 KiB single-argument limit shows the limit is real.
+func TestMaxCommandBytesFitsOneShellArgument(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("MAX_ARG_STRLEN is Linux's; macOS bounds the whole argv at ARG_MAX (1 MiB) instead")
+	}
+	const prelude = "ulimit -u 1024 2>/dev/null; ulimit -f 4194304 2>/dev/null; "
+	var args []string
+	for argvLen(args) < MaxCommandBytes-64 {
+		args = append(args, "'tests/boundary/area/someLongTestName.test.ts'")
+	}
+	cmd := prelude + "true " + strings.Join(args, " ")
+	if err := exec.Command("sh", "-c", cmd).Run(); err != nil {
+		t.Fatalf("a %d-byte command (MaxCommandBytes %d, quoted) did not run: %v", len(cmd), MaxCommandBytes, err)
+	}
+	if err := exec.Command("sh", "-c", "true "+strings.Repeat("a", 129*1024)).Run(); err == nil {
+		t.Errorf("control: a 129 KiB single argument ran; Linux's MAX_ARG_STRLEN is not what this assumes")
 	}
 }
 

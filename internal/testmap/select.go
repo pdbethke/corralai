@@ -23,12 +23,28 @@ import (
 // output on every input its tests used: moving the rules here must not move
 // what Python selects.
 
-// MaxArgv bounds the selection a command line carries, measured as argvLen.
-// Past it a test-grain selection names the units its tests live in instead —
-// a superset, still the evidence's, never the whole suite. 32 KiB sits far
-// below any kernel's argument limit; it is the size at which a command stops
-// being something a person can read in a record.
+// MaxArgv bounds the selection a test-grain command carries, measured as
+// argvLen. Past it a test-grain selection names the units its tests live in
+// instead — a superset, still the evidence's, never the whole suite. 32 KiB
+// is the size at which a command stops being something a person can read in a
+// record.
+//
+// It used to bound unit-grain selections too, which have nothing coarser to
+// widen to, so past it a file was graded by the WHOLE suite: on REA
+// (2026-10-30) 850 selected units, 44,997 bytes, became 2,186 units and a
+// red baseline nothing could be retried without. Readability is not worth
+// that. A unit selection is bounded by MaxCommandBytes instead.
 const MaxArgv = 32 * 1024
+
+// MaxCommandBytes is the most selection any command may carry, measured as
+// argvLen, because it is what the jail can run: the command reaches the
+// kernel as ONE argument of `sh -c` (shellJoin, after the jail's ulimit
+// prelude, each argument quoted), and Linux caps one argument at
+// MAX_ARG_STRLEN, 32 pages (128 KiB). 96 KiB leaves the prelude and the
+// quoting their room. Past it a selection is refused, never run: run, it
+// fails to exec (E2BIG) and reads as a red baseline the code never caused.
+// TestMaxCommandBytesFitsOneShellArgument executes the bound.
+const MaxCommandBytes = 96 * 1024
 
 // grainOf is the node grain a map's method produces. A method this build
 // does not know is refused, never read as one or the other: the grain
@@ -166,6 +182,12 @@ func SelectExcluding(m Map, r lang.Runner, testCmd []string, repoRoot, codePath,
 		// answer, refuses over the cap.
 		sel.Lines, sel.Static, sel.Always = nil, nil, nil
 		ids = units
+		// Still over what the jail can carry: refused, not run. (The ruling
+		// above kept Python's answer of running such a set; past this bound
+		// that answer could only fail to exec, so it is corrected here.)
+		if n := argvLen(ids); n > MaxCommandBytes {
+			return lang.Selection{}, fmt.Errorf("testmap: %d selected test files take %d bytes of command line, over the %d bytes the jail's one shell argument can carry", len(ids), n, MaxCommandBytes)
+		}
 	}
 	cmd, ok := r.TestsCmd(base, ids)
 	if !ok {
@@ -330,8 +352,8 @@ func canRun(r lang.Runner, grain string) error {
 // row's UnitsCmd refuses (a name filter in argv, a launcher with no
 // arguments).
 func unitsCmd(m Map, r lang.Runner, argv, units []string) ([]string, error) {
-	if n := argvLen(units); n > MaxArgv {
-		return nil, fmt.Errorf("testmap: %d selected units take %d bytes of command line, over the %d-byte cap, and a unit has nothing coarser to widen to", len(units), n, MaxArgv)
+	if n := argvLen(units); n > MaxCommandBytes {
+		return nil, fmt.Errorf("testmap: %d selected units take %d bytes of command line, over the %d bytes the jail's one shell argument can carry, and a unit has nothing coarser to widen to", len(units), n, MaxCommandBytes)
 	}
 	if other, ok := corunsUnnamed(m, r, units); ok {
 		return nil, fmt.Errorf("testmap: running the selected units with the %s runner would also run %q, which no evidence selected", r.ID, other)

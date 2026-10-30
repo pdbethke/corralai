@@ -543,7 +543,7 @@ func loadRepoFiles(root string, opts loadOpts) (map[string]string, []adequacy.De
 				return serr
 			}
 			if !text && !underTestdata(rel) && !pairing.InTestTree(testRules, rel) {
-				skipped = append(skipped, seedSkip{Path: rel, Size: n})
+				skipped = append(skipped, seedSkip{Path: rel, Size: n, Why: skipNotText})
 				return nil
 			}
 			total += n
@@ -576,7 +576,7 @@ func loadRepoFiles(root string, opts loadOpts) (map[string]string, []adequacy.De
 			// tree is not — and mirrors the same `testdata` carve-out the
 			// test-surface digest already makes, for the same reason.
 			// The seed limit still bounds a fixture kept this way.
-			skipped = append(skipped, seedSkip{Path: rel, Size: int64(len(b))})
+			skipped = append(skipped, seedSkip{Path: rel, Size: int64(len(b)), Why: skipNotText})
 			return nil
 		}
 		total += int64(len(b))

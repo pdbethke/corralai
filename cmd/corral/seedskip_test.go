@@ -34,7 +34,7 @@ func TestLoadRepoFilesReturnsWhatItLeftOut(t *testing.T) {
 		t.Error("a text file over 1 MiB must be seeded whole: a test may run it")
 	}
 	want := map[string]seedSkip{
-		"assets/bin.dat": {Path: "assets/bin.dat", Size: 3},
+		"assets/bin.dat": {Path: "assets/bin.dat", Size: 3, Why: skipNotText},
 	}
 	if len(skipped) != len(want) {
 		t.Fatalf("skipped = %+v, want exactly %+v", skipped, want)
@@ -84,7 +84,7 @@ func TestBuildRepoSeedIsSilentWhenNothingIsLeftOut(t *testing.T) {
 func TestSeedSkipsLineCapsTheNamesItLists(t *testing.T) {
 	var skips []seedSkip
 	for _, p := range []string{"a", "b", "c", "d", "e"} {
-		skips = append(skips, seedSkip{Path: p, Size: 2 << 20})
+		skips = append(skips, seedSkip{Path: p, Size: 2 << 20, Why: skipNotText})
 	}
 	got := seedSkipsLine("corral certify --repo", skips)
 	if !strings.Contains(got, "and 2 more") || strings.Contains(got, " d ") {
@@ -111,7 +111,7 @@ func TestLoadRepoFilesMeasuresAFileOverTheRemainingRoomWithoutHoldingIt(t *testi
 	if err != nil {
 		t.Fatalf("a binary over the room is left out, not counted: %v", err)
 	}
-	if files["a.py"] == "" || len(skipped) != 1 || skipped[0] != (seedSkip{Path: "blob.dat", Size: 3 << 20}) {
+	if files["a.py"] == "" || len(skipped) != 1 || skipped[0] != (seedSkip{Path: "blob.dat", Size: 3 << 20, Why: skipNotText}) {
 		t.Errorf("files = %d, skipped = %+v; want a.py seeded and blob.dat (3 MiB) left out", len(files), skipped)
 	}
 }
@@ -129,8 +129,8 @@ func TestSeedSkippedJSONSortsAndDedupes(t *testing.T) {
 	if got := seedSkippedJSON(nil); got != "" {
 		t.Errorf("nothing left out = %q, want empty", got)
 	}
-	got := seedSkippedJSON([]seedSkip{{Path: "b.png"}, {Path: "a.png"}, {Path: "b.png"}})
-	if got != `["a.png","b.png"]` {
+	got := seedSkippedJSON([]seedSkip{{Path: "b.png", Why: skipNotText}, {Path: "a.png", Why: skipNotText}, {Path: "b.png", Why: skipNotText}, {Path: ".env.test", Why: "gitignored"}})
+	if got != `[{"path":".env.test","why":"gitignored"},{"path":"a.png","why":"not-text"},{"path":"b.png","why":"not-text"}]` {
 		t.Errorf("seedSkippedJSON = %s", got)
 	}
 }
@@ -139,7 +139,7 @@ func TestSeedSkippedJSONSortsAndDedupes(t *testing.T) {
 // once each.
 func TestSeedCacheReportsWhatItsSeedsLeftOut(t *testing.T) {
 	c := newSeedCache(func(lang string) (repoSeed, error) {
-		return repoSeed{skipped: []seedSkip{{Path: "logo.png"}, {Path: lang + ".bin"}}, cleanup: func() {}}, nil
+		return repoSeed{skipped: []seedSkip{{Path: "logo.png", Why: skipNotText}, {Path: lang + ".bin", Why: skipNotText}}, cleanup: func() {}}, nil
 	})
 	defer c.close()
 	for _, l := range []string{"go", "python"} {
@@ -147,7 +147,7 @@ func TestSeedCacheReportsWhatItsSeedsLeftOut(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if got := seedSkippedJSON(c.skipped()); got != `["go.bin","logo.png","python.bin"]` {
+	if got := seedSkippedJSON(c.skipped()); got != `[{"path":"go.bin","why":"not-text"},{"path":"logo.png","why":"not-text"},{"path":"python.bin","why":"not-text"}]` {
 		t.Errorf("skipped = %s", got)
 	}
 }
@@ -179,5 +179,19 @@ func TestBuildJailWiringHandsTheSeedsLeftOutFilesToItsSink(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Path != "logo.png" {
 		t.Errorf("sink got %+v, want the seed's logo.png", got)
+	}
+}
+
+// The line groups by reason, so a reason the build step adds (gitignored)
+// reads as its own clause rather than being called "not text".
+func TestSeedSkipsLineSaysEachReason(t *testing.T) {
+	got := seedSkipsLine("corral certify --repo", []seedSkip{
+		{Path: "logo.png", Size: 9, Why: skipNotText},
+		{Path: ".env.test", Size: 3, Why: "gitignored"},
+	})
+	for _, w := range []string{"leaves out 2 file(s)", "1 not UTF-8 text (logo.png)", "1 gitignored (.env.test)"} {
+		if !strings.Contains(got, w) {
+			t.Errorf("line %q lacks %q", got, w)
+		}
 	}
 }

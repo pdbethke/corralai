@@ -238,16 +238,16 @@ func TestEntryBannerSaysWhoSignedAndDoesNotCallAFailureUnchecked(t *testing.T) {
 // count; one that left nothing out shows no row; text that does not parse is
 // shown as recorded, never dropped.
 func TestAScanPageNamesWhatTheJailCopyLeftOut(t *testing.T) {
-	var paths []string
+	var left []map[string]string
 	for i := 0; i < 12; i++ {
-		paths = append(paths, fmt.Sprintf("assets/f%02d.png", i))
+		left = append(left, map[string]string{"path": fmt.Sprintf("assets/f%02d.png", i), "why": "not-text"})
 	}
-	raw, _ := json.Marshal(paths)
+	raw, _ := json.Marshal(left)
 	e := warpLikeScan("eeeeeeeeeeee0000", true)
 	e.Bundle.Scan.SeedSkipped = string(raw)
 	_, page := renderOne(t, []auditpush.LedgerEntry{e})
 	p := page("eeeeeeeeeeee")
-	if !strings.Contains(p, "assets/f09.png") || strings.Contains(p, "assets/f10.png") || !strings.Contains(p, "and 2 more") {
+	if !strings.Contains(p, "assets/f09.png (not-text)") || strings.Contains(p, "assets/f10.png") || !strings.Contains(p, "and 2 more") {
 		t.Error("the page must name the first ten left-out files and count the rest")
 	}
 

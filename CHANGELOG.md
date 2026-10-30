@@ -25,9 +25,12 @@ history of any release, `git log v0.3.4..v0.3.5`.
     and may need a larger `--seed-limit`. A file bigger than the remaining
     room is measured as a stream, never held whole.
   - A file left out because it is not text is named on the run's output (one
-    line, largest first) and recorded on the ledger entry
-    (`ScanRow.SeedSkipped`, warehouse column `seed_skipped`), by `certify
-    --repo` and `certify --local`, and the record page lists it.
+    line, by reason, largest first) and recorded on the ledger entry
+    (`ScanRow.SeedSkipped`, warehouse column `seed_skipped`: JSON text, an
+    array of `{"path","why"}`, `why` today always `not-text`), by `certify
+    --repo` and `certify --local`, and the record page lists it with its
+    reason. What a run could not see shapes what it measured, so it is part
+    of the record.
 
 - **The unit evidence pass recorded partial coverage as clean evidence on
   vitest projects that use the forks pool.** The forks pool ends its workers

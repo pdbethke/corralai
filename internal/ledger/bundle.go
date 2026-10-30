@@ -162,9 +162,11 @@ type ScanRow struct {
 	// row written before them.
 	SandboxBackend string `json:",omitempty"`
 	SandboxImage   string `json:",omitempty"`
-	// SeedSkipped is the files the jail's copy of the repository left out
-	// because they are not UTF-8 text (outside a test tree), as JSON TEXT:
-	// a sorted array of repo-relative paths. A test that reads one fails on
+	// SeedSkipped is the files the jail's copy of the repository left out, as
+	// JSON TEXT: an array of {"path","why"} sorted by path, "why" a reason
+	// token ("not-text": not UTF-8 text, outside a test tree). Recorded
+	// because what a run could not see shapes what it measured: a file left
+	// out can turn tests red, and so steer what is graded. A test that reads one fails on
 	// unmutated code, so a COULD-NOT-GRADE can be traced to it from the
 	// record. Text rather than a list because a ScanRow is compared whole
 	// (a bundle with no scan is ScanRow{}), which a slice field would forbid.

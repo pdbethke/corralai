@@ -816,7 +816,7 @@ func TestScanSandboxReachesTheWarehouse(t *testing.T) {
 func TestScanSeedSkippedReachesTheWarehouse(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "w.duckdb")
 	b := sampleBundle()
-	b.Scan.SeedSkipped = `["assets/logo.png","dist/blob.bin"]`
+	b.Scan.SeedSkipped = `[{"path":"assets/logo.png","why":"not-text"}]`
 	if _, err := PushBundle(target, b); err != nil {
 		t.Fatalf("PushBundle: %v", err)
 	}

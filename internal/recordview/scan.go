@@ -39,8 +39,8 @@ type ScanView struct {
 	Survived   int
 	Proven     int
 	Seats      []string // "role: model [tool version]", from the recorded model set
-	// LeftOut is the first files the jail's copy left out as not text
-	// (ScanRow.SeedSkipped), LeftOutMore how many more there were, and
+	// LeftOut is the first files the jail's copy left out, each with its
+	// reason (ScanRow.SeedSkipped), LeftOutMore how many more there were, and
 	// LeftOutRaw the recorded text when it does not parse, shown as-is
 	// rather than dropped.
 	LeftOut     []string
@@ -93,12 +93,14 @@ func buildScanView(e auditpush.LedgerEntry, c ChainView, retraction *auditpush.L
 	}
 	sv.Seats = seatsOf(b.Scan.ModelSet)
 	if raw := b.Scan.SeedSkipped; raw != "" {
-		var paths []string
-		if json.Unmarshal([]byte(raw), &paths) != nil {
+		var left []struct{ Path, Why string }
+		if json.Unmarshal([]byte(raw), &left) != nil {
 			sv.LeftOutRaw = raw
 		} else {
-			sv.LeftOut = paths[:min(len(paths), leftOutShown)]
-			sv.LeftOutMore = len(paths) - len(sv.LeftOut)
+			for _, l := range left[:min(len(left), leftOutShown)] {
+				sv.LeftOut = append(sv.LeftOut, l.Path+" ("+l.Why+")")
+			}
+			sv.LeftOutMore = len(left) - len(sv.LeftOut)
 		}
 	}
 

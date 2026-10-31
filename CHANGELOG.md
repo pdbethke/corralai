@@ -55,6 +55,15 @@ history of any release, `git log v0.3.4..v0.3.5`.
   command, error and output are printed on the scan's own lines only. A
   unit's `coverage unavailable` and `unparseable` reasons keep their class
   and leave the tool's text to the terminal too.
+- **Why the coverage pre-flight did not run could publish the operator's
+  command line.** The scan row's `preflight_note`, written on every ledger
+  entry, quoted the jail's error, the coverage reporter's parse error
+  (which can quote a report line naming a host path) and the test command
+  (`no coverage instrumentation for test command [...]`). Each is now a
+  fixed phrase (`preflight: the jail could not be prepared`, `coverage
+  pre-flight run failed: the jail could not start it`, `coverage report
+  unparseable: the coverage report could not be read`), with the error
+  printed on the scan's pre-flight line only.
 - **A baseline killed at its time bound was reported as red.** REA's
   eleventh run (2026-10-31) printed "baseline does not pass unmutated" over
   a tail of passing tests and no failure, then tried both retries: the suite

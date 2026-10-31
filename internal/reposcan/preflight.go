@@ -37,7 +37,24 @@ type commandRunner interface {
 type CoverageMap struct {
 	Executed map[string]bool // nil unless Ran
 	Ran      bool
-	Note     string // why it did not run; printed verbatim
+	// Note is why the run did not happen, as the record keeps it: it is
+	// the scan row's PreflightNote, published on every ledger entry, so it
+	// is one fixed phrase per reason (a language name aside) and never
+	// quotes the operator's command, an error or what the run printed.
+	Note string
+	// Detail is Note as the operator's terminal says it, with the command
+	// or error that explains it; never marshalled, never recorded. "" when
+	// Note says everything (Said).
+	Detail string `json:"-"`
+}
+
+// Said is why the run did not happen as the terminal says it: Detail when
+// there is one, else Note. Never record it.
+func (c CoverageMap) Said() string {
+	if c.Detail != "" {
+		return c.Detail
+	}
+	return c.Note
 }
 
 // Preflight runs ONE instrumented suite invocation for p's language (if it
@@ -66,7 +83,8 @@ func Preflight(ctx context.Context, runner commandRunner, files map[string]strin
 	stdout, err := runner.Enumerate(ctx, files, cmd)
 	if err != nil {
 		return CoverageMap{
-			Note: fmt.Sprintf("%s: coverage pre-flight run failed: %v", p.Name(), err),
+			Note:   fmt.Sprintf("%s: coverage pre-flight run failed: the jail could not start it", p.Name()),
+			Detail: fmt.Sprintf("%s: coverage pre-flight run failed: %v", p.Name(), err),
 		}
 	}
 
@@ -97,7 +115,8 @@ func Preflight(ctx context.Context, runner commandRunner, files map[string]strin
 	executed, err := reporter.ParseCoverage(stdout, repoRoot)
 	if err != nil {
 		return CoverageMap{
-			Note: fmt.Sprintf("%s: coverage report unparseable: %v", p.Name(), err),
+			Note:   fmt.Sprintf("%s: coverage report unparseable: the coverage report could not be read", p.Name()),
+			Detail: fmt.Sprintf("%s: coverage report unparseable: %v", p.Name(), err),
 		}
 	}
 
@@ -117,7 +136,8 @@ func PreflightCommand(p lang.Plugin, testCmd []string) (cmd []string, note strin
 	}
 	cmd, ok = reporter.CoverageCmd(testCmd)
 	if !ok {
-		return nil, fmt.Sprintf("%s: no coverage instrumentation for test command %v", p.Name(), testCmd)
+		// Not quoted: the note is the scan row's published PreflightNote.
+		return nil, fmt.Sprintf("%s: no coverage instrumentation for the test command", p.Name())
 	}
 	return cmd, ""
 }

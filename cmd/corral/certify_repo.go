@@ -3049,7 +3049,9 @@ func (l *localExecutor) runPreflight(ctx context.Context, sources []string) repo
 	}
 	runner, files, rerr := l.scanRunner(langName, plug, preflightMaxOutput, preflightTimeout)
 	if rerr != nil {
-		return reposcan.CoverageMap{Note: fmt.Sprintf("preflight: %v", rerr)}
+		// Recorded by its reason (Note is the scan row's published
+		// PreflightNote); the error is the terminal's (Detail).
+		return reposcan.CoverageMap{Note: "preflight: the jail could not be prepared", Detail: fmt.Sprintf("preflight: %v", rerr)}
 	}
 
 	// DEFAULT TO THE REPO'S FILESYSTEM ROOT, and let Go override it.
@@ -3077,7 +3079,7 @@ func (l *localExecutor) runPreflight(ctx context.Context, sources []string) repo
 	// opt OUT rather than remember to opt in.
 	repoRoot, merr := l.coverageModulePath(langName)
 	if merr != nil {
-		return reposcan.CoverageMap{Note: fmt.Sprintf("preflight: %v", merr)}
+		return reposcan.CoverageMap{Note: "preflight: the coverage module path could not be read", Detail: fmt.Sprintf("preflight: %v", merr)}
 	}
 
 	return reposcan.Preflight(ctx, runner, files, plug, testCmd, repoRoot)
@@ -3517,7 +3519,7 @@ func splitPreflightFindings(sourceFiles []string, cm reposcan.CoverageMap) prefl
 func printPreflightReport(w io.Writer, cm reposcan.CoverageMap, sourceFiles []string) {
 	fmt.Fprintln(w, "\nCoverage pre-flight (coverage-derived evidence from one instrumented suite run, not proof):")
 	if !cm.Ran {
-		fmt.Fprintf(w, "  could not run: %s\n", cm.Note)
+		fmt.Fprintf(w, "  could not run: %s\n", cm.Said())
 		return
 	}
 	f := splitPreflightFindings(sourceFiles, cm)

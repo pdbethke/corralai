@@ -354,8 +354,10 @@ func TestUnitPassNoUnitFormIsNotEvidence(t *testing.T) {
 	if ev.Ran {
 		t.Fatalf("ev = %+v, want not Ran", ev)
 	}
-	if !strings.Contains(ev.Note, "make test") || !strings.Contains(ev.Note, "typescript") {
-		t.Errorf("Note = %q, want the language and the command named", ev.Note)
+	// The terminal names the command; the recorded Note (every file's
+	// published Fallback) names the language and never the command.
+	if !strings.Contains(ev.Said(), "make test") || !strings.Contains(ev.Note, "typescript") || strings.Contains(ev.Note, "make test") {
+		t.Errorf("Note = %q, Said = %q, want the language in both and the command only in Said", ev.Note, ev.Said())
 	}
 	if len(r.ran) != 0 {
 		t.Errorf("ran %q for a command with no unit form", r.ran)
@@ -399,9 +401,9 @@ func TestUnitPassListingFailuresAreNotEvidence(t *testing.T) {
 		err  error
 		want string
 	}{
-		{"run error", sandbox.EnumerateResult{}, errors.New("boom"), "boom"},
+		{"run error", sandbox.EnumerateResult{}, errors.New("boom"), "the jail could not start the listing"},
 		{"exit", sandbox.EnumerateResult{Output: "x", Stderr: "no config", ExitCode: 1}, nil, "exited 1"},
-		{"unreadable", sandbox.EnumerateResult{Output: "hello\n"}, nil, "could not read"},
+		{"unreadable", sandbox.EnumerateResult{Output: "hello\n"}, nil, "could not be read"},
 		{"truncated", sandbox.EnumerateResult{Output: vitestTwoUnits + sandbox.TruncationMarker}, nil, "truncated"},
 		{"no units", sandbox.EnumerateResult{Output: "corral-units-cwd /w\n[]\n"}, nil, "no test units"},
 	}
@@ -415,6 +417,13 @@ func TestUnitPassListingFailuresAreNotEvidence(t *testing.T) {
 			ev := f.collect(context.Background(), "/w", 1)
 			if ev.Ran || !strings.Contains(ev.Note, tc.want) {
 				t.Errorf("ev = %+v, want not Ran with a note containing %q", ev, tc.want)
+			}
+			// What the listing printed or the runner said is the
+			// terminal's (Said), never the recorded Note.
+			for _, leak := range []string{"boom", "no config", "hello", "vitest run"} {
+				if strings.Contains(ev.Note, leak) {
+					t.Errorf("Note %q quotes %q", ev.Note, leak)
+				}
 			}
 		})
 	}
@@ -662,10 +671,13 @@ func TestUnitPassTakesOnlyAGreenSuite(t *testing.T) {
 func TestUnitPassSaysWhyCoverageWasUnavailable(t *testing.T) {
 	listing := strings.Replace(unitListingFixture(t, "cargo-units.txt"), "/fixture/units/cargo", "/w", -1)
 	const notice = "corral-rust-coverage: unavailable llvm-profdata and llvm-cov are in neither the toolchain's llvm-tools nor PATH\n"
-	cases := []struct{ name, out, wantErr string }{
-		{"before the suite", notice, "coverage unavailable: llvm-profdata and llvm-cov are in neither the toolchain's llvm-tools nor PATH"},
-		{"after a green suite", "# suite-exit 0\n" + notice, "coverage unavailable: llvm-profdata and llvm-cov are in neither the toolchain's llvm-tools nor PATH"},
-		{"after a red suite", "# suite-exit 101\n" + notice, "run failed: exit 101"},
+	// The instrument's notice is the unit's Detail, for the terminal; the
+	// recorded Err keeps the class.
+	const why = "llvm-profdata and llvm-cov are in neither the toolchain's llvm-tools nor PATH"
+	cases := []struct{ name, out, wantErr, wantDetail string }{
+		{"before the suite", notice, "coverage unavailable: the coverage instrument reported it unavailable", why},
+		{"after a green suite", "# suite-exit 0\n" + notice, "coverage unavailable: the coverage instrument reported it unavailable", why},
+		{"after a red suite", "# suite-exit 101\n" + notice, "run failed: exit 101", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -677,8 +689,8 @@ func TestUnitPassSaysWhyCoverageWasUnavailable(t *testing.T) {
 			if !ev.Ran {
 				t.Fatalf("ev = %+v, want the pass to have run", ev)
 			}
-			if u := unitByName(t, ev, "units-a/lib"); u.Err != tc.wantErr || u.Counts != nil {
-				t.Errorf("units-a/lib = %+v, want Err %q and no counts", u, tc.wantErr)
+			if u := unitByName(t, ev, "units-a/lib"); u.Err != tc.wantErr || (tc.wantDetail != "" && u.Detail != tc.wantDetail) || u.Counts != nil {
+				t.Errorf("units-a/lib = %+v, want Err %q, Detail %q and no counts", u, tc.wantErr, tc.wantDetail)
 			}
 		})
 	}
@@ -1196,8 +1208,8 @@ func TestCollectUnitEvidenceSeedsOnce(t *testing.T) {
 	bf := newUnitFixture(t, "typescript", []string{"vitest", "run"}, vitestTwoUnits)
 	broken := &seedingFake{unitFakeRunner: bf.run, seedErr: errors.New("no space left on device")}
 	ev = collect(bf, broken)
-	if ev.Ran || !strings.Contains(ev.Note, "no space left on device") {
-		t.Errorf("a failed seed: ev = %+v, want a pass that did not run, saying why", ev)
+	if ev.Ran || ev.Note != "typescript: the unit pass did not run: the jail could not start it" || !strings.Contains(ev.Said(), "no space left on device") {
+		t.Errorf("a failed seed: ev = %+v, want a pass that did not run, saying why on the terminal and recording the class", ev)
 	}
 	for _, u := range ev.Units {
 		if u.Err == "" {

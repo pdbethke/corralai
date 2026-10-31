@@ -215,7 +215,7 @@ func selectWithout(m Map, r lang.Runner, testCmd []string, repoRoot, codePath, t
 	}
 	cmd, ok := r.TestsCmd(base, ids)
 	if !ok {
-		return lang.Selection{}, fmt.Errorf("testmap: the %s runner cannot run the %d selected tests from %v", r.ID, len(ids), base)
+		return lang.Selection{}, fmt.Errorf("testmap: the %s runner cannot run the %d selected tests from the test command", r.ID, len(ids))
 	}
 	sel.Tests, sel.Cmd = ids, cmd
 	return sel, nil
@@ -419,7 +419,7 @@ func unitsCmd(m Map, r lang.Runner, argv, units []string, closed bool, exclude m
 	}
 	cmd, ok := r.UnitsCmd(argv, units)
 	if !ok {
-		return nil, nil, fmt.Errorf("testmap: the %s runner cannot run exactly the selected units %v from %v", r.ID, units, argv)
+		return nil, nil, fmt.Errorf("testmap: the %s runner cannot run exactly the selected units %v from the test command", r.ID, units)
 	}
 	return cmd, units, nil
 }
@@ -635,7 +635,7 @@ func AuthoredTestCmd(m Map, sel lang.Selection, r lang.Runner, testCmd []string,
 	}
 	out, ok := r.TestsCmd(base, []string{authoredTestPath})
 	if !ok {
-		return nil, fmt.Errorf("testmap: the %s runner cannot add %s to %v", r.ID, authoredTestPath, base)
+		return nil, fmt.Errorf("testmap: the %s runner cannot add %s to the test command", r.ID, authoredTestPath)
 	}
 	if r.CarryArgs != nil {
 		out = append(out, r.CarryArgs(testCmd)...)

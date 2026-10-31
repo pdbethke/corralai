@@ -85,20 +85,26 @@ func (l *localExecutor) collectUnits(ctx context.Context, sources []string) repo
 	if !runsUnitPass(plug) {
 		return reposcan.UnitEvidence{Note: fmt.Sprintf("%s grades through its own per-test selector, so it runs no unit pass", langName)}
 	}
+	// Each refusal below is recorded by its fixed reason (Note, which
+	// becomes every file's Fallback in the published ledger) and said with
+	// its error on the terminal (Detail).
 	inv, err := lang.Resolve(plug, l.repoDir, testCmd, l.runnerFor(langName))
 	if err != nil {
-		return reposcan.UnitEvidence{Note: fmt.Sprintf("%s: %v", langName, err)}
+		return reposcan.UnitEvidence{Note: fmt.Sprintf("%s: the unit pass did not run: its command could not be built", langName),
+			Detail: fmt.Sprintf("%s: %v", langName, err)}
 	}
 	modulePath, err := l.coverageModulePath(langName)
 	if err != nil {
-		return reposcan.UnitEvidence{Note: fmt.Sprintf("%s: %v", langName, err)}
+		return reposcan.UnitEvidence{Note: fmt.Sprintf("%s: the unit pass did not run: the coverage module path could not be read", langName),
+			Detail: fmt.Sprintf("%s: %v", langName, err)}
 	}
 	if l.evidenceTimeout <= 0 {
 		return reposcan.UnitEvidence{Note: fmt.Sprintf("%s: unit pass: no evidence bound was set (--evidence-timeout)", langName)}
 	}
 	runner, files, err := l.scanRunner(langName, plug, selectionMaxOutput, l.evidenceTimeout)
 	if err != nil {
-		return reposcan.UnitEvidence{Note: fmt.Sprintf("%s: unit pass: %v", langName, err)}
+		return reposcan.UnitEvidence{Note: fmt.Sprintf("%s: the unit pass did not run: the jail could not be prepared", langName),
+			Detail: fmt.Sprintf("%s: unit pass: %v", langName, err)}
 	}
 	// The landing map. The jail's seed holds the tree's text, and the
 	// runner applies it to the jail; the workspace runner applies files to
@@ -288,7 +294,7 @@ func unitPassUncounted(ev reposcan.UnitEvidence) int {
 func printUnitPass(w io.Writer, ex *localExecutor) {
 	ev := ex.units
 	if !ev.Ran {
-		fmt.Fprintf(w, "  units: %s\n", ev.Note)
+		fmt.Fprintf(w, "  units: %s\n", ev.Said())
 		return
 	}
 	// No duration here: the scan's report is compared run against run
@@ -372,13 +378,13 @@ func printUnitGrading(w io.Writer, ex *localExecutor, langName string) {
 		}
 		fmt.Fprintln(w, line+")")
 	case !ev.Ran:
-		fmt.Fprintf(w, "  selection: grading by the WHOLE suite — %s\n", ex.unitsNotRunReason(langName))
+		fmt.Fprintf(w, "  selection: grading by the WHOLE suite — %s\n", ex.unitsNotRunSaid(langName))
 	case reposcan.NoRunnerRow(ex.unitMap) != "":
 		fmt.Fprintf(w, "  selection: grading by the WHOLE suite — %s\n", reposcan.NoRunnerRow(ex.unitMap))
 	default:
 		why := fmt.Sprintf("no unit of %d reported evidence", len(ev.Units))
-		if ev.Note != "" {
-			why += ": " + ev.Note
+		if ev.Said() != "" {
+			why += ": " + ev.Said()
 		}
 		fmt.Fprintf(w, "  selection: grading by the WHOLE suite — %s\n", why)
 	}

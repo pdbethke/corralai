@@ -1096,7 +1096,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 				if *wholeSuiteFlag {
 					unused = ex.evidenceTimeoutUnused("--whole-suite runs no instrumented run")
 				}
-				fmt.Fprintf(stdout, "  selection: grading by the WHOLE suite — %s%s\n", ex.selection.Note, unused)
+				fmt.Fprintf(stdout, "  selection: grading by the WHOLE suite — %s%s\n", ex.selection.Said(), unused)
 			}
 			if line := failedInEvidenceLine(ex.selection.Map); ex.selection.Ran && line != "" {
 				fmt.Fprintf(stdout, "  selection: %s\n", line)
@@ -1434,13 +1434,13 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	}
 	selectionNote := ""
 	if ex != nil {
-		selectionNote = ex.selection.Note
+		selectionNote = ex.selection.Said()
 		// For a language the unit pass serves, ITS reason is why candidacy
 		// is pairing-only; the selection note ("no selector for …") is
 		// about grading.
 		switch {
 		case ex.units.Note != "":
-			selectionNote = ex.units.Note
+			selectionNote = ex.units.Said()
 		case ex.unitLandingNote != "":
 			selectionNote = ex.unitLandingNote
 		case ex.units.Ran && !evidenceCandidacyOK:
@@ -3266,7 +3266,9 @@ func (l *localExecutor) collectSelection(ctx context.Context, sources []string) 
 	}
 	runner, files, err := l.scanRunner(langName, plug, selectionMaxOutput, l.evidenceTimeout)
 	if err != nil {
-		return reposcan.SelectionEvidence{Note: fmt.Sprintf("selection: %v", err)}
+		// Recorded by its reason (Note is every file's published Fallback);
+		// the error is said on the terminal (Detail).
+		return reposcan.SelectionEvidence{Note: "selection: the jail could not be prepared", Detail: fmt.Sprintf("selection: %v", err)}
 	}
 	// THE INSTRUMENTED RUN, and the only statement in this function that runs
 	// the project's suite. The clock is here, and only here: every return
@@ -3278,6 +3280,9 @@ func (l *localExecutor) collectSelection(ctx context.Context, sources []string) 
 	// runner's words; it did not say which bound, or that one flag moves it.
 	if !ev.Ran && watch.hit() {
 		ev.Note += evidenceBoundNote(l.evidenceTimeout)
+		if ev.Detail != "" {
+			ev.Detail += evidenceBoundNote(l.evidenceTimeout)
+		}
 	}
 	// Recorded even when the run produced no usable evidence: the suite still
 	// executed, and the minutes it burned are part of what this scan cost.
@@ -3336,6 +3341,16 @@ func (l *localExecutor) unitsNotRunReason(langName string) string {
 		return l.units.Note
 	}
 	return fmt.Sprintf("no unit evidence was collected for %s", langName)
+}
+
+// unitsNotRunSaid is unitsNotRunReason as the terminal says it, with the
+// error or output behind it (UnitEvidence.Said). Never a Fallback: that is
+// recorded, and takes the fixed reason.
+func (l *localExecutor) unitsNotRunSaid(langName string) string {
+	if said := l.units.Said(); said != "" {
+		return said
+	}
+	return l.unitsNotRunReason(langName)
 }
 
 // collectSelectionEvidence is reposcan.CollectSelectionEvidence behind a

@@ -249,5 +249,7 @@ func NoRunnerRow(m testmap.Map) string {
 	if m.Runner != "" {
 		return ""
 	}
-	return fmt.Sprintf("the %s unit evidence names no runner row for %v, so no unit can be selected to run", m.Lang, m.Command)
+	// The command is not quoted: this is a Fallback, which the ledger
+	// publishes, and the operator's argv may carry a secret.
+	return fmt.Sprintf("the %s unit evidence names no runner row for its test command, so no unit can be selected to run", m.Lang)
 }

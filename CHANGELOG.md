@@ -42,6 +42,19 @@ history of any release, `git log v0.3.4..v0.3.5`.
   could not be built`, `red in the baseline; not rerun alone: the jail could
   not be prepared`). The full error and output are still printed on the
   run's own output, beside the unit they belong to, and stored nowhere.
+- **Why a file graded by the whole suite could publish the operator's
+  command line.** That reason is the entry's `selection_fallback`, written
+  on every ledger entry whether or not source is pushed, and it quoted the
+  test command (`no runner row for [...]`, `cannot instrument test command
+  [...]`, a unit listing's command in backticks), the runner's error and
+  what a failed evidence run printed. A command written as `API_KEY=...
+  vitest run` put the key in the public record. Each such reason is now one
+  fixed phrase (`the unit pass could not list units: the listing exited
+  1`, `the unit pass did not run: the jail could not start it`,
+  `selection evidence run failed: the jail could not start it`), and the
+  command, error and output are printed on the scan's own lines only. A
+  unit's `coverage unavailable` and `unparseable` reasons keep their class
+  and leave the tool's text to the terminal too.
 - **A baseline killed at its time bound was reported as red.** REA's
   eleventh run (2026-10-31) printed "baseline does not pass unmutated" over
   a tail of passing tests and no failure, then tried both retries: the suite

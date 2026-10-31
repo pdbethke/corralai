@@ -165,14 +165,14 @@ func runTestsMap(args []string, stdout, stderr io.Writer) int {
 		ex.unitInventory = checkoutInventory(cands, excl)
 		ex.units = ex.collectUnits(ctx, sources)
 		if !ex.units.Ran {
-			fmt.Fprintf(stderr, "%s: the unit pass did not run, so there is no map: %s\n", name, ex.unitsNotRunReason(langName))
+			fmt.Fprintf(stderr, "%s: the unit pass did not run, so there is no map: %s\n", name, ex.unitsNotRunSaid(langName))
 			return 1
 		}
 		m = ex.unitMap
 	} else {
 		ex.selection = ex.collectSelection(ctx, sources)
 		if !ex.selection.Ran {
-			fmt.Fprintf(stderr, "%s: the selection pass did not run, so there is no map: %s\n", name, ex.selection.Note)
+			fmt.Fprintf(stderr, "%s: the selection pass did not run, so there is no map: %s\n", name, ex.selection.Said())
 			return 1
 		}
 		m = ex.selection.Map

@@ -144,3 +144,106 @@ func TestAUnitsFailureTextNeverReachesTheVerdict(t *testing.T) {
 		}
 	}
 }
+
+// assertRecordClean fails t when the verdict built from sel — its
+// TestSelection and its wire form, the VerdictJSON — quotes any plant.
+func assertRecordClean(t *testing.T, sel lang.Selection, m testmap.Map, class string) {
+	t.Helper()
+	if !strings.Contains(sel.Fallback, class) {
+		t.Fatalf("Fallback %q is not the %q refusal this case is for, so it proves nothing", sel.Fallback, class)
+	}
+	v := advpool.VerdictFromSpec(advpool.RunSpec{Lang: "typescript", CodePath: "src/x.ts", DevTestPath: "test/green.test.ts",
+		TestCmd: "vitest run", Selection: sel, SelectionMap: m, RepoDir: "/repo"})
+	fields, err := json.Marshal(v.TestSelection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, leak := range []string{plantedSecret, "sk-live", plantedPath, "/home/operator"} {
+		if strings.Contains(v.TestSelection.Fallback, leak) {
+			t.Errorf("TestSelection.Fallback (the ledger's SelectionFallback) carries %q: %q", leak, v.TestSelection.Fallback)
+		}
+		if strings.Contains(string(fields), leak) || strings.Contains(string(wire), leak) {
+			t.Errorf("the verdict or its JSON carries %q: %s", leak, fields)
+		}
+	}
+}
+
+// THE RECORD NEVER QUOTES THE OPERATOR'S COMMAND (ruling R-F2). A file
+// that cannot be graded by its selection records why as
+// TestSelection.Fallback, which the ledger publishes on every entry as
+// SelectionFallback, source or no source. Those reasons quoted the
+// operator's command line (where a secret can ride: `API_KEY=… vitest`), a
+// runner's error and what a run printed. Each case below plants the secret
+// in the operator's command and the host path in the failure, takes the
+// Fallback from its real producer, and shows the plant reached the
+// terminal's text (Said) before asserting the record holds neither.
+func TestTheOperatorsCommandNeverReachesTheFallback(t *testing.T) {
+	ts, _ := lang.ByName("typescript")
+	py, _ := lang.ByName("python")
+	argv := []string{"env", plantedSecret, "vitest", "run"}
+
+	t.Run("unit listing fails", func(t *testing.T) {
+		inv := lang.Cmd([]string{"vitest", "run", "--env=" + plantedSecret})
+		list, ok := lang.ListUnitsCmd(ts, inv)
+		if !ok {
+			t.Fatal("no listing")
+		}
+		run := plantedRunner{res: map[string]sandbox.EnumerateResult{
+			plantKey(list): {Output: "x", Stderr: "cannot open " + plantedPath, ExitCode: 1},
+		}}
+		ev := reposcan.CollectUnitEvidence(context.Background(), run, map[string]string{}, ts, inv, "/w", 1, func(int, int) {})
+		if ev.Ran || !strings.Contains(ev.Said(), plantedSecret) || !strings.Contains(ev.Said(), plantedPath) {
+			t.Fatalf("ev = %+v: want a pass that did not run, the plants on the terminal", ev)
+		}
+		// A pass that did not run is every file's Fallback, verbatim
+		// (the scan's selectionFor through unitsNotRunReason).
+		assertRecordClean(t, lang.Selection{Fallback: ev.Note}, testmap.Map{}, "exited 1")
+	})
+
+	t.Run("unit listing cannot start", func(t *testing.T) {
+		inv := lang.Cmd([]string{"vitest", "run", "--env=" + plantedSecret})
+		run := plantedRunner{errs: map[string]error{}}
+		list, _ := lang.ListUnitsCmd(ts, inv)
+		run.errs[plantKey(list)] = errors.New("bwrap: " + plantedPath + ": no such file")
+		ev := reposcan.CollectUnitEvidence(context.Background(), run, map[string]string{}, ts, inv, "/w", 1, func(int, int) {})
+		if ev.Ran || !strings.Contains(ev.Said(), plantedPath) {
+			t.Fatalf("ev = %+v: want the runner's error on the terminal", ev)
+		}
+		assertRecordClean(t, lang.Selection{Fallback: ev.Note}, testmap.Map{}, "listing")
+	})
+
+	t.Run("unit map names no runner row", func(t *testing.T) {
+		m := testmap.Map{Schema: testmap.Schema, Lang: "typescript", Method: testmap.MethodUnitEvidence, Command: argv,
+			Tests: map[string]testmap.Node{"test/a.test.ts": {ID: "test/a.test.ts", Grain: testmap.GrainUnit}}}
+		sel := reposcan.UnitSelectionFor(m, ts, "/repo", "src/x.ts", "test/a.test.ts", argv)
+		assertRecordClean(t, sel, m, "names no runner row")
+	})
+
+	t.Run("python selection run fails", func(t *testing.T) {
+		cmd := []string{"pytest", "--override-ini=" + plantedSecret}
+		run := plantedRunner{errs: map[string]error{}}
+		inst, ok := reposcan.InstrumentedCommand(py, cmd, nil)
+		if !ok {
+			t.Fatal("pytest did not instrument")
+		}
+		run.errs[plantKey(inst)] = errors.New("exec " + plantedPath + " " + plantedSecret + ": denied")
+		ev := reposcan.CollectSelectionEvidence(context.Background(), run, nil, py, cmd, nil)
+		if ev.Ran || !strings.Contains(ev.Said(), plantedSecret) {
+			t.Fatalf("ev = %+v: want the run's error on the terminal", ev)
+		}
+		assertRecordClean(t, ev.For(py, "/repo", "pkg/a.py", "tests/test_a.py", cmd), testmap.Map{}, "run failed")
+	})
+
+	t.Run("python command cannot be instrumented", func(t *testing.T) {
+		cmd := []string{"make", plantedSecret}
+		ev := reposcan.CollectSelectionEvidence(context.Background(), plantedRunner{}, nil, py, cmd, nil)
+		if ev.Ran {
+			t.Fatalf("ev = %+v", ev)
+		}
+		assertRecordClean(t, ev.For(py, "/repo", "pkg/a.py", "tests/test_a.py", cmd), testmap.Map{}, "cannot instrument")
+	})
+}

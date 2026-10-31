@@ -47,7 +47,8 @@ func TestSelectionEvidenceRunFailureIsDisclosedPerFile(t *testing.T) {
 	py, _ := lang.ByName("python")
 	r := &fakeRunner{err: errors.New("boom")}
 	ev := CollectSelectionEvidence(context.Background(), r, nil, py, []string{"pytest"}, nil)
-	if ev.Ran || ev.Note != "python: selection evidence run failed: boom" {
+	// The record's reason names the class; the error is the terminal's.
+	if ev.Ran || ev.Note != "python: selection evidence run failed: the jail could not start it" || ev.Said() != "python: selection evidence run failed: boom" {
 		t.Errorf("got %+v", ev)
 	}
 	if r.got == nil || r.got[0] != "sh" {
@@ -92,7 +93,8 @@ func TestSelectionEvidenceForNarrowsFromRecordedEvidence(t *testing.T) {
 func TestSelectionEvidenceInstrumentRefusalIsDisclosed(t *testing.T) {
 	py, _ := lang.ByName("python")
 	ev := CollectSelectionEvidence(context.Background(), &fakeRunner{}, nil, py, []string{"make", "test"}, nil)
-	if ev.Ran || ev.Note != "python: cannot instrument test command [make test]" {
+	// The command is not quoted: the note is every file's published Fallback.
+	if ev.Ran || ev.Note != "python: cannot instrument the test command" {
 		t.Errorf("got %+v", ev)
 	}
 }
@@ -350,8 +352,14 @@ func TestCollectSelectionEvidenceRefusesUnparseableOutput(t *testing.T) {
 	if ev.Ran {
 		t.Fatalf("Ran = true for output the plugin cannot read — this is what got cached and served forever: %q", ev.Raw)
 	}
-	if !strings.Contains(ev.Note, "unparseable") || !strings.Contains(ev.Note, "not found") {
-		t.Errorf("the note must say the document was unparseable AND show what came back, got %q", ev.Note)
+	// The terminal shows what came back; the record, which publishes the
+	// note as a Fallback, says the class and quotes none of it (here, a
+	// host path).
+	if !strings.Contains(ev.Said(), "unparseable") || !strings.Contains(ev.Said(), "not found") {
+		t.Errorf("the terminal must say the document was unparseable AND show what came back, got %q", ev.Said())
+	}
+	if !strings.Contains(ev.Note, "unparseable") || strings.Contains(ev.Note, "/home/u") {
+		t.Errorf("the recorded note must name the class and quote no output, got %q", ev.Note)
 	}
 }
 
@@ -372,9 +380,12 @@ func TestSelectionEvidenceFailingSuiteSaysTheSuiteFailed(t *testing.T) {
 		t.Fatal("a failing instrumented suite is not selection evidence")
 	}
 	for _, want := range []string{"exited 1", "2 failed, 440 passed, 43 skipped in 9.81s"} {
-		if !strings.Contains(ev.Note, want) {
-			t.Errorf("note %q does not contain %q", ev.Note, want)
+		if !strings.Contains(ev.Said(), want) {
+			t.Errorf("terminal note %q does not contain %q", ev.Said(), want)
 		}
+	}
+	if !strings.Contains(ev.Note, "exited 1") || strings.Contains(ev.Note, "440 passed") {
+		t.Errorf("the recorded note must say how the run exited and quote none of its output, got %q", ev.Note)
 	}
 	if strings.Contains(ev.Note, "invalid character") {
 		t.Errorf("a failing suite was reported as a JSON error: %q", ev.Note)

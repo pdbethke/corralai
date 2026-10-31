@@ -90,3 +90,26 @@ func TestAloneWhyRecordsAFixedPhraseAndPrintsTheError(t *testing.T) {
 		})
 	}
 }
+
+// A unit pass that did not run grades every file whole-suite, and its
+// reason is each file's Fallback, which the ledger publishes as
+// SelectionFallback. The scan takes that Fallback from the pass's fixed
+// Note and says the pass's Detail — the command, the error — only on the
+// terminal (ruling R-F2).
+func TestAUnitPassThatDidNotRunRecordsItsReasonAndSaysItsDetail(t *testing.T) {
+	const secret = "API_KEY=sk-live-PLANTED"
+	ex := &localExecutor{units: reposcan.UnitEvidence{
+		Note:   "typescript: the unit pass did not run: its command could not be built",
+		Detail: "typescript: vitest --env " + secret + ": not found",
+	}}
+	sel := ex.selectionFor(tsJob("src/a.ts", "tests/one.test.ts"))
+	if sel.Fallback != ex.units.Note {
+		t.Errorf("Fallback = %q, want the pass's fixed Note %q", sel.Fallback, ex.units.Note)
+	}
+	var out strings.Builder
+	printUnitGrading(&out, ex, "typescript")
+	printUnitPass(&out, ex)
+	if !strings.Contains(out.String(), secret) {
+		t.Errorf("the terminal lacks the pass's Detail:\n%s", out.String())
+	}
+}

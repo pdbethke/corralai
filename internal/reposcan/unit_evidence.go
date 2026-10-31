@@ -74,7 +74,17 @@ type UnitResult struct {
 type UnitEvidence struct {
 	Ran   bool
 	Units []UnitResult
-	Note  string
+	// Note is why the pass did not run, as the record keeps it: it becomes
+	// every file's TestSelection.Fallback (testmap's someUnitReported, the
+	// scan's unitsNotRunReason), which the ledger publishes on every entry,
+	// so it is one fixed phrase per reason and never quotes the operator's
+	// command, a runner's error or what a run printed.
+	Note string
+	// Detail is Note as the operator's terminal says it: the same reason
+	// with the command, the error and the output tail that explain it. It
+	// is never marshalled and never read into a selection. "" when Note
+	// says everything (Said).
+	Detail string `json:"-"`
 	// Changed is what the pass changed in the operator's command to run
 	// each unit (lang.EvidenceNote: vitest's threads pool), "" for nothing.
 	// It is set on a pass that ran, every unit green or not, so the scan
@@ -117,8 +127,13 @@ const (
 	// unitNoCommand is a unit the operator's command has no one-unit form
 	// for. It once quoted that command, argv and all, into the record.
 	unitNoCommand = "not run: the command could not be built"
-	// unitCoverageUnavailable prefixes the instrument's own reason.
-	unitCoverageUnavailable = "coverage unavailable: "
+	// unitCoverageUnavailable prefixes the instrument's own reason, which
+	// is the unit's Detail; unitCoverageUnavailableRecord is the Err.
+	unitCoverageUnavailable       = "coverage unavailable: "
+	unitCoverageUnavailableRecord = unitCoverageUnavailable + "the coverage instrument reported it unavailable"
+	// unitUnparseable is a report the reducer's parser refused; the
+	// parser's message is the unit's Detail.
+	unitUnparseable = "unparseable: the coverage report could not be read"
 )
 
 // CollectUnitEvidence lists the units inv collects and runs each one's
@@ -152,24 +167,30 @@ func CollectUnitEvidence(ctx context.Context, runner commandRunner, files map[st
 	}
 	listCmd, ok := lang.ListUnitsCmd(p, inv)
 	if !ok {
-		return UnitEvidence{Note: fmt.Sprintf("%s: `%s` has no one-unit form corral can list and run, so no unit evidence", p.Name(), command)}
+		return UnitEvidence{Note: fmt.Sprintf("%s: the unit pass could not list units: its command has no one-unit form corral can list and run", p.Name()),
+			Detail: fmt.Sprintf("%s: `%s` has no one-unit form corral can list and run, so no unit evidence", p.Name(), command)}
 	}
 
 	out, exit, stderr, err := runSelectionCmd(ctx, runner, files, listCmd)
 	switch {
 	case err != nil:
-		return UnitEvidence{Note: fmt.Sprintf("%s: listing the test units of `%s` failed: %v", p.Name(), command, err)}
+		return UnitEvidence{Note: fmt.Sprintf("%s: the unit pass could not list units: the jail could not start the listing", p.Name()),
+			Detail: fmt.Sprintf("%s: listing the test units of `%s` failed: %v", p.Name(), command, err)}
 	case exit > 0:
-		return UnitEvidence{Note: fmt.Sprintf("%s: listing the test units of `%s` exited %d%s", p.Name(), command, exit, failureTail(stderr, out))}
+		return UnitEvidence{Note: fmt.Sprintf("%s: the unit pass could not list units: the listing exited %d", p.Name(), exit),
+			Detail: fmt.Sprintf("%s: listing the test units of `%s` exited %d%s", p.Name(), command, exit, failureTail(stderr, out))}
 	case truncated(out):
-		return UnitEvidence{Note: fmt.Sprintf("%s: the unit listing of `%s` was truncated, so the units it names cannot be trusted to be all of them", p.Name(), command)}
+		return UnitEvidence{Note: fmt.Sprintf("%s: the unit pass could not list units: the listing was truncated, so the units it names cannot be trusted to be all of them", p.Name()),
+			Detail: fmt.Sprintf("%s: the unit listing of `%s` was truncated, so the units it names cannot be trusted to be all of them", p.Name(), command)}
 	}
 	units := lang.ParseUnitList(p, inv, out)
 	if units == nil {
-		return UnitEvidence{Note: fmt.Sprintf("%s: could not read the unit listing of `%s`%s", p.Name(), command, failureTail(stderr, out))}
+		return UnitEvidence{Note: fmt.Sprintf("%s: the unit pass could not list units: the listing could not be read", p.Name()),
+			Detail: fmt.Sprintf("%s: could not read the unit listing of `%s`%s", p.Name(), command, failureTail(stderr, out))}
 	}
 	if len(units) == 0 {
-		return UnitEvidence{Note: fmt.Sprintf("%s: `%s` collects no test units", p.Name(), command)}
+		return UnitEvidence{Note: fmt.Sprintf("%s: the test command collects no test units", p.Name()),
+			Detail: fmt.Sprintf("%s: `%s` collects no test units", p.Name(), command)}
 	}
 
 	results := make([]UnitResult, len(units))
@@ -205,7 +226,8 @@ func CollectUnitEvidence(ctx context.Context, runner commandRunner, files map[st
 		runnable = append(runnable, i)
 	}
 	if len(runnable) == 0 {
-		return UnitEvidence{Units: results, Note: fmt.Sprintf("%s: no unit `%s` collects can run alone under coverage, so no unit evidence", p.Name(), command)}
+		return UnitEvidence{Units: results, Note: fmt.Sprintf("%s: no unit the test command collects can run alone under coverage, so no unit evidence", p.Name()),
+			Detail: fmt.Sprintf("%s: no unit `%s` collects can run alone under coverage, so no unit evidence", p.Name(), command)}
 	}
 
 	noCoverage := lang.UnitNoCoverageReason(p, inv)
@@ -254,7 +276,8 @@ func CollectUnitEvidence(ctx context.Context, runner commandRunner, files map[st
 				results[i].Err = unitJailCouldNotStart
 				results[i].Detail = err.Error()
 			}
-			return UnitEvidence{Units: results, Note: fmt.Sprintf("%s: the unit pass could not seed the tree its units run over: %v", p.Name(), err)}
+			return UnitEvidence{Units: results, Note: fmt.Sprintf("%s: the unit pass did not run: the jail could not start it", p.Name()),
+				Detail: fmt.Sprintf("%s: the unit pass could not seed the tree its units run over: %v", p.Name(), err)}
 		}
 	}
 
@@ -469,6 +492,15 @@ func joinChanged(changed, more string) string {
 	return changed + "; " + more
 }
 
+// Said is why the pass did not run as the operator's terminal says it:
+// Detail when there is one, else Note. Never read it into a selection.
+func (ev UnitEvidence) Said() string {
+	if ev.Detail != "" {
+		return ev.Detail
+	}
+	return ev.Note
+}
+
 // Settled reports whether this pass may be kept for a later scan of the
 // same tree (the selection cache): it ran, and EVERY unit succeeded. Any
 // unit failure disqualifies it, because none can be told apart from the
@@ -577,7 +609,8 @@ func runUnit(ctx context.Context, runner commandRunner, files map[string]string,
 		return UnitResult{Err: fmt.Sprintf(unitRunFailed+"exit %d", rc), Detail: runDetail(note, failureTail(stderr, lang.BeforeSuiteExit(out)))}
 	}
 	if reason, unavailable := lang.CoverageUnavailable(out); unavailable {
-		return UnitResult{Err: unitCoverageUnavailable + reason}
+		// The instrument's notice is tool text: the operator's, in Detail.
+		return UnitResult{Err: unitCoverageUnavailableRecord, Detail: reason}
 	}
 	if !ok {
 		return UnitResult{Err: unitNoSuiteExit}
@@ -595,7 +628,9 @@ func runUnit(ctx context.Context, runner commandRunner, files map[string]string,
 			}
 			return UnitResult{Err: "unparseable: " + empty.Summary(), Uncounted: lang.UncountedCoverage(out)}
 		}
-		return UnitResult{Err: fmt.Sprintf("unparseable: %v", err)}
+		// The parser's message can quote the report: the operator's, in
+		// Detail; the record keeps the class.
+		return UnitResult{Err: unitUnparseable, Detail: err.Error()}
 	}
 	return UnitResult{Counts: counts, Uncounted: lang.UncountedCoverage(out), Loaded: lang.LoadedCoverage(out)}
 }

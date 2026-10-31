@@ -4,9 +4,9 @@
 
 Signing proves integrity and authorship of the record, not truth of its contents. Every field corral records carries one of four tiers, which says what it can be trusted for.
 
-- **measured**: produced by executing something, and re-runnable. A kill rate, a survivor, the source of a test that ran.
-- **declared**: what the audited commit says about itself: its author, committer, Co-authored-by trailers and the tools named in a "Generated with" footer. The audited party writes these freely, or removes them, so read them as metrics about a change and never as evidence of who or what wrote it.
-- **meta**: the run's account of itself: its event timeline, its notes, its configuration, a model's opinion. Signed, but forgeable by the key holder, and never verified as true.
+- **measured**: what corral itself set, observed or executed: counts, durations, timestamps, settings, versions, the model and seat each role ran on, and the outcome of anything it ran. A kill rate, a survivor, the source of a test that ran.
+- **declared**: what the audited commit or a person says: a commit's author, committer, Co-authored-by trailers and the tools named in a "Generated with" footer, and a person's adjudication, retraction or signer-change reason. The audited party writes a commit's names freely, or removes them, so read them as metrics about a change and never as evidence of who or what wrote it; a person's words are theirs and are not verified as true.
+- **meta**: the run's narrative and notes about itself (its event kinds, actors, subjects and detail, its free-text notes) and a model's opinion. Signed, but forgeable by the key holder, and never verified as true.
 - **key**: names or links and measures nothing: repo, commit, ids, hashes, the run URL, signatures, the previous-entry link.
 
 The table is checked against the record's Go types by a test, so a field cannot be added to the record without a tier being decided for it.
@@ -66,7 +66,7 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `Prev` | key |  |
 | `Pushed` | measured |  |
 | `Raw` | key |  |
-| `Reason` | meta | the retractor's words: signed, but not verified as true |
+| `Reason` | declared | declared by the person who wrote it: their words, not verified as true |
 | `Retracts` | key |  |
 | `ScanUID` | key |  |
 | `Signature` | key |  |
@@ -78,17 +78,17 @@ The table is checked against the record's Go types by a test, so a field cannot 
 |---|---|---|
 | `Actor` | meta | the run's own account of its timeline: signed, but not verified as true |
 | `Detail` | meta | the run's own account of its timeline: signed, but not verified as true |
-| `DurationMillis` | meta | the run's own account of its timeline: signed, but not verified as true |
+| `DurationMillis` | measured |  |
 | `Kind` | meta | the run's own account of its timeline: signed, but not verified as true |
 | `Model` | measured |  |
 | `Path` | key |  |
 | `Repo` | key |  |
 | `RunURL` | key |  |
 | `ScanID` | key |  |
-| `Seq` | meta | the run's own account of its timeline: signed, but not verified as true |
+| `Seq` | measured |  |
 | `StatementSHA256` | key |  |
 | `Subject` | meta | the run's own account of its timeline: signed, but not verified as true |
-| `TS` | meta | the run's own account of its timeline: signed, but not verified as true |
+| `TS` | measured |  |
 
 ## Finding
 
@@ -417,7 +417,7 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `KeyID` | key |  |
 | `Name` | key |  |
 | `PubKey` | key |  |
-| `Reason` | meta | the run's own account of itself: signed, but not verified as true |
+| `Reason` | declared | declared by the person who wrote it: their words, not verified as true |
 
 ## SignerKey
 

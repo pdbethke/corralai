@@ -25,15 +25,19 @@ import (
 type Tier string
 
 const (
-	// TierMeasured: produced by executing something, and re-runnable.
+	// TierMeasured: what corral itself set, observed or executed: counts,
+	// durations, timestamps, settings, versions, the model and seat each role ran
+	// on, and the outcome of anything it ran.
 	TierMeasured Tier = "measured"
-	// TierDeclared: what the audited commit says about itself (author,
-	// committer, Co-authored-by, footer tools). Forgeable by whoever wrote the
-	// commit, so read it as a metric about a change, never as evidence of who
-	// or what wrote it.
+	// TierDeclared: what the audited commit or a person says (a commit's
+	// author, committer, Co-authored-by and footer tools; a person's
+	// adjudication, retraction or signer-change reason). Forgeable by whoever
+	// wrote it, so read a commit's names as a metric about a change, never as
+	// evidence of who or what wrote it, and a person's words as theirs.
 	TierDeclared Tier = "declared"
-	// TierMeta: the run's account of itself (its timeline, its notes, its
-	// configuration, a model's opinion). Signed, but forgeable by the key
+	// TierMeta: the run's narrative and notes about itself (its event kinds,
+	// actors, subjects and detail, its free-text notes) and a model's opinion.
+	// Signed, but forgeable by the key
 	// holder, and never verified as true.
 	TierMeta Tier = "meta"
 	// TierKey: names or links and measures nothing (repo, commit, ids, hashes,
@@ -54,6 +58,7 @@ const (
 	noteDeclaredCommit = "declared by the commit: freely written or removed by its author, so a metric about the change and not evidence of who or what wrote it"
 	noteRunAccount     = "the run's own account of itself: signed, but not verified as true"
 	noteModelOpinion   = "a model's opinion: advisory, signed but not verified as true"
+	notePerson         = "declared by the person who wrote it: their words, not verified as true"
 	noteAdjudicator    = "declared by the person who adjudicated"
 )
 
@@ -76,12 +81,12 @@ func buildFieldTiers() map[[2]string]FieldTier {
 	// Entry: the envelope. Everything here names or links.
 	add("Entry", TierKey, "", "Format Kind ScanUID Prev Retracts Hash KeyID Signature Sigstore File Raw")
 	add("Entry", TierMeasured, "", "Pushed")
-	add("Entry", TierMeta, "the retractor's words: signed, but not verified as true", "Reason")
+	add("Entry", TierDeclared, notePerson, "Reason")
 	add("Bundle", TierMeasured, "", "SourcePushed")
 	add("Link", TierKey, "", "Require ScanID StatementSHA256")
 	add("Checkpoint", TierKey, "", "Entries Head Through")
 	add("SignerChange", TierKey, "", "Action KeyID Name PubKey")
-	add("SignerChange", TierMeta, noteRunAccount, "Reason")
+	add("SignerChange", TierDeclared, notePerson, "Reason")
 	add("SignerKey", TierKey, "", "KeyID Name PubKey")
 	add("Adjudication", TierKey, "", "Adjudicates")
 	add("Adjudication", TierDeclared, noteAdjudicator, "By Verdict Reason")
@@ -134,8 +139,8 @@ func buildFieldTiers() map[[2]string]FieldTier {
 
 	// EventRow: the run's own timeline.
 	add("EventRow", TierKey, "", "Path Repo RunURL ScanID StatementSHA256")
-	add("EventRow", TierMeta, "the run's own account of its timeline: signed, but not verified as true", "Actor Detail DurationMillis Kind Seq Subject TS")
-	add("EventRow", TierMeasured, "", "Model")
+	add("EventRow", TierMeta, "the run's own account of its timeline: signed, but not verified as true", "Actor Detail Kind Subject")
+	add("EventRow", TierMeasured, "", "Model DurationMillis Seq TS")
 
 	// reviewrecord.Review and its findings.
 	add("Review", TierKey, "", "Repo Commit Scope StatementSHA256")

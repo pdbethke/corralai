@@ -156,6 +156,9 @@ type WeakFile struct {
 	// graded without them reads as the exam the evidence chose.
 	Excluded       int
 	ExcludedReason string
+	// ExcludedRedInBaseline mirrors advpool.TestSelection's: the units of
+	// Excluded the evidence pass ran green, by name, with why.
+	ExcludedRedInBaseline string
 	// WriterMode and WriterCalls mirror advpool.Verdict.WriterMode and the
 	// test-writer's own entry in advpool.Verdict.ModelCalls: whether this
 	// file's survivors were attacked one call each ("per-survivor") or all in
@@ -597,21 +600,22 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 			// Which measurement this file's rate IS, carried onto the report
 			// so the printer never has to reach back into the verdict — and
 			// so it cannot print a rate without the question it answers.
-			SelectionMethod:     r.Verdict.TestSelection.Method,
-			SelectedTests:       r.Verdict.TestSelection.Selected,
-			SuiteTests:          r.Verdict.TestSelection.Of,
-			SelectionFallback:   r.Verdict.TestSelection.Fallback,
-			Unreported:          r.Verdict.TestSelection.Unreported,
-			UnreportedReason:    r.Verdict.TestSelection.UnreportedReason,
-			Excluded:            r.Verdict.TestSelection.Excluded,
-			ExcludedReason:      r.Verdict.TestSelection.ExcludedReason,
-			UnitNoun:            r.Verdict.TestSelection.UnitNoun,
-			AuthoredFallback:    r.Verdict.TestSelection.AuthoredFallback,
-			AuthoredExtra:       r.Verdict.AuthoredExtra,
-			WriterMode:          r.Verdict.WriterMode,
-			WriterCalls:         writerCallsOf(r.Verdict),
-			WriterSeatsUngraded: r.Verdict.WriterSeatsUngraded,
-			WriterAttempts:      r.Verdict.WriterAttempts,
+			SelectionMethod:       r.Verdict.TestSelection.Method,
+			SelectedTests:         r.Verdict.TestSelection.Selected,
+			SuiteTests:            r.Verdict.TestSelection.Of,
+			SelectionFallback:     r.Verdict.TestSelection.Fallback,
+			Unreported:            r.Verdict.TestSelection.Unreported,
+			UnreportedReason:      r.Verdict.TestSelection.UnreportedReason,
+			Excluded:              r.Verdict.TestSelection.Excluded,
+			ExcludedReason:        r.Verdict.TestSelection.ExcludedReason,
+			ExcludedRedInBaseline: r.Verdict.TestSelection.ExcludedRedInBaseline,
+			UnitNoun:              r.Verdict.TestSelection.UnitNoun,
+			AuthoredFallback:      r.Verdict.TestSelection.AuthoredFallback,
+			AuthoredExtra:         r.Verdict.AuthoredExtra,
+			WriterMode:            r.Verdict.WriterMode,
+			WriterCalls:           writerCallsOf(r.Verdict),
+			WriterSeatsUngraded:   r.Verdict.WriterSeatsUngraded,
+			WriterAttempts:        r.Verdict.WriterAttempts,
 			// And at which GRAIN it was measured: a rate averaged over
 			// mutants that each faced a different test set is not one
 			// measurement unless the report carries the spread.

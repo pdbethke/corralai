@@ -25,3 +25,11 @@ three (src/units/multi; Go's units/gomod under -tags extra; the cargo
 workspace), as "# argv:" the operator's command, "$ " the command run, then
 its stdout+stderr with timings and run ids removed. Run with the agent
 variables unset: jest 30 prints only its summary when it sees one.
+vitest5-fail.txt, vitest5-fail-projects.txt and vitest5-fail-projects-nocolor.txt
+(added 2026-10-31, vitest 5.0.3 on node v24.22.1, captured by hand, not by
+the script): the default command on src/fail-vitest5 under `env -i` (PATH,
+HOME, LANG only, as the jail sets them), not a TTY; -projects with
+vitest.projects.config.mjs as vitest.config.mjs, -nocolor with NO_COLOR=1.
+vitest 5 colours its output with no TTY and no colour variable, which is
+how a jailed run returns it; $DIR, ms timings, start time and duration
+replaced.

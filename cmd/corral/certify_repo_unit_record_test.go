@@ -48,6 +48,10 @@ func TestUnitEvidenceReportLine(t *testing.T) {
 		{"multi-line reason", reposcan.WeakFile{SelectedTests: 1, SuiteTests: 99, UnitNoun: "packages", Excluded: 18,
 			ExcludedReason: "run failed: exit 1: # github.com/smacker/go-tree-sitter/php\nparser.c:1:10: fatal error\nFAIL"},
 			"graded by 1 of 99 packages (unit evidence; 18 units that failed unmutated left out after the baseline failed with them: run failed: exit 1: # github.com/smacker/go-tree-sitter/php …)\n"},
+		// The second retry's units are named, with why, after the count.
+		{"red in the baseline", reposcan.WeakFile{SelectedTests: 3, SuiteTests: 12, UnitNoun: "test files", Excluded: 2, ExcludedReason: "run failed: exit 1",
+			ExcludedRedInBaseline: "tests/a.test.ts: flaky\ntests/b.test.ts: red alone"},
+			"2 units that failed unmutated left out after the baseline failed with them: run failed: exit 1; red in the baseline though green in the evidence pass: tests/a.test.ts: flaky; tests/b.test.ts: red alone)"},
 		{"rust", reposcan.WeakFile{SelectedTests: 1, SuiteTests: 7, UnitNoun: "test targets"},
 			"graded by 1 of 7 test targets (unit evidence)"},
 	}
@@ -119,12 +123,13 @@ func TestAuthoredFallbackPrintsOnItsOwnLine(t *testing.T) {
 func TestUnreportedCountSurvivesToTheLedgerAndAttestation(t *testing.T) {
 	root := t.TempDir()
 	const why = "its filter would also run tests/two.test.ts"
+	const red = "tests/five.test.ts: red in the baseline, green run alone"
 	mustWrite(t, filepath.Join(root, "src", "a.ts"), "export const a = 1;\n")
 	v := advpool.Verdict{
 		DevKillRate: 0.5, MutantsTotal: 4, Survivors: 2,
 		TestSelection: advpool.TestSelection{Method: "unit-evidence", Selected: 4, Of: 10, Unreported: 2,
 			UnreportedReason: "timed out", UnitNoun: "test files", AuthoredFallback: why,
-			Excluded: 3, ExcludedReason: "run failed: exit 1"},
+			Excluded: 3, ExcludedReason: "run failed: exit 1", ExcludedRedInBaseline: red},
 	}
 	res := reposcan.FileResult{Job: reposcan.Job{Path: "src/a.ts", Lang: "typescript"}, Verdict: v, Gradable: true}
 
@@ -134,31 +139,31 @@ func TestUnreportedCountSurvivesToTheLedgerAndAttestation(t *testing.T) {
 	}
 	w := rep.Weakest[0]
 	if w.Unreported != 2 || w.UnreportedReason != "timed out" || w.UnitNoun != "test files" || w.AuthoredFallback != why ||
-		w.Excluded != 3 || w.ExcludedReason != "run failed: exit 1" {
+		w.Excluded != 3 || w.ExcludedReason != "run failed: exit 1" || w.ExcludedRedInBaseline != red {
 		t.Fatalf("report dropped a field: %+v", w)
 	}
 
 	files := buildScanFileRows([]reposcan.FileResult{res}, nil, reposcan.CoverageMap{}, "", root, io.Discard)
-	if len(files) != 1 || files[0].SelectionUnreported != 2 || files[0].AuthoredFallback != why || files[0].SelectionExcluded != 3 {
+	if len(files) != 1 || files[0].SelectionUnreported != 2 || files[0].AuthoredFallback != why || files[0].SelectionExcluded != 3 || files[0].SelectionExcludedRed != red {
 		t.Fatalf("scan row dropped a field: %+v", files)
 	}
 
 	b := buildBundle(scanstore.Scan{Owner: "o", Repo: "r", Commit: "c"}, 1, files, nil, nil, nil, auditpush.Link{}, false, "o/r", "c", "", bundleMeta{})
-	if len(b.Files) != 1 || b.Files[0].SelectionUnreported != 2 || b.Files[0].AuthoredFallback != why || b.Files[0].SelectionExcluded != 3 {
+	if len(b.Files) != 1 || b.Files[0].SelectionUnreported != 2 || b.Files[0].AuthoredFallback != why || b.Files[0].SelectionExcluded != 3 || b.Files[0].SelectionExcludedRed != red {
 		t.Fatalf("ledger row dropped a field: %+v", b.Files)
 	}
 	raw, err := json.Marshal(b.Files[0])
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"selection_unreported":2`, `"selection_excluded":3`, `"authored_fallback":"` + why + `"`} {
+	for _, want := range []string{`"selection_unreported":2`, `"selection_excluded":3`, `"authored_fallback":"` + why + `"`, `"selection_excluded_red":"` + red + `"`} {
 		if !strings.Contains(string(raw), want) {
 			t.Errorf("ledger row JSON lacks %s: %s", want, raw)
 		}
 	}
 	// And back out of the ledger into the scan's file, the way `corral scans`
 	// reads it.
-	if back := fileFromRow(b.Files[0]); back.SelectionUnreported != 2 || back.AuthoredFallback != why || back.SelectionExcluded != 3 {
+	if back := fileFromRow(b.Files[0]); back.SelectionUnreported != 2 || back.AuthoredFallback != why || back.SelectionExcluded != 3 || back.SelectionExcludedRed != red {
 		t.Errorf("fileFromRow dropped a field: %+v", back)
 	}
 
@@ -174,9 +179,10 @@ func TestUnreportedCountSurvivesToTheLedgerAndAttestation(t *testing.T) {
 	var doc struct {
 		Predicate struct {
 			Files []struct {
-				SelectionUnreported int    `json:"selectionUnreported"`
-				SelectionExcluded   int    `json:"selectionExcluded"`
-				AuthoredFallback    string `json:"authoredFallback"`
+				SelectionUnreported  int    `json:"selectionUnreported"`
+				SelectionExcluded    int    `json:"selectionExcluded"`
+				SelectionExcludedRed string `json:"selectionExcludedRed"`
+				AuthoredFallback     string `json:"authoredFallback"`
 			} `json:"files"`
 		} `json:"predicate"`
 	}
@@ -184,7 +190,7 @@ func TestUnreportedCountSurvivesToTheLedgerAndAttestation(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(doc.Predicate.Files) != 1 || doc.Predicate.Files[0].SelectionUnreported != 2 || doc.Predicate.Files[0].AuthoredFallback != why ||
-		doc.Predicate.Files[0].SelectionExcluded != 3 {
+		doc.Predicate.Files[0].SelectionExcluded != 3 || doc.Predicate.Files[0].SelectionExcludedRed != red {
 		t.Errorf("attestation dropped a field: %s", stmt)
 	}
 }

@@ -520,3 +520,140 @@ func TestARedBaselineThatIsNotRetriedSaysWhy(t *testing.T) {
 		t.Errorf("whole-suite file: red %v, why %q", red, why)
 	}
 }
+
+// reportingBaseline is a baseline that prints what vitest prints for each
+// failing unit, so the second retry reads the units from its output.
+type reportingBaseline struct {
+	green bool
+	out   string
+}
+
+func (b *reportingBaseline) RunBaseline() (bool, error) { return b.green, nil }
+func (b *reportingBaseline) BaselineOutput() string     { return b.out }
+
+// baselineRedExecutor is redUnitExecutor's fixture with a baseline that is
+// red for alwaysRed whenever its command runs one, and red for besideOthers
+// only when its command runs another unit too; its output names only the
+// units in named. tests/five is the unit the time limit cut, so it is in
+// src/a.ts's selection for caution, and green alone.
+func baselineRedExecutor(t *testing.T, alwaysRed, besideOthers, named []string, cmds *[][]string, audited *localAuditInput, out io.Writer) *localExecutor {
+	t.Helper()
+	ex := redUnitExecutor(t, nil, cmds, audited, out)
+	all := []string{"tests/one.test.ts", "tests/two.test.ts", "tests/three.test.ts", "tests/four.test.ts", "tests/five.test.ts"}
+	ex.newBaseline = func(_ context.Context, in localAuditInput) (reposcan.BaselineRunner, func(), error) {
+		*cmds = append(*cmds, slices.Clone(in.checkArgv))
+		var ran []string
+		for _, u := range all {
+			if slices.Contains(in.checkArgv, u) {
+				ran = append(ran, u)
+			}
+		}
+		b := &reportingBaseline{green: true}
+		for _, u := range ran {
+			red := slices.Contains(alwaysRed, u) || (slices.Contains(besideOthers, u) && len(ran) > 1)
+			if !red {
+				continue
+			}
+			b.green = false
+			if slices.Contains(named, u) {
+				// vitest 5's heading as the jail returns it: coloured.
+				b.out += "\x1b[41m\x1b[1m FAIL \x1b[22m\x1b[49m " + u + "\x1b[2m > \x1b[22mit fails\n"
+			}
+		}
+		return b, func() {}, nil
+	}
+	return ex
+}
+
+// THE SECOND RETRY. REA's tenth run (2026-10-31): the first retry dropped
+// the units red in the evidence pass and its baseline was still red, with
+// one unit the evidence pass ran green that failed beside the rest of its
+// selection and passed alone. The file is retried once more without the
+// unit its output names failing, the unit run alone first, and graded by
+// that retry, with the unit left out named and why.
+func TestAStillRedBaselineIsRetriedWithoutTheUnitsItsOutputNames(t *testing.T) {
+	var cmds [][]string
+	var in localAuditInput
+	var out strings.Builder
+	ex := baselineRedExecutor(t, []string{"tests/four.test.ts"}, []string{"tests/five.test.ts"},
+		[]string{"tests/four.test.ts", "tests/five.test.ts"}, &cmds, &in, &out)
+
+	res, err := ex.Execute(context.Background(), tsJob("src/a.ts", "tests/one.test.ts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Gradable {
+		t.Fatalf("the second retry's baseline was green, yet the file was not graded: %+v\n%s", res, out.String())
+	}
+	alone := vitestUnitsCmd(t, "tests/five.test.ts")
+	second := vitestUnitsCmd(t, "tests/one.test.ts")
+	if len(cmds) != 4 || !reflect.DeepEqual(cmds[2], alone) || !reflect.DeepEqual(cmds[3], second) {
+		t.Fatalf("baseline commands = %v, want the selection, the first retry, tests/five alone, then %v", cmds, second)
+	}
+	if !reflect.DeepEqual(in.checkArgv, second) || !reflect.DeepEqual(in.selection.Excluded, []string{"tests/four.test.ts", "tests/five.test.ts"}) {
+		t.Errorf("audit input: checkArgv=%v selection=%+v, want the second retry's", in.checkArgv, in.selection)
+	}
+	if got := in.selection.ExcludedWhy; !reflect.DeepEqual(got, map[string]string{"tests/five.test.ts": redBesideOthers}) {
+		t.Errorf("ExcludedWhy = %v, want tests/five as red beside the others", got)
+	}
+	for _, want := range []string{
+		"retried without it: still red",
+		"src/a.ts: tests/five.test.ts: " + redBesideOthers,
+		"baseline red with 1 unit its output names failing (tests/five.test.ts); retried without it: green — graded without it",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("run output lacks %q:\n%s", want, out.String())
+		}
+	}
+}
+
+// A unit red alone as well is said to be, not called flaky: the record
+// must not tell the project its test is flaky when it fails every time.
+func TestAUnitRedAloneIsSaidToBeRedAlone(t *testing.T) {
+	var cmds [][]string
+	var in localAuditInput
+	var out strings.Builder
+	ex := baselineRedExecutor(t, []string{"tests/four.test.ts", "tests/five.test.ts"}, nil,
+		[]string{"tests/five.test.ts"}, &cmds, &in, &out)
+
+	res, err := ex.Execute(context.Background(), tsJob("src/a.ts", "tests/one.test.ts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Gradable || in.selection.ExcludedWhy["tests/five.test.ts"] != redAlone {
+		t.Errorf("result %+v, ExcludedWhy %v; output:\n%s", res, in.selection.ExcludedWhy, out.String())
+	}
+}
+
+// Retried once, never until green: a baseline still red after the second
+// retry is not graded and not retried again, and one whose output names no
+// unit of its selection is not retried a second time at all, saying why.
+func TestTheSecondRetryIsTheLast(t *testing.T) {
+	var cmds [][]string
+	var in localAuditInput
+	var out strings.Builder
+	// tests/one is red always but its failure is never named: the output
+	// accounts for tests/five only.
+	ex := baselineRedExecutor(t, []string{"tests/four.test.ts", "tests/one.test.ts"}, []string{"tests/five.test.ts"},
+		[]string{"tests/four.test.ts", "tests/five.test.ts"}, &cmds, &in, &out)
+	res, err := ex.Execute(context.Background(), tsJob("src/a.ts", "tests/one.test.ts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Gradable || res.Reason != reposcan.ReasonBaselineFailed || in.codePath != "" || len(cmds) != 4 {
+		t.Fatalf("result %+v after %d baseline(s), audited %q; output:\n%s", res, len(cmds), in.codePath, out.String())
+	}
+	if !strings.Contains(out.String(), "retried without it: still red") || strings.Count(out.String(), "still red") != 2 {
+		t.Errorf("both retries must say still red, once each:\n%s", out.String())
+	}
+
+	cmds, out = nil, strings.Builder{}
+	ex = baselineRedExecutor(t, []string{"tests/four.test.ts", "tests/one.test.ts"}, nil,
+		[]string{"tests/four.test.ts"}, &cmds, &in, &out)
+	if _, err := ex.Execute(context.Background(), tsJob("src/a.ts", "tests/one.test.ts")); err != nil {
+		t.Fatal(err)
+	}
+	if want := "src/a.ts: baseline still red; not retried again: its output names no failing test files in its selection"; !strings.Contains(out.String(), want) || len(cmds) != 2 {
+		t.Errorf("%d baseline(s); output lacks %q:\n%s", len(cmds), want, out.String())
+	}
+}

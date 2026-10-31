@@ -237,14 +237,14 @@ func observe(t *testing.T, o observer, live []byte) map[string]string {
 		if c.wantEmpty != (len(sel.Tests) == 0) {
 			t.Fatalf("%s: Tests = %v, case says empty=%v", key, sel.Tests, c.wantEmpty)
 		}
-		// Excluded (the baseline retry's left-out units) and Always (tests that
-		// failed in the evidence run) postdate the golden, and no recorded
-		// case sets either: both must be nil here, and are then left out of
+		// Excluded and ExcludedWhy (the baseline retries' left-out units) and
+		// Always (tests that failed in the evidence run) postdate the golden,
+		// and no recorded case sets any: both must be nil here, and are then left out of
 		// the text so the recorded answers stay byte-identical.
-		if sel.Excluded != nil || sel.Always != nil {
-			t.Fatalf("%s: Excluded = %v, Always = %v, but no recorded Python case sets either", key, sel.Excluded, sel.Always)
+		if sel.Excluded != nil || sel.ExcludedWhy != nil || sel.Always != nil {
+			t.Fatalf("%s: Excluded = %v, ExcludedWhy = %v, Always = %v, but no recorded Python case sets any", key, sel.Excluded, sel.ExcludedWhy, sel.Always)
 		}
-		out[key] = render(strings.Replace(fmt.Sprintf("%#v", sel), ", Always:[]string(nil), Excluded:[]string(nil)}", "}", 1))
+		out[key] = render(strings.Replace(fmt.Sprintf("%#v", sel), ", Always:[]string(nil), Excluded:[]string(nil), ExcludedWhy:map[string]string(nil)}", "}", 1))
 		// The selection must also narrow and take the authored test.
 		narrow(key, sel, withCarried(c.cmd), c.root)
 	}

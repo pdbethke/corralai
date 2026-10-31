@@ -185,6 +185,63 @@ func WithoutRedUnits(m testmap.Map, p lang.Plugin, repoRoot, codePath, testPath 
 	return retry, red
 }
 
+// WithoutBaselineRedUnits answers codePath again with sel's units that a red
+// baseline's output reports failing left out too, beside whatever sel had
+// already left out, and names the ones it adds; nil, and why, when the
+// output names none of sel's units. It is the second retry, for a baseline
+// still red after WithoutRedUnits: a unit the evidence pass ran green alone
+// that fails beside the rest of its selection fails there on unmutated
+// code, so it can kill no mutant there either, and a flaky one would credit
+// a kill to chance. The output is the runner's own report, read by its row
+// (lang.FailedUnitsOf): a row that reads no units from its output, or a
+// report cut before it named them, leaves nothing to retry without, and the
+// file stays ungraded. The caller says why each unit failed (Selection.
+// ExcludedWhy), runs the retry's baseline before trusting it, and retries no
+// further: a selection still red after this is red for a reason no unit
+// accounts for.
+func WithoutBaselineRedUnits(m testmap.Map, p lang.Plugin, repoRoot, codePath, testPath string, testCmd []string, sel lang.Selection, output string) (lang.Selection, []string, string) {
+	r, err := lang.RunnerByID(p, m.Runner)
+	if err != nil {
+		return lang.Selection{}, nil, err.Error()
+	}
+	failed, ok := lang.FailedUnitsOf(r, output)
+	if !ok {
+		return lang.Selection{}, nil, fmt.Sprintf("the %s runner names no failing %s corral can read from its output", r.Name, unitNounOr(r))
+	}
+	exclude := make(map[string]bool, len(sel.Excluded)+len(failed))
+	for _, id := range sel.Excluded {
+		exclude[id] = true
+	}
+	var red []string
+	for _, u := range failed {
+		if slices.Contains(sel.Tests, u) && !exclude[u] {
+			red = append(red, u)
+			exclude[u] = true
+		}
+	}
+	if len(red) == 0 {
+		why := fmt.Sprintf("its output names no failing %s in its selection", unitNounOr(r))
+		if len(failed) > 0 {
+			why = fmt.Sprintf("the %s its output names failing (%s) are not in its selection", unitNounOr(r), strings.Join(failed, ", "))
+		}
+		return lang.Selection{}, nil, why
+	}
+	retry, err := testmap.SelectLeavingOut(m, r, testCmd, repoRoot, codePath, testPath, exclude)
+	if err != nil {
+		return lang.Selection{Fallback: err.Error()}, red, ""
+	}
+	retry.Excluded = append(slices.Clone(sel.Excluded), red...)
+	return retry, red, ""
+}
+
+// unitNounOr is r's UnitNoun, or "units" for a row that names none.
+func unitNounOr(r lang.Runner) string {
+	if r.UnitNoun != "" {
+		return r.UnitNoun
+	}
+	return "units"
+}
+
 // NoRunnerRow is why a unit map can select nothing for want of a runner row
 // to run its units with, or "" when it names one. The one wording, so the
 // scan's selection line and each file's fallback say the same thing.

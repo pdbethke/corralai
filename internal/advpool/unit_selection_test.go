@@ -273,3 +273,29 @@ func TestExcludedRedUnitsReachTheVerdict(t *testing.T) {
 		t.Errorf("nothing excluded, yet %+v", v.TestSelection)
 	}
 }
+
+// The second retry, on the record: the units the evidence pass ran green
+// and a red baseline named failing reach both construction sites by name,
+// with why, after the units red in the evidence pass; the count holds both.
+func TestUnitsRedInTheBaselineReachTheVerdictByName(t *testing.T) {
+	m := vitestUnitMap([]string{"tests/one.test.ts", "tests/two.test.ts", "tests/three.test.ts"}, "tests/one.test.ts", "tests/two.test.ts")
+	n := m.Tests["tests/three.test.ts"]
+	n.Err = "run failed: exit 1 (needs dist/)"
+	m.Tests["tests/three.test.ts"] = n
+	rs := unitRunSpec(t, m, "src/one.ts", "tests/one.test.ts")
+	rs.Selection.Excluded = []string{"tests/three.test.ts", "tests/two.test.ts"}
+	rs.Selection.ExcludedWhy = map[string]string{"tests/two.test.ts": "red beside the others"}
+
+	converged := verdictFromSpec(rs)
+	timedOut := (&Driver{}).timeoutVerdict(&runState{rs: rs})
+	for name, v := range map[string]Verdict{"converged": converged, "timeout": timedOut} {
+		ts := v.TestSelection
+		if ts.Excluded != 2 || ts.ExcludedReason != "run failed: exit 1 (needs dist/)" || ts.ExcludedRedInBaseline != "tests/two.test.ts: red beside the others" {
+			t.Errorf("%s verdict: %+v", name, ts)
+		}
+	}
+	rs.Selection.ExcludedWhy = nil
+	if v := verdictFromSpec(rs); v.TestSelection.ExcludedRedInBaseline != "" {
+		t.Errorf("no unit red in the baseline, yet %q", v.TestSelection.ExcludedRedInBaseline)
+	}
+}

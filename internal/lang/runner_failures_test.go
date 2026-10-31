@@ -37,6 +37,72 @@ func TestFailureParsersReadTheRealOutput(t *testing.T) {
 	}
 }
 
+// vitest 5 colours its report with no TTY (as the jail runs it), and a
+// vitest project prints its name before the file. Read through the row, as
+// adequacy reads it, every shape names the same two failing tests, where the
+// coloured heading once named nothing.
+func TestVitestFailuresReadVitest5sColouredAndProjectHeadings(t *testing.T) {
+	inv := Invocation{Argv: []string{"node", "./node_modules/vitest/vitest.mjs", "run"}}
+	p, _ := ByName("typescript")
+	want := []string{"Calc::adds (a+b)", "top level"}
+	for _, fixture := range []string{"vitest5-fail.txt", "vitest5-fail-projects.txt", "vitest5-fail-projects-nocolor.txt"} {
+		out := readFixture(t, fixture)
+		failed, ok := DeselectorFor(p, inv)
+		if !ok {
+			t.Fatal("vitest row salvages")
+		}
+		if got := failed(out); !slices.Equal(got, want) {
+			t.Errorf("%s: failed tests %q, want %q", fixture, got, want)
+		}
+		if got := FailureParserFor(p, inv).FirstFailure([]byte(out)); got != want[0] {
+			t.Errorf("%s: first failure %q, want %q", fixture, got, want[0])
+		}
+		// The negative control: the raw coloured text is what the parser
+		// was handed before, and it names nothing.
+		if fixture != "vitest5-fail-projects-nocolor.txt" {
+			if got := vitestFailures(out); got != nil {
+				t.Errorf("%s: raw coloured output named %q; the fixture no longer shows the defect", fixture, got)
+			}
+		}
+	}
+}
+
+// The failing UNITS, read the same way: the file each failure heading names,
+// a file that failed to load included, each once, in report order.
+func TestFailedUnitsNameTheFailingFiles(t *testing.T) {
+	p, _ := ByName("javascript")
+	row := func(id string) Runner {
+		r, err := RunnerByID(p, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	vitest, jest := row("vitest"), row("jest")
+	for _, c := range []struct {
+		fixture string
+		inv     Runner
+		want    []string
+	}{
+		{"vitest5-fail.txt", vitest, []string{"fail/broken.vitest.test.mjs", "fail/f.vitest.test.mjs"}},
+		{"vitest5-fail-projects.txt", vitest, []string{"fail/broken.vitest.test.mjs", "fail/f.vitest.test.mjs"}},
+		{"vitest5-fail-projects-nocolor.txt", vitest, []string{"fail/broken.vitest.test.mjs", "fail/f.vitest.test.mjs"}},
+		{"vitest-fail.txt", vitest, []string{"fail/f.vitest.test.mjs"}},
+		{"vitest-suitefail.txt", vitest, []string{"fail/broken.vitest.test.mjs"}},
+		{"jest-fail.txt", jest, []string{"fail/f.jest.test.js"}},
+		{"jest-suitefail.txt", jest, []string{"fail/broken.jest.test.js"}},
+	} {
+		got, ok := FailedUnitsOf(c.inv, readFixture(t, c.fixture))
+		if !ok || !slices.Equal(got, c.want) {
+			t.Errorf("%s: %q (ok=%v), want %q", c.fixture, got, ok, c.want)
+		}
+	}
+	// A row that cannot read its units answers ok=false, never a guess.
+	if _, ok := FailedUnitsOf(row("mocha"), "anything"); ok {
+		t.Error("mocha reads no units from its output")
+	}
+}
+
 // A file that failed to load, or a failing hook, ran no test: nothing is
 // named, so no kill is credited to a test and no salvage is attempted.
 func TestFailureParsersNameNoTestForALoadFailure(t *testing.T) {

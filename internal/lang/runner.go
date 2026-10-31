@@ -67,6 +67,15 @@ type Runner struct {
 	// program, or ORed with the operator's own filter, runs a set nobody chose.
 	FailedTests func(output string) []string
 	DeselectCmd func(argv, ids []string) ([]string, bool)
+	// FailedUnits names the units (UnitNoun) the runner's output reports
+	// failing, a file that failed to load included, in report order and each
+	// once, in the spelling ParseUnits gives them; nil when the output names
+	// none it can read. It is what a red baseline is retried without when no
+	// unit in it failed alone in the evidence pass (reposcan.
+	// WithoutBaselineRedUnits). Optional per runner, as EvidenceArgs is: a row
+	// without it retries nothing a second time, which is the run's answer
+	// before it existed. Callers go through FailedUnitsFor.
+	FailedUnits func(output string) []string
 	// ListUnits is the command that lists the test UNITS argv collects —
 	// the smallest thing the runner runs on its own (a test file for the
 	// JavaScript runners) — and ParseUnits reads its stdout into unit names
@@ -255,7 +264,7 @@ var runners = []Runner{
 			return wordIndex(argv, "jest") >= 0 || entryScriptIndex(argv, "jest", "bin/jest.js") >= 0
 		},
 		ListCmd: jestListCmd, ParseList: jestParseList, SingleCmd: jestSingleCmd, ResolveByList: true, Coruns: jestCoruns,
-		FirstFailure: firstOf(jestFailures), FailedTests: jestFailures, DeselectCmd: jestDeselectCmd,
+		FirstFailure: firstOf(jestFailures), FailedTests: jestFailures, DeselectCmd: jestDeselectCmd, FailedUnits: jestFailedUnits,
 		ListUnits: jestListUnits, ParseUnits: jestParseUnits, UnitCmd: oneUnit(jestUnitsCmd), UnitCoruns: jestUnitCoruns,
 		UnitsCmd: jestUnitsCmd, UnitsCoruns: eachUnitCoruns(jestUnitCoruns), UnitForFile: fileUnitForFile, UnitNoun: "test files",
 		Note: "listing, one-test, one-file and several-file runs verified on jest 30.5",
@@ -280,7 +289,7 @@ var runners = []Runner{
 		Name: "vitest", ID: "vitest", Languages: []string{"javascript", "typescript"}, Words: []string{"vitest"},
 		Detect:  func(argv []string) bool { return vitestIndex(argv) >= 0 },
 		ListCmd: vitestListCmd, ParseList: vitestParseList, SingleCmd: vitestSingleCmd, ResolveByList: true, Coruns: fullNameColl,
-		FirstFailure: firstOf(vitestFailures), FailedTests: vitestFailures, DeselectCmd: vitestDeselectCmd,
+		FirstFailure: firstOf(vitestFailures), FailedTests: vitestFailures, DeselectCmd: vitestDeselectCmd, FailedUnits: vitestFailedUnits,
 		ListUnits: vitestListUnits, ParseUnits: vitestParseUnits, UnitCmd: oneUnit(vitestUnitsCmd), UnitCoruns: vitestUnitCoruns,
 		UnitsCmd: vitestUnitsCmd, UnitsCoruns: eachUnitCoruns(vitestUnitCoruns), UnitForFile: fileUnitForFile, UnitNoun: "test files",
 		EvidenceArgs:   vitestEvidenceArgs,
@@ -555,11 +564,15 @@ func FailureParserFor(p Plugin, inv Invocation) FailureParser {
 
 type rowParser struct{ r Runner }
 
-func (p rowParser) FirstFailure(output []byte) string { return p.r.FirstFailure(output) }
+func (p rowParser) FirstFailure(output []byte) string {
+	return p.r.FirstFailure([]byte(plainText(string(output))))
+}
 
 type flakyRowParser struct{ rowParser }
 
-func (p flakyRowParser) FlakyTests(output []byte) []string { return p.r.Flaky(output) }
+func (p flakyRowParser) FlakyTests(output []byte) []string {
+	return p.r.Flaky([]byte(plainText(string(output))))
+}
 
 // DeselectorFor is argv's runner's failure list for salvage, ok=false when
 // the runner cannot salvage (DeselectCmd builds the rerun without them),
@@ -585,7 +598,19 @@ func DeselectorFor(p Plugin, inv Invocation) (failed func(string) []string, ok b
 	if !found || r.FailedTests == nil || r.DeselectCmd == nil {
 		return nil, false
 	}
-	return r.FailedTests, true
+	return func(out string) []string { return r.FailedTests(plainText(out)) }, true
+}
+
+// FailedUnitsOf is the units row r reports failing in output
+// (Runner.FailedUnits), ok=false when the row reads none from its output.
+// It takes the row, not argv, because its caller holds the row the unit
+// evidence was collected under (testmap.Map.Runner). Read colour-free, as
+// every parser here is.
+func FailedUnitsOf(r Runner, output string) ([]string, bool) {
+	if r.FailedUnits == nil {
+		return nil, false
+	}
+	return r.FailedUnits(plainText(output)), true
 }
 
 // DeselectCmd is argv rerun without the tests ids, from its runner, shaped

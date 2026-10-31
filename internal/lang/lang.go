@@ -528,6 +528,12 @@ type Selection struct {
 	// is nil for every selection the evidence chose unaided; a non-nil one
 	// is a different exam, which the verdict discloses.
 	Excluded []string
+	// ExcludedWhy is why each unit of Excluded that the evidence pass ran
+	// GREEN was left out: it failed in a red baseline and the second retry
+	// dropped it (reposcan.WithoutBaselineRedUnits), with what running it
+	// alone showed. A unit Excluded for its own red evidence run has no
+	// entry; its reason is the map's. nil when there are none.
+	ExcludedWhy map[string]string
 }
 
 // NarrowableByLine reports whether the Selection's line evidence can actually

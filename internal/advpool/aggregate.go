@@ -5,6 +5,7 @@ package advpool
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
@@ -60,7 +61,10 @@ func verdictFromSpec(rs RunSpec) Verdict {
 			UnreportedReason: testmap.FirstUnreportedReason(rs.SelectionMap, rs.Selection),
 			Excluded:         len(rs.Selection.Excluded),
 			ExcludedReason:   excludedReason(rs),
-			UnitNoun:         unitNounOf(rs),
+			// Named one per line, beside the count, so the units a red
+			// baseline cost the exam reach the record by name.
+			ExcludedRedInBaseline: excludedRedInBaseline(rs.Selection),
+			UnitNoun:              unitNounOf(rs),
 		},
 		// Concurrency rides straight through — including onto a timed-out
 		// verdict (timeoutVerdict builds off this same function), since the
@@ -103,7 +107,23 @@ func excludedReason(rs RunSpec) string {
 	if len(rs.Selection.Excluded) == 0 {
 		return ""
 	}
-	return rs.SelectionMap.Tests[rs.Selection.Excluded[0]].Err
+	first := rs.Selection.Excluded[0]
+	if why, ok := rs.Selection.ExcludedWhy[first]; ok {
+		return why
+	}
+	return rs.SelectionMap.Tests[first].Err
+}
+
+// excludedRedInBaseline is sel's Excluded units that carry an ExcludedWhy,
+// as "unit: why" lines in Excluded's order; "" when none do.
+func excludedRedInBaseline(sel lang.Selection) string {
+	var lines []string
+	for _, u := range sel.Excluded {
+		if why, ok := sel.ExcludedWhy[u]; ok {
+			lines = append(lines, u+": "+why)
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // timingWith overlays the phases the DRIVER measured onto the ones the SPEC

@@ -241,6 +241,39 @@ func TestSelectExcludingRefusesWhenACorunBringsBackAnExcludedUnit(t *testing.T) 
 	}
 }
 
+// The second retry's selection: a unit an edge selects (it ran green alone)
+// is left out when the baseline named it failing, where SelectExcluding,
+// the first retry's, keeps every edge's unit whatever exclude says.
+func TestSelectLeavingOutDropsAUnitAnEdgeSelects(t *testing.T) {
+	m := unitMap([]string{"a.test.js", "b.test.js", "c.test.js"}, "a.test.js", "b.test.js")
+	drop := map[string]bool{"b.test.js": true}
+	sel, err := SelectLeavingOut(m, jestRow(t), jestArgv, "", "src/a.js", "", drop)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(sel.Tests, []string{"a.test.js"}) {
+		t.Errorf("SelectLeavingOut Tests = %v, want only a.test.js", sel.Tests)
+	}
+	kept, err := SelectExcluding(m, jestRow(t), jestArgv, "", "src/a.js", "", drop)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(kept.Tests, "b.test.js") {
+		t.Errorf("SelectExcluding Tests = %v: the first retry must keep an edge's unit", kept.Tests)
+	}
+}
+
+// Leaving out every unit an edge selects would grade the file by units that
+// reported nothing: refused, naming why, not run.
+func TestSelectLeavingOutRefusesToLeaveOutEveryEdgesUnit(t *testing.T) {
+	m := unitMap([]string{"a.test.js", "b.test.js"}, "a.test.js")
+	m.Tests["b.test.js"] = Node{ID: "b.test.js", Grain: GrainUnit, Files: []string{"b.test.js"}, Err: "not run (time limit)"}
+	_, err := SelectLeavingOut(m, jestRow(t), jestArgv, "", "src/a.js", "", map[string]bool{"a.test.js": true})
+	if err == nil || !strings.Contains(err.Error(), "every unit the javascript evidence says executes src/a.js") {
+		t.Errorf("err = %v, want the refusal", err)
+	}
+}
+
 func TestSelectUnitGrainRefusesWhatTheRowRefuses(t *testing.T) {
 	m := unitMap([]string{"a.test.js", "b.test.js"}, "a.test.js")
 	if _, err := Select(m, jestRow(t), []string{"npx", "jest", "-t", "foo"}, "", "src/a.js", ""); err == nil {

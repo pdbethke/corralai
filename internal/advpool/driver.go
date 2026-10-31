@@ -454,6 +454,14 @@ type TestSelection struct {
 	// one's reason, verbatim. Zero and empty when nothing was left out.
 	Excluded       int    `json:"excluded,omitempty"`
 	ExcludedReason string `json:"excluded_reason,omitempty"`
+	// ExcludedRedInBaseline is the units of Excluded the evidence pass ran
+	// green, left out because a red baseline's output named them failing
+	// (lang.Selection.ExcludedWhy), one "unit: why" per line in the
+	// selection's order: flaky, or broken by a unit run beside them, or red
+	// as the operator's command runs them. Each is named because a reader
+	// owed a reason for a smaller exam is owed which tests it lost. Empty
+	// when no unit was left out that way.
+	ExcludedRedInBaseline string `json:"excluded_red_in_baseline,omitempty"`
 	// UnitNoun is what a unit of this selection is called on the scan line
 	// ("test files", "packages", "test targets"): the runner row's own
 	// UnitNoun, copied here because the line is printed from the verdict and

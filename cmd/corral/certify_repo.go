@@ -11,6 +11,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path"
@@ -4182,6 +4183,9 @@ func cautionDetail(f reposcan.WeakFile, one, many string) string {
 		}
 		out += fmt.Sprintf("; %d %s that failed unmutated left out after the baseline failed with %s: %s", f.Excluded, word, it, firstLineOf(f.ExcludedReason))
 	}
+	if f.ExcludedRedInBaseline != "" {
+		out += "; red in the baseline though green in the evidence pass: " + strings.ReplaceAll(f.ExcludedRedInBaseline, "\n", "; ")
+	}
 	return out
 }
 
@@ -5666,6 +5670,9 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 	// by the retry only if its baseline is stably green. The retry's
 	// selection, naming what it left out, replaces the job's everywhere, so
 	// the pool's every later command is built from the exam that passed.
+	// tried is the input the last baseline ran: the job's own, or the
+	// retry's, which the second retry narrows further.
+	tried := in
 	if stable && !rec.last {
 		if retry, red, why := l.redUnitRetry(j, in.selection); red == nil {
 			l.note("%s: baseline failed; not retried: %s\n", j.Path, why)
@@ -5696,7 +5703,59 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 					in = retryIn
 				default:
 					l.note("%s: baseline failed with %s; retried without %s: still red\n", j.Path, what, pronounFor(red))
+					tried = retryIn
 				}
+			}
+		}
+	}
+	// A baseline still red may be red only because of units the evidence
+	// pass ran green alone, which fail beside the rest of the selection:
+	// flaky, or broken by a unit run with them, or red as the operator's
+	// command runs them. Each fails on unmutated code here, so it can kill
+	// no mutant here, and a flaky one would credit a kill to chance. The
+	// file is retried ONCE more without the units the baseline's own output
+	// names failing, each rerun alone first so the record says which of
+	// those it was, and graded only if that baseline is stably green.
+	// Retried once, never until green: a third red is a red no unit
+	// accounts for, and the run says so.
+	if stable && !rec.last {
+		var out string
+		if br, ok := runner.(interface{ BaselineOutput() string }); ok {
+			out = br.BaselineOutput()
+		}
+		retry, red, why := l.baselineRedRetry(ctx, j, tried, out)
+		switch {
+		case red == nil && why != "":
+			l.note("%s: baseline still red; not retried again: %s\n", j.Path, why)
+		case red == nil:
+		case retry.Fallback != "":
+			l.note("%s: baseline red with %s; cannot retry without %s: %s\n", j.Path, baselineRedPhrase(red), pronounFor(red), retry.Fallback)
+		default:
+			for _, u := range red {
+				l.note("%s: %s: %s\n", j.Path, u, retry.ExcludedWhy[u])
+			}
+			release()
+			retryIn := tried
+			retryIn.selection = retry
+			retryIn.checkArgv = l.testCmd(j, retry)
+			r2, c2, err := l.newBaseline(ctx, retryIn)
+			if err != nil {
+				return reposcan.FileResult{}, l.fail(j, err)
+			}
+			runner, cleanup, released = r2, c2, false
+			rec = &recordingBaseline{inner: runner}
+			if stable, err = reposcan.CheckBaselineStable(rec, l.baselineRuns); err != nil {
+				return reposcan.FileResult{}, l.fail(j, err)
+			}
+			switch {
+			case !stable:
+				l.note("%s: baseline red with %s; retried without %s: unstable — not graded\n", j.Path, baselineRedPhrase(red), pronounFor(red))
+				return reposcan.FileResult{Gradable: false, Reason: reposcan.ReasonFlakyBaseline}, nil
+			case rec.last:
+				l.note("%s: baseline red with %s; retried without %s: green — graded without %s\n", j.Path, baselineRedPhrase(red), pronounFor(red), pronounFor(red))
+				in = retryIn
+			default:
+				l.note("%s: baseline red with %s; retried without %s: still red\n", j.Path, baselineRedPhrase(red), pronounFor(red))
 			}
 		}
 	}
@@ -5824,6 +5883,85 @@ func (l *localExecutor) redUnitRetry(j reposcan.Job, sel lang.Selection) (lang.S
 	}
 	retry.Excluded = red
 	return retry, red, ""
+}
+
+// baselineRedRetry is the second retry's selection: in's selection without
+// the units its red baseline's output names failing (reposcan.
+// WithoutBaselineRedUnits), each rerun alone, as the operator's command runs
+// it, for its ExcludedWhy; nil and "" for a selection that is not a unit
+// selection (Python's test-grain selection has its own failure handling,
+// and a whole-suite run was already said not to be retried), and nil and
+// why when the output names none of its units. A retry the engine refuses
+// comes back with its Fallback set and is not run.
+func (l *localExecutor) baselineRedRetry(ctx context.Context, j reposcan.Job, in localAuditInput, output string) (lang.Selection, []string, string) {
+	sel := in.selection
+	if sel.Method != testmap.MethodUnitEvidence {
+		return lang.Selection{}, nil, ""
+	}
+	p, ok := lang.ByName(j.Lang)
+	if !ok {
+		return lang.Selection{}, nil, fmt.Sprintf("no language plugin is named %q", j.Lang)
+	}
+	base := l.baseCmd(j)
+	retry, red, why := reposcan.WithoutBaselineRedUnits(l.mapFor(j), p, l.repoDir, j.Path, j.TestPath, base, sel, output)
+	if red == nil || retry.Fallback != "" {
+		return retry, red, why
+	}
+	retry.ExcludedWhy = maps.Clone(sel.ExcludedWhy)
+	if retry.ExcludedWhy == nil {
+		retry.ExcludedWhy = make(map[string]string, len(red))
+	}
+	inv, err := lang.Resolve(p, l.repoDir, base, l.runnerFor(j.Lang))
+	for _, u := range red {
+		retry.ExcludedWhy[u] = l.aloneWhy(ctx, p, inv, err, in, u)
+	}
+	return retry, red, ""
+}
+
+// The reasons a unit the evidence pass ran green is left out of a red
+// baseline's retry, by what running it alone showed.
+const (
+	redBesideOthers = "red in the baseline, green run alone as your command runs it: flaky, or broken by a test file run beside it"
+	redAlone        = "red in the baseline and red run alone as your command runs it, though green alone in the evidence pass"
+	redNotRerun     = "red in the baseline; not rerun alone: %s"
+)
+
+// aloneWhy runs unit alone in the job's jail, by the operator's command
+// narrowed to it, and says which of the reasons above it is.
+func (l *localExecutor) aloneWhy(ctx context.Context, p lang.Plugin, inv lang.Invocation, invErr error, in localAuditInput, unit string) string {
+	if invErr != nil {
+		return fmt.Sprintf(redNotRerun, invErr)
+	}
+	cmd, ok := lang.UnitRunCmd(p, inv, unit)
+	if !ok {
+		return fmt.Sprintf(redNotRerun, "the runner has no command that runs it alone")
+	}
+	alone := in
+	alone.checkArgv = cmd
+	r, cleanup, err := l.newBaseline(ctx, alone)
+	if err != nil {
+		return fmt.Sprintf(redNotRerun, err)
+	}
+	defer cleanup()
+	green, err := r.RunBaseline()
+	switch {
+	case err != nil:
+		return fmt.Sprintf(redNotRerun, err)
+	case green:
+		return redBesideOthers
+	default:
+		return redAlone
+	}
+}
+
+// baselineRedPhrase names the units a red baseline's output named failing,
+// as redUnitsPhrase does for the evidence pass's.
+func baselineRedPhrase(red []string) string {
+	noun := "units its output names failing"
+	if len(red) == 1 {
+		noun = "unit its output names failing"
+	}
+	return fmt.Sprintf("%d %s (%s)", len(red), noun, redUnitsNames(red))
 }
 
 // redUnitsPhrase names the units a red baseline is retried without: how
@@ -6148,10 +6286,11 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 			// How much of the selection is caution rather than evidence, and
 			// whether the authored pass ran the whole command: both change
 			// what the signed rate answers.
-			SelectionUnreported: f.Unreported,
-			SelectionExcluded:   f.Excluded,
-			AuthoredFallback:    f.AuthoredFallback,
-			Uncovered:           f.Uncovered,
+			SelectionUnreported:  f.Unreported,
+			SelectionExcluded:    f.Excluded,
+			SelectionExcludedRed: f.ExcludedRedInBaseline,
+			AuthoredFallback:     f.AuthoredFallback,
+			Uncovered:            f.Uncovered,
 			// And at which grain: a signed rate averaged over mutants that
 			// each faced a different test set needs the spread to be read
 			// as the measurement it is.

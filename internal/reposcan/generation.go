@@ -337,6 +337,17 @@ package reposcan
 // "javascript") is now graded by its units (SameEvidenceRun) where every
 // "37" verdict for one graded it by the whole suite: REA's 1,784 auditable
 // TypeScript files. Behaviour bump.
+//
+// Riding along in "38" too (2026-10-31): a baseline still red after the
+// retry above is retried once more without the units its own output names
+// failing that the evidence pass ran green (reposcan.WithoutBaselineRedUnits;
+// TestSelection.ExcludedRedInBaseline names them, nested, so outside the
+// fingerprint), so a file REA's tenth run could not grade can be graded;
+// and every runner's failure output is read with its terminal escapes
+// removed, so a vitest 5 kill now carries the killed_by label a "38" verdict
+// graded before this lacked. "38" has not left its branch, and no vitest 5
+// file was graded under it (REA's runs were all ungraded), so no cached
+// verdict differs; not bumped.
 const VerdictGeneration = "38"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every

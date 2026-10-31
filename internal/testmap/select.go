@@ -106,6 +106,26 @@ func Select(m Map, r lang.Runner, testCmd []string, repoRoot, codePath, testPath
 // and the corun guard still sees every listed unit, so a command that would
 // also run an excluded unit is refused, not run. nil excludes nothing.
 func SelectExcluding(m Map, r lang.Runner, testCmd []string, repoRoot, codePath, testPath string, exclude map[string]bool) (lang.Selection, error) {
+	return selectWithout(m, r, testCmd, repoRoot, codePath, testPath, exclude, false)
+}
+
+// SelectLeavingOut is SelectExcluding with the units in exclude left out
+// whether or not an edge selects them. It exists for one caller too: a
+// baseline still red after SelectExcluding's retry, whose own output names
+// units failing that the evidence pass ran GREEN (reposcan.
+// WithoutBaselineRedUnits). Their edge says they ran green alone; the
+// baseline says they fail beside the rest of the selection, on the same
+// unmutated code, so the edge no longer says they can grade it. It refuses
+// a selection that would leave out every unit an edge selects: graded only
+// by units that reported no evidence, the file's rate would measure tests
+// nobody showed execute it.
+func SelectLeavingOut(m Map, r lang.Runner, testCmd []string, repoRoot, codePath, testPath string, exclude map[string]bool) (lang.Selection, error) {
+	return selectWithout(m, r, testCmd, repoRoot, codePath, testPath, exclude, true)
+}
+
+// selectWithout is both: exclude drops unreported units, and with evidence
+// set, edge units too.
+func selectWithout(m Map, r lang.Runner, testCmd []string, repoRoot, codePath, testPath string, exclude map[string]bool, evidence bool) (lang.Selection, error) {
 	grain, err := grainOf(m)
 	if err != nil {
 		return lang.Selection{}, err
@@ -142,7 +162,11 @@ func SelectExcluding(m Map, r lang.Runner, testCmd []string, repoRoot, codePath,
 			sel.Static = slices.Clone(src.Static)
 		}
 	}
-	ids, err := selectedIDs(m, grain, want, &sel, exclude)
+	var dropEdges map[string]bool
+	if evidence {
+		dropEdges = exclude
+	}
+	ids, err := selectedIDs(m, grain, want, &sel, exclude, dropEdges)
 	if err != nil {
 		return lang.Selection{}, err
 	}
@@ -204,10 +228,13 @@ func SelectExcluding(m Map, r lang.Runner, testCmd []string, repoRoot, codePath,
 // predicate behind Select and Uncovered, so a summary of a map cannot call a
 // file uncovered that grading would select units for. When sel is non-nil, a
 // test-grain edge's lines are recorded on it. An unreported unit in exclude
-// is not added (SelectExcluding); an edge's unit always is.
-func selectedIDs(m Map, grain, want string, sel *lang.Selection, exclude map[string]bool) ([]string, error) {
+// is not added (SelectExcluding); an edge's unit is, unless dropEdges names
+// it (SelectLeavingOut), and then a selection left with no edge's unit is
+// refused.
+func selectedIDs(m Map, grain, want string, sel *lang.Selection, exclude, dropEdges map[string]bool) ([]string, error) {
 	seen := map[string]bool{}
 	var ids []string
+	edges, dropped := 0, 0
 	for _, e := range m.EdgesTo(want) {
 		n, ok := m.Tests[e.Test]
 		if !ok {
@@ -219,9 +246,17 @@ func selectedIDs(m Map, grain, want string, sel *lang.Selection, exclude map[str
 		if grain == GrainUnit && e.Executed == 0 && !e.Loaded && e.Uncounted == "" {
 			continue
 		}
+		if dropEdges[e.Test] {
+			if !seen[e.Test] {
+				seen[e.Test] = true
+				dropped++
+			}
+			continue
+		}
 		if !seen[e.Test] {
 			seen[e.Test] = true
 			ids = append(ids, e.Test)
+			edges++
 		}
 		if sel != nil && grain == GrainTest && len(e.Lines) > 0 {
 			sel.Lines[e.Test] = append(sel.Lines[e.Test], e.Lines...)
@@ -235,6 +270,9 @@ func selectedIDs(m Map, grain, want string, sel *lang.Selection, exclude map[str
 			seen[id] = true
 			ids = append(ids, id)
 		}
+	}
+	if dropped > 0 && edges == 0 {
+		return nil, fmt.Errorf("testmap: leaving out the %d unit(s) red in the baseline would leave out every unit the %s evidence says executes %s", dropped, m.Lang, want)
 	}
 	return ids, nil
 }
@@ -258,7 +296,7 @@ func Uncovered(m Map) (uncovered, unselectedButGraded []string) {
 		if !src.HasStatements || src.HasStatic {
 			continue
 		}
-		ids, err := selectedIDs(m, grain, p, nil, nil)
+		ids, err := selectedIDs(m, grain, p, nil, nil, nil)
 		if err != nil {
 			continue
 		}

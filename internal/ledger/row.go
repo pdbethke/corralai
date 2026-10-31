@@ -65,6 +65,11 @@ type Row struct {
 	// baseline retry). omitempty for the same reason as the two above.
 	SelectionExcluded int    `json:"selection_excluded,omitempty"`
 	AuthoredFallback  string `json:"authored_fallback,omitempty"`
+	// SelectionExcludedRed names the units of SelectionExcluded the evidence
+	// pass ran green, left out because a red baseline's output named them
+	// failing, one "unit: why" per line (advpool.TestSelection.
+	// ExcludedRedInBaseline). omitempty for the same reason as the others.
+	SelectionExcludedRed string `json:"selection_excluded_red,omitempty"`
 	// WriterMode is HOW the writer seat attacked this file's survivors:
 	// "per-survivor" or "batched". EMPTY reaches the warehouse as NULL, never
 	// as either spelling — a run that named no mode, or a row pushed by a

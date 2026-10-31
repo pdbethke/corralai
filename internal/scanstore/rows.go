@@ -266,6 +266,10 @@ type File struct {
 	// failed unmutated, left out after the baseline failed with them.
 	SelectionExcluded int    `json:",omitempty"`
 	AuthoredFallback  string `json:",omitempty"`
+	// SelectionExcludedRed mirrors advpool.TestSelection.
+	// ExcludedRedInBaseline: the units of SelectionExcluded left out because
+	// a red baseline named them failing, by name, with why.
+	SelectionExcludedRed string `json:",omitempty"`
 	// WriterMode mirrors advpool.Verdict.WriterMode: whether this file's
 	// survivors were attacked by one writer call each ("per-survivor") or by
 	// one call carrying them all ("batched"). NULL — never one of the two

@@ -280,8 +280,10 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 				// above means, so both ride beside it.
 				SelectionUnreported: r.Verdict.TestSelection.Unreported,
 				SelectionExcluded:   r.Verdict.TestSelection.Excluded,
-				AuthoredFallback:    r.Verdict.TestSelection.AuthoredFallback,
-				WriterMode:          r.Verdict.WriterMode,
+				// And which of them were green in the evidence pass, by name.
+				SelectionExcludedRed: r.Verdict.TestSelection.ExcludedRedInBaseline,
+				AuthoredFallback:     r.Verdict.TestSelection.AuthoredFallback,
+				WriterMode:           r.Verdict.WriterMode,
 				// Uncovered also makes the store write kill_rate NULL (see
 				// scanstore.fileKillRate): no test executes this file, so
 				// there is no measurement to record.

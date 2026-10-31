@@ -13,6 +13,33 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ### Fixed
 
+- **A baseline still red after the retry, because of a test file the
+  evidence pass ran green, was not graded.** REA's tenth run (2026-10-31)
+  retried `src/server/createServer.ts` without the 34 test files red in the
+  evidence pass, and its baseline was still red with one file failing:
+  `tests/boundary/cli/runtimeUrlPrefixMappingCli.test.ts`, green in the
+  evidence pass, in the ninth run's whole suite and three times out of three
+  run alone afterwards, and red in both baseline runs beside the other 597
+  files. A baseline still red is now retried once more without the test files
+  its own output names failing, each run alone first so the run says which
+  it was: red beside the others and green alone (flaky, or broken by a file
+  run with it), or red alone as your command runs it. The retry may leave out
+  files the evidence says execute the file, but never all of them: graded
+  only by files that reported no evidence, the rate would measure tests
+  nobody showed run it, so that retry is refused. Retried once, never until
+  green: a third red baseline is not graded. The files left out this way are
+  named, with why, on the run's line, the verdict
+  (`excluded_red_in_baseline`), the ledger row (`selection_excluded_red`)
+  and the signed statement (`selectionExcludedRed`). Read from vitest's and
+  jest's output; another runner's output names no unit corral reads yet, so
+  its file is not retried a second time, and the run says so.
+- **vitest 5's failures were never named.** vitest 5 colours its report with
+  no terminal and no colour variable (measured on 5.0.3 in the jail's
+  environment), so its `FAIL` headings reached the failure parser wrapped in
+  escape codes and named nothing: no `killed_by` label on a kill, and no
+  salvage of a partly failing authored test, on any vitest 5 run. Every
+  runner's output is now read with its escape codes removed, and a vitest
+  project's name before the file is read in both of its forms.
 - **Every file of a repository with units that cannot run alone was graded
   by the whole suite.** vitest runs every file a filter is a substring of,
   and a unit selection whose command would also run an unnamed unit was

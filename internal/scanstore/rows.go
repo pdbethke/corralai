@@ -51,8 +51,9 @@ type Scan struct {
 	StartedAt     time.Time
 	FinishedAt    time.Time
 	// The audited party: who made the commit, by name (author, committer,
-	// the Co-authored-by trailers one per line). See auditpush.Identity.
-	Author, Committer, CoAuthors string
+	// the Co-authored-by trailers one per line, the tools its footer lines
+	// declare one per line). See auditpush.Identity.
+	Author, Committer, CoAuthors, GeneratedWith string
 	// CorralVersion is the version string `corral version` prints for the
 	// binary that ran this scan. EngineVersion above is the same value today,
 	// but it is an INPUT to the verdict cache key (a job keyed under one

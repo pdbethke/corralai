@@ -261,7 +261,7 @@ longer stands as the record{{if $.RetractedReason}}: {{$.RetractedReason}}{{end}
     {{else}}<span class="chip mute">no verifier seat ran</span>{{end}}</dd>
   <dt>substrate</dt><dd>{{.Substrate}}</dd>
   <dt>started</dt><dd>{{stamp .StartedAt}}</dd>
-  {{if .Author}}<dt>audited party</dt><dd>{{.Author}}{{if .CoAuthors}} <span class="small">· co-authored: {{.CoAuthors}}</span>{{end}}</dd>{{end}}
+  {{if .Author}}<dt>audited party</dt><dd>{{.Author}}{{if .CoAuthors}} <span class="small">· co-authored: {{.CoAuthors}}</span>{{end}}{{if .GeneratedWith}} <span class="small">· generated with: {{.GeneratedWith}}</span>{{end}}</dd>{{end}}
   <dt>files shown</dt><dd>{{.FilesShown | len}} file(s){{if .Truncated}} <span class="chip warn">truncated</span>{{end}}</dd>
   {{if .Coverage}}<dt>coverage note</dt><dd>{{.Coverage}}</dd>{{end}}
 </dl>

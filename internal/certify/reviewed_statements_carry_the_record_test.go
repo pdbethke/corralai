@@ -67,7 +67,7 @@ func TestReviewStatementCarriesHowTheReviewWasMade(t *testing.T) {
 	r := review.Review{
 		Repo: "r", Commit: "c", Scope: "internal/certify", ReviewerModel: "claude-code", ReviewerTool: "2.1.263 (Claude Code)",
 		VerifierModel: "codex", VerifierTool: "codex-cli 0.152.0", Lang: "go", Substrate: "workspace",
-		Author: "Ada Writer", Committer: "Forge Bot", CoAuthors: "Claude Code", BytesShown: 4096, VerifierNote: "verdict 2 named no finding",
+		Author: "Ada Writer", Committer: "Forge Bot", CoAuthors: "Claude Code", GeneratedWith: "Claude Code", BytesShown: 4096, VerifierNote: "verdict 2 named no finding",
 		Sound: []string{"the ledger chain"}, Opinion: "nothing found",
 	}
 	r.Coverage = review.CoverageNote(r)
@@ -81,7 +81,7 @@ func TestReviewStatementCarriesHowTheReviewWasMade(t *testing.T) {
 	pred := stmt["predicate"].(map[string]any)
 	for k, want := range map[string]any{
 		"coverage": r.Coverage, "reviewerTool": r.ReviewerTool, "verifierTool": r.VerifierTool, "lang": "go",
-		"author": "Ada Writer", "committer": "Forge Bot", "coAuthors": "Claude Code", "bytesShown": 4096, "verifierNote": r.VerifierNote,
+		"author": "Ada Writer", "committer": "Forge Bot", "coAuthors": "Claude Code", "generatedWith": "Claude Code", "bytesShown": 4096, "verifierNote": r.VerifierNote,
 	} {
 		if pred[k] != want {
 			t.Errorf("predicate[%q] = %#v, want %#v", k, pred[k], want)
@@ -89,7 +89,7 @@ func TestReviewStatementCarriesHowTheReviewWasMade(t *testing.T) {
 	}
 	// Absent, never "", when the entry has none.
 	bare := BuildReviewAttestation(review.Review{Repo: "r", Commit: "c", Scope: "s", ReviewerModel: "m", Findings: []review.Finding{{ID: "R1", Declared: review.TierHypothesis, Tier: review.TierHypothesis}}})["predicate"].(map[string]any)
-	for _, k := range []string{"coverage", "reviewerTool", "verifierTool", "lang", "author", "committer", "coAuthors", "verifierNote"} {
+	for _, k := range []string{"coverage", "reviewerTool", "verifierTool", "lang", "author", "committer", "coAuthors", "generatedWith", "verifierNote"} {
 		if _, present := bare[k]; present {
 			t.Errorf("predicate[%q] signed as %#v on a review that recorded none", k, bare[k])
 		}

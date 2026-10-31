@@ -152,7 +152,7 @@ func localEntryBundle(in localAuditInput, v advpool.Verdict, t advpool.RunTeleme
 		Candidates:    1, Audited: audited,
 		KillRate:  killRate,
 		StartedAt: started, FinishedAt: finished,
-		Author: party.Author, Committer: party.Committer, CoAuthors: party.CoAuthors,
+		Author: party.Author, Committer: party.Committer, CoAuthors: party.CoAuthors, GeneratedWith: party.GeneratedWith,
 		CorralVersion: version, Host: host, Cores: runtime.NumCPU(),
 		TotalMillis: finished.Sub(started).Milliseconds(),
 		InputTokens: inTokens, OutputTokens: outTokens, ModelCalls: callCount,

@@ -11,6 +11,21 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+### Added
+
+- **The audited party includes the tools a commit's footer declares.** A
+  commit message line `Generated with <tool>` (or `by`), after an optional
+  emoji, with the tool as a Markdown link's text or as a few plain words, is
+  read beside the `Co-authored-by` trailers: Claude Code writes
+  `🤖 Generated with [Claude Code](https://claude.com/claude-code)`, and a
+  tool can declare itself there and not in a trailer. Recorded on scan and
+  review entries (`generated_with`), in the warehouse's `corral_scans` and
+  `corral_reviews`, on the signed review statement (`generatedWith`) and on
+  the review page. Only whole lines of that shape count, so prose that
+  begins the same way names nothing; and a commit that declares no tool is
+  not evidence a person wrote it alone. `models rank --seat committer` does
+  not read it yet.
+
 ### Fixed
 
 - **A baseline still red after the retry, because of a test file the

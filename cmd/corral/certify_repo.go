@@ -1711,7 +1711,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		KillRate: killRatePtr(rep.KillRate), CacheHits: rep.CacheHits,
 		PreflightRan: preflightResult.Ran, PreflightNote: preflightResult.Note,
 		StartedAt: startedAt, FinishedAt: finishedAt,
-		Author: party.Author, Committer: party.Committer, CoAuthors: party.CoAuthors,
+		Author: party.Author, Committer: party.Committer, CoAuthors: party.CoAuthors, GeneratedWith: party.GeneratedWith,
 		// The box and the build, so a wall-clock number in this ledger can be
 		// interpreted at all. TreesRequested is the workspace substrate's
 		// resolved per-file tree count — an INTENTION; the per-file probe

@@ -290,7 +290,7 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 			strings.Join(unpinned, " and "), strings.SplitN(*model, ":", 2)[0])
 	}
 
-	r := review.Review{Repo: repoName, Commit: commit, Author: party.Author, Committer: party.Committer, CoAuthors: party.CoAuthors,
+	r := review.Review{Repo: repoName, Commit: commit, Author: party.Author, Committer: party.Committer, CoAuthors: party.CoAuthors, GeneratedWith: party.GeneratedWith,
 		Scope: *scope, ReviewerModel: *model, ReviewerTool: reviewerTool, Lang: langOfScope(allFiles),
 		ReviewerModelResolved: agentbackend.SeatNamesAModel(*model),
 		Substrate:             substrateOf(rep), StartedAt: time.Now().UTC(),

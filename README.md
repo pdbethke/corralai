@@ -1076,7 +1076,9 @@ the reviewer by the claims that held of those checked, the verifier by the
 verdicts that agreed with the outcome, a person's adjudication counting
 as the outcome when there is one — under the same evidence floor as every
 other seat. Both entry kinds also name the **audited party** — the commit's
-author, committer and `Co-authored-by` trailers, by name, never an address
+author, committer and `Co-authored-by` trailers, by name, never an address,
+and the tools its message declares in a `Generated with <tool>` footer line
+(`generated_with`; recorded, not yet graded by `models rank`)
 — so the record says who wrote the change beside who judged it, and
 `models rank --seat committer` grades each party, a person or an agent
 alike, by the changes that held under audit. The first use of that row is

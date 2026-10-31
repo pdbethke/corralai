@@ -137,7 +137,7 @@ func buildBundle(
 			Top: scan.Top, AllCandidates: scan.AllCandidates, TotalFiles: scan.TotalFiles,
 			PreflightRan: scan.PreflightRan, PreflightNote: scan.PreflightNote,
 			FinishedAt: nilIfZeroTime(scan.FinishedAt),
-			Identity:   auditpush.Identity{Author: scan.Author, Committer: scan.Committer, CoAuthors: scan.CoAuthors},
+			Identity:   auditpush.Identity{Author: scan.Author, Committer: scan.Committer, CoAuthors: scan.CoAuthors, GeneratedWith: scan.GeneratedWith},
 			TreeDirty:  meta.TreeDirty, RepoIdentity: meta.RepoIdentity,
 			SandboxBackend: meta.Sandbox.Backend, SandboxImage: meta.Sandbox.Image,
 			SeedSkipped: meta.SeedSkipped,

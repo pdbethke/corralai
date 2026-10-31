@@ -16,15 +16,15 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | Field | Tier | Note |
 |---|---|---|
 | `Adjudicates` | key |  |
-| `By` | meta | a person's statement, signed in their name: not verified as true |
-| `Reason` | meta | a person's statement, signed in their name: not verified as true |
-| `Verdict` | meta | a person's statement, signed in their name: not verified as true |
+| `By` | declared | declared by the person who adjudicated |
+| `Reason` | declared | declared by the person who adjudicated |
+| `Verdict` | declared | declared by the person who adjudicated |
 
 ## Bundle
 
 | Field | Tier | Note |
 |---|---|---|
-| `SourcePushed` | meta | whether the run says the audited source was pushed: signed, but not verified as true |
+| `SourcePushed` | measured |  |
 
 ## Checkpoint
 
@@ -41,13 +41,13 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `Adjudication` | meta | a model's opinion: advisory, signed but not verified as true |
 | `Commit` | key |  |
 | `Evidence` | meta | a model's opinion: advisory, signed but not verified as true |
-| `Model` | meta | the run's own account of itself: signed, but not verified as true |
-| `ModelUnresolved` | meta | the run's own account of itself: signed, but not verified as true |
+| `Model` | measured |  |
+| `ModelUnresolved` | measured |  |
 | `Path` | key |  |
 | `QueueFindingID` | key |  |
 | `Repo` | key |  |
 | `Scope` | meta | a model's opinion: advisory, signed but not verified as true |
-| `SeatTool` | meta | the run's own account of itself: signed, but not verified as true |
+| `SeatTool` | measured |  |
 | `Severity` | meta | a model's opinion: advisory, signed but not verified as true |
 | `Source` | meta | a model's opinion: advisory, signed but not verified as true |
 | `TargetTest` | meta | a model's opinion: advisory, signed but not verified as true |
@@ -64,7 +64,7 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `KeyID` | key |  |
 | `Kind` | key |  |
 | `Prev` | key |  |
-| `Pushed` | meta | when the entry was placed in the directory, by whoever placed it: signed, but not verified as true |
+| `Pushed` | measured |  |
 | `Raw` | key |  |
 | `Reason` | meta | the retractor's words: signed, but not verified as true |
 | `Retracts` | key |  |
@@ -80,7 +80,7 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `Detail` | meta | the run's own account of its timeline: signed, but not verified as true |
 | `DurationMillis` | meta | the run's own account of its timeline: signed, but not verified as true |
 | `Kind` | meta | the run's own account of its timeline: signed, but not verified as true |
-| `Model` | meta | the run's own account of its timeline: signed, but not verified as true |
+| `Model` | measured |  |
 | `Path` | key |  |
 | `Repo` | key |  |
 | `RunURL` | key |  |
@@ -128,34 +128,34 @@ The table is checked against the record's Go types by a test, so a field cannot 
 
 | Field | Tier | Note |
 |---|---|---|
-| `CacheWriteInputTokens` | meta | metered from the provider's or agent CLI's own report: signed, but not verified as true |
-| `CachedInputTokens` | meta | metered from the provider's or agent CLI's own report: signed, but not verified as true |
-| `Calls` | meta | metered from the provider's or agent CLI's own report: signed, but not verified as true |
-| `InputTokens` | meta | metered from the provider's or agent CLI's own report: signed, but not verified as true |
-| `Model` | meta | the run's own account of itself: signed, but not verified as true |
-| `OutputTokens` | meta | metered from the provider's or agent CLI's own report: signed, but not verified as true |
+| `CacheWriteInputTokens` | measured |  |
+| `CachedInputTokens` | measured |  |
+| `Calls` | measured |  |
+| `InputTokens` | measured |  |
+| `Model` | measured |  |
+| `OutputTokens` | measured |  |
 | `Path` | key |  |
 | `Repo` | key |  |
-| `Retries` | meta | metered from the provider's or agent CLI's own report: signed, but not verified as true |
-| `Role` | meta | the run's own account of itself: signed, but not verified as true |
+| `Retries` | measured |  |
+| `Role` | measured |  |
 | `RunURL` | key |  |
 | `ScanID` | key |  |
 | `StatementSHA256` | key |  |
-| `UnmeteredCalls` | meta | metered from the provider's or agent CLI's own report: signed, but not verified as true |
-| `WallMillis` | meta | metered from the provider's or agent CLI's own report: signed, but not verified as true |
+| `UnmeteredCalls` | measured |  |
+| `WallMillis` | measured |  |
 
 ## MutantAttemptRow
 
 | Field | Tier | Note |
 |---|---|---|
 | `Commit` | key |  |
-| `Model` | meta | the run's own account of itself: signed, but not verified as true |
+| `Model` | measured |  |
 | `MutantID` | key |  |
 | `Outcome` | measured |  |
 | `Path` | key |  |
 | `Repo` | key |  |
-| `Role` | meta | the run's own account of itself: signed, but not verified as true |
-| `Shadow` | meta | the run's own account of itself: signed, but not verified as true |
+| `Role` | measured |  |
+| `Shadow` | measured |  |
 
 ## MutantRow
 
@@ -163,7 +163,7 @@ The table is checked against the record's Go types by a test, so a field cannot 
 |---|---|---|
 | `Code` | measured |  |
 | `DurationMillis` | measured |  |
-| `GeneratorModel` | meta | the run's own account of itself: signed, but not verified as true |
+| `GeneratorModel` | measured |  |
 | `InvalidReason` | measured |  |
 | `KilledBy` | measured |  |
 | `MutantID` | key |  |
@@ -202,34 +202,34 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | Field | Tier | Note |
 |---|---|---|
 | `Author` | declared | declared by the commit: freely written or removed by its author, so a metric about the change and not evidence of who or what wrote it |
-| `BytesShown` | meta | the run's own account of itself: signed, but not verified as true |
-| `Calls` | meta | the run's own account of itself: signed, but not verified as true |
+| `BytesShown` | measured |  |
+| `Calls` | measured |  |
 | `CoAuthors` | declared | declared by the commit: freely written or removed by its author, so a metric about the change and not evidence of who or what wrote it |
 | `Commit` | key |  |
 | `Committer` | declared | declared by the commit: freely written or removed by its author, so a metric about the change and not evidence of who or what wrote it |
-| `Coverage` | meta | the run's own account of itself: signed, but not verified as true |
-| `FilesShown` | meta | the run's own account of itself: signed, but not verified as true |
+| `Coverage` | measured |  |
+| `FilesShown` | measured |  |
 | `GeneratedWith` | declared | declared by the commit: freely written or removed by its author, so a metric about the change and not evidence of who or what wrote it |
-| `InputTokens` | meta | metered from the provider's or agent CLI's own report: signed, but not verified as true |
-| `Lang` | meta | the run's own account of itself: signed, but not verified as true |
+| `InputTokens` | measured |  |
+| `Lang` | measured |  |
 | `Opinion` | meta | a model's opinion: advisory, signed but not verified as true |
-| `OutputTokens` | meta | metered from the provider's or agent CLI's own report: signed, but not verified as true |
+| `OutputTokens` | measured |  |
 | `Repo` | key |  |
-| `ReviewerModel` | meta | the run's own account of itself: signed, but not verified as true |
-| `ReviewerModelResolved` | meta | the run's own account of itself: signed, but not verified as true |
-| `ReviewerTool` | meta | the run's own account of itself: signed, but not verified as true |
+| `ReviewerModel` | measured |  |
+| `ReviewerModelResolved` | measured |  |
+| `ReviewerTool` | measured |  |
 | `Scope` | key |  |
 | `Sound` | meta | a model's opinion: advisory, signed but not verified as true |
-| `StartedAt` | meta | the run's own account of itself: signed, but not verified as true |
+| `StartedAt` | measured |  |
 | `StatementSHA256` | key |  |
-| `Substrate` | meta | the run's own account of itself: signed, but not verified as true |
-| `Truncated` | meta | the run's own account of itself: signed, but not verified as true |
-| `UnmeteredCalls` | meta | metered from the provider's or agent CLI's own report: signed, but not verified as true |
-| `VerifierModel` | meta | the run's own account of itself: signed, but not verified as true |
-| `VerifierModelResolved` | meta | the run's own account of itself: signed, but not verified as true |
+| `Substrate` | measured |  |
+| `Truncated` | measured |  |
+| `UnmeteredCalls` | measured |  |
+| `VerifierModel` | measured |  |
+| `VerifierModelResolved` | measured |  |
 | `VerifierNote` | meta | a model's opinion: advisory, signed but not verified as true |
 | `VerifierOpinion` | meta | a model's opinion: advisory, signed but not verified as true |
-| `VerifierTool` | meta | the run's own account of itself: signed, but not verified as true |
+| `VerifierTool` | measured |  |
 
 ## Row
 
@@ -243,7 +243,7 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `AuthoredTestNotCollected` | measured |  |
 | `BaselineFailed` | measured |  |
 | `BaselineFlaky` | measured |  |
-| `CacheHit` | meta | the run's own account of itself: signed, but not verified as true |
+| `CacheHit` | measured |  |
 | `CacheKey` | key |  |
 | `Candidates` | measured |  |
 | `ChallengerJaccard` | measured |  |
@@ -256,7 +256,7 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `ChallengerUnion` | measured |  |
 | `Commit` | key |  |
 | `Complexity` | measured |  |
-| `ComputedAt` | meta | the run's own clock: signed, but not verified as true |
+| `ComputedAt` | measured |  |
 | `ConcurrencyNote` | meta | the run's own account of itself: signed, but not verified as true |
 | `CoveringTests` | measured |  |
 | `CoveringUnits` | measured |  |
@@ -275,16 +275,16 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `ImportOnly` | measured |  |
 | `KillRate` | measured |  |
 | `Lang` | measured |  |
-| `MaxProvenMissed` | meta | the run's own configuration, as it reported it: signed, but not verified as true |
-| `MinKillRate` | meta | the run's own configuration, as it reported it: signed, but not verified as true |
-| `ModelsByRole` | meta | the run's own configuration, as it reported it: signed, but not verified as true |
-| `MutantBudget` | meta | the run's own configuration, as it reported it: signed, but not verified as true |
-| `MutantBudgetRule` | meta | the run's own configuration, as it reported it: signed, but not verified as true |
+| `MaxProvenMissed` | measured |  |
+| `MinKillRate` | measured |  |
+| `ModelsByRole` | measured |  |
+| `MutantBudget` | measured |  |
+| `MutantBudgetRule` | measured |  |
 | `MutantMillisMax` | measured |  |
 | `MutantMillisMedian` | measured |  |
 | `MutantsDistinct` | measured |  |
 | `MutantsDistinctSurvived` | measured |  |
-| `MutantsFrom` | meta | the run's own configuration, as it reported it: signed, but not verified as true |
+| `MutantsFrom` | measured |  |
 | `MutantsGraded` | measured |  |
 | `MutantsInvalid` | measured |  |
 | `MutantsPlanted` | measured |  |
@@ -295,10 +295,10 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `PerMutant` | measured |  |
 | `PoolMillis` | measured |  |
 | `PoolTestUnsound` | measured |  |
-| `PreflightState` | meta | the run's own account of itself: signed, but not verified as true |
+| `PreflightState` | measured |  |
 | `PriorDigest` | key |  |
-| `PriorsApplied` | meta | the run's own configuration, as it reported it: signed, but not verified as true |
-| `PromptShape` | meta | the run's own configuration, as it reported it: signed, but not verified as true |
+| `PriorsApplied` | measured |  |
+| `PromptShape` | measured |  |
 | `ProvenMissed` | measured |  |
 | `ProvenMutantIDs` | measured |  |
 | `Reason` | meta | the run's own account of itself: signed, but not verified as true |
@@ -308,15 +308,15 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `ReusedFromScanID` | key |  |
 | `RunURL` | key |  |
 | `ScanID` | key |  |
-| `SeatTools` | meta | the run's own configuration, as it reported it: signed, but not verified as true |
+| `SeatTools` | measured |  |
 | `SelectedTests` | measured |  |
 | `SelectionExcluded` | measured |  |
 | `SelectionExcludedRed` | measured |  |
 | `SelectionFallback` | measured |  |
 | `SelectionMillis` | measured |  |
 | `SelectionUnreported` | measured |  |
-| `SharedDirs` | meta | the run's own account of itself: signed, but not verified as true |
-| `StartedAt` | meta | the run's own clock: signed, but not verified as true |
+| `SharedDirs` | measured |  |
+| `StartedAt` | measured |  |
 | `StatementSHA256` | key |  |
 | `Status` | measured |  |
 | `SuiteBaselineMillis` | measured |  |
@@ -331,54 +331,54 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `Trees` | measured |  |
 | `Uncovered` | measured |  |
 | `VacuousFindings` | meta | a model's opinion: advisory, signed but not verified as true |
-| `VerdictJSON` | measured |  |
-| `WriterMode` | meta | the run's own configuration, as it reported it: signed, but not verified as true |
+| `VerdictJSON` | meta | carries the run's full verdict document, critic opinion included: signed, but not verified as true |
+| `WriterMode` | measured |  |
 
 ## ScanRow
 
 | Field | Tier | Note |
 |---|---|---|
-| `AllCandidates` | meta | the run's own configuration, as it reported it: signed, but not verified as true |
+| `AllCandidates` | measured |  |
 | `Audited` | measured |  |
 | `Candidates` | measured |  |
 | `Commit` | key |  |
-| `Cores` | meta | the run's own configuration, as it reported it: signed, but not verified as true |
-| `CorralVersion` | meta | the run's own configuration, as it reported it: signed, but not verified as true |
+| `Cores` | measured |  |
+| `CorralVersion` | measured |  |
 | `DiffBase` | key |  |
-| `EngineVersion` | meta | the run's own configuration, as it reported it: signed, but not verified as true |
+| `EngineVersion` | measured |  |
 | `EntryHash` | key |  |
-| `FinishedAt` | meta | the run's own clock: signed, but not verified as true |
-| `Host` | meta | the run's own configuration, as it reported it: signed, but not verified as true |
-| `InputTokens` | meta | metered from the provider's or agent CLI's own report: signed, but not verified as true |
-| `ModelCalls` | meta | metered from the provider's or agent CLI's own report: signed, but not verified as true |
-| `ModelSet` | meta | the run's own configuration, as it reported it: signed, but not verified as true |
-| `OutputTokens` | meta | metered from the provider's or agent CLI's own report: signed, but not verified as true |
+| `FinishedAt` | measured |  |
+| `Host` | measured |  |
+| `InputTokens` | measured |  |
+| `ModelCalls` | measured |  |
+| `ModelSet` | measured |  |
+| `OutputTokens` | measured |  |
 | `Passed` | measured |  |
 | `PreflightNote` | meta | the run's own account of itself: signed, but not verified as true |
 | `PreflightRan` | measured |  |
-| `PushedBy` | meta | the run's own configuration, as it reported it: signed, but not verified as true |
+| `PushedBy` | measured |  |
 | `RekorLogIndex` | key |  |
 | `RekorUUID` | key |  |
 | `Repo` | key |  |
 | `RepoIdentity` | key |  |
 | `RunURL` | key |  |
-| `SandboxBackend` | meta | the run's own configuration, as it reported it: signed, but not verified as true |
-| `SandboxImage` | meta | the run's own configuration, as it reported it: signed, but not verified as true |
+| `SandboxBackend` | measured |  |
+| `SandboxImage` | measured |  |
 | `ScanID` | key |  |
 | `ScanUID` | key |  |
-| `Scope` | meta | the run's own configuration, as it reported it: signed, but not verified as true |
-| `SeedSkipped` | meta | the run's own configuration, as it reported it: signed, but not verified as true |
-| `SelectionMillis` | meta | the run's own clock: signed, but not verified as true |
-| `SelectionReused` | meta | the run's own configuration, as it reported it: signed, but not verified as true |
-| `SourcePushed` | meta | the run's own account of itself: signed, but not verified as true |
-| `StartedAt` | meta | the run's own clock: signed, but not verified as true |
+| `Scope` | measured |  |
+| `SeedSkipped` | measured |  |
+| `SelectionMillis` | measured |  |
+| `SelectionReused` | measured |  |
+| `SourcePushed` | measured |  |
+| `StartedAt` | measured |  |
 | `StatementSHA256` | key |  |
-| `Substrate` | meta | the run's own configuration, as it reported it: signed, but not verified as true |
-| `Top` | meta | the run's own configuration, as it reported it: signed, but not verified as true |
+| `Substrate` | measured |  |
+| `Top` | measured |  |
 | `TotalFiles` | measured |  |
-| `TotalMillis` | meta | the run's own clock: signed, but not verified as true |
+| `TotalMillis` | measured |  |
 | `TreeDirty` | measured |  |
-| `TreesRequested` | meta | the run's own configuration, as it reported it: signed, but not verified as true |
+| `TreesRequested` | measured |  |
 
 ## SeatRow
 
@@ -388,24 +388,24 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `Catches` | measured |  |
 | `Commit` | key |  |
 | `CriticFlags` | meta | a model's opinion: advisory, signed but not verified as true |
-| `Dropped` | meta | the run's own account of itself: signed, but not verified as true |
+| `Dropped` | measured |  |
 | `Lang` | measured |  |
-| `Model` | meta | the run's own account of itself: signed, but not verified as true |
-| `ModelUnresolved` | meta | the run's own account of itself: signed, but not verified as true |
+| `Model` | measured |  |
+| `ModelUnresolved` | measured |  |
 | `MutantsPlanted` | measured |  |
 | `MutantsSurvived` | measured |  |
 | `Opportunities` | measured |  |
-| `ParseRetries` | meta | the run's own account of itself: signed, but not verified as true |
+| `ParseRetries` | measured |  |
 | `Path` | key |  |
 | `Region` | measured |  |
 | `RegionComplexity` | measured |  |
 | `RegionLines` | measured |  |
 | `Repo` | key |  |
-| `Role` | meta | the run's own account of itself: signed, but not verified as true |
-| `SeatTool` | meta | the run's own account of itself: signed, but not verified as true |
-| `Shadow` | meta | the run's own account of itself: signed, but not verified as true |
-| `ShadowDrawn` | meta | the run's own account of itself: signed, but not verified as true |
-| `Shard` | meta | the run's own account of itself: signed, but not verified as true |
+| `Role` | measured |  |
+| `SeatTool` | measured |  |
+| `Shadow` | measured |  |
+| `ShadowDrawn` | measured |  |
+| `Shard` | measured |  |
 | `SoundTests` | measured |  |
 | `TestComplexity` | measured |  |
 
@@ -417,7 +417,7 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `KeyID` | key |  |
 | `Name` | key |  |
 | `PubKey` | key |  |
-| `Reason` | meta | a person's statement, signed in their name: not verified as true |
+| `Reason` | meta | the run's own account of itself: signed, but not verified as true |
 
 ## SignerKey
 

@@ -53,10 +53,8 @@ type FieldTier struct {
 const (
 	noteDeclaredCommit = "declared by the commit: freely written or removed by its author, so a metric about the change and not evidence of who or what wrote it"
 	noteRunAccount     = "the run's own account of itself: signed, but not verified as true"
-	noteRunConfig      = "the run's own configuration, as it reported it: signed, but not verified as true"
 	noteModelOpinion   = "a model's opinion: advisory, signed but not verified as true"
-	noteMetered        = "metered from the provider's or agent CLI's own report: signed, but not verified as true"
-	notePerson         = "a person's statement, signed in their name: not verified as true"
+	noteAdjudicator    = "declared by the person who adjudicated"
 )
 
 var fieldTiers = buildFieldTiers()
@@ -77,27 +75,26 @@ func buildFieldTiers() map[[2]string]FieldTier {
 
 	// Entry: the envelope. Everything here names or links.
 	add("Entry", TierKey, "", "Format Kind ScanUID Prev Retracts Hash KeyID Signature Sigstore File Raw")
-	add("Entry", TierMeta, "when the entry was placed in the directory, by whoever placed it: signed, but not verified as true", "Pushed")
+	add("Entry", TierMeasured, "", "Pushed")
 	add("Entry", TierMeta, "the retractor's words: signed, but not verified as true", "Reason")
-	add("Bundle", TierMeta, "whether the run says the audited source was pushed: signed, but not verified as true", "SourcePushed")
+	add("Bundle", TierMeasured, "", "SourcePushed")
 	add("Link", TierKey, "", "Require ScanID StatementSHA256")
 	add("Checkpoint", TierKey, "", "Entries Head Through")
 	add("SignerChange", TierKey, "", "Action KeyID Name PubKey")
-	add("SignerChange", TierMeta, notePerson, "Reason")
+	add("SignerChange", TierMeta, noteRunAccount, "Reason")
 	add("SignerKey", TierKey, "", "KeyID Name PubKey")
 	add("Adjudication", TierKey, "", "Adjudicates")
-	add("Adjudication", TierMeta, notePerson, "By Verdict Reason")
+	add("Adjudication", TierDeclared, noteAdjudicator, "By Verdict Reason")
 
 	// Identity: read from the audited commit, so declared and nothing more.
 	add("Identity", TierDeclared, noteDeclaredCommit, "Author Committer CoAuthors GeneratedWith")
 
 	// ScanRow: one per run.
 	add("ScanRow", TierKey, "", "ScanID ScanUID EntryHash Repo RepoIdentity Commit DiffBase RunURL StatementSHA256 RekorLogIndex RekorUUID")
-	add("ScanRow", TierMeasured, "", "Audited Candidates TotalFiles Passed TreeDirty PreflightRan")
-	add("ScanRow", TierMeta, noteRunConfig, "AllCandidates Top TreesRequested Scope Substrate SandboxBackend SandboxImage ModelSet CorralVersion EngineVersion Cores SeedSkipped SelectionReused PushedBy Host")
-	add("ScanRow", TierMeta, "the run's own clock: signed, but not verified as true", "StartedAt FinishedAt TotalMillis SelectionMillis")
-	add("ScanRow", TierMeta, noteMetered, "ModelCalls InputTokens OutputTokens")
-	add("ScanRow", TierMeta, noteRunAccount, "PreflightNote SourcePushed")
+	add("ScanRow", TierMeasured, "", `Audited Candidates TotalFiles Passed TreeDirty PreflightRan AllCandidates Top TreesRequested
+		Scope Substrate SandboxBackend SandboxImage ModelSet CorralVersion EngineVersion Cores SeedSkipped SelectionReused
+		PushedBy Host SourcePushed StartedAt FinishedAt TotalMillis SelectionMillis ModelCalls InputTokens OutputTokens`)
+	add("ScanRow", TierMeta, noteRunAccount, "PreflightNote")
 
 	// Row: one per audited file.
 	add("Row", TierKey, "", "Repo Commit Path ScanID RunURL StatementSHA256 ParentSHA256 CacheKey PriorDigest ReusedFromScanID")
@@ -110,42 +107,40 @@ func buildFieldTiers() map[[2]string]FieldTier {
 		PerMutant PoolMillis PoolTestUnsound ProvenMissed ProvenMutantIDs RegionsProbed RegionsTotal SelectedTests
 		SelectionExcluded SelectionExcludedRed SelectionFallback SelectionMillis SelectionUnreported Status
 		SuiteBaselineMillis SuiteTests Survivors Symbols SymbolsProbed TestSelection TestWriterFailed
-		TimedOut TotalMillis Trees Uncovered VerdictJSON DroppedRegions`)
-	add("Row", TierMeta, noteRunConfig, "MaxProvenMissed MinKillRate MutantBudget MutantBudgetRule ModelsByRole SeatTools PromptShape WriterMode MutantsFrom PriorsApplied")
-	add("Row", TierMeta, noteRunAccount, "CacheHit ConcurrencyNote Detail PreflightState Reason SharedDirs")
-	add("Row", TierMeta, "the run's own clock: signed, but not verified as true", "ComputedAt StartedAt")
+		TimedOut TotalMillis Trees Uncovered DroppedRegions
+		MaxProvenMissed MinKillRate MutantBudget MutantBudgetRule ModelsByRole SeatTools PromptShape WriterMode MutantsFrom
+		PriorsApplied CacheHit PreflightState SharedDirs ComputedAt StartedAt`)
+	add("Row", TierMeta, noteRunAccount, "ConcurrencyNote Detail Reason")
+	add("Row", TierMeta, "carries the run's full verdict document, critic opinion included: signed, but not verified as true", "VerdictJSON")
 	add("Row", TierMeta, noteModelOpinion, "VacuousFindings")
 	add("TestsPerMutantSpread", TierMeasured, "", "Min Median Max")
 
 	// MutantRow, MutantAttemptRow: what was planted and what executing it said.
 	add("MutantRow", TierKey, "", "MutantID ParentSHA256 Path Repo RunURL ScanID StatementSHA256")
 	add("MutantRow", TierMeasured, "", "Code DurationMillis InvalidReason KilledBy Outcome Proven ProvenByAuthoredAlone SelectionRule Shape SpanEnd SpanStart TestsRun")
-	add("MutantRow", TierMeta, noteRunAccount, "GeneratorModel")
+	add("MutantRow", TierMeasured, "", "GeneratorModel")
 	add("MutantAttemptRow", TierKey, "", "Commit MutantID Path Repo")
-	add("MutantAttemptRow", TierMeasured, "", "Outcome")
-	add("MutantAttemptRow", TierMeta, noteRunAccount, "Model Role Shadow")
+	add("MutantAttemptRow", TierMeasured, "", "Outcome Model Role Shadow")
 
 	// ModelCallRow, SeatRow, CriticFindingRow: how the models were used.
 	add("ModelCallRow", TierKey, "", "Path Repo RunURL ScanID StatementSHA256")
-	add("ModelCallRow", TierMeta, noteMetered, "CacheWriteInputTokens CachedInputTokens Calls InputTokens OutputTokens Retries UnmeteredCalls WallMillis")
-	add("ModelCallRow", TierMeta, noteRunAccount, "Model Role")
+	add("ModelCallRow", TierMeasured, "", "CacheWriteInputTokens CachedInputTokens Calls InputTokens OutputTokens Retries UnmeteredCalls WallMillis Model Role")
 	add("SeatRow", TierKey, "", "Commit Path Repo")
-	add("SeatRow", TierMeasured, "", "AuthoredTests Catches MutantsPlanted MutantsSurvived Opportunities SoundTests Lang Region RegionComplexity RegionLines TestComplexity")
-	add("SeatRow", TierMeta, noteRunAccount, "Dropped Model ModelUnresolved ParseRetries Role SeatTool Shadow ShadowDrawn Shard")
+	add("SeatRow", TierMeasured, "", "AuthoredTests Catches MutantsPlanted MutantsSurvived Opportunities SoundTests Lang Region RegionComplexity RegionLines TestComplexity Dropped Model ModelUnresolved ParseRetries Role SeatTool Shadow ShadowDrawn Shard")
 	add("SeatRow", TierMeta, noteModelOpinion, "CriticFlags")
 	add("CriticFindingRow", TierKey, "", "Commit Path Repo QueueFindingID")
 	add("CriticFindingRow", TierMeta, noteModelOpinion, "Adjudication Evidence Severity Source TargetTest TestFile TestSelector Scope")
-	add("CriticFindingRow", TierMeta, noteRunAccount, "Model ModelUnresolved SeatTool")
+	add("CriticFindingRow", TierMeasured, "", "Model ModelUnresolved SeatTool")
 
 	// EventRow: the run's own timeline.
 	add("EventRow", TierKey, "", "Path Repo RunURL ScanID StatementSHA256")
-	add("EventRow", TierMeta, "the run's own account of its timeline: signed, but not verified as true", "Actor Detail DurationMillis Kind Model Seq Subject TS")
+	add("EventRow", TierMeta, "the run's own account of its timeline: signed, but not verified as true", "Actor Detail DurationMillis Kind Seq Subject TS")
+	add("EventRow", TierMeasured, "", "Model")
 
 	// reviewrecord.Review and its findings.
 	add("Review", TierKey, "", "Repo Commit Scope StatementSHA256")
 	add("Review", TierDeclared, noteDeclaredCommit, "Author Committer CoAuthors GeneratedWith")
-	add("Review", TierMeta, noteRunAccount, "BytesShown Calls Coverage FilesShown Lang StartedAt Substrate Truncated ReviewerModel ReviewerModelResolved ReviewerTool VerifierModel VerifierModelResolved VerifierTool")
-	add("Review", TierMeta, noteMetered, "InputTokens OutputTokens UnmeteredCalls")
+	add("Review", TierMeasured, "", "BytesShown Calls Coverage FilesShown Lang StartedAt Substrate Truncated ReviewerModel ReviewerModelResolved ReviewerTool VerifierModel VerifierModelResolved VerifierTool InputTokens OutputTokens UnmeteredCalls")
 	add("Review", TierMeta, noteModelOpinion, "Opinion Sound VerifierNote VerifierOpinion")
 	add("Finding", TierKey, "", "ID")
 	add("Finding", TierMeasured, "", "Demoted ExitCode Script Stdout Tier Unrun")

@@ -407,6 +407,7 @@ var printedMetrics = map[string]printedRow{
 		"Row.ChallengerMutants", "Row.ChallengerSurvivedWriter", "Row.ChallengerSurvivedShadow", "Row.ChallengerShared",
 		"Row.ChallengerUnion", "Row.ChallengerJaccard"}},
 	"cmd/corral/certify_repo_transparency.go:uploadToTransparencyLog": {Fields: []string{"ScanRow.RekorLogIndex"}},
+	"cmd/corral/toolchains.go:readVersion":                            {Fields: []string{"ScanRow.Toolchains"}},
 	"cmd/corral/certify_repo_units.go:collectUnits":                   {Fields: []string{"ScanRow.UnitPass", "ScanRow.Settings"}},
 	"cmd/corral/certify_repo_units.go:unitsCmdDigest":                 {Exempt: exDigestFrame},
 	"cmd/corral/certify_repo_units.go:printUnitPass":                  {Fields: []string{"ScanRow.UnitPass", "ScanRow.Settings"}},

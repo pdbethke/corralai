@@ -309,7 +309,14 @@ func TestBuildModelCallRowsIsFieldForField(t *testing.T) {
 			lt := lv.Type()
 			// deliberatelyUnmappedCall names every scanstore.ModelCall field with no
 			// identically-named, identically-typed auditpush.ModelCallRow field.
-			deliberatelyUnmappedCall := map[string]string{}
+			deliberatelyUnmappedCall := map[string]string{
+				// Priced here, not copied: a run's row carries no cost, and
+				// buildModelCallRows computes it once (the cost tests hold
+				// the figure). The fields exist on scanstore.ModelCall only
+				// for the ledger reader to fill.
+				"CostMicroUSD": "computed by buildModelCallRows",
+				"CostBasis":    "computed by buildModelCallRows",
+			}
 			for i := 0; i < lt.NumField(); i++ {
 				name := lt.Field(i).Name
 				if _, skip := deliberatelyUnmappedCall[name]; skip {

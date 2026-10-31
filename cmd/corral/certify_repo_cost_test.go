@@ -167,9 +167,15 @@ func TestModelCallsReachTheLedger(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("ModelCallsForScan returned %d rows, want 1", len(got))
 	}
+	// The cost is the one the entry priced the row at, read back with it:
+	// the reader must not drop it (it once did) and must not invent one.
+	if len(b.Calls) != 1 || b.Calls[0].CostBasis == "" {
+		t.Fatalf("the entry priced no row: %+v", b.Calls)
+	}
 	want := scanstore.ModelCall{
 		ScanID: id, Path: "pkg/a.go", Role: advpool.RoleMutantGenerator, Model: "m-1",
 		Calls: 3, InputTokens: 900, OutputTokens: 210, WallMillis: 4100,
+		CostMicroUSD: b.Calls[0].CostMicroUSD, CostBasis: b.Calls[0].CostBasis,
 	}
 	if !reflect.DeepEqual(got[0], want) {
 		t.Errorf("ledger round trip = %+v, want %+v", got[0], want)

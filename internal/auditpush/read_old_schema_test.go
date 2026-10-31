@@ -27,7 +27,7 @@ func TestReadingAWarehouseThatPredatesTheLateScanColumns(t *testing.T) {
 	}
 	// corral_scans as the previous release left it: every column but the
 	// two this branch added.
-	for _, col := range []string{"tree_dirty", "repo_identity", "sandbox_backend", "sandbox_image", "seed_skipped", "unit_pass", "test_command", "runner", "settings"} {
+	for _, col := range []string{"tree_dirty", "repo_identity", "sandbox_backend", "sandbox_image", "seed_skipped", "unit_pass", "test_command", "test_command_sha256", "runner", "settings"} {
 		if _, err := db.Exec("ALTER TABLE corral_scans DROP COLUMN " + col); err != nil {
 			t.Fatal(err)
 		}

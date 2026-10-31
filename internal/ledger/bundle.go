@@ -188,6 +188,10 @@ type ScanRow struct {
 	// stock one. Empty when the scan resolved no single language to name a
 	// command for (a mixed repository, a dry run) and on every earlier row.
 	TestCommand string `json:",omitempty"`
+	// TestCommandSHA256 is the sha256 hex of the UNREDACTED, shell-joined
+	// command, so two runs' commands can be compared exactly without the
+	// command being published. Empty when TestCommand is, and on earlier rows.
+	TestCommandSHA256 string `json:",omitempty"`
 	// Runner is the runner-table row (lang.Runner.ID) that command was read
 	// as: the operator's --runner, else the row the command names, else the
 	// language's default. Empty when none resolved and on every earlier row.

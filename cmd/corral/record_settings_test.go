@@ -11,65 +11,125 @@ import (
 	"time"
 
 	"github.com/pdbethke/corralai/internal/auditpush"
-	"github.com/pdbethke/corralai/internal/creds"
-	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
+// redactRepo is a repository holding the files the positive controls name.
+func redactRepo(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "node_modules", "vitest", "vitest.mjs"), "x")
+	mustWrite(t, filepath.Join(root, "tests", "a_test.py"), "x")
+	return root
+}
+
 // TestRedactCommandHidesSecretsInTheCommand: the command is recorded on a
-// signed, public ledger entry, so a credential typed after `--` must not
-// reach it. A name is secret when it is a credential corral knows by name or
-// looks like one; here a false positive only hides a value from a record and
-// never breaks a run (unlike ScrubbedEnviron, which strips a suite's own
-// environment), so the heuristic is the right side to err on.
+// signed entry on a public branch, so the recording is an ALLOWLIST (ruling
+// R-T5): a token is kept only when provably safe, and a credential reaches
+// the record by none of the routes a denylist of names cannot close. Each
+// case's secret part is asserted absent from the joined result, not the
+// exact output, so a different redaction shape cannot pass by accident.
 func TestRedactCommandHidesSecretsInTheCommand(t *testing.T) {
-	canon := creds.CanonicalNames[0]
-	own := sandbox.CorralOwnSecrets[0]
+	root := redactRepo(t)
 	cases := []struct {
-		name string
-		in   []string
-		want []string
+		name   string
+		in     []string
+		secret string
 	}{
-		{"env assignment", []string{"env", "API_KEY=x", "npm", "test"}, []string{"env", "API_KEY=<redacted>", "npm", "test"}},
-		{"flag with equals", []string{"pytest", "--token=abc"}, []string{"pytest", "--token=<redacted>"}},
-		{"flag with separate value", []string{"pytest", "--token", "abc"}, []string{"pytest", "--token", "<redacted>"}},
-		{"assignment inside an sh -c script", []string{"sh", "-c", "GH_TOKEN=x make test"}, []string{"sh", "-c", "GH_TOKEN=<redacted> make test"}},
-		{"flag inside an sh -c script", []string{"sh", "-c", "tool --api-key abc && tool --password=hunter2 run"}, []string{"sh", "-c", "tool --api-key <redacted> && tool --password=<redacted> run"}},
-		{"quoted value in a script", []string{"sh", "-c", `DB_PASSWORD="a b c" go test ./...`}, []string{"sh", "-c", `DB_PASSWORD=<redacted> go test ./...`}},
-		{"lower case name", []string{"env", "my_secret=x", "go", "test"}, []string{"env", "my_secret=<redacted>", "go", "test"}},
-		{"passwd", []string{"env", "DB_PASSWD=x", "go", "test"}, []string{"env", "DB_PASSWD=<redacted>", "go", "test"}},
-		{"a canonical credential name", []string{"env", canon + "=x", "go", "test"}, []string{"env", canon + "=<redacted>", "go", "test"}},
-		{"a corral secret name", []string{"env", own + "=x", "go", "test"}, []string{"env", own + "=<redacted>", "go", "test"}},
-		{"a secret in a url query", []string{"curl", "https://h/p?token=abc&x=1"}, []string{"curl", "https://h/p?token=<redacted>&x=1"}},
-		{"a non-secret assignment stays", []string{"env", "CI=1", "go", "test"}, []string{"env", "CI=1", "go", "test"}},
-		{"nothing secret", []string{"node", "./node_modules/vitest/vitest.mjs", "run"}, []string{"node", "./node_modules/vitest/vitest.mjs", "run"}},
+		{"credentials in a url", []string{"curl", "https://usr1:s3cr3tpw@host/x"}, "s3cr3tpw"},
+		{"credentials in a url assignment", []string{"env", "DATABASE_URL=postgres://u1:s3cr3tpw@h/db", "npm", "test"}, "s3cr3tpw"},
+		{"authorization header", []string{"curl", "-H", "Authorization: Bearer s3cr3tpw"}, "s3cr3tpw"},
+		{"api key header", []string{"curl", "-H", "X-Api-Key: s3cr3tpw"}, "s3cr3tpw"},
+		{"short flag with separate value", []string{"tool", "-t", "s3cr3tpw"}, "s3cr3tpw"},
+		{"short flag p with separate value", []string{"mysql", "-p", "s3cr3tpw"}, "s3cr3tpw"},
+		{"short flag with attached value", []string{"mysql", "-ps3cr3tpw"}, "s3cr3tpw"},
+		{"curl -u", []string{"curl", "-u", "user1:s3cr3tpw"}, "s3cr3tpw"},
+		{"--pass", []string{"tool", "--pass=s3cr3tpw"}, "s3cr3tpw"},
+		{"DB_PASS", []string{"env", "DB_PASS=s3cr3tpw", "go", "test"}, "s3cr3tpw"},
+		{"AUTH", []string{"env", "AUTH=s3cr3tpw", "go", "test"}, "s3cr3tpw"},
+		{"escaped quote in a script", []string{"sh", "-c", `PW="s3cr3\"tpw" go test ./...`}, "s3cr3"},
+		{"metacharacter in a script", []string{"sh", "-c", "TOKEN=s3cr3&tpw go test ./..."}, "tpw"},
+		{"dotted flag name", []string{"tool", "--api.key=s3cr3tpw"}, "s3cr3tpw"},
+		{"api key before npm test", []string{"API_KEY=s3cr3tpw", "npm", "test"}, "s3cr3tpw"},
+		{"pytest --token=", []string{"pytest", "--token=s3cr3tpw"}, "s3cr3tpw"},
+		{"pytest --token value", []string{"pytest", "--token", "s3cr3tpw"}, "s3cr3tpw"},
+		{"assignment inside an sh -c script", []string{"sh", "-c", "GH_TOKEN=s3cr3tpw make test"}, "s3cr3tpw"},
+		{"a script that cannot be read", []string{"sh", "-c", "tool 's3cr3tpw"}, "s3cr3tpw"},
+		{"a backquoted script", []string{"sh", "-c", "tool `echo s3cr3tpw`"}, "s3cr3tpw"},
+		{"a path that does not exist", []string{"pytest", "s3cr3tpw/path"}, "s3cr3tpw"},
+		{"a path escaping the repository", []string{"pytest", "../s3cr3tpw"}, "s3cr3tpw"},
+		{"an absolute path", []string{"pytest", "/home/s3cr3tpw/x"}, "s3cr3tpw"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			orig := append([]string(nil), c.in...)
-			got := redactCommand(c.in)
-			if !reflect.DeepEqual(got, c.want) {
-				t.Errorf("redactCommand(%q) = %q, want %q", c.in, got, c.want)
+			got := redactCommand(c.in, root)
+			if len(got) != len(c.in) {
+				t.Errorf("redaction changed the shape: %q -> %q", c.in, got)
+			}
+			if joined := strings.Join(got, " "); strings.Contains(joined, c.secret) {
+				t.Errorf("redactCommand(%q) = %q, which carries %q", c.in, got, c.secret)
+			}
+			if text := testCommandText(c.in, root); strings.Contains(text, c.secret) {
+				t.Errorf("testCommandText(%q) = %q, which carries %q", c.in, text, c.secret)
 			}
 			if !reflect.DeepEqual(c.in, orig) {
 				t.Errorf("redactCommand mutated its argument: %q", c.in)
-			}
-			again := redactCommand(got)
-			if !reflect.DeepEqual(again, got) {
-				t.Errorf("redaction is not idempotent: %q then %q", got, again)
 			}
 		})
 	}
 }
 
+// What is provably safe is recorded intact, so the recorded command still
+// says what ran.
+func TestRedactCommandKeepsWhatIsProvablySafe(t *testing.T) {
+	root := redactRepo(t)
+	for _, in := range [][]string{
+		{"node", "./node_modules/vitest/vitest.mjs", "run"},
+		{"python3", "-m", "pytest", "-q", "tests/"},
+		{"npm", "test"},
+		{"go", "test", "./..."},
+		{"go", "test", "-race", "-short", "./tests/..."},
+		{"pytest", "--reporter=./tests/a_test.py", "--", "tests"},
+	} {
+		if got := redactCommand(in, root); !reflect.DeepEqual(got, in) {
+			t.Errorf("redactCommand(%q) = %q, want it intact", in, got)
+		}
+	}
+	// A path that does not exist is redacted, in its own position.
+	got := redactCommand([]string{"pytest", "secret/path"}, root)
+	if want := []string{"pytest", "<redacted>"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	// A script's safe words survive, its unsafe ones do not, and a flag with
+	// an attached value keeps its name.
+	got = redactCommand([]string{"sh", "-c", "GH_TOKEN=s3cr3t go test ./... && pytest --token=s3cr3t"}, root)
+	if want := []string{"sh", "-c", "GH_TOKEN=<redacted> go test ./... ; pytest --token=<redacted>"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	// With no repository root nothing is a path that exists.
+	if got := redactCommand([]string{"go", "test", "./..."}, ""); got[2] != "<redacted>" {
+		t.Errorf("no root: %q", got)
+	}
+}
+
 // The recorded text is a shell-joined command, with an argument that needs
-// quoting quoted, so it reads as the command the operator typed.
+// quoting quoted, and its digest is of the UNREDACTED command.
 func TestTestCommandTextIsShellJoined(t *testing.T) {
-	got := testCommandText([]string{"sh", "-c", "GH_TOKEN=x make test"})
-	if want := `sh -c 'GH_TOKEN=<redacted> make test'`; got != want {
+	root := redactRepo(t)
+	got := testCommandText([]string{"sh", "-c", "GH_TOKEN=s3cr3t go test ./..."}, root)
+	if want := `sh -c 'GH_TOKEN=<redacted> go test ./...'`; got != want {
 		t.Errorf("testCommandText = %q, want %q", got, want)
 	}
-	if got := testCommandText(nil); got != "" {
+	if got := testCommandText(nil, root); got != "" {
 		t.Errorf("no command recorded as %q", got)
+	}
+	a := testCommandDigest([]string{"pytest", "--token=one"})
+	b := testCommandDigest([]string{"pytest", "--token=two"})
+	if a == "" || a == b || len(a) != 64 {
+		t.Errorf("digests %q %q must differ although the redacted texts are equal", a, b)
+	}
+	if testCommandDigest(nil) != "" {
+		t.Error("no command has a digest")
 	}
 }
 
@@ -124,6 +184,9 @@ func TestTheCommandAndSettingsReachTheLedger(t *testing.T) {
 	sc := entries[0].Bundle.Scan
 	if strings.Contains(sc.TestCommand, "abc123") || !strings.Contains(sc.TestCommand, "GH_TOKEN=<redacted>") || !strings.Contains(sc.TestCommand, "go test ./...") {
 		t.Errorf("TestCommand = %q", sc.TestCommand)
+	}
+	if sc.TestCommandSHA256 != testCommandDigest([]string{"sh", "-c", "GH_TOKEN=abc123 go test ./..."}) {
+		t.Errorf("TestCommandSHA256 = %q", sc.TestCommandSHA256)
 	}
 	if sc.Runner != "go-test" {
 		t.Errorf("Runner = %q", sc.Runner)

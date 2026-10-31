@@ -1754,7 +1754,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		UnitPass: ex.unitPassJSON(),
 		// What the run executed under: the test command (redacted), the
 		// runner row it was read as, and the settings the run used.
-		TestCommand: testCommandText(recordedCmd), Runner: recordedRunnerID,
+		TestCommand: testCommandText(recordedCmd, *repoDir), TestCommandSHA256: testCommandDigest(recordedCmd), Runner: recordedRunnerID,
 		Settings: runSettingsJSON(runSettings{
 			Timeout: *timeoutFlag, EvidenceTimeout: evidenceTimeout,
 			SeedLimitBytes: seedLimitUsed(*substrateFlag, seedLimit),

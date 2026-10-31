@@ -166,7 +166,7 @@ func localEntryBundle(in localAuditInput, v advpool.Verdict, t advpool.RunTeleme
 	if len(testArgv) == 0 && plug != nil {
 		testArgv = plug.TestCmd()
 	}
-	scan.TestCommand = testCommandText(testArgv)
+	scan.TestCommand, scan.TestCommandSHA256 = testCommandText(testArgv, in.repoDir), testCommandDigest(testArgv)
 	scan.Runner = recordedRunner(plug, in.repoDir, testArgv, in.runner)
 	scan.Settings = runSettingsJSON(runSettings{
 		Timeout: in.timeout, SeedLimitBytes: in.seedLimit,

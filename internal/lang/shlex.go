@@ -233,3 +233,46 @@ func commandArgv(cmd []shWord) []shWord {
 	}
 	return nil
 }
+
+// ShellScriptCommands is script's simple commands as the words each is made
+// of, quotes resolved (the text of each shWord), for a caller that must
+// inspect every word of an operator's `sh -c` script without running it.
+// ok is false when the script cannot be read with confidence: it ends inside
+// a quote, or holds a backquote, which shellCommands keeps as opaque text.
+// Redirections and their targets are not words, as in shellCommands.
+func ShellScriptCommands(script string) (cmds [][]string, ok bool) {
+	var quote rune
+	escaped := false
+	for _, r := range script {
+		switch {
+		case escaped:
+			escaped = false
+		case quote == '\'':
+			if r == '\'' {
+				quote = 0
+			}
+		case r == '\\':
+			escaped = true
+		case quote == '"':
+			if r == '"' {
+				quote = 0
+			}
+		case r == '\'' || r == '"':
+			quote = r
+		}
+		if r == '`' {
+			return nil, false
+		}
+	}
+	if quote != 0 || escaped {
+		return nil, false
+	}
+	for _, c := range shellCommands(script) {
+		words := make([]string, len(c))
+		for i, w := range c {
+			words[i] = w.text
+		}
+		cmds = append(cmds, words)
+	}
+	return cmds, true
+}

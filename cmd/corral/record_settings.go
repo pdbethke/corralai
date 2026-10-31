@@ -3,14 +3,16 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 
-	"github.com/pdbethke/corralai/internal/creds"
 	"github.com/pdbethke/corralai/internal/lang"
-	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
 // What a run executed under, as the ledger records it: the test command
@@ -20,111 +22,208 @@ import (
 
 const redactedValue = "<redacted>"
 
-// secretNameParts are substrings that mark a name as a credential. Unlike
-// sandbox.ScrubbedEnviron, which deliberately does NOT guess (a project's own
-// API key is something its tests need), a false positive here only hides a
-// value from a public record and never breaks a run, so the heuristic is the
-// safe side to err on.
-var secretNameParts = []string{"KEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD"}
+// The recorded command is an ALLOWLIST (ruling R-T5). It is signed into an
+// entry on a public branch, and a denylist of secret-looking names cannot be
+// closed: a credential rides in a URL (https://u:p@h), a header
+// (-H "Authorization: Bearer x"), a short flag (-psecret), a name nobody
+// listed (DB_PASS, AUTH, PWD) or a quoted value holding a metacharacter. So
+// a token is recorded verbatim only when it is provably safe, and every
+// other one becomes "<redacted>" in its own position, which keeps the
+// command's shape. When in doubt, redact.
 
-// isSecretName reports whether a variable or flag name looks like a
-// credential: a name corral knows (creds.CanonicalNames,
-// sandbox.CorralOwnSecrets) or one containing a secret part, in any case. A
-// flag's dashes read as underscores, so --api-key and API_KEY are one name.
-func isSecretName(name string) bool {
-	n := strings.ToUpper(strings.ReplaceAll(strings.Trim(name, "-"), "-", "_"))
-	if n == "" {
-		return false
-	}
-	for _, known := range creds.CanonicalNames {
-		if strings.EqualFold(known, n) {
-			return true
-		}
-	}
-	for _, known := range sandbox.CorralOwnSecrets {
-		if strings.EqualFold(known, n) {
-			return true
-		}
-	}
-	for _, part := range secretNameParts {
-		if strings.Contains(n, part) {
-			return true
-		}
-	}
-	return false
+// launcherWords are interpreters and launchers a command is run through.
+var launcherWords = map[string]bool{
+	"node": true, "python": true, "python3": true, "npm": true, "npx": true, "pnpm": true, "yarn": true,
+	"bun": true, "go": true, "cargo": true, "bundle": true, "ruby": true, "php": true, "composer": true,
+	"sh": true, "bash": true, "env": true,
+}
+
+// subcommandWords are the fixed subcommand words recorded as written.
+var subcommandWords = map[string]bool{"run": true, "test": true, "exec": true, "-m": true}
+
+// shortFlagsKept are the single-dash flags longer than one letter that are
+// recorded: a word like -psecret is a short flag with its value attached
+// and cannot be told from one, so single-dash flags are kept only when they
+// are one letter or listed here.
+var shortFlagsKept = map[string]bool{
+	"race": true, "run": true, "count": true, "short": true, "timeout": true, "cover": true,
+	"bench": true, "json": true, "parallel": true, "failfast": true,
 }
 
 var (
-	// NAME=value or --flag=value anywhere in a string: at its start or after
-	// any character that cannot be part of a name (a space, ';', '&', '?',
-	// a quote), so an assignment inside an `sh -c` script and a query
-	// parameter in a URL are both found. The value is a quoted string or
-	// the run of characters up to whitespace or a shell separator.
-	assignmentRe = regexp.MustCompile(`(^|[^A-Za-z0-9_.-])(-{0,2}[A-Za-z_][A-Za-z0-9_.-]*)=("[^"]*"|'[^']*'|[^\s;&|)"']*)`)
-	// --flag value inside a script string.
-	flagValueRe = regexp.MustCompile(`(^|[^A-Za-z0-9_.-])(--?[A-Za-z][A-Za-z0-9_-]*)([ \t]+)("[^"]*"|'[^']*'|[^\s;&|)"'-][^\s;&|)"']*)`)
+	flagRe       = regexp.MustCompile(`^--?[A-Za-z][A-Za-z0-9-]*$`)
+	flagValueRe  = regexp.MustCompile(`^(--?[A-Za-z][A-Za-z0-9-]*)=(.*)$`)
+	assignmentRe = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*)=(.*)$`)
+	plainWordRe  = regexp.MustCompile(`^[A-Za-z0-9_./+-]+$`)
 )
 
-// redactText replaces the value of every secret-named assignment or flag in s.
-func redactText(s string) string {
-	s = assignmentRe.ReplaceAllStringFunc(s, func(m string) string {
-		sub := assignmentRe.FindStringSubmatch(m)
-		if !isSecretName(sub[2]) {
-			return m
+// runnerWords are the words the runner table names (lang.Runner.Words).
+func runnerWords() map[string]bool {
+	m := map[string]bool{}
+	for _, r := range lang.Runners() {
+		for _, w := range r.Words {
+			m[w] = true
 		}
-		return sub[1] + sub[2] + "=" + redactedValue
-	})
-	return flagValueRe.ReplaceAllStringFunc(s, func(m string) string {
-		sub := flagValueRe.FindStringSubmatch(m)
-		if !isSecretName(sub[2]) || sub[4] == redactedValue {
-			return m
-		}
-		return sub[1] + sub[2] + sub[3] + redactedValue
-	})
+	}
+	return m
 }
 
-// redactCommand returns argv with every secret value replaced by
-// "<redacted>", leaving argv itself untouched. It is fail-safe in the
-// direction that matters: a name that merely looks secret loses its value,
-// and a value is never let through because its name was unfamiliar. Three
-// shapes are covered: NAME=value and --flag=value in any argument (so also
-// inside an `sh -c` script), `--flag value` inside a script, and `--flag`
-// `value` as two arguments, where the flag's name decides about the next one.
-func redactCommand(argv []string) []string {
+// repoPathExists reports whether tok names something that exists in the
+// repository at repoRoot: a path relative to it that does not escape it. A
+// token ending in "/..." (go's package wildcard) counts when its prefix is
+// an existing directory, or "." itself. With no repoRoot nothing exists.
+func repoPathExists(repoRoot, tok string) bool {
+	if repoRoot == "" || tok == "" || filepath.IsAbs(tok) {
+		return false
+	}
+	t := strings.TrimSuffix(tok, "/...")
+	if t == "" {
+		t = "."
+	}
+	if t == "..." {
+		return false
+	}
+	c := filepath.Clean(t)
+	if c == ".." || strings.HasPrefix(c, ".."+string(filepath.Separator)) {
+		return false
+	}
+	_, err := os.Lstat(filepath.Join(repoRoot, c))
+	return err == nil
+}
+
+// keepToken is the value part of one token: verbatim when provably safe,
+// "<redacted>" otherwise. first marks argv[0], recorded by basename.
+func keepToken(tok, repoRoot string, words map[string]bool, first bool) string {
+	switch {
+	case tok == "--":
+		return tok
+	case first && plainWordRe.MatchString(tok):
+		return filepath.Base(tok)
+	case plainWordRe.MatchString(tok) && !strings.Contains(tok, "/") && (launcherWords[tok] || words[tok] || subcommandWords[tok]):
+		return tok
+	case subcommandWords[tok]:
+		return tok
+	case flagRe.MatchString(tok):
+		name := strings.TrimLeft(tok, "-")
+		if strings.HasPrefix(tok, "--") || len(name) == 1 || shortFlagsKept[name] {
+			return tok
+		}
+	case repoPathExists(repoRoot, tok):
+		return tok
+	}
+	return redactedValue
+}
+
+// redactToken is keepToken extended to the two attached-value shapes:
+// --flag=value and NAME=value keep the name and redact the value unless it
+// is itself a path that exists in the repository.
+func redactToken(tok, repoRoot string, words map[string]bool, first bool) string {
+	if m := flagValueRe.FindStringSubmatch(tok); m != nil {
+		return m[1] + "=" + valueOf(m[2], repoRoot)
+	}
+	if m := assignmentRe.FindStringSubmatch(tok); m != nil {
+		return m[1] + "=" + valueOf(m[2], repoRoot)
+	}
+	return keepToken(tok, repoRoot, words, first)
+}
+
+func valueOf(v, repoRoot string) string {
+	if repoPathExists(repoRoot, v) {
+		return v
+	}
+	return redactedValue
+}
+
+// redactCommand returns argv with every token that is not provably safe
+// replaced by "<redacted>" in place, leaving argv untouched. Safe is one of:
+// argv[0] (by basename) or a launcher word; a word the runner table names or
+// one of run, test, exec, -m; a flag with no attached value; a path that
+// exists in the repository at repoRoot (or a "/..." wildcard over one); and
+// an `sh -c` script, whose every word is judged by the same rules and
+// rejoined, or the whole script redacted when it cannot be read.
+func redactCommand(argv []string, repoRoot string) []string {
+	words := runnerWords()
 	out := make([]string, len(argv))
-	redactNext := false
+	shell := len(argv) > 0 && cmdShellName(argv[0])
+	script := -1
+	if shell {
+		for i, a := range argv {
+			if a == "-c" && i+1 < len(argv) {
+				script = i + 1
+				break
+			}
+		}
+	}
 	for i, a := range argv {
-		if redactNext {
-			out[i], redactNext = redactedValue, false
+		if i == script {
+			out[i] = redactScript(a, repoRoot, words)
 			continue
 		}
-		out[i] = redactText(a)
-		if strings.HasPrefix(a, "-") && !strings.Contains(a, "=") && isSecretName(a) {
-			redactNext = true
-		}
+		out[i] = redactToken(a, repoRoot, words, i == 0)
 	}
 	return out
 }
 
-var plainArg = regexp.MustCompile(`^[A-Za-z0-9_@%+=:,./-]+$`)
-
-// testCommandText is the recorded text of a test command: argv redacted and
-// shell-joined, an argument that needs it single-quoted, so the text reads as
-// the command the operator typed. "" for no command.
-func testCommandText(argv []string) string {
-	if len(argv) == 0 {
-		return ""
+func cmdShellName(a string) bool {
+	switch filepath.Base(a) {
+	case "sh", "bash", "zsh", "dash":
+		return true
 	}
-	red := redactCommand(argv)
-	parts := make([]string, len(red))
-	for i, a := range red {
-		if plainArg.MatchString(a) {
+	return false
+}
+
+// redactScript judges every word of an `sh -c` script and rejoins the
+// commands with " ; " (the operators and redirections are not recorded).
+func redactScript(script, repoRoot string, words map[string]bool) string {
+	cmds, ok := lang.ShellScriptCommands(script)
+	if !ok {
+		return redactedValue
+	}
+	var parts []string
+	for _, c := range cmds {
+		ws := make([]string, len(c))
+		for i, w := range c {
+			ws[i] = redactToken(w, repoRoot, words, false)
+		}
+		parts = append(parts, strings.Join(ws, " "))
+	}
+	return strings.Join(parts, " ; ")
+}
+
+// shellQuoted joins argv as one command, an argument that needs it
+// single-quoted.
+func shellQuoted(argv []string) string {
+	parts := make([]string, len(argv))
+	for i, a := range argv {
+		if quotePlainRe.MatchString(a) {
 			parts[i] = a
 		} else {
 			parts[i] = "'" + strings.ReplaceAll(a, "'", `'\''`) + "'"
 		}
 	}
 	return strings.Join(parts, " ")
+}
+
+var quotePlainRe = regexp.MustCompile(`^[A-Za-z0-9_@%+=:,./-]+$`)
+
+// testCommandText is the recorded text of a test command: argv redacted and
+// shell-joined. "" for no command.
+func testCommandText(argv []string, repoRoot string) string {
+	if len(argv) == 0 {
+		return ""
+	}
+	return shellQuoted(redactCommand(argv, repoRoot))
+}
+
+// testCommandDigest is the sha256 hex of the UNREDACTED, shell-joined
+// argv: two runs' commands can be compared exactly without publishing the
+// command. "" for no command.
+func testCommandDigest(argv []string) string {
+	if len(argv) == 0 {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(shellQuoted(argv)))
+	return hex.EncodeToString(sum[:])
 }
 
 // recordedRunner is the runner-table row ID argv is read as under plug: the

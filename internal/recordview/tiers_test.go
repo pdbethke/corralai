@@ -105,12 +105,16 @@ func TestTierAdjudicationAndRetractionReasonsAreLabelled(t *testing.T) {
 		adjudicationEntry("bbbbbbbbbbbb", "aaaaaaaaaaaa#R1", auditpush.VerdictConfirmed),
 	})
 	page := read(t, filepath.Join(out, "entry", "aaaaaaaaaaaa.html"))
-	if !strings.Contains(page, "declared by the person who adjudicated") {
+	if !strings.Contains(page, ledger.NoteOf("Adjudication", "Reason")) {
 		t.Error("the human verdict is not labelled as declared by the adjudicator")
 	}
 	_, out = renderAll(t, []auditpush.LedgerEntry{reviewEntry("aaaaaaaaaaaa", 0), retractEntry("cccccccccccc", "aaaaaaaaaaaa")})
 	page = read(t, filepath.Join(out, "entry", "aaaaaaaaaaaa.html"))
-	if !strings.Contains(page, "declared by the person who wrote it") {
+	if !strings.Contains(page, ledger.NoteOf("Entry", "Reason")) {
 		t.Error("the retraction reason is not labelled as a person's words")
+	}
+	chain := read(t, filepath.Join(out, "chain-1.html"))
+	if !strings.Contains(chain, "wrong scope") || !strings.Contains(chain, ledger.NoteOf("Entry", "Reason")) {
+		t.Error("the chain row's retraction reason is not labelled as a person's words")
 	}
 }

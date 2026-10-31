@@ -286,11 +286,14 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `MutantMillisMedian` | measured |  |
 | `MutantsDistinct` | measured |  |
 | `MutantsDistinctSurvived` | measured |  |
+| `MutantsDuplicate` | measured |  |
 | `MutantsFrom` | measured |  |
 | `MutantsGraded` | measured |  |
 | `MutantsInvalid` | measured |  |
 | `MutantsPlanted` | measured |  |
 | `MutantsTimedOut` | measured |  |
+| `MutantsUnmeasured` | measured |  |
+| `MutantsUnplaced` | measured |  |
 | `ParentSHA256` | key |  |
 | `Passed` | measured |  |
 | `Path` | key |  |
@@ -334,6 +337,7 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `Uncovered` | measured |  |
 | `VacuousFindings` | meta | a model's opinion: advisory, signed but not verified as true |
 | `VerdictJSON` | meta | carries the run's full verdict document, critic opinion included: signed, but not verified as true |
+| `WriterAttempts` | measured |  |
 | `WriterMode` | measured |  |
 
 ## ScanRow
@@ -354,9 +358,11 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `Host` | measured |  |
 | `HostNotMeasured` | measured |  |
 | `InputTokens` | measured |  |
+| `Inventory` | measured |  |
 | `LoadEnd` | measured |  |
 | `LoadPeak` | measured |  |
 | `LoadStart` | measured |  |
+| `MaxTokensReached` | measured |  |
 | `MemAvailableStartBytes` | measured |  |
 | `ModelCalls` | measured |  |
 | `ModelSet` | measured |  |
@@ -381,6 +387,7 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `SelectionMillis` | measured |  |
 | `SelectionReused` | measured |  |
 | `Settings` | measured |  |
+| `ShadowDraw` | measured |  |
 | `SourcePushed` | measured |  |
 | `StartedAt` | measured |  |
 | `StatementSHA256` | key |  |

@@ -155,7 +155,10 @@ CREATE TABLE IF NOT EXISTS corral_scans (
   mem_available_start_bytes BIGINT,
   peak_rss_bytes   BIGINT,
   cpu_millis       BIGINT,
-  host_not_measured VARCHAR
+  host_not_measured VARCHAR,
+  inventory        VARCHAR,
+  shadow_draw      VARCHAR,
+  max_tokens_reached BOOLEAN
 );`
 
 const auditsSchema = `
@@ -247,6 +250,10 @@ CREATE TABLE IF NOT EXISTS corral_audits (
   symbols_probed          INTEGER,
   decisions               INTEGER,
   decisions_probed        INTEGER,
+  mutants_unplaced        INTEGER,
+  mutants_unmeasured      INTEGER,
+  mutants_duplicate       INTEGER,
+  writer_attempts         VARCHAR,
   challenger_mutants          INTEGER,
   challenger_survived_writer  INTEGER,
   challenger_survived_shadow  INTEGER,
@@ -430,6 +437,10 @@ var corralAuditsMigrationCols = []struct{ name, ddl string }{
 	{"symbols_probed", "symbols_probed INTEGER"},
 	{"decisions", "decisions INTEGER"},
 	{"decisions_probed", "decisions_probed INTEGER"},
+	{"mutants_unplaced", "mutants_unplaced INTEGER"},
+	{"mutants_unmeasured", "mutants_unmeasured INTEGER"},
+	{"mutants_duplicate", "mutants_duplicate INTEGER"},
+	{"writer_attempts", "writer_attempts VARCHAR"},
 	{"challenger_mutants", "challenger_mutants INTEGER"},
 	{"challenger_survived_writer", "challenger_survived_writer INTEGER"},
 	{"challenger_survived_shadow", "challenger_survived_shadow INTEGER"},
@@ -524,6 +535,12 @@ var (
 		{"peak_rss_bytes", "peak_rss_bytes BIGINT"},
 		{"cpu_millis", "cpu_millis BIGINT"},
 		{"host_not_measured", "host_not_measured VARCHAR"},
+		// The walk's inventory, the shadow draw and whether --max-tokens was
+		// reached (ScanRow.Inventory ... MaxTokensReached). NULL before them,
+		// and NULL on a run with no cap: not recorded, which is not false.
+		{"inventory", "inventory VARCHAR"},
+		{"shadow_draw", "shadow_draw VARCHAR"},
+		{"max_tokens_reached", "max_tokens_reached BOOLEAN"},
 		// The tools the commit's footer lines declare (Identity.
 		// GeneratedWith), one per line. NULL before it: not read.
 		{"generated_with", "generated_with VARCHAR"},
@@ -1113,8 +1130,9 @@ func insertBundle(db *sql.DB, b Bundle, now time.Time, uid string) (Counts, erro
 		    author, committer, co_authors, scope, tree_dirty, repo_identity,
 		    sandbox_backend, sandbox_image, seed_skipped, generated_with, unit_pass,
 		    test_command, runner, settings, toolchains,
-		    load_start, load_end, load_peak, mem_available_start_bytes, peak_rss_bytes, cpu_millis, host_not_measured
-		  ) VALUES (`+placeholders(59)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+		    load_start, load_end, load_peak, mem_available_start_bytes, peak_rss_bytes, cpu_millis, host_not_measured,
+		    inventory, shadow_draw, max_tokens_reached
+		  ) VALUES (`+placeholders(62)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 			uid, now, b.Scan.Repo, b.Scan.RunURL, b.Scan.ScanID, b.Scan.Commit,
 			b.Scan.CorralVersion, b.Scan.Substrate, b.Scan.Host, b.Scan.Cores,
 			nullIfZeroInt(b.Scan.TreesRequested), b.Scan.DiffBase,
@@ -1135,6 +1153,7 @@ func insertBundle(db *sql.DB, b Bundle, now time.Time, uid string) (Counts, erro
 			nullIfEmpty(b.Scan.Toolchains),
 			b.Scan.LoadStart, b.Scan.LoadEnd, b.Scan.LoadPeak,
 			b.Scan.MemAvailableStartBytes, b.Scan.PeakRSSBytes, b.Scan.CPUMillis, nullIfEmpty(b.Scan.HostNotMeasured),
+			nullIfEmpty(b.Scan.Inventory), nullIfEmpty(b.Scan.ShadowDraw), b.Scan.MaxTokensReached,
 		); err != nil {
 			return Counts{}, fmt.Errorf("auditpush: insert scan row: %w", err)
 		}
@@ -1265,9 +1284,10 @@ func insertFileRow(tx *sql.Tx, uid string, now time.Time, r Row) error {
 	    authored_test, verdict_json, schema_version, prompt_shape, covering_tests, import_only, started_at,
 	    mutant_budget, mutant_budget_rule, complexity,
 	    symbols, symbols_probed, decisions, decisions_probed,
+	    mutants_unplaced, mutants_unmeasured, mutants_duplicate, writer_attempts,
 	    challenger_mutants, challenger_survived_writer, challenger_survived_shadow, challenger_union, challenger_shared,
 	    priors_applied, prior_digest, computed_at, mutants_from, authored_landing, baseline_flaky, seat_tools, covering_units
-	  ) VALUES (`+placeholders(100)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+	  ) VALUES (`+placeholders(104)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 		uid, now, r.Repo, r.Commit, r.Path, r.Lang,
 		killRate, r.Survivors, r.ProvenMissed,
 		r.TimedOut, r.TestWriterFailed, r.PoolTestUnsound,
@@ -1296,6 +1316,7 @@ func insertFileRow(tx *sql.Tx, uid string, now time.Time, r Row) error {
 		nullTime(r.StartedAt),
 		r.MutantBudget, nullIfEmpty(r.MutantBudgetRule), r.Complexity,
 		r.Symbols, r.SymbolsProbed, r.Decisions, r.DecisionsProbed,
+		r.MutantsUnplaced, r.MutantsUnmeasured, r.MutantsDuplicate, nullIfEmpty(r.WriterAttempts),
 		r.ChallengerMutants, r.ChallengerSurvivedWriter, r.ChallengerSurvivedShadow, r.ChallengerUnion, r.ChallengerShared,
 		r.PriorsApplied, nullIfEmpty(r.PriorDigest), nullTime(r.ComputedAt), nullIfEmpty(r.MutantsFrom),
 		nullIfEmpty(r.AuthoredLanding), nullIfEmpty(r.BaselineFlaky), nullIfEmpty(r.SeatTools), r.CoveringUnits,

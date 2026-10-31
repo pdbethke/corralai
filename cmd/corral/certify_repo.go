@@ -539,6 +539,11 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// with it. The diff-bound path never ranks at all, so it stays empty
 	// rather than claiming an ordering that was not applied.
 	rankSignal := ""
+	// rankRan and rankedInfo are the ranking's own answer, kept for the
+	// inventory the record holds: a scan that ranked nothing (every candidate
+	// kept, or a --diff-base with no --top) has no count of unsized candidates.
+	rankRan := false
+	var rankedInfo reposcan.RankInfo
 	// diffChanged is the --diff-base bound, kept for the evidence pass below:
 	// a changed TEST file is in the diff but is neither a candidate nor an
 	// unpairable source, and it is the one change a suite-weakening pull
@@ -597,6 +602,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// as clean.
 		if flagWasSet(fs, "top") && !*allFlag && *topFlag > 0 && len(selected) > *topFlag {
 			ranked, rankInfo := reposcan.Rank(*repoDir, selected)
+			rankRan, rankedInfo = true, rankInfo
 			var cut []reposcan.Exclusion
 			selected, cut = reposcan.Select(ranked, *topFlag)
 			excl = append(excl, cut...)
@@ -655,6 +661,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// Selection precedes derivation, deliberately: bounding afterwards would
 		// pay for a goal on every candidate in order to audit 25 of them.
 		ranked, rankInfo := reposcan.Rank(*repoDir, cands)
+		rankRan, rankedInfo = true, rankInfo
 
 		limit := *topFlag
 		if *allFlag {
@@ -1476,6 +1483,10 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		summary += fmt.Sprintf(" — unit evidence is partial: %d of %d unit(s) contributed none", unitPassFailed(ex.units), len(ex.units.Units))
 	}
 	fmt.Fprintln(stdout, summary)
+	// The record's inventory is taken from the SAME cands and excl the lines
+	// below print from.
+	inventory := newRecordedInventory(cands, excl)
+	inventory.withUnsized(rankRan, rankedInfo)
 	printLanguageProfile(stdout, reposcan.BuildLanguageProfile(cands, excl))
 	printSearchPairings(stdout, cands)
 	printEvidencePairings(stdout, cands, evidenceIdx)
@@ -1547,6 +1558,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		preflightSources = enumeratedSourcePaths(cands, excl[:enumExcl])
 		fmt.Fprintln(stdout, "  preflight: running the suite once with coverage instrumentation…")
 		preflightResult = ex.runPreflight(context.Background(), preflightSources)
+		inventory.withPreflight(preflightResult, preflightSources)
 	}
 
 	// The audit cannot proceed, but the pre-flight above already answered
@@ -1759,6 +1771,11 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		SelectionReused: ex != nil && ex.selectionReused,
 		// The whole unit pass, from the values its "units:" lines print.
 		UnitPass: ex.unitPassJSON(),
+		// What the walk found, the challenger draw and whether the token cap
+		// bit: each from the value its printed line is made from.
+		Inventory:        inventory.text(),
+		ShadowDraw:       shadowDrawJSON(shadowSels),
+		MaxTokensReached: tokenCapReached(scanTokenBudget(ex)),
 		// The toolchains the run graded under, read in the jail it used.
 		Toolchains: ex.toolchainsJSON(auditCtx, enumeratedSourcePaths(cands, excl)),
 		// What the run executed under: the test command (redacted), the
@@ -3497,17 +3514,7 @@ func enumeratedSourcePaths(cands []reposcan.Candidate, enumOnlyExcl []reposcan.E
 // ran prints no line of its own and "no selection evidence" alone is a zero
 // nobody explained (semver, Task 11a).
 func noEvidenceSourcesNote(excl []reposcan.Exclusion) string {
-	refused := map[string]int{}
-	for _, e := range excl {
-		if !reposcan.IsLandingRefusal(e.Reason) {
-			continue
-		}
-		name := "unknown-language"
-		if p, ok := lang.Detect(e.Path); ok {
-			name = p.Name()
-		}
-		refused[name]++
-	}
+	refused := landingRefusalsByLang(excl)
 	if len(refused) == 0 {
 		return "no source file in a language corral audits, so no evidence pass ran"
 	}
@@ -4083,10 +4090,7 @@ func printExclusions(w io.Writer, excl []reposcan.Exclusion) {
 	if len(excl) == 0 {
 		return
 	}
-	byReason := map[string]int{}
-	for _, e := range excl {
-		byReason[e.Reason]++
-	}
+	byReason := exclusionsByReason(excl)
 	reasons := make([]string, 0, len(byReason))
 	for r := range byReason {
 		reasons = append(reasons, r)

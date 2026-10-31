@@ -251,6 +251,19 @@ type Row struct {
 	SymbolsProbed   *int
 	Decisions       *int
 	DecisionsProbed *int
+	// MutantsUnplaced, MutantsUnmeasured and MutantsDuplicate mirror
+	// scanstore.File's: graded mutants that carried no span and so could not
+	// be placed on the file's surface; mutants whose grading command failed on
+	// the unmutated code, so nothing it said was evidence; and mutants that
+	// were byte-identical edits of another and were collapsed before scoring.
+	// nil when the exam was not scored (or, for Unplaced, when the coverage
+	// was not measured), never a 0 standing in for "nothing measured". omitempty,
+	// so a row without them marshals to the bytes it always did.
+	MutantsUnplaced   *int `json:",omitempty"`
+	MutantsUnmeasured *int `json:",omitempty"`
+	MutantsDuplicate  *int `json:",omitempty"`
+	// WriterAttempts mirrors scanstore.File.WriterAttempts, JSON text.
+	WriterAttempts string `json:",omitempty"`
 	// CoveringTests mirrors scanstore.File.CoveringTests: the number of
 	// tests the selection evidence showed execute this file. *int, and NULL
 	// for a row from a scan where the evidence never measured this file

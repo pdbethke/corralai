@@ -118,6 +118,11 @@ type Scan struct {
 	PeakRSSBytes                 *int64
 	CPUMillis                    *int64
 	HostNotMeasured              string
+	// Inventory, ShadowDraw and MaxTokensReached are the ledger's
+	// (ledger.ScanRow's), the first two JSON text.
+	Inventory        string
+	ShadowDraw       string
+	MaxTokensReached *bool
 	// InputTokens, OutputTokens and ModelCalls are what the scan consumed
 	// from the providers, scan-wide. The per-role breakdown lives in
 	// scan_model_calls; these are the totals the run already printed to
@@ -426,6 +431,18 @@ type File struct {
 	SymbolsProbed   *int
 	Decisions       *int
 	DecisionsProbed *int
+	// MutantsUnplaced, MutantsUnmeasured and MutantsDuplicate mirror
+	// advpool.Verdict.ExamCoverage.Unplaced, MutantsUnmeasured and
+	// DuplicateMutants: graded mutants with no span, mutants whose grading
+	// command failed on the unmutated code, and byte-identical mutants
+	// collapsed before scoring. nil when the exam was not scored.
+	MutantsUnplaced   *int
+	MutantsUnmeasured *int
+	MutantsDuplicate  *int
+	// WriterAttempts is advpool.Verdict.WriterAttempts and WriterSeatsUngraded
+	// as JSON text ({"min","median","max","seats_ungraded"}); empty unless a
+	// per-survivor writer ran.
+	WriterAttempts string
 	// AuthoredTestNotCollected mirrors advpool.Verdict.AuthoredTestNotCollected:
 	// the run proved a killing test compiled and ran, but the dev suite's own
 	// collection never picked it up, so ProvenMissed on this row is earned

@@ -172,6 +172,10 @@ func localEntryBundle(in localAuditInput, v advpool.Verdict, t advpool.RunTeleme
 	scan.TestCommand = testCommandText(testArgv, in.repoDir)
 	scan.Toolchains = localToolchainsNotRead(v.Lang)
 	recordHostConditions(&scan, run.host)
+	// The challenger draw and whether the token cap bit, from the values the
+	// run printed them from. --local walks no tree, so it has no inventory.
+	scan.ShadowDraw = shadowDrawJSON(in.shadowSelection)
+	scan.MaxTokensReached = tokenCapReached(in.tokenBudget)
 	scan.Runner = recordedRunner(plug, in.repoDir, testArgv, in.runner)
 	scan.Settings = runSettingsJSON(runSettings{
 		Timeout: in.timeout, SeedLimitBytes: in.seedLimit,

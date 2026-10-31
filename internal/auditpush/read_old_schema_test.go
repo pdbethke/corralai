@@ -27,7 +27,7 @@ func TestReadingAWarehouseThatPredatesTheLateScanColumns(t *testing.T) {
 	}
 	// corral_scans as the previous release left it: every column but the
 	// two this branch added.
-	for _, col := range []string{"tree_dirty", "repo_identity", "sandbox_backend", "sandbox_image", "seed_skipped", "unit_pass", "test_command", "runner", "settings", "toolchains", "load_start", "load_end", "load_peak", "mem_available_start_bytes", "peak_rss_bytes", "cpu_millis", "host_not_measured"} {
+	for _, col := range []string{"tree_dirty", "repo_identity", "sandbox_backend", "sandbox_image", "seed_skipped", "unit_pass", "test_command", "runner", "settings", "toolchains", "load_start", "load_end", "load_peak", "mem_available_start_bytes", "peak_rss_bytes", "cpu_millis", "host_not_measured", "inventory", "shadow_draw", "max_tokens_reached"} {
 		if _, err := db.Exec("ALTER TABLE corral_scans DROP COLUMN " + col); err != nil {
 			t.Fatal(err)
 		}
@@ -62,5 +62,8 @@ func TestReadingAWarehouseThatPredatesTheLateScanColumns(t *testing.T) {
 	}
 	if s.TreeDirty != nil || s.RepoIdentity != "" {
 		t.Fatalf("an absent column must read as not recorded, got TreeDirty=%v RepoIdentity=%q", s.TreeDirty, s.RepoIdentity)
+	}
+	if s.Inventory != "" || s.ShadowDraw != "" || s.MaxTokensReached != nil {
+		t.Fatalf("absent inventory columns must read as not recorded, got %q %q %v", s.Inventory, s.ShadowDraw, s.MaxTokensReached)
 	}
 }

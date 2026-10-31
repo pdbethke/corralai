@@ -226,6 +226,25 @@ type ScanRow struct {
 	PeakRSSBytes                 *int64   `json:",omitempty"`
 	CPUMillis                    *int64   `json:",omitempty"`
 	HostNotMeasured              string   `json:",omitempty"`
+	// Inventory is what the walk found before any audit ran, as JSON text (a
+	// ScanRow is compared whole, so no map): the files excluded and the count
+	// per reason, the source files per language that are auditable, have no
+	// paired test, are ambiguous or wait on a test landing that is not built,
+	// each language's test files, the coverage pre-flight's executed and
+	// not-measured files (only when --preflight ran) and the candidates that
+	// could not be sized and were ranked last (only when a ranking ran). Each
+	// number is the one the scan printed. Empty on every row written before it
+	// and on a run that walked nothing (--local).
+	Inventory string `json:",omitempty"`
+	// ShadowDraw is the challenger draw, as JSON text: for each drawn seat the
+	// seed, the pool with each member's Beta(alpha, beta) parameters and its
+	// sample, the member chosen, and the scorecard rows the draw read. The
+	// seed is spelled exactly as --shadow-seed accepts it, so a run is replayed
+	// from this record. Empty unless a draw happened.
+	ShadowDraw string `json:",omitempty"`
+	// MaxTokensReached is whether the --max-tokens cap was reached. nil when no
+	// cap was set (the cap itself is in Settings), never false for "no cap".
+	MaxTokensReached *bool `json:",omitempty"`
 }
 
 // PushedByCertify is the ScanRow.PushedBy of a run's own entry.

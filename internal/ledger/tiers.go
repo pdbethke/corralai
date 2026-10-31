@@ -99,6 +99,7 @@ func buildFieldTiers() map[[2]string]FieldTier {
 	add("ScanRow", TierMeasured, "", `Audited Candidates TotalFiles Passed TreeDirty PreflightRan AllCandidates Top TreesRequested
 		Scope Substrate SandboxBackend SandboxImage ModelSet CorralVersion EngineVersion Cores SeedSkipped UnitPass TestCommand Runner Settings Toolchains HostNotMeasured SelectionReused
 		LoadStart LoadEnd LoadPeak MemAvailableStartBytes PeakRSSBytes CPUMillis
+		Inventory ShadowDraw MaxTokensReached
 		PushedBy Host SourcePushed StartedAt FinishedAt TotalMillis SelectionMillis ModelCalls InputTokens OutputTokens`)
 	add("ScanRow", TierMeta, noteRunAccount, "PreflightNote")
 
@@ -115,7 +116,8 @@ func buildFieldTiers() map[[2]string]FieldTier {
 		SuiteBaselineMillis SuiteTests Survivors Symbols SymbolsProbed TestSelection TestWriterFailed
 		TimedOut TotalMillis Trees Uncovered DroppedRegions
 		MaxProvenMissed MinKillRate MutantBudget MutantBudgetRule ModelsByRole SeatTools PromptShape WriterMode MutantsFrom
-		PriorsApplied CacheHit PreflightState SharedDirs ComputedAt StartedAt`)
+		PriorsApplied CacheHit PreflightState SharedDirs ComputedAt StartedAt
+		MutantsUnplaced MutantsUnmeasured MutantsDuplicate WriterAttempts`)
 	add("Row", TierMeta, noteRunAccount, "ConcurrencyNote Detail Reason")
 	add("Row", TierMeta, "carries the run's full verdict document, critic opinion included: signed, but not verified as true", "VerdictJSON")
 	add("Row", TierMeta, noteModelOpinion, "VacuousFindings")

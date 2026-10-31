@@ -19,6 +19,12 @@ import (
 type RankInfo struct {
 	Signal string // "churn-x-size" | "size-only"
 	Note   string // why the signal degraded; empty when it did not
+	// Unsized is how many candidates could not be stat'ed and were ranked
+	// last: the count the Note's "could not be sized" sentence prints, kept as
+	// a number so the record can hold it. 0 is a measurement here (a ranking
+	// ran and sized every candidate), so a caller that ran no ranking holds
+	// no RankInfo at all.
+	Unsized int
 }
 
 // Rank orders candidates most-worth-auditing first, by commit count times
@@ -49,6 +55,7 @@ func Rank(root string, cands []Candidate) ([]Candidate, RankInfo) {
 	}
 	// Disclosed, like every other degradation: a reader must be able to see
 	// that the order was computed with missing information.
+	info.Unsized = unsized
 	if unsized > 0 {
 		note := fmt.Sprintf("%d candidate(s) could not be sized and were ranked last", unsized)
 		if info.Note == "" {

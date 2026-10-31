@@ -250,7 +250,18 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 				SymbolsProbed:   examCount(r.Verdict.ExamCoverage, r.Verdict.ExamCoverage.SymbolsProbed),
 				Decisions:       examCount(r.Verdict.ExamCoverage, r.Verdict.ExamCoverage.Decisions),
 				DecisionsProbed: examCount(r.Verdict.ExamCoverage, r.Verdict.ExamCoverage.DecisionsProbed),
-				BaselineFailed:  r.Verdict.BaselineFailed,
+				// The counts the report prints beside the exam, from the same
+				// Verdict values: mutants the exam could not place
+				// (examConfidenceLine), mutants whose grading command failed
+				// on the unmutated code (renderAdvVerdict's "unmeasured"),
+				// byte-identical mutants collapsed, and the per-survivor
+				// writer's attempts spread and ungraded seats
+				// (writerModeDisclosure). nil where nothing scored them.
+				MutantsUnplaced:   examCount(r.Verdict.ExamCoverage, r.Verdict.ExamCoverage.Unplaced),
+				MutantsUnmeasured: examCountsScored(r.Verdict, r.Verdict.MutantsUnmeasured),
+				MutantsDuplicate:  examCountsScored(r.Verdict, r.Verdict.DuplicateMutants),
+				WriterAttempts:    writerAttemptsJSON(r.Verdict.WriterMode, r.Verdict.WriterAttempts, r.Verdict.WriterSeatsUngraded),
+				BaselineFailed:    r.Verdict.BaselineFailed,
 				// SuiteBaselineMillis is the cost-model input: how long the
 				// dev suite's own compliant run took, in milliseconds — see
 				// scanstore.File.SuiteBaselineMillis. Like every timing

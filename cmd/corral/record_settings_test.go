@@ -4,6 +4,7 @@ package main
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -119,6 +120,29 @@ func TestRedactCommandKeepsWhatIsProvablySafe(t *testing.T) {
 	// With no repository root nothing is a path that exists.
 	if got := redactCommand([]string{"go", "test", "./..."}, ""); got[2] != "<redacted>" {
 		t.Errorf("no root: %q", got)
+	}
+}
+
+// A path that reaches outside the repository through a symlink in the middle
+// of it is not a repository path: `lnk -> /etc` must not make lnk/passwd
+// "exist", or any host file becomes recordable verbatim. The link itself is
+// in the repository and still counts.
+func TestARepoPathThroughASymlinkOutOfTheRepoDoesNotExist(t *testing.T) {
+	root := redactRepo(t)
+	if err := os.Symlink("/etc", filepath.Join(root, "lnk")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat("/etc/passwd"); err != nil {
+		t.Skip("no /etc/passwd on this host to reach through the link")
+	}
+	if repoPathExists(root, "lnk/passwd") {
+		t.Error("lnk/passwd counted as an existing repository path through lnk -> /etc")
+	}
+	if got := redactCommand([]string{"pytest", "lnk/passwd"}, root); got[1] != "<redacted>" {
+		t.Errorf("redactCommand kept %q", got)
+	}
+	if !repoPathExists(root, "lnk") {
+		t.Error("the link itself is in the repository and should count")
 	}
 }
 

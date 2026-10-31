@@ -69,7 +69,8 @@ func runnerWords() map[string]bool {
 // repoPathExists reports whether tok names something that exists in the
 // repository at repoRoot: a path relative to it that does not escape it. A
 // token ending in "/..." (go's package wildcard) counts when its prefix is
-// an existing directory, or "." itself. With no repoRoot nothing exists.
+// an existing directory, or "." itself. With no repoRoot nothing exists, and
+// nothing reached through a symlink that leaves repoRoot exists.
 func repoPathExists(repoRoot, tok string) bool {
 	if repoRoot == "" || tok == "" || filepath.IsAbs(tok) {
 		return false
@@ -94,7 +95,17 @@ func repoPathExists(repoRoot, tok string) bool {
 	if c != strings.TrimSuffix(strings.TrimPrefix(t, "./"), "/") && !(t == "." || t == "./") {
 		return false
 	}
-	_, err := os.Lstat(filepath.Join(repoRoot, c)) // #nosec G703 -- tok is relative, has no ".." component and equals its own cleaned form (checked above), so the join cannot leave repoRoot; Lstat only tests existence
+	// Through an os.Root: the textual checks above cannot see a symlink in
+	// the MIDDLE of the path (lnk -> /etc makes lnk/passwd a host file), and
+	// a plain Lstat follows one. root.Lstat refuses any path that resolves
+	// outside repoRoot, and like Lstat does not follow a final link, so a
+	// link that is itself in the repository still counts.
+	root, err := os.OpenRoot(repoRoot)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = root.Close() }()
+	_, err = root.Lstat(c)
 	return err == nil
 }
 

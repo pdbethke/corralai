@@ -22,7 +22,7 @@ func unitMapEvidence() UnitEvidence {
 			"src/z.ts": {Executed: 0, Executable: 0},
 		}, Loaded: []string{"src/z.ts"}},
 		{Unit: "test/beta.test.ts", Counts: map[string]lang.LineCounts{"src/x.ts": {Executed: 2, Executable: 10}}},
-		{Unit: "test/broken.test.ts", Err: "exit status 1"},
+		{Unit: "test/broken.test.ts", Err: "run failed: exit 1"},
 	}}
 }
 
@@ -50,7 +50,7 @@ func TestMapFromUnitsKeepsEveryListedUnit(t *testing.T) {
 			t.Errorf("node %s: %+v", id, n)
 		}
 	}
-	if got := m.Tests["test/broken.test.ts"].Err; got != "exit status 1" {
+	if got := m.Tests["test/broken.test.ts"].Err; got != "run failed: exit 1" {
 		t.Errorf("Err not copied: %q", got)
 	}
 	if got := m.Tests["test/alpha.test.ts"].Files; !reflect.DeepEqual(got, []string{"test/alpha.test.ts"}) {

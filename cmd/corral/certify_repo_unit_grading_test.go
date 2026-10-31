@@ -121,7 +121,7 @@ func TestUnreportedUnitsAreAlwaysSelected(t *testing.T) {
 	ex := unitGradedExecutor(t, root, reposcan.UnitEvidence{Ran: true, Units: []reposcan.UnitResult{
 		unitRun("tests/one.test.ts", map[string]lang.LineCounts{"src/a.ts": {Executed: 3, Executable: 4}}),
 		unitRun("tests/two.test.ts", map[string]lang.LineCounts{"src/b.ts": {Executed: 1, Executable: 4}}),
-		{Unit: "tests/five.test.ts", Err: "could not run: exit status 127"},
+		{Unit: "tests/five.test.ts", Err: "could not run: the jail could not start it"},
 	}})
 	for path, want := range map[string][]string{
 		"src/a.ts": {"tests/five.test.ts", "tests/one.test.ts"},
@@ -321,7 +321,7 @@ func TestUnitGradedScanSaysHowItGrades(t *testing.T) {
 	mustWrite(t, filepath.Join(root, "tests", "broken.test.ts"), "test('broken', () => {});\n")
 	fake := &fakeUnitPass{ev: reposcan.UnitEvidence{Ran: true, Units: []reposcan.UnitResult{
 		unitRun("tests/composition/service.test.ts", map[string]lang.LineCounts{"src/app/Service.ts": {Executed: 1, Executable: 1}}),
-		{Unit: "tests/broken.test.ts", Err: "could not run: exit status 1"},
+		{Unit: "tests/broken.test.ts", Err: "could not run: the jail could not start it"},
 	}}}
 	fake.install(t)
 	s := runUnitEvidenceScan(t, root, "--dry-run", "--evidence", "--", "vitest", "run")
@@ -392,7 +392,7 @@ func redUnitExecutor(t *testing.T, red []string, cmds *[][]string, audited *loca
 		unitRun("tests/one.test.ts", map[string]lang.LineCounts{"src/a.ts": {Executed: 3, Executable: 4}}),
 		unitRun("tests/two.test.ts", map[string]lang.LineCounts{"src/b.ts": {Executed: 1, Executable: 2}}),
 		unitRun("tests/three.test.ts", map[string]lang.LineCounts{"src/c.ts": {Executed: 1, Executable: 2}}),
-		{Unit: "tests/four.test.ts", Err: "run failed: exit 1 (needs dist/)"},
+		{Unit: "tests/four.test.ts", Err: "run failed: exit 1"},
 		{Unit: "tests/five.test.ts", Err: "not run (time limit)"},
 	}})
 	ex.progress = out
@@ -488,7 +488,7 @@ func TestARedBaselineWithNoRedUnitIsNotRetried(t *testing.T) {
 	}
 	cmds = nil
 	ex2 := redUnitExecutor(t, []string{"tests/two.test.ts"}, &cmds, &in, &out)
-	ex2.unitMap.Tests["tests/four.test.ts"] = testmap.Node{ID: "tests/four.test.ts", Grain: testmap.GrainUnit, Err: "could not run: bwrap failed"}
+	ex2.unitMap.Tests["tests/four.test.ts"] = testmap.Node{ID: "tests/four.test.ts", Grain: testmap.GrainUnit, Err: "could not run: the jail could not start it"}
 	res, err = ex2.Execute(context.Background(), tsJob("src/b.ts", "tests/two.test.ts"))
 	if err != nil {
 		t.Fatal(err)
@@ -507,7 +507,7 @@ func TestARedBaselineThatIsNotRetriedSaysWhy(t *testing.T) {
 	var in localAuditInput
 	var out strings.Builder
 	ex := redUnitExecutor(t, []string{"tests/two.test.ts"}, &cmds, &in, &out)
-	ex.unitMap.Tests["tests/four.test.ts"] = testmap.Node{ID: "tests/four.test.ts", Grain: testmap.GrainUnit, Err: "could not run: bwrap failed"}
+	ex.unitMap.Tests["tests/four.test.ts"] = testmap.Node{ID: "tests/four.test.ts", Grain: testmap.GrainUnit, Err: "could not run: the jail could not start it"}
 	if _, err := ex.Execute(context.Background(), tsJob("src/b.ts", "tests/two.test.ts")); err != nil {
 		t.Fatal(err)
 	}

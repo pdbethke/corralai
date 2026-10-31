@@ -77,7 +77,7 @@ func TestAUnitSelectionNarrowsTheDevPass(t *testing.T) {
 func TestUnreportedCountReachesTheVerdict(t *testing.T) {
 	m := vitestUnitMap([]string{"tests/one.test.ts", "tests/two.test.ts", "tests/three.test.ts"}, "tests/one.test.ts")
 	n := m.Tests["tests/three.test.ts"]
-	n.Err = "could not run: exit status 1"
+	n.Err = "could not run: the jail could not start it"
 	m.Tests["tests/three.test.ts"] = n
 	rs := unitRunSpec(t, m, "src/one.ts", "tests/one.test.ts")
 	if !reflect.DeepEqual(rs.Selection.Tests, []string{"tests/one.test.ts", "tests/three.test.ts"}) {
@@ -218,7 +218,7 @@ func TestTheVerdictJudgesTheAuthoredPathTheScorerRuns(t *testing.T) {
 // a default) and the first unreported unit's own reason, in selection order.
 func TestUnitNounAndFirstReasonReachTheVerdict(t *testing.T) {
 	m := vitestUnitMap([]string{"tests/one.test.ts", "tests/two.test.ts", "tests/three.test.ts", "tests/four.test.ts"}, "tests/one.test.ts")
-	for id, why := range map[string]string{"tests/three.test.ts": "could not run: exit status 1", "tests/four.test.ts": "timed out"} {
+	for id, why := range map[string]string{"tests/three.test.ts": "could not run: the jail could not start it", "tests/four.test.ts": "timed out"} {
 		n := m.Tests[id]
 		n.Err = why
 		m.Tests[id] = n
@@ -249,7 +249,7 @@ func TestUnitNounAndFirstReasonReachTheVerdict(t *testing.T) {
 func TestExcludedRedUnitsReachTheVerdict(t *testing.T) {
 	m := vitestUnitMap([]string{"tests/one.test.ts", "tests/two.test.ts", "tests/three.test.ts"}, "tests/one.test.ts")
 	n := m.Tests["tests/three.test.ts"]
-	n.Err = "run failed: exit 1 (needs dist/)"
+	n.Err = "run failed: exit 1"
 	m.Tests["tests/three.test.ts"] = n
 	rs := unitRunSpec(t, m, "src/one.ts", "tests/one.test.ts")
 	rs.Selection.Excluded = []string{"tests/three.test.ts"}
@@ -257,14 +257,14 @@ func TestExcludedRedUnitsReachTheVerdict(t *testing.T) {
 	converged := verdictFromSpec(rs)
 	timedOut := (&Driver{}).timeoutVerdict(&runState{rs: rs})
 	for name, v := range map[string]Verdict{"converged": converged, "timeout": timedOut} {
-		if v.TestSelection.Excluded != 1 || v.TestSelection.ExcludedReason != "run failed: exit 1 (needs dist/)" {
+		if v.TestSelection.Excluded != 1 || v.TestSelection.ExcludedReason != "run failed: exit 1" {
 			t.Errorf("%s verdict: %+v, want 1 excluded with the unit's own reason", name, v.TestSelection)
 		}
 		b, err := json.Marshal(v)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(string(b), `"excluded":1`) || !strings.Contains(string(b), `"excluded_reason":"run failed: exit 1 (needs dist/)"`) {
+		if !strings.Contains(string(b), `"excluded":1`) || !strings.Contains(string(b), `"excluded_reason":"run failed: exit 1"`) {
 			t.Errorf("%s verdict_json does not carry the exclusion: %s", name, b)
 		}
 	}
@@ -280,7 +280,7 @@ func TestExcludedRedUnitsReachTheVerdict(t *testing.T) {
 func TestUnitsRedInTheBaselineReachTheVerdictByName(t *testing.T) {
 	m := vitestUnitMap([]string{"tests/one.test.ts", "tests/two.test.ts", "tests/three.test.ts"}, "tests/one.test.ts", "tests/two.test.ts")
 	n := m.Tests["tests/three.test.ts"]
-	n.Err = "run failed: exit 1 (needs dist/)"
+	n.Err = "run failed: exit 1"
 	m.Tests["tests/three.test.ts"] = n
 	rs := unitRunSpec(t, m, "src/one.ts", "tests/one.test.ts")
 	rs.Selection.Excluded = []string{"tests/three.test.ts", "tests/two.test.ts"}
@@ -290,7 +290,7 @@ func TestUnitsRedInTheBaselineReachTheVerdictByName(t *testing.T) {
 	timedOut := (&Driver{}).timeoutVerdict(&runState{rs: rs})
 	for name, v := range map[string]Verdict{"converged": converged, "timeout": timedOut} {
 		ts := v.TestSelection
-		if ts.Excluded != 2 || ts.ExcludedReason != "run failed: exit 1 (needs dist/)" || ts.ExcludedRedInBaseline != "tests/two.test.ts: red beside the others" {
+		if ts.Excluded != 2 || ts.ExcludedReason != "run failed: exit 1" || ts.ExcludedRedInBaseline != "tests/two.test.ts: red beside the others" {
 			t.Errorf("%s verdict: %+v", name, ts)
 		}
 	}

@@ -5947,40 +5947,55 @@ func (l *localExecutor) baselineRedRetry(ctx context.Context, j reposcan.Job, in
 	}
 	inv, err := lang.Resolve(p, l.repoDir, base, l.runnerFor(j.Lang))
 	for _, u := range red {
-		retry.ExcludedWhy[u] = l.aloneWhy(ctx, p, inv, err, in, u)
+		retry.ExcludedWhy[u] = l.aloneWhy(ctx, p, inv, err, in, j.Path, u)
 	}
 	return retry, red, ""
 }
 
 // The reasons a unit the evidence pass ran green is left out of a red
-// baseline's retry, by what running it alone showed.
+// baseline's retry, by what running it alone showed. Each is a fixed phrase:
+// it is stored on the verdict (lang.Selection.ExcludedWhy, then
+// TestSelection.ExcludedReason and ExcludedRedInBaseline), which is signed
+// into the ledger and published, so it never carries a runner's error text,
+// the operator's argv or a host path. The error itself is printed to the
+// run's progress output when it happens (aloneWhy), and stored nowhere.
 const (
-	redBesideOthers = "red in the baseline, green run alone as your command runs it: flaky, or broken by a test file run beside it"
-	redAlone        = "red in the baseline and red run alone as your command runs it, though green alone in the evidence pass"
-	redNotRerun     = "red in the baseline; not rerun alone: %s"
+	redBesideOthers  = "red in the baseline, green run alone as your command runs it: flaky, or broken by a test file run beside it"
+	redAlone         = "red in the baseline and red run alone as your command runs it, though green alone in the evidence pass"
+	redNotRerun      = "red in the baseline; not rerun alone: "
+	redNoCommand     = redNotRerun + "its runner command could not be resolved"
+	redNoUnitCommand = redNotRerun + "the runner has no command that runs it alone"
+	redNoJail        = redNotRerun + "the jail could not be prepared"
+	redNotCompleted  = redNotRerun + "the run did not complete"
 )
 
 // aloneWhy runs unit alone in the job's jail, by the operator's command
-// narrowed to it, and says which of the reasons above it is.
-func (l *localExecutor) aloneWhy(ctx context.Context, p lang.Plugin, inv lang.Invocation, invErr error, in localAuditInput, unit string) string {
+// narrowed to it, and says which of the reasons above it is. A call that
+// fails is said once on the progress output with its error, for the
+// operator, and recorded by its fixed reason alone.
+func (l *localExecutor) aloneWhy(ctx context.Context, p lang.Plugin, inv lang.Invocation, invErr error, in localAuditInput, path, unit string) string {
+	notRerun := func(why string, err error) string {
+		l.note("%s: %s: %s: %v\n", path, unit, why, err)
+		return why
+	}
 	if invErr != nil {
-		return fmt.Sprintf(redNotRerun, invErr)
+		return notRerun(redNoCommand, invErr)
 	}
 	cmd, ok := lang.UnitRunCmd(p, inv, unit)
 	if !ok {
-		return fmt.Sprintf(redNotRerun, "the runner has no command that runs it alone")
+		return redNoUnitCommand
 	}
 	alone := in
 	alone.checkArgv = cmd
 	r, cleanup, err := l.newBaseline(ctx, alone)
 	if err != nil {
-		return fmt.Sprintf(redNotRerun, err)
+		return notRerun(redNoJail, err)
 	}
 	defer cleanup()
 	green, err := r.RunBaseline()
 	switch {
 	case err != nil:
-		return fmt.Sprintf(redNotRerun, err)
+		return notRerun(redNotCompleted, err)
 	case green:
 		return redBesideOthers
 	default:

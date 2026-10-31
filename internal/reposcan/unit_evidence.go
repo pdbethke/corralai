@@ -51,7 +51,18 @@ type UnitResult struct {
 	// import-only, not uncovered (ruling R24). Nil for a reporter that does
 	// not report loading.
 	Loaded []string
-	Err    string
+	// Err is the unit's reason as the record keeps it: one fixed phrase per
+	// failure class, with an exit code where one was read. It reaches the
+	// verdict (TestSelection.UnreportedReason, ExcludedReason) and so the
+	// signed, published ledger, so it never holds a runner's error text, an
+	// output tail, the operator's argv or a host path.
+	Err string
+	// Detail is what the operator needs to act on Err — the runner's error,
+	// the failed run's output tail — for the scan's units line on the
+	// terminal (printUnitPass) and nothing else. It is never marshalled (the
+	// selection cache stores this struct as JSON) and never copied into the
+	// test map, so it cannot reach a verdict.
+	Detail string `json:"-"`
 }
 
 // UnitEvidence is one scan's unit pass. Ran false means there is no unit
@@ -73,7 +84,8 @@ type UnitEvidence struct {
 }
 
 // Reasons a unit contributes nothing. They are written into UnitResult.Err
-// verbatim, and the scan line repeats them.
+// verbatim, and the scan line repeats them. Each is fixed text (an exit code
+// aside): what a failure printed goes in UnitResult.Detail, for the terminal.
 const (
 	unitNotRunTimeLimit   = "not run (time limit)"
 	unitNotRunInterrupted = "not run (interrupted)"
@@ -98,6 +110,13 @@ const (
 	// unitCouldNotRun prefixes a runner's own error: the unit never ran,
 	// for a reason outside the tree (a jail that could not start).
 	unitCouldNotRun = "could not run: "
+	// unitJailCouldNotStart is unitCouldNotRun's one reason: the runner's
+	// own error (an OS error naming host paths, a bwrap message) is the
+	// unit's Detail, never its Err.
+	unitJailCouldNotStart = unitCouldNotRun + "the jail could not start it"
+	// unitNoCommand is a unit the operator's command has no one-unit form
+	// for. It once quoted that command, argv and all, into the record.
+	unitNoCommand = "not run: the command could not be built"
 	// unitCoverageUnavailable prefixes the instrument's own reason.
 	unitCoverageUnavailable = "coverage unavailable: "
 )
@@ -169,7 +188,8 @@ func CollectUnitEvidence(ctx context.Context, runner commandRunner, files map[st
 		}
 		unitCmd, ok := lang.UnitRunCmd(p, inv, u)
 		if !ok {
-			results[i].Err = fmt.Sprintf("not run: `%s` has no one-unit command for it", command)
+			results[i].Err = unitNoCommand
+			results[i].Detail = fmt.Sprintf("`%s` has no one-unit command for it", command)
 			continue
 		}
 		// The evidence pass's own flags (vitest's threads pool) go on the
@@ -231,7 +251,8 @@ func CollectUnitEvidence(ctx context.Context, runner commandRunner, files map[st
 			}
 		default:
 			for _, i := range runnable {
-				results[i].Err = unitCouldNotRun + err.Error()
+				results[i].Err = unitJailCouldNotStart
+				results[i].Detail = err.Error()
 			}
 			return UnitEvidence{Units: results, Note: fmt.Sprintf("%s: the unit pass could not seed the tree its units run over: %v", p.Name(), err)}
 		}
@@ -504,13 +525,9 @@ func (ev UnitEvidence) CutShort() int {
 // is the runner's known cause for a report that names no project file at
 // all (lang.UnitNoCoverageReason), "" for none. note is what the evidence
 // pass changed in the operator's command (lang.EvidenceNote), "" for
-// nothing: a red unit's reason names it, because the operator's own run of
+// nothing: a red unit's Detail names it, because the operator's own run of
 // the same unit may be green without it.
 func runUnit(ctx context.Context, runner commandRunner, files map[string]string, reporter lang.CoverageReporter, cmd []string, modulePath, noCoverage, note string) UnitResult {
-	ran := ""
-	if note != "" {
-		ran = " (" + note + ")"
-	}
 	if err := ctx.Err(); err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
 			return UnitResult{Err: unitNotRunTimeLimit}
@@ -525,15 +542,15 @@ func runUnit(ctx context.Context, runner commandRunner, files map[string]string,
 	case err != nil && ctx.Err() != nil:
 		return UnitResult{Err: unitInterrupted}
 	case err != nil:
-		return UnitResult{Err: unitCouldNotRun + err.Error()}
+		return UnitResult{Err: unitJailCouldNotStart, Detail: err.Error()}
 	case exit > 0:
 		// A unit whose own run failed — a red test, a build error, a
 		// toolchain the jail lacks — is not evidence, even when a report
 		// still parses: a failing unit can stop before the code it would
 		// have executed, so its zeros are not "never executed".
-		return UnitResult{Err: fmt.Sprintf(unitRunFailed+"exited %d%s%s", exit, ran, failureTail(stderr, lang.BeforeSuiteExit(out)))}
+		return UnitResult{Err: fmt.Sprintf(unitRunFailed+"exited %d", exit), Detail: runDetail(note, failureTail(stderr, lang.BeforeSuiteExit(out)))}
 	case detailed && exit < 0:
-		return UnitResult{Err: unitRunFailed + "the process did not exit normally" + ran + failureTail(stderr, lang.BeforeSuiteExit(out))}
+		return UnitResult{Err: unitRunFailed + "the process did not exit normally", Detail: runDetail(note, failureTail(stderr, lang.BeforeSuiteExit(out)))}
 	case truncated(out):
 		// Checked before parsing, as Preflight does: a report cut on a
 		// clean boundary parses as a partial map that looks complete.
@@ -557,7 +574,7 @@ func runUnit(ctx context.Context, runner commandRunner, files map[string]string,
 		// What the suite printed before its trailer says why it failed
 		// (stderr when the runner kept it apart); the report after it
 		// does not.
-		return UnitResult{Err: fmt.Sprintf(unitRunFailed+"exit %d%s%s", rc, ran, failureTail(stderr, lang.BeforeSuiteExit(out)))}
+		return UnitResult{Err: fmt.Sprintf(unitRunFailed+"exit %d", rc), Detail: runDetail(note, failureTail(stderr, lang.BeforeSuiteExit(out)))}
 	}
 	if reason, unavailable := lang.CoverageUnavailable(out); unavailable {
 		return UnitResult{Err: unitCoverageUnavailable + reason}
@@ -601,6 +618,20 @@ func recheckAsWritten(ctx context.Context, runner commandRunner, files map[strin
 		return r
 	}
 	return UnitResult{Err: fmt.Sprintf(unitGreenAsWritten, note)}
+}
+
+// runDetail is a failed unit run's Detail: what the evidence pass changed in
+// its command (note), then the end of what it printed (a failureTail), for
+// the terminal only.
+func runDetail(note, tail string) string {
+	tail = strings.TrimPrefix(tail, ": ")
+	switch {
+	case note == "":
+		return tail
+	case tail == "":
+		return note
+	}
+	return note + ": " + tail
 }
 
 // truncated reports whether out ends with the runner's truncation marker.

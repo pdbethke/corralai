@@ -29,6 +29,19 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ### Fixed
 
+- **A test unit's failure text could be published in the ledger.** Why a
+  unit gave no evidence, or was left out of a red baseline's retry, is
+  stored on the verdict (`unreported_reason`, `excluded_reason`,
+  `excluded_red_in_baseline`) and signed into the ledger, and that reason
+  quoted the failure itself: the runner's error, which can name host paths,
+  the last lines the failed run printed, which can echo a secret from the
+  operator's command, and, for a unit with no one-unit command, the
+  operator's whole command line. Each reason is now one fixed phrase per
+  kind of failure, with the exit code where one was read (`run failed: exit
+  1`, `could not run: the jail could not start it`, `not run: the command
+  could not be built`, `red in the baseline; not rerun alone: the jail could
+  not be prepared`). The full error and output are still printed on the
+  run's own output, beside the unit they belong to, and stored nowhere.
 - **A baseline killed at its time bound was reported as red.** REA's
   eleventh run (2026-10-31) printed "baseline does not pass unmutated" over
   a tail of passing tests and no failure, then tried both retries: the suite

@@ -327,10 +327,16 @@ func printUnitPass(w io.Writer, ex *localExecutor) {
 		}
 		listed++
 		if u.Err != "" {
-			// A failed unit's reason ends with its output tail, which can
-			// run over several lines; each is indented under the unit so
-			// it reads as that unit's, not as a line of the scan.
-			fmt.Fprintf(w, "    %s: %s\n", u.Unit, strings.ReplaceAll(u.Err, "\n", "\n      "))
+			// A failed unit's reason is followed by its Detail — the
+			// runner's error or its output tail, for the operator here and
+			// never in the record — which can run over several lines; each
+			// is indented under the unit so it reads as that unit's, not as
+			// a line of the scan.
+			line := u.Err
+			if u.Detail != "" {
+				line += ": " + u.Detail
+			}
+			fmt.Fprintf(w, "    %s: %s\n", u.Unit, strings.ReplaceAll(line, "\n", "\n      "))
 		}
 		// The files a unit measured and could not count are a COUNT here
 		// and a list in the --dry-run --json inventory (ruling R22): listed

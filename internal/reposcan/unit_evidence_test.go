@@ -235,8 +235,10 @@ func TestUnitPassDropsAFailedUnitAndKeepsTheRest(t *testing.T) {
 		t.Fatalf("ev = %+v, want Ran", ev)
 	}
 	beta := unitByName(t, ev, "test/beta.test.ts")
-	if !strings.HasPrefix(beta.Err, "run failed") || !strings.Contains(beta.Err, "TS2304") {
-		t.Errorf("beta.Err = %q, want a run failure naming the build error", beta.Err)
+	// The record keeps the class and exit code; the build error is the
+	// operator's, on the terminal (Detail).
+	if beta.Err != "run failed: exited 1" || !strings.Contains(beta.Detail, "TS2304") {
+		t.Errorf("beta = (Err %q, Detail %q), want a run failure with the build error in its Detail", beta.Err, beta.Detail)
 	}
 	if beta.Counts != nil {
 		t.Errorf("a failed unit kept counts %+v", beta.Counts)
@@ -626,7 +628,7 @@ func TestUnitPassTakesOnlyAGreenSuite(t *testing.T) {
 		name, out, wantErr string
 	}{
 		{"green", "# suite-exit 0\n" + report, ""},
-		{"red", "# suite-exit 1\n" + report, "run failed: exit 1 (the evidence pass runs each unit with --pool=threads)"},
+		{"red", "# suite-exit 1\n" + report, "run failed: exit 1"},
 		{"no status", report, "no suite exit status in the report"},
 	}
 	for _, tc := range cases {
@@ -728,19 +730,21 @@ func TestUnitEvidenceSettled(t *testing.T) {
 // tell a jail-only failure from a real red test (commander.js, Task 11a).
 // The tail is the output BEFORE the suite-exit trailer: in the jail the
 // streams are one, and what follows the trailer is the coverage report, not
-// the failure.
+// the failure. It is said in the unit's Detail, for the terminal, and never
+// in its Err, which the verdict carries into the published ledger: a tail
+// can quote a secret or a host path.
 func TestUnitPassShowsAFailedUnitsOutput(t *testing.T) {
 	cases := []struct {
-		name    string
-		res     sandbox.EnumerateResult
-		wantErr string
+		name                string
+		res                 sandbox.EnumerateResult
+		wantErr, wantDetail string
 	}{
 		{"red suite, one stream", sandbox.EnumerateResult{Output: "AssertionError: expected 1\n    at alpha.test.ts:3\n# suite-exit 1\ncorral-js-coverage: v2\n7 10 src/x.ts\n"},
-			"run failed: exit 1 (the evidence pass runs each unit with --pool=threads): AssertionError: expected 1\n    at alpha.test.ts:3"},
+			"run failed: exit 1", "the evidence pass runs each unit with --pool=threads: AssertionError: expected 1\n    at alpha.test.ts:3"},
 		{"red suite, stderr apart", sandbox.EnumerateResult{Output: "# suite-exit 1\ncorral-js-coverage: v2\n7 10 src/x.ts\n", Stderr: "TypeError: boom\n"},
-			"run failed: exit 1 (the evidence pass runs each unit with --pool=threads): TypeError: boom"},
+			"run failed: exit 1", "the evidence pass runs each unit with --pool=threads: TypeError: boom"},
 		{"command failed", sandbox.EnumerateResult{Output: "sh: 1: go: not found\n# suite-exit 127\n", ExitCode: 127},
-			"run failed: exited 127 (the evidence pass runs each unit with --pool=threads): sh: 1: go: not found"},
+			"run failed: exited 127", "the evidence pass runs each unit with --pool=threads: sh: 1: go: not found"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -748,8 +752,9 @@ func TestUnitPassShowsAFailedUnitsOutput(t *testing.T) {
 			f.answer("test/alpha.test.ts", tc.res)
 			f.answer("test/beta.test.ts", sandbox.EnumerateResult{Output: jsReport("2 10 src/y.ts")})
 			ev := f.collect(context.Background(), "/w", 1)
-			if got := unitByName(t, ev, "test/alpha.test.ts").Err; got != tc.wantErr {
-				t.Errorf("alpha.Err = %q, want %q", got, tc.wantErr)
+			alpha := unitByName(t, ev, "test/alpha.test.ts")
+			if alpha.Err != tc.wantErr || alpha.Detail != tc.wantDetail {
+				t.Errorf("alpha = (Err %q, Detail %q), want (%q, %q)", alpha.Err, alpha.Detail, tc.wantErr, tc.wantDetail)
 			}
 		})
 	}
@@ -934,7 +939,8 @@ func TestCollectUnitEvidenceUsesEvidenceArgs(t *testing.T) {
 }
 
 // A unit that is red under --pool=threads contributes nothing, and its
-// reason says the evidence pass ran it with that flag: the operator's own
+// Detail says the evidence pass ran it with that flag (the scan line says
+// so too, once, from Changed): the operator's own
 // run may be green in the forks pool, and a red unit is unreported (every
 // file then selects it) rather than graded on partial evidence.
 func TestThreadsRedUnitIsUnreportedNamingThePool(t *testing.T) {
@@ -951,8 +957,8 @@ func TestThreadsRedUnitIsUnreportedNamingThePool(t *testing.T) {
 			f.answer("test/beta.test.ts", c.res)
 			ev := f.collect(context.Background(), "/w", 1)
 			beta := unitByName(t, ev, "test/beta.test.ts")
-			if !strings.HasPrefix(beta.Err, "run failed:") || !strings.Contains(beta.Err, "--pool=threads") {
-				t.Errorf("beta.Err = %q, want a run failure naming --pool=threads", beta.Err)
+			if !strings.HasPrefix(beta.Err, "run failed:") || !strings.Contains(beta.Detail, "--pool=threads") {
+				t.Errorf("beta = (Err %q, Detail %q), want a run failure whose Detail names --pool=threads", beta.Err, beta.Detail)
 			}
 			if beta.Counts != nil {
 				t.Errorf("a red unit kept counts %+v", beta.Counts)

@@ -383,8 +383,9 @@ func TestDryRunEvidenceCachesASettledPass(t *testing.T) {
 
 // The scan line carries a COUNT of each unit's uncounted files and the
 // --json inventory carries the list (ruling R22): REA's 25 units each put
-// ~390 paths on the scan line, 1.4 MB of output. A failed unit's reason
-// keeps its output tail, indented under its unit so it reads as part of it.
+// ~390 paths on the scan line, 1.4 MB of output. A failed unit's reason is
+// followed by its output tail (its Detail, which the record never holds),
+// indented under its unit so it reads as part of it.
 func TestUnitPassPrintsUncountedAsACountAndListsThemInJSON(t *testing.T) {
 	refuseModelEndpoints(t)
 	root := unitEvidenceTSFixture(t)
@@ -392,7 +393,7 @@ func TestUnitPassPrintsUncountedAsACountAndListsThemInJSON(t *testing.T) {
 	fake := &fakeUnitPass{ev: reposcan.UnitEvidence{Ran: true, Units: []reposcan.UnitResult{
 		{Unit: "tests/composition/service.test.ts", Counts: map[string]lang.LineCounts{"src/app/Service.ts": {Executed: 1, Executable: 1}},
 			Uncounted: []string{"src/gen/a.ts: transformed code", "src/gen/b.ts: transformed code"}},
-		{Unit: "tests/broken.test.ts", Err: "run failed: exit 1: AssertionError: no\nat broken.test.ts:1", Uncounted: []string{"src/gen/c.ts: transformed code"}},
+		{Unit: "tests/broken.test.ts", Err: "run failed: exit 1", Detail: "AssertionError: no\nat broken.test.ts:1", Uncounted: []string{"src/gen/c.ts: transformed code"}},
 	}}}
 	fake.install(t)
 	args := []string{"--repo", root, "--dry-run", "--evidence", "--substrate", substrateWorkspace, "--no-selection-cache"}

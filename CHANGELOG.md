@@ -13,8 +13,9 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ### Added
 
-- **The signed record now holds every number a run prints, and every field
-  says what it can be trusted for.** Each recorded field carries one of four
+- **The signed record now holds every number a certify run prints, or a
+  written reason why not, and every field says what it can be trusted
+  for.** Each recorded field carries one of four
   tiers, set in `internal/ledger/tiers.go` and rendered to
   [`docs/corral/record-fields.md`](docs/corral/record-fields.md): **measured**
   (corral set, observed or executed it), **declared** (the audited commit or a
@@ -22,14 +23,18 @@ history of any release, `git log v0.3.4..v0.3.5`.
   **key** (names, ids, hashes). A test fails on a recorded field with no tier,
   and a second test (`cmd/corral/printed_metrics_test.go`) fails on a function
   in a linked package that prints a number without naming the ledger field
-  that holds it or carrying a written exemption. The record views print the
-  declared and meta labels. New fields, all measured unless noted:
+  that holds it or carrying a written exemption. That gate does not yet cover
+  `corral review`'s metrics (exempted for a later phase) or `corral doctor`,
+  and it cannot see a printer that takes its format string as a parameter.
+  The record views print the declared and meta labels. New fields, all measured unless noted:
   `TestCommand`, `Runner` and `Settings` (the test command is
   allowlist-redacted: anything not provably safe is written `<redacted>`, and
   there is deliberately no digest of it, because a digest of a short command
   could be brute-forced back to the secret it hid); `Toolchains` (versions
   read inside the jail on `--repo`, covered by tests and not yet by a real
-  run; `--local` records that they were not read, as the demo below shows); `UnitPass` (the whole unit evidence pass,
+  run; only a version command that exits 0 is a version, and one that fails,
+  exits non-zero or does not answer records `not read:` with a fixed reason
+  naming the tool, never the command or its error text; `--local` records that they were not read, as the demo below shows); `UnitPass` (the whole unit evidence pass,
   `--repo` only, covered by tests and not yet by a real run); host conditions `LoadStart`, `LoadEnd`, `LoadPeak`,
   `MemAvailableStartBytes`, `PeakRSSBytes`, `CPUMillis` and
   `HostNotMeasured`; `Inventory`, `ShadowDraw` and `MaxTokensReached`; and per
@@ -41,7 +46,8 @@ history of any release, `git log v0.3.4..v0.3.5`.
   Haiku 5.5 is priced by prompt length per request, which one row of
   tokens cannot reproduce, so it records "no price" rather than a guess; an
   agent seat records "billing not known to corral", since a subscription
-  seat has no per-token bill.
+  seat has no per-token bill. `corral scans show --timing --json` prints
+  both on each model-call row, the basis always beside the figure.
 
   **Example values from a real run.** A run of `corral demo --writer-model codex
   --mutant-model claude-code:claude-sonnet-5-5 --critic-model

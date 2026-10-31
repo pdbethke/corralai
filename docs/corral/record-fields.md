@@ -192,7 +192,7 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `Declared` | meta | a model's opinion: advisory, signed but not verified as true |
 | `Demoted` | measured |  |
 | `ExitCode` | measured |  |
-| `Model` | meta | a model's opinion: advisory, signed but not verified as true |
+| `Model` | measured |  |
 | `Script` | measured |  |
 | `Stdout` | measured |  |
 | `Tier` | measured |  |
@@ -220,7 +220,7 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `ReviewerModel` | measured |  |
 | `ReviewerModelResolved` | measured |  |
 | `ReviewerTool` | measured |  |
-| `Scope` | key |  |
+| `Scope` | measured |  |
 | `Sound` | meta | a model's opinion: advisory, signed but not verified as true |
 | `StartedAt` | measured |  |
 | `StatementSHA256` | key |  |

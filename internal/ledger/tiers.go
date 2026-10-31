@@ -147,15 +147,15 @@ func buildFieldTiers() map[[2]string]FieldTier {
 	add("EventRow", TierMeasured, "", "Model DurationMillis Seq TS")
 
 	// reviewrecord.Review and its findings.
-	add("Review", TierKey, "", "Repo Commit Scope StatementSHA256")
+	add("Review", TierKey, "", "Repo Commit StatementSHA256")
 	add("Review", TierDeclared, noteDeclaredCommit, "Author Committer CoAuthors GeneratedWith")
-	add("Review", TierMeasured, "", "BytesShown Calls Coverage FilesShown Lang StartedAt Substrate Truncated ReviewerModel ReviewerModelResolved ReviewerTool VerifierModel VerifierModelResolved VerifierTool InputTokens OutputTokens UnmeteredCalls")
+	add("Review", TierMeasured, "", "Scope BytesShown Calls Coverage FilesShown Lang StartedAt Substrate Truncated ReviewerModel ReviewerModelResolved ReviewerTool VerifierModel VerifierModelResolved VerifierTool InputTokens OutputTokens UnmeteredCalls")
 	add("Review", TierMeta, noteModelOpinion, "Opinion Sound VerifierNote VerifierOpinion")
 	add("Finding", TierKey, "", "ID")
 	add("Finding", TierMeasured, "", "Demoted ExitCode Script Stdout Tier Unrun")
 	add("Finding", TierMeta, noteModelOpinion, "Claim Declared File Line Severity")
-	add("Refutation", TierMeasured, "", "Demoted ExitCode Script Stdout Tier Unrun")
-	add("Refutation", TierMeta, noteModelOpinion, "Argument Declared Model Verdict")
+	add("Refutation", TierMeasured, "", "Model Demoted ExitCode Script Stdout Tier Unrun")
+	add("Refutation", TierMeta, noteModelOpinion, "Argument Declared Verdict")
 	return m
 }
 

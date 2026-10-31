@@ -43,8 +43,7 @@ toolchain-node24-version.txt node v24.22.1; toolchain-go-version.txt
 `go version` (go1.26.10); toolchain-python3-version.txt `python3 --version`;
 toolchain-ruby-version.txt `ruby --version` (3.3.8); toolchain-php-version.txt
 the first line of `php --version` (PHP 8.5.4); toolchain-rustc-version.txt
-`rustc --version` (1.90.0). jest has no version fixture and no VersionCmd:
-no jest was installed on the capture machine.
+`rustc --version` (1.90.0).
 jest-version.txt (added 2026-10-31): `node ./node_modules/jest/bin/jest.js --version`
 in a scratch directory after `npm install jest@30.5.2` (node v22.23.4); the
 output is the bare version, 30.5.2. Replaces the earlier note that jest had no

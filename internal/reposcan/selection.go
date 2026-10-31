@@ -35,18 +35,20 @@ type SelectionEvidence struct {
 	// fixed hint aside) and never quotes the operator's command, a runner's
 	// error or what the run printed.
 	Note string
-	// Detail is Note as the operator's terminal says it, with the error and
+	// TerminalDetail is Note as the operator's terminal says it, with the error and
 	// output that explain it; never marshalled, never read into a
 	// selection. "" when Note says everything (Said).
-	Detail string `json:"-"`
-	Map    testmap.Map
+	// Named TerminalDetail, never Detail: a ledger row's Detail is recorded,
+	// and a field of that name is one assignment from leaking into it.
+	TerminalDetail string `json:"-"`
+	Map            testmap.Map
 }
 
 // Said is why the evidence did not run as the operator's terminal says it:
-// Detail when there is one, else Note. Never read it into a selection.
+// TerminalDetail when there is one, else Note. Never read it into a selection.
 func (e SelectionEvidence) Said() string {
-	if e.Detail != "" {
-		return e.Detail
+	if e.TerminalDetail != "" {
+		return e.TerminalDetail
 	}
 	return e.Note
 }
@@ -382,15 +384,15 @@ func CollectSelectionEvidence(ctx context.Context, runner commandRunner, files m
 	}
 	// Every failure below is recorded by its fixed reason, with the
 	// plugin's own fixed hint, in Note; the error and the output that
-	// explain it are the operator's, in Detail.
+	// explain it are the operator's, in TerminalDetail.
 	out, exitCode, stderr, err := runSelectionCmd(ctx, runner, files, cmd)
 	if err != nil {
 		hint := selectionFailureHint(p, err.Error()+" "+stderr+" "+out)
 		return SelectionEvidence{Note: withHint(fmt.Sprintf("%s: selection evidence run failed: the jail could not start it", p.Name()), hint),
-			Detail: withHint(fmt.Sprintf("%s: selection evidence run failed: %v", p.Name(), err), hint)}
+			TerminalDetail: withHint(fmt.Sprintf("%s: selection evidence run failed: %v", p.Name(), err), hint)}
 	}
 	if strings.TrimSpace(out) == "" {
-		return SelectionEvidence{Note: emptySelectionRunNote(p, exitCode, stderr, false), Detail: emptySelectionRunNote(p, exitCode, stderr, true)}
+		return SelectionEvidence{Note: emptySelectionRunNote(p, exitCode, stderr, false), TerminalDetail: emptySelectionRunNote(p, exitCode, stderr, true)}
 	}
 	// The document parsed and is non-empty; check it is not the
 	// src-layout/editable-install pathology before trusting it as Ran.
@@ -417,10 +419,10 @@ func CollectSelectionEvidence(ctx context.Context, runner commandRunner, files m
 		if exitCode > 0 {
 			hint := selectionFailureHint(p, stderr+" "+out)
 			return SelectionEvidence{Note: withHint(fmt.Sprintf("%s: selection evidence run exited %d, so its output is unparseable as evidence and no test can be selected", p.Name(), exitCode), hint),
-				Detail: withHint(fmt.Sprintf("%s: selection evidence run exited %d, so its output is unparseable as evidence and no test can be selected (it ended: %q)", p.Name(), exitCode, lastLine(out)), hint)}
+				TerminalDetail: withHint(fmt.Sprintf("%s: selection evidence run exited %d, so its output is unparseable as evidence and no test can be selected (it ended: %q)", p.Name(), exitCode, lastLine(out)), hint)}
 		}
 		return SelectionEvidence{Note: fmt.Sprintf("%s: selection evidence unparseable", p.Name()),
-			Detail: fmt.Sprintf("%s: selection evidence unparseable: %v (output began: %q)", p.Name(), mErr, firstLine(out))}
+			TerminalDetail: fmt.Sprintf("%s: selection evidence unparseable: %v (output began: %q)", p.Name(), mErr, firstLine(out))}
 	}
 	if !hasMeasuredSourceFile(p, m.Coverage()) {
 		return SelectionEvidence{Note: pathologicalSelectionDocumentNote(p)}

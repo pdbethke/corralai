@@ -42,6 +42,10 @@ history of any release, `git log v0.3.4..v0.3.5`.
   could not be built`, `red in the baseline; not rerun alone: the jail could
   not be prepared`). The full error and output are still printed on the
   run's own output, beside the unit they belong to, and stored nowhere.
+  One reason still carries words from the command: a unit red only with
+  the evidence pass's change and green as your command runs it names the
+  runner flags that change replaced (`--pool=forks`, say), which are
+  corral's own edit to the command, not its arguments at large.
 - **Why a file graded by the whole suite could publish the operator's
   command line.** That reason is the entry's `selection_fallback`, written
   on every ledger entry whether or not source is pushed, and it quoted the

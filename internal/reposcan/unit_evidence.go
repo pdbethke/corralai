@@ -57,12 +57,14 @@ type UnitResult struct {
 	// signed, published ledger, so it never holds a runner's error text, an
 	// output tail, the operator's argv or a host path.
 	Err string
-	// Detail is what the operator needs to act on Err — the runner's error,
+	// TerminalDetail is what the operator needs to act on Err — the runner's error,
 	// the failed run's output tail — for the scan's units line on the
 	// terminal (printUnitPass) and nothing else. It is never marshalled (the
 	// selection cache stores this struct as JSON) and never copied into the
 	// test map, so it cannot reach a verdict.
-	Detail string `json:"-"`
+	// Named TerminalDetail, never Detail: a ledger row's Detail is recorded,
+	// and a field of that name is one assignment from leaking into it.
+	TerminalDetail string `json:"-"`
 }
 
 // UnitEvidence is one scan's unit pass. Ran false means there is no unit
@@ -80,11 +82,13 @@ type UnitEvidence struct {
 	// so it is one fixed phrase per reason and never quotes the operator's
 	// command, a runner's error or what a run printed.
 	Note string
-	// Detail is Note as the operator's terminal says it: the same reason
+	// TerminalDetail is Note as the operator's terminal says it: the same reason
 	// with the command, the error and the output tail that explain it. It
 	// is never marshalled and never read into a selection. "" when Note
 	// says everything (Said).
-	Detail string `json:"-"`
+	// Named TerminalDetail, never Detail: a ledger row's Detail is recorded,
+	// and a field of that name is one assignment from leaking into it.
+	TerminalDetail string `json:"-"`
 	// Changed is what the pass changed in the operator's command to run
 	// each unit (lang.EvidenceNote: vitest's threads pool), "" for nothing.
 	// It is set on a pass that ran, every unit green or not, so the scan
@@ -95,7 +99,7 @@ type UnitEvidence struct {
 
 // Reasons a unit contributes nothing. They are written into UnitResult.Err
 // verbatim, and the scan line repeats them. Each is fixed text (an exit code
-// aside): what a failure printed goes in UnitResult.Detail, for the terminal.
+// aside): what a failure printed goes in UnitResult.TerminalDetail, for the terminal.
 const (
 	unitNotRunTimeLimit   = "not run (time limit)"
 	unitNotRunInterrupted = "not run (interrupted)"
@@ -122,17 +126,17 @@ const (
 	unitCouldNotRun = "could not run: "
 	// unitJailCouldNotStart is unitCouldNotRun's one reason: the runner's
 	// own error (an OS error naming host paths, a bwrap message) is the
-	// unit's Detail, never its Err.
+	// unit's TerminalDetail, never its Err.
 	unitJailCouldNotStart = unitCouldNotRun + "the jail could not start it"
 	// unitNoCommand is a unit the operator's command has no one-unit form
 	// for. It once quoted that command, argv and all, into the record.
 	unitNoCommand = "not run: the command could not be built"
 	// unitCoverageUnavailable prefixes the instrument's own reason, which
-	// is the unit's Detail; unitCoverageUnavailableRecord is the Err.
+	// is the unit's TerminalDetail; unitCoverageUnavailableRecord is the Err.
 	unitCoverageUnavailable       = "coverage unavailable: "
 	unitCoverageUnavailableRecord = unitCoverageUnavailable + "the coverage instrument reported it unavailable"
 	// unitUnparseable is a report the reducer's parser refused; the
-	// parser's message is the unit's Detail.
+	// parser's message is the unit's TerminalDetail.
 	unitUnparseable = "unparseable: the coverage report could not be read"
 )
 
@@ -168,29 +172,29 @@ func CollectUnitEvidence(ctx context.Context, runner commandRunner, files map[st
 	listCmd, ok := lang.ListUnitsCmd(p, inv)
 	if !ok {
 		return UnitEvidence{Note: fmt.Sprintf("%s: the unit pass could not list units: its command has no one-unit form corral can list and run", p.Name()),
-			Detail: fmt.Sprintf("%s: `%s` has no one-unit form corral can list and run, so no unit evidence", p.Name(), command)}
+			TerminalDetail: fmt.Sprintf("%s: `%s` has no one-unit form corral can list and run, so no unit evidence", p.Name(), command)}
 	}
 
 	out, exit, stderr, err := runSelectionCmd(ctx, runner, files, listCmd)
 	switch {
 	case err != nil:
 		return UnitEvidence{Note: fmt.Sprintf("%s: the unit pass could not list units: the jail could not start the listing", p.Name()),
-			Detail: fmt.Sprintf("%s: listing the test units of `%s` failed: %v", p.Name(), command, err)}
+			TerminalDetail: fmt.Sprintf("%s: listing the test units of `%s` failed: %v", p.Name(), command, err)}
 	case exit > 0:
 		return UnitEvidence{Note: fmt.Sprintf("%s: the unit pass could not list units: the listing exited %d", p.Name(), exit),
-			Detail: fmt.Sprintf("%s: listing the test units of `%s` exited %d%s", p.Name(), command, exit, failureTail(stderr, out))}
+			TerminalDetail: fmt.Sprintf("%s: listing the test units of `%s` exited %d%s", p.Name(), command, exit, failureTail(stderr, out))}
 	case truncated(out):
 		return UnitEvidence{Note: fmt.Sprintf("%s: the unit pass could not list units: the listing was truncated, so the units it names cannot be trusted to be all of them", p.Name()),
-			Detail: fmt.Sprintf("%s: the unit listing of `%s` was truncated, so the units it names cannot be trusted to be all of them", p.Name(), command)}
+			TerminalDetail: fmt.Sprintf("%s: the unit listing of `%s` was truncated, so the units it names cannot be trusted to be all of them", p.Name(), command)}
 	}
 	units := lang.ParseUnitList(p, inv, out)
 	if units == nil {
 		return UnitEvidence{Note: fmt.Sprintf("%s: the unit pass could not list units: the listing could not be read", p.Name()),
-			Detail: fmt.Sprintf("%s: could not read the unit listing of `%s`%s", p.Name(), command, failureTail(stderr, out))}
+			TerminalDetail: fmt.Sprintf("%s: could not read the unit listing of `%s`%s", p.Name(), command, failureTail(stderr, out))}
 	}
 	if len(units) == 0 {
 		return UnitEvidence{Note: fmt.Sprintf("%s: the test command collects no test units", p.Name()),
-			Detail: fmt.Sprintf("%s: `%s` collects no test units", p.Name(), command)}
+			TerminalDetail: fmt.Sprintf("%s: `%s` collects no test units", p.Name(), command)}
 	}
 
 	results := make([]UnitResult, len(units))
@@ -210,7 +214,7 @@ func CollectUnitEvidence(ctx context.Context, runner commandRunner, files map[st
 		unitCmd, ok := lang.UnitRunCmd(p, inv, u)
 		if !ok {
 			results[i].Err = unitNoCommand
-			results[i].Detail = fmt.Sprintf("`%s` has no one-unit command for it", command)
+			results[i].TerminalDetail = fmt.Sprintf("`%s` has no one-unit command for it", command)
 			continue
 		}
 		// The evidence pass's own flags (vitest's threads pool) go on the
@@ -227,7 +231,7 @@ func CollectUnitEvidence(ctx context.Context, runner commandRunner, files map[st
 	}
 	if len(runnable) == 0 {
 		return UnitEvidence{Units: results, Note: fmt.Sprintf("%s: no unit the test command collects can run alone under coverage, so no unit evidence", p.Name()),
-			Detail: fmt.Sprintf("%s: no unit `%s` collects can run alone under coverage, so no unit evidence", p.Name(), command)}
+			TerminalDetail: fmt.Sprintf("%s: no unit `%s` collects can run alone under coverage, so no unit evidence", p.Name(), command)}
 	}
 
 	noCoverage := lang.UnitNoCoverageReason(p, inv)
@@ -274,10 +278,10 @@ func CollectUnitEvidence(ctx context.Context, runner commandRunner, files map[st
 		default:
 			for _, i := range runnable {
 				results[i].Err = unitJailCouldNotStart
-				results[i].Detail = err.Error()
+				results[i].TerminalDetail = err.Error()
 			}
 			return UnitEvidence{Units: results, Note: fmt.Sprintf("%s: the unit pass did not run: the jail could not start it", p.Name()),
-				Detail: fmt.Sprintf("%s: the unit pass could not seed the tree its units run over: %v", p.Name(), err)}
+				TerminalDetail: fmt.Sprintf("%s: the unit pass could not seed the tree its units run over: %v", p.Name(), err)}
 		}
 	}
 
@@ -493,10 +497,10 @@ func joinChanged(changed, more string) string {
 }
 
 // Said is why the pass did not run as the operator's terminal says it:
-// Detail when there is one, else Note. Never read it into a selection.
+// TerminalDetail when there is one, else Note. Never read it into a selection.
 func (ev UnitEvidence) Said() string {
-	if ev.Detail != "" {
-		return ev.Detail
+	if ev.TerminalDetail != "" {
+		return ev.TerminalDetail
 	}
 	return ev.Note
 }
@@ -557,7 +561,7 @@ func (ev UnitEvidence) CutShort() int {
 // is the runner's known cause for a report that names no project file at
 // all (lang.UnitNoCoverageReason), "" for none. note is what the evidence
 // pass changed in the operator's command (lang.EvidenceNote), "" for
-// nothing: a red unit's Detail names it, because the operator's own run of
+// nothing: a red unit's TerminalDetail names it, because the operator's own run of
 // the same unit may be green without it.
 func runUnit(ctx context.Context, runner commandRunner, files map[string]string, reporter lang.CoverageReporter, cmd []string, modulePath, noCoverage, note string) UnitResult {
 	if err := ctx.Err(); err != nil {
@@ -574,15 +578,15 @@ func runUnit(ctx context.Context, runner commandRunner, files map[string]string,
 	case err != nil && ctx.Err() != nil:
 		return UnitResult{Err: unitInterrupted}
 	case err != nil:
-		return UnitResult{Err: unitJailCouldNotStart, Detail: err.Error()}
+		return UnitResult{Err: unitJailCouldNotStart, TerminalDetail: err.Error()}
 	case exit > 0:
 		// A unit whose own run failed — a red test, a build error, a
 		// toolchain the jail lacks — is not evidence, even when a report
 		// still parses: a failing unit can stop before the code it would
 		// have executed, so its zeros are not "never executed".
-		return UnitResult{Err: fmt.Sprintf(unitRunFailed+"exited %d", exit), Detail: runDetail(note, failureTail(stderr, lang.BeforeSuiteExit(out)))}
+		return UnitResult{Err: fmt.Sprintf(unitRunFailed+"exited %d", exit), TerminalDetail: runDetail(note, failureTail(stderr, lang.BeforeSuiteExit(out)))}
 	case detailed && exit < 0:
-		return UnitResult{Err: unitRunFailed + "the process did not exit normally", Detail: runDetail(note, failureTail(stderr, lang.BeforeSuiteExit(out)))}
+		return UnitResult{Err: unitRunFailed + "the process did not exit normally", TerminalDetail: runDetail(note, failureTail(stderr, lang.BeforeSuiteExit(out)))}
 	case truncated(out):
 		// Checked before parsing, as Preflight does: a report cut on a
 		// clean boundary parses as a partial map that looks complete.
@@ -606,11 +610,11 @@ func runUnit(ctx context.Context, runner commandRunner, files map[string]string,
 		// What the suite printed before its trailer says why it failed
 		// (stderr when the runner kept it apart); the report after it
 		// does not.
-		return UnitResult{Err: fmt.Sprintf(unitRunFailed+"exit %d", rc), Detail: runDetail(note, failureTail(stderr, lang.BeforeSuiteExit(out)))}
+		return UnitResult{Err: fmt.Sprintf(unitRunFailed+"exit %d", rc), TerminalDetail: runDetail(note, failureTail(stderr, lang.BeforeSuiteExit(out)))}
 	}
 	if reason, unavailable := lang.CoverageUnavailable(out); unavailable {
-		// The instrument's notice is tool text: the operator's, in Detail.
-		return UnitResult{Err: unitCoverageUnavailableRecord, Detail: reason}
+		// The instrument's notice is tool text: the operator's, in TerminalDetail.
+		return UnitResult{Err: unitCoverageUnavailableRecord, TerminalDetail: reason}
 	}
 	if !ok {
 		return UnitResult{Err: unitNoSuiteExit}
@@ -629,8 +633,8 @@ func runUnit(ctx context.Context, runner commandRunner, files map[string]string,
 			return UnitResult{Err: "unparseable: " + empty.Summary(), Uncounted: lang.UncountedCoverage(out)}
 		}
 		// The parser's message can quote the report: the operator's, in
-		// Detail; the record keeps the class.
-		return UnitResult{Err: unitUnparseable, Detail: err.Error()}
+		// TerminalDetail; the record keeps the class.
+		return UnitResult{Err: unitUnparseable, TerminalDetail: err.Error()}
 	}
 	return UnitResult{Counts: counts, Uncounted: lang.UncountedCoverage(out), Loaded: lang.LoadedCoverage(out)}
 }
@@ -655,7 +659,7 @@ func recheckAsWritten(ctx context.Context, runner commandRunner, files map[strin
 	return UnitResult{Err: fmt.Sprintf(unitGreenAsWritten, note)}
 }
 
-// runDetail is a failed unit run's Detail: what the evidence pass changed in
+// runDetail is a failed unit run's TerminalDetail: what the evidence pass changed in
 // its command (note), then the end of what it printed (a failureTail), for
 // the terminal only.
 func runDetail(note, tail string) string {

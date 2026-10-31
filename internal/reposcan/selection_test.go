@@ -391,3 +391,27 @@ func TestSelectionEvidenceFailingSuiteSaysTheSuiteFailed(t *testing.T) {
 		t.Errorf("a failing suite was reported as a JSON error: %q", ev.Note)
 	}
 }
+
+// An instrumented run that printed nothing records how it exited and never
+// its stderr, which the terminal shows (review of R-F2): the note is every
+// Python file's published Fallback.
+func TestAnEmptySelectionRunRecordsNoStderr(t *testing.T) {
+	const (
+		secret = "API_KEY=sk-live-PLANTED"
+		host   = "/home/operator/private-checkout/.venv/bin/python"
+	)
+	py, _ := lang.ByName("python")
+	r := &fakeDetailedRunner{res: sandbox.EnumerateResult{Stderr: "env: " + host + " " + secret + ": No such file\n", ExitCode: 1}}
+	ev := CollectSelectionEvidence(context.Background(), r, nil, py, []string{"pytest"}, nil)
+	if ev.Ran || !strings.Contains(ev.Note, "exited 1 and printed nothing") {
+		t.Fatalf("ev = %+v: not the empty-run refusal this test is for", ev)
+	}
+	if !strings.Contains(ev.Said(), secret) || !strings.Contains(ev.Said(), host) {
+		t.Fatalf("Said = %q lacks the plants, so this test proves nothing", ev.Said())
+	}
+	for _, leak := range []string{secret, "sk-live", host, "/home/operator"} {
+		if strings.Contains(ev.Note, leak) {
+			t.Errorf("the recorded Note carries %q: %q", leak, ev.Note)
+		}
+	}
+}

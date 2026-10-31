@@ -56,7 +56,7 @@ func (r plantedRunner) EnumerateDetailed(_ context.Context, _ map[string]string,
 // the failed run's output tail into that reason, so an OS error naming a
 // host path, or a stderr line echoing a secret in the operator's argv, was
 // published. The reason is a fixed phrase per failure class; what the run
-// printed is the unit's Detail, for the terminal, and shown here to have
+// printed is the unit's TerminalDetail, for the terminal, and shown here to have
 // been planted, so the absence below is not an artefact of a quiet fixture.
 func TestAUnitsFailureTextNeverReachesTheVerdict(t *testing.T) {
 	p, ok := lang.ByName("typescript")
@@ -95,11 +95,11 @@ func TestAUnitsFailureTextNeverReachesTheVerdict(t *testing.T) {
 	if !ev.Ran {
 		t.Fatalf("the pass did not run: %q", ev.Note)
 	}
-	// The plants were really there: each failing unit's Detail carries
+	// The plants were really there: each failing unit's TerminalDetail carries
 	// them for the operator's terminal.
 	for _, u := range ev.Units {
-		if u.Unit != "test/green.test.ts" && (!strings.Contains(u.Detail, plantedSecret) || !strings.Contains(u.Detail, plantedPath)) {
-			t.Fatalf("%s: Detail %q lacks the planted text, so this test would prove nothing", u.Unit, u.Detail)
+		if u.Unit != "test/green.test.ts" && (!strings.Contains(u.TerminalDetail, plantedSecret) || !strings.Contains(u.TerminalDetail, plantedPath)) {
+			t.Fatalf("%s: TerminalDetail %q lacks the planted text, so this test would prove nothing", u.Unit, u.TerminalDetail)
 		}
 	}
 

@@ -236,9 +236,9 @@ func TestUnitPassDropsAFailedUnitAndKeepsTheRest(t *testing.T) {
 	}
 	beta := unitByName(t, ev, "test/beta.test.ts")
 	// The record keeps the class and exit code; the build error is the
-	// operator's, on the terminal (Detail).
-	if beta.Err != "run failed: exited 1" || !strings.Contains(beta.Detail, "TS2304") {
-		t.Errorf("beta = (Err %q, Detail %q), want a run failure with the build error in its Detail", beta.Err, beta.Detail)
+	// operator's, on the terminal (TerminalDetail).
+	if beta.Err != "run failed: exited 1" || !strings.Contains(beta.TerminalDetail, "TS2304") {
+		t.Errorf("beta = (Err %q, TerminalDetail %q), want a run failure with the build error in its TerminalDetail", beta.Err, beta.TerminalDetail)
 	}
 	if beta.Counts != nil {
 		t.Errorf("a failed unit kept counts %+v", beta.Counts)
@@ -671,7 +671,7 @@ func TestUnitPassTakesOnlyAGreenSuite(t *testing.T) {
 func TestUnitPassSaysWhyCoverageWasUnavailable(t *testing.T) {
 	listing := strings.Replace(unitListingFixture(t, "cargo-units.txt"), "/fixture/units/cargo", "/w", -1)
 	const notice = "corral-rust-coverage: unavailable llvm-profdata and llvm-cov are in neither the toolchain's llvm-tools nor PATH\n"
-	// The instrument's notice is the unit's Detail, for the terminal; the
+	// The instrument's notice is the unit's TerminalDetail, for the terminal; the
 	// recorded Err keeps the class.
 	const why = "llvm-profdata and llvm-cov are in neither the toolchain's llvm-tools nor PATH"
 	cases := []struct{ name, out, wantErr, wantDetail string }{
@@ -689,8 +689,8 @@ func TestUnitPassSaysWhyCoverageWasUnavailable(t *testing.T) {
 			if !ev.Ran {
 				t.Fatalf("ev = %+v, want the pass to have run", ev)
 			}
-			if u := unitByName(t, ev, "units-a/lib"); u.Err != tc.wantErr || (tc.wantDetail != "" && u.Detail != tc.wantDetail) || u.Counts != nil {
-				t.Errorf("units-a/lib = %+v, want Err %q, Detail %q and no counts", u, tc.wantErr, tc.wantDetail)
+			if u := unitByName(t, ev, "units-a/lib"); u.Err != tc.wantErr || (tc.wantDetail != "" && u.TerminalDetail != tc.wantDetail) || u.Counts != nil {
+				t.Errorf("units-a/lib = %+v, want Err %q, TerminalDetail %q and no counts", u, tc.wantErr, tc.wantDetail)
 			}
 		})
 	}
@@ -742,7 +742,7 @@ func TestUnitEvidenceSettled(t *testing.T) {
 // tell a jail-only failure from a real red test (commander.js, Task 11a).
 // The tail is the output BEFORE the suite-exit trailer: in the jail the
 // streams are one, and what follows the trailer is the coverage report, not
-// the failure. It is said in the unit's Detail, for the terminal, and never
+// the failure. It is said in the unit's TerminalDetail, for the terminal, and never
 // in its Err, which the verdict carries into the published ledger: a tail
 // can quote a secret or a host path.
 func TestUnitPassShowsAFailedUnitsOutput(t *testing.T) {
@@ -765,8 +765,8 @@ func TestUnitPassShowsAFailedUnitsOutput(t *testing.T) {
 			f.answer("test/beta.test.ts", sandbox.EnumerateResult{Output: jsReport("2 10 src/y.ts")})
 			ev := f.collect(context.Background(), "/w", 1)
 			alpha := unitByName(t, ev, "test/alpha.test.ts")
-			if alpha.Err != tc.wantErr || alpha.Detail != tc.wantDetail {
-				t.Errorf("alpha = (Err %q, Detail %q), want (%q, %q)", alpha.Err, alpha.Detail, tc.wantErr, tc.wantDetail)
+			if alpha.Err != tc.wantErr || alpha.TerminalDetail != tc.wantDetail {
+				t.Errorf("alpha = (Err %q, TerminalDetail %q), want (%q, %q)", alpha.Err, alpha.TerminalDetail, tc.wantErr, tc.wantDetail)
 			}
 		})
 	}
@@ -951,7 +951,7 @@ func TestCollectUnitEvidenceUsesEvidenceArgs(t *testing.T) {
 }
 
 // A unit that is red under --pool=threads contributes nothing, and its
-// Detail says the evidence pass ran it with that flag (the scan line says
+// TerminalDetail says the evidence pass ran it with that flag (the scan line says
 // so too, once, from Changed): the operator's own
 // run may be green in the forks pool, and a red unit is unreported (every
 // file then selects it) rather than graded on partial evidence.
@@ -969,8 +969,8 @@ func TestThreadsRedUnitIsUnreportedNamingThePool(t *testing.T) {
 			f.answer("test/beta.test.ts", c.res)
 			ev := f.collect(context.Background(), "/w", 1)
 			beta := unitByName(t, ev, "test/beta.test.ts")
-			if !strings.HasPrefix(beta.Err, "run failed:") || !strings.Contains(beta.Detail, "--pool=threads") {
-				t.Errorf("beta = (Err %q, Detail %q), want a run failure whose Detail names --pool=threads", beta.Err, beta.Detail)
+			if !strings.HasPrefix(beta.Err, "run failed:") || !strings.Contains(beta.TerminalDetail, "--pool=threads") {
+				t.Errorf("beta = (Err %q, TerminalDetail %q), want a run failure whose TerminalDetail names --pool=threads", beta.Err, beta.TerminalDetail)
 			}
 			if beta.Counts != nil {
 				t.Errorf("a red unit kept counts %+v", beta.Counts)
@@ -1411,4 +1411,45 @@ func TestUnitPassDoesNotRecheckWhenThePassChangedNothing(t *testing.T) {
 	if f.run.didRun(cmd) {
 		t.Error("a red unit was rerun although the evidence pass changed nothing in its command")
 	}
+}
+
+// A unit's recorded reason quotes no command and no parser text (review of
+// R-F2): the secret rides in the operator's command, the host path in what
+// the report printed. Each case shows the plant reached the unit's
+// TerminalDetail, so the absence from Err is the fix and not a quiet
+// fixture.
+func TestAUnitsRecordedReasonQuotesNoCommandAndNoParserText(t *testing.T) {
+	const (
+		secret = "API_KEY=sk-live-PLANTED"
+		host   = "/home/operator/private-checkout"
+	)
+	argv := []string{"vitest", "run", "--reporter=" + secret}
+	clean := func(t *testing.T, err string) {
+		t.Helper()
+		for _, leak := range []string{secret, "sk-live", host, "/home/operator"} {
+			if strings.Contains(err, leak) {
+				t.Errorf("the recorded Err carries %q: %q", leak, err)
+			}
+		}
+	}
+	t.Run("no one-unit command", func(t *testing.T) {
+		// A file named like a flag has no one-unit command (fileUnits).
+		f := newUnitFixture(t, "typescript", argv, "corral-units-cwd /w\n[{\"file\":\"/w/test/alpha.test.ts\"},{\"file\":\"/w/-x.test.ts\"}]\n")
+		f.answer("test/alpha.test.ts", sandbox.EnumerateResult{Output: jsReport("7 10 src/x.ts")})
+		u := unitByName(t, f.collect(context.Background(), "/w", 1), "-x.test.ts")
+		if u.Err != unitNoCommand || !strings.Contains(u.TerminalDetail, secret) {
+			t.Fatalf("u = %+v: want %q with the command in TerminalDetail", u, unitNoCommand)
+		}
+		clean(t, u.Err)
+	})
+	t.Run("unparseable report", func(t *testing.T) {
+		f := newUnitFixture(t, "typescript", argv, vitestTwoUnits)
+		f.answer("test/alpha.test.ts", sandbox.EnumerateResult{Output: jsReport("x y " + host + "/" + secret + ".ts")})
+		f.answer("test/beta.test.ts", sandbox.EnumerateResult{Output: jsReport("2 10 src/x.ts")})
+		u := unitByName(t, f.collect(context.Background(), "/w", 1), "test/alpha.test.ts")
+		if !strings.HasPrefix(u.Err, "unparseable: ") || !strings.Contains(u.TerminalDetail, host) {
+			t.Fatalf("u = %+v: want an unparseable reason with the parser's text in TerminalDetail", u)
+		}
+		clean(t, u.Err)
+	})
 }

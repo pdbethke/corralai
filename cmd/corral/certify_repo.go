@@ -3045,13 +3045,13 @@ func (l *localExecutor) runPreflight(ctx context.Context, sources []string) repo
 	// preparation is the expensive part, and a language with no coverage
 	// instrumentation would get only this note after paying for it.
 	if _, note := reposcan.PreflightCommand(plug, testCmd); note != "" {
-		return reposcan.CoverageMap{Note: note}
+		return reposcan.PreflightRefused(note, testCmd)
 	}
 	runner, files, rerr := l.scanRunner(langName, plug, preflightMaxOutput, preflightTimeout)
 	if rerr != nil {
 		// Recorded by its reason (Note is the scan row's published
-		// PreflightNote); the error is the terminal's (Detail).
-		return reposcan.CoverageMap{Note: "preflight: the jail could not be prepared", Detail: fmt.Sprintf("preflight: %v", rerr)}
+		// PreflightNote); the error is the terminal's (TerminalDetail).
+		return reposcan.CoverageMap{Note: "preflight: the jail could not be prepared", TerminalDetail: fmt.Sprintf("preflight: %v", rerr)}
 	}
 
 	// DEFAULT TO THE REPO'S FILESYSTEM ROOT, and let Go override it.
@@ -3079,7 +3079,7 @@ func (l *localExecutor) runPreflight(ctx context.Context, sources []string) repo
 	// opt OUT rather than remember to opt in.
 	repoRoot, merr := l.coverageModulePath(langName)
 	if merr != nil {
-		return reposcan.CoverageMap{Note: "preflight: the coverage module path could not be read", Detail: fmt.Sprintf("preflight: %v", merr)}
+		return reposcan.CoverageMap{Note: "preflight: the coverage module path could not be read", TerminalDetail: fmt.Sprintf("preflight: %v", merr)}
 	}
 
 	return reposcan.Preflight(ctx, runner, files, plug, testCmd, repoRoot)
@@ -3269,8 +3269,8 @@ func (l *localExecutor) collectSelection(ctx context.Context, sources []string) 
 	runner, files, err := l.scanRunner(langName, plug, selectionMaxOutput, l.evidenceTimeout)
 	if err != nil {
 		// Recorded by its reason (Note is every file's published Fallback);
-		// the error is said on the terminal (Detail).
-		return reposcan.SelectionEvidence{Note: "selection: the jail could not be prepared", Detail: fmt.Sprintf("selection: %v", err)}
+		// the error is said on the terminal (TerminalDetail).
+		return reposcan.SelectionEvidence{Note: "selection: the jail could not be prepared", TerminalDetail: fmt.Sprintf("selection: %v", err)}
 	}
 	// THE INSTRUMENTED RUN, and the only statement in this function that runs
 	// the project's suite. The clock is here, and only here: every return
@@ -3282,8 +3282,8 @@ func (l *localExecutor) collectSelection(ctx context.Context, sources []string) 
 	// runner's words; it did not say which bound, or that one flag moves it.
 	if !ev.Ran && watch.hit() {
 		ev.Note += evidenceBoundNote(l.evidenceTimeout)
-		if ev.Detail != "" {
-			ev.Detail += evidenceBoundNote(l.evidenceTimeout)
+		if ev.TerminalDetail != "" {
+			ev.TerminalDetail += evidenceBoundNote(l.evidenceTimeout)
 		}
 	}
 	// Recorded even when the run produced no usable evidence: the suite still

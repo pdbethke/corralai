@@ -87,16 +87,16 @@ func (l *localExecutor) collectUnits(ctx context.Context, sources []string) repo
 	}
 	// Each refusal below is recorded by its fixed reason (Note, which
 	// becomes every file's Fallback in the published ledger) and said with
-	// its error on the terminal (Detail).
+	// its error on the terminal (TerminalDetail).
 	inv, err := lang.Resolve(plug, l.repoDir, testCmd, l.runnerFor(langName))
 	if err != nil {
 		return reposcan.UnitEvidence{Note: fmt.Sprintf("%s: the unit pass did not run: its command could not be built", langName),
-			Detail: fmt.Sprintf("%s: %v", langName, err)}
+			TerminalDetail: fmt.Sprintf("%s: %v", langName, err)}
 	}
 	modulePath, err := l.coverageModulePath(langName)
 	if err != nil {
 		return reposcan.UnitEvidence{Note: fmt.Sprintf("%s: the unit pass did not run: the coverage module path could not be read", langName),
-			Detail: fmt.Sprintf("%s: %v", langName, err)}
+			TerminalDetail: fmt.Sprintf("%s: %v", langName, err)}
 	}
 	if l.evidenceTimeout <= 0 {
 		return reposcan.UnitEvidence{Note: fmt.Sprintf("%s: unit pass: no evidence bound was set (--evidence-timeout)", langName)}
@@ -104,7 +104,7 @@ func (l *localExecutor) collectUnits(ctx context.Context, sources []string) repo
 	runner, files, err := l.scanRunner(langName, plug, selectionMaxOutput, l.evidenceTimeout)
 	if err != nil {
 		return reposcan.UnitEvidence{Note: fmt.Sprintf("%s: the unit pass did not run: the jail could not be prepared", langName),
-			Detail: fmt.Sprintf("%s: unit pass: %v", langName, err)}
+			TerminalDetail: fmt.Sprintf("%s: unit pass: %v", langName, err)}
 	}
 	// The landing map. The jail's seed holds the tree's text, and the
 	// runner applies it to the jail; the workspace runner applies files to
@@ -333,14 +333,14 @@ func printUnitPass(w io.Writer, ex *localExecutor) {
 		}
 		listed++
 		if u.Err != "" {
-			// A failed unit's reason is followed by its Detail — the
+			// A failed unit's reason is followed by its TerminalDetail — the
 			// runner's error or its output tail, for the operator here and
 			// never in the record — which can run over several lines; each
 			// is indented under the unit so it reads as that unit's, not as
 			// a line of the scan.
 			line := u.Err
-			if u.Detail != "" {
-				line += ": " + u.Detail
+			if u.TerminalDetail != "" {
+				line += ": " + u.TerminalDetail
 			}
 			fmt.Fprintf(w, "    %s: %s\n", u.Unit, strings.ReplaceAll(line, "\n", "\n      "))
 		}

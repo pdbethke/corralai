@@ -1033,6 +1033,22 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	skipEvidence := *diffBase != "" && len(selected) == 0 && len(unpairableInDiff) == 0 && !diffTouchedATest
+	// The test command and runner the entry records (ScanRow.TestCommand,
+	// Runner): the operator's command, else the resolved language's stock
+	// one, and the runner row it is read as. Resolved once, from the same
+	// plugin resolution the evidence passes use, so a mixed repository with
+	// no single language records the operator's command (or none) and no
+	// runner, rather than a guess.
+	var recordedCmd []string
+	recordedRunnerID := ""
+	if ex != nil {
+		recPlug, _, recCmd, _ := ex.resolveSelectionPlugin(enumeratedSourcePaths(cands, excl))
+		recordedCmd = recCmd
+		if len(recordedCmd) == 0 {
+			recordedCmd = checkArgv
+		}
+		recordedRunnerID = recordedRunner(recPlug, *repoDir, recordedCmd, *runnerFlag)
+	}
 	evidenceCandidacyOK := false
 	selectionMethod := ""
 	// evidenceIdx is the index candidacy was widened by, kept for the
@@ -1736,6 +1752,20 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		SelectionReused: ex != nil && ex.selectionReused,
 		// The whole unit pass, from the values its "units:" lines print.
 		UnitPass: ex.unitPassJSON(),
+		// What the run executed under: the test command (redacted), the
+		// runner row it was read as, and the settings the run used.
+		TestCommand: testCommandText(recordedCmd), Runner: recordedRunnerID,
+		Settings: runSettingsJSON(runSettings{
+			Timeout: *timeoutFlag, EvidenceTimeout: evidenceTimeout,
+			SeedLimitBytes: seedLimitUsed(*substrateFlag, seedLimit),
+			Swarm:          resolveSwarm(*swarmFlag), ScanWorkers: workers, UnitWorkers: ex.unitWorkers,
+			MutantConcurrency: mutantConc, PerFileSwarm: ex.perFileSwarm, BaselineRuns: ex.baselineRuns,
+			MaxTokens:  *maxTokensFlag,
+			WholeSuite: boolPtrOf(*wholeSuiteFlag), NoFailFast: boolPtrOf(*noFailFastFlag),
+			NoGoalCache: boolPtrOf(*noGoalCacheFlag), NoVerdictCache: boolPtrOf(*noVerdictCacheFlag),
+			NoSelectionCache: boolPtrOf(*noSelectionCacheFlag),
+			WriterMode:       writerMode, Jail: ex.sandboxIdentity().Backend, RunnerFlag: *runnerFlag,
+		}),
 		// What the scan consumed. The run already printed these to stdout and
 		// then discarded them, which is how "what did that cost me" had no
 		// answer from the tool whose central caveat is that audits are

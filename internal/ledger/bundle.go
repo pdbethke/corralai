@@ -181,6 +181,25 @@ type ScanRow struct {
 	// disagree. Empty when no unit pass ran (Python, --dry-run, a language
 	// the pass does not serve) and on every row written before it.
 	UnitPass string `json:",omitempty"`
+	// TestCommand is the test command the run graded with, shell-joined and
+	// REDACTED (cmd/corral redactCommand: a secret-named assignment or flag
+	// value is replaced, so the public record cannot carry a credential typed
+	// after `--`). The operator's own command, else the language plugin's
+	// stock one. Empty when the scan resolved no single language to name a
+	// command for (a mixed repository, a dry run) and on every earlier row.
+	TestCommand string `json:",omitempty"`
+	// Runner is the runner-table row (lang.Runner.ID) that command was read
+	// as: the operator's --runner, else the row the command names, else the
+	// language's default. Empty when none resolved and on every earlier row.
+	Runner string `json:",omitempty"`
+	// Settings is the conditions the run executed under, as JSON TEXT (a
+	// ScanRow is compared whole, so no map): timeout, evidence_timeout,
+	// seed_limit_mib, swarm, scan_workers, unit_workers, mutant_concurrency,
+	// per_file_swarm, baseline_runs, max_tokens, whole_suite, no_fail_fast,
+	// no_goal_cache, no_verdict_cache, no_selection_cache, writer_mode, jail,
+	// runner_flag. A setting the run did not use is ABSENT, never a zero.
+	// Empty on every row written before it.
+	Settings string `json:",omitempty"`
 }
 
 // PushedByCertify is the ScanRow.PushedBy of a run's own entry.

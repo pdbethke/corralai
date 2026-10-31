@@ -106,6 +106,10 @@ type Scan struct {
 	// UnitPass is the unit evidence pass as JSON text (ledger.ScanRow.UnitPass):
 	// "" when no pass ran.
 	UnitPass string
+	// TestCommand, Runner and Settings are the ledger's (ledger.ScanRow):
+	// the redacted test command, the runner row it was read as, and the
+	// run's settings as JSON text. "" when not recorded.
+	TestCommand, Runner, Settings string
 	// InputTokens, OutputTokens and ModelCalls are what the scan consumed
 	// from the providers, scan-wide. The per-role breakdown lives in
 	// scan_model_calls; these are the totals the run already printed to

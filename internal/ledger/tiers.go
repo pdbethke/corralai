@@ -97,7 +97,7 @@ func buildFieldTiers() map[[2]string]FieldTier {
 	// ScanRow: one per run.
 	add("ScanRow", TierKey, "", "ScanID ScanUID EntryHash Repo RepoIdentity Commit DiffBase RunURL StatementSHA256 RekorLogIndex RekorUUID")
 	add("ScanRow", TierMeasured, "", `Audited Candidates TotalFiles Passed TreeDirty PreflightRan AllCandidates Top TreesRequested
-		Scope Substrate SandboxBackend SandboxImage ModelSet CorralVersion EngineVersion Cores SeedSkipped UnitPass SelectionReused
+		Scope Substrate SandboxBackend SandboxImage ModelSet CorralVersion EngineVersion Cores SeedSkipped UnitPass TestCommand Runner Settings SelectionReused
 		PushedBy Host SourcePushed StartedAt FinishedAt TotalMillis SelectionMillis ModelCalls InputTokens OutputTokens`)
 	add("ScanRow", TierMeta, noteRunAccount, "PreflightNote")
 

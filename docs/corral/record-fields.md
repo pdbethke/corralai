@@ -362,6 +362,7 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `Repo` | key |  |
 | `RepoIdentity` | key |  |
 | `RunURL` | key |  |
+| `Runner` | measured |  |
 | `SandboxBackend` | measured |  |
 | `SandboxImage` | measured |  |
 | `ScanID` | key |  |
@@ -370,10 +371,12 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `SeedSkipped` | measured |  |
 | `SelectionMillis` | measured |  |
 | `SelectionReused` | measured |  |
+| `Settings` | measured |  |
 | `SourcePushed` | measured |  |
 | `StartedAt` | measured |  |
 | `StatementSHA256` | key |  |
 | `Substrate` | measured |  |
+| `TestCommand` | measured |  |
 | `Top` | measured |  |
 | `TotalFiles` | measured |  |
 | `TotalMillis` | measured |  |

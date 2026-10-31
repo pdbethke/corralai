@@ -14,6 +14,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/auditpush"
+	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/sandbox"
 	"github.com/pdbethke/corralai/internal/scanstore"
@@ -157,6 +158,23 @@ func localEntryBundle(in localAuditInput, v advpool.Verdict, t advpool.RunTeleme
 		TotalMillis: finished.Sub(started).Milliseconds(),
 		InputTokens: inTokens, OutputTokens: outTokens, ModelCalls: callCount,
 	}
+	// The test command and runner, and the settings --local has. It has no
+	// scan workers, unit pass, evidence bound, caches or baseline count, and
+	// those are absent, not zero: Settings records only what the run used.
+	plug, _ := lang.ByName(v.Lang)
+	testArgv := in.checkArgv
+	if len(testArgv) == 0 && plug != nil {
+		testArgv = plug.TestCmd()
+	}
+	scan.TestCommand = testCommandText(testArgv)
+	scan.Runner = recordedRunner(plug, in.repoDir, testArgv, in.runner)
+	scan.Settings = runSettingsJSON(runSettings{
+		Timeout: in.timeout, SeedLimitBytes: in.seedLimit,
+		Swarm: resolveSwarm(in.swarm), MutantConcurrency: in.mutantConcurrency,
+		MaxTokens:  localTokenCap(in),
+		NoFailFast: boolPtrOf(in.noFailFast),
+		WriterMode: in.writerMode, Jail: run.sandbox.Backend, RunnerFlag: in.runner,
+	})
 	rosterJSON, _ := json.Marshal(v.ModelsByRole)
 	seatToolsJSON := ""
 	if len(v.SeatTools) > 0 {
@@ -291,4 +309,11 @@ func localSandboxIdentity(jailFlag string, stderr io.Writer) sandbox.Identity {
 		return sandbox.Identity{}
 	}
 	return id
+}
+
+// localTokenCap is the --max-tokens cap the run was held to, 0 (absent from
+// the settings) when it had none: a nil budget answers 0.
+func localTokenCap(in localAuditInput) int64 {
+	_, cap, _, _ := in.tokenBudget.Exhausted()
+	return cap
 }

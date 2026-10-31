@@ -453,7 +453,7 @@ var printedMetrics = map[string]printedRow{
 	"cmd/corral/scans.go:scanFileBudget":        {Fields: []string{"Row.MutantBudget", "Row.MutantBudgetRule"}},
 	"cmd/corral/scans_ledger.go:EntryKind":      {Fields: []string{"Checkpoint.Entries"}, Exempt: exReview},
 
-	"cmd/corral/scorecard.go:runScorecard":  {Fields: []string{"SeatRow.Catches", "SeatRow.Opportunities"}},
+	"cmd/corral/scorecard.go:runScorecard":  {Fields: []string{"SeatRow.Catches", "SeatRow.Opportunities"}, Exempt: "RUNS is a count of SeatRow records per model and role, derived at read time, not a stored field"},
 	"cmd/corral/scorecard.go:pctOrDash":     {Exempt: exFmtHelper},
 	"cmd/corral/seal.go:runSealWithoutRepo": {Fields: []string{"Row.KillRate", "Row.Survivors", "Row.ProvenMissed", "Row.Trees"}},
 	"cmd/corral/seal.go:runSealWithRepo":    {Fields: []string{"Row.KillRate", "Row.Survivors", "Row.ProvenMissed", "Row.Trees", "Row.Disposition", "Row.ImportOnly", "Row.Uncovered"}},

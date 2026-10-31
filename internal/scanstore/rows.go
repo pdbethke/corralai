@@ -696,6 +696,14 @@ type ModelCall struct {
 	// advpool.ModelCall.UnmeteredCalls.
 	UnmeteredCalls int
 	WallMillis     int64
+	// CostMicroUSD and CostBasis are the ledger row's (ledger.ModelCallRow):
+	// what the row's tokens cost in millionths of a dollar, nil when there is
+	// no honest figure, and the dated price table it came from or the reason
+	// there is none. Only the ledger reader sets them: a run prices its rows
+	// when it builds the entry (buildModelCallRows), so a row a run builds
+	// carries neither and its cost is computed there, once.
+	CostMicroUSD *int64
+	CostBasis    string
 }
 
 // Event is one entry on the tape: an ordered log of what the pool did, at

@@ -18,6 +18,7 @@ func scansShowJSONFixture() *fakeScansReader {
 	retries := 1
 	cachedTokens := int64(240000)
 	cacheWrites := int64(38000)
+	cost := int64(1834500)
 	return &fakeScansReader{
 		files: []scanstore.File{{
 			Path: "pkg/a.py", Lang: "python", Disposition: "audited", Gradable: true,
@@ -26,14 +27,18 @@ func scansShowJSONFixture() *fakeScansReader {
 		scan: scanstore.ScanRow{ID: 1, Scan: scanstore.Scan{SelectionMillis: ms(92000)}},
 		modelCalls: []scanstore.ModelCall{
 			{ScanID: 1, Path: "pkg/a.py", Role: "mutant-generator", Model: "m-1",
-				Calls: 24, Retries: &retries, InputTokens: 900000, OutputTokens: 31000, WallMillis: 4100},
+				Calls: 24, Retries: &retries, InputTokens: 900000, OutputTokens: 31000, WallMillis: 4100,
+				CostMicroUSD: &cost, CostBasis: "vendor list prices, 2026-10-30"},
 			// The writer seat is the one that sends a byte-identical prefix on
 			// every call of a file, so it is the seat a caching provider
 			// actually reports on; the generator row leaves it NULL.
 			{ScanID: 1, Path: "pkg/a.py", Role: "test-writer", Model: "w-1",
 				Calls: 5, InputTokens: 300000, OutputTokens: 17000,
 				CachedInputTokens: &cachedTokens, CacheWriteInputTokens: &cacheWrites,
-				WallMillis: 2200},
+				WallMillis: 2200,
+				// No figure, and the basis says why: the cost is never shown
+				// without what it rests on, and its absence never reads as $0.
+				CostBasis: "unpriced: no price for w-1"},
 		},
 	}
 }
@@ -147,7 +152,9 @@ const wantScansShowJSONWithTiming = `{
       "unmetered_calls": 0,
       "cached_input_tokens": null,
       "cache_write_input_tokens": null,
-      "wall_ms": 4100
+      "wall_ms": 4100,
+      "cost_micro_usd": 1834500,
+      "cost_basis": "vendor list prices, 2026-10-30"
     },
     {
       "path": "pkg/a.py",
@@ -160,7 +167,9 @@ const wantScansShowJSONWithTiming = `{
       "unmetered_calls": 0,
       "cached_input_tokens": 240000,
       "cache_write_input_tokens": 38000,
-      "wall_ms": 2200
+      "wall_ms": 2200,
+      "cost_micro_usd": null,
+      "cost_basis": "unpriced: no price for w-1"
     }
   ]
 }

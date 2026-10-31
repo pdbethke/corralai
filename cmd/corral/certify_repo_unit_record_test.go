@@ -81,3 +81,39 @@ func TestNoUnitPassRecordsNoUnitPass(t *testing.T) {
 		t.Errorf("no pass: %q", got)
 	}
 }
+
+// A key nothing measured is ABSENT from the record, never a zero standing
+// in for it: runnable on a pass that failed to seed (it announced nothing),
+// millis on a reused pass (no unit ran), unreported where the whole suite
+// grades (the screen prints no such text).
+func TestUnitPassOmitsWhatNothingMeasured(t *testing.T) {
+	keys := func(ex *localExecutor) map[string]any {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(ex.unitPassJSON()), &m); err != nil {
+			t.Fatalf("%q: %v", ex.unitPassJSON(), err)
+		}
+		return m
+	}
+	// Ran:false with units: the seed-failure early return.
+	failed := &localExecutor{units: reposcan.UnitEvidence{Units: []reposcan.UnitResult{
+		{Unit: "a", Err: "could not run: seed"}, {Unit: "b", Err: "could not run: seed"}}}}
+	m := keys(failed)
+	for _, k := range []string{"runnable", "unreported"} {
+		if _, ok := m[k]; ok {
+			t.Errorf("a pass that never announced records %s: %v", k, m)
+		}
+	}
+	if m["run"] != float64(2) || m["failed"] != float64(2) {
+		t.Errorf("counts lost: %v", m)
+	}
+	// Reused: no duration, but runnable is known.
+	n := 2
+	reused := &localExecutor{unitsReused: true, unitsRunnable: &n, units: reposcan.UnitEvidence{Ran: true, Units: []reposcan.UnitResult{{Unit: "a"}, {Unit: "b"}}}}
+	m = keys(reused)
+	if _, ok := m["millis"]; ok {
+		t.Errorf("a reused pass records a duration: %v", m)
+	}
+	if m["runnable"] != float64(2) || m["reused"] != true {
+		t.Errorf("reused pass: %v", m)
+	}
+}

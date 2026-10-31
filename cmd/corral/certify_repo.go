@@ -5170,7 +5170,7 @@ type localExecutor struct {
 	unitsReused bool
 	// unitsRunnable is how many listed units the pass ran alone: the
 	// "running N of M listed" line's N, set where that line is printed.
-	unitsRunnable int
+	unitsRunnable *int
 	// seedLimit is the jail seed limit in bytes (--seed-limit,
 	// resolveSeedLimit), read when the first seed is built, not at
 	// construction, so the flag boundary sets it after newLocalExecutor.

@@ -13,6 +13,50 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ### Added
 
+- **The signed record now holds every number a run prints, and every field
+  says what it can be trusted for.** Each recorded field carries one of four
+  tiers, set in `internal/ledger/tiers.go` and rendered to
+  [`docs/corral/record-fields.md`](docs/corral/record-fields.md): **measured**
+  (corral set, observed or executed it), **declared** (the audited commit or a
+  person says it), **meta** (the run's narrative and a model's opinion) and
+  **key** (names, ids, hashes). A test fails on a recorded field with no tier,
+  and a second test (`cmd/corral/printed_metrics_test.go`) fails on a function
+  in a linked package that prints a number without naming the ledger field
+  that holds it or carrying a written exemption. The record views print the
+  declared and meta labels. New fields, all measured unless noted:
+  `TestCommand`, `Runner` and `Settings` (the test command is
+  allowlist-redacted: anything not provably safe is written `<redacted>`, and
+  there is deliberately no digest of it, because a digest of a short command
+  could be brute-forced back to the secret it hid); `Toolchains` (versions
+  read inside the jail on `--repo`; `--local` records that they were not
+  read, as the demo below shows); `UnitPass` (the whole unit evidence pass,
+  `--repo` only); host conditions `LoadStart`, `LoadEnd`, `LoadPeak`,
+  `MemAvailableStartBytes`, `PeakRSSBytes`, `CPUMillis` and
+  `HostNotMeasured`; `Inventory`, `ShadowDraw` and `MaxTokensReached`; and per
+  file `MutantsUnplaced`, `MutantsUnmeasured`, `MutantsDuplicate` and
+  `WriterAttempts`. **Cost is derived, not observed, so it is declared.**
+  `CostMicroUSD` and `CostBasis` on each model-call row come from a dated
+  price table in `internal/pricing` that cites the vendor pages read on
+  2026-10-31. A model with no published price records "no price"; Claude
+  Haiku 5.5 is priced by prompt length per request, which one row of
+  tokens cannot reproduce, so it records "no price" rather than a guess; an
+  agent seat records "billing not known to corral", since a subscription
+  seat has no per-token bill. A real run of `corral demo --writer-model codex
+  --mutant-model claude-code:claude-sonnet-5-5 --critic-model
+  claude-code:claude-haiku-5-5` on 2026-10-31 (all three seats on
+  subscriptions) recorded `TestCommand` `go test ./...`, `Runner` `go-test`,
+  `Settings` `{"jail":"bwrap","no_fail_fast":false,"seed_limit_mib":64,"swarm":8,"timeout":"30m0s","writer_mode":"per-survivor"}`,
+  `Toolchains` `{"go":{"toolchains":"not read: certify --local does not read toolchain versions yet"}}`,
+  `LoadStart` 4.8, `LoadEnd` and `LoadPeak` 14.57, `MemAvailableStartBytes`
+  72234979328, `PeakRSSBytes` 344084480, `CPUMillis` 9122, and, on the file,
+  `MutantsUnplaced`, `MutantsUnmeasured` and `MutantsDuplicate` 0 and
+  `WriterAttempts` `{"min":1,"median":1,"max":1,"seats_ungraded":0}`. All
+  three model-call rows recorded `CostBasis` "agent seat: billing not known
+  to corral". That run exercised no `UnitPass`, `Inventory`, `ShadowDraw` or
+  `MaxTokensReached` (they belong to `--repo`), and no priced API model, so
+  no example is given for them; none has been run against a real repository
+  yet.
+
 - **The audited party includes the tools a commit's footer declares.** A
   commit message line `Generated with <tool>` (or `by`), after an optional
   emoji, with the tool as a Markdown link's text or as a few plain words, is

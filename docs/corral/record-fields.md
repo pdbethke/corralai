@@ -340,6 +340,7 @@ The table is checked against the record's Go types by a test, so a field cannot 
 |---|---|---|
 | `AllCandidates` | measured |  |
 | `Audited` | measured |  |
+| `CPUMillis` | measured |  |
 | `Candidates` | measured |  |
 | `Commit` | key |  |
 | `Cores` | measured |  |
@@ -349,11 +350,17 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `EntryHash` | key |  |
 | `FinishedAt` | measured |  |
 | `Host` | measured |  |
+| `HostNotMeasured` | measured |  |
 | `InputTokens` | measured |  |
+| `LoadEnd` | measured |  |
+| `LoadPeak` | measured |  |
+| `LoadStart` | measured |  |
+| `MemAvailableStartBytes` | measured |  |
 | `ModelCalls` | measured |  |
 | `ModelSet` | measured |  |
 | `OutputTokens` | measured |  |
 | `Passed` | measured |  |
+| `PeakRSSBytes` | measured |  |
 | `PreflightNote` | meta | the run's own account of itself: signed, but not verified as true |
 | `PreflightRan` | measured |  |
 | `PushedBy` | measured |  |

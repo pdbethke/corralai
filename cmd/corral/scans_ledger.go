@@ -183,6 +183,8 @@ func scanRowFromEntry(e auditpush.LedgerEntry, id int64) scanstore.ScanRow {
 		CorralVersion: sc.CorralVersion, Host: sc.Host, Cores: sc.Cores, TreesRequested: sc.TreesRequested,
 		SelectionMillis: sc.SelectionMillis, SelectionReused: sc.SelectionReused, UnitPass: sc.UnitPass,
 		TestCommand: sc.TestCommand, Runner: sc.Runner, Settings: sc.Settings, Toolchains: sc.Toolchains,
+		LoadStart: sc.LoadStart, LoadEnd: sc.LoadEnd, LoadPeak: sc.LoadPeak,
+		MemAvailableStartBytes: sc.MemAvailableStartBytes, PeakRSSBytes: sc.PeakRSSBytes, CPUMillis: sc.CPUMillis, HostNotMeasured: sc.HostNotMeasured,
 		InputTokens: sc.InputTokens, OutputTokens: sc.OutputTokens, ModelCalls: sc.ModelCalls,
 		SourcePushed: sc.SourcePushed, StatementSHA256: sc.StatementSHA256,
 		RekorLogIndex: sc.RekorLogIndex, RekorUUID: sc.RekorUUID,

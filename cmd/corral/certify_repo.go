@@ -28,6 +28,7 @@ import (
 	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/certify"
+	"github.com/pdbethke/corralai/internal/hoststat"
 	"github.com/pdbethke/corralai/internal/killrate"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/modelcorr"
@@ -392,6 +393,11 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// portion of it. Read only if --record is given (see the fail-open call
 	// site near the bottom of this function).
 	startedAt := time.Now()
+	// The host's load and the run's own consumption, sampled until the scan
+	// header is built. The deferred Stop ends the sampler on every early
+	// return; Stop is idempotent, so the one before the header is the read.
+	hostSampler := hoststat.Start(hostSampleInterval)
+	defer hostSampler.Stop()
 
 	var testMap *reposcan.TestMap
 	if *testsPath != "" {
@@ -1716,6 +1722,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	inTokens, outTokens, modelCallCount := modelCallRowTotals(modelCallRows)
 	host, _ := os.Hostname()
 	finishedAt := time.Now()
+	hostConditions := hostSampler.Stop()
 	// The audited party, from the checkout: nemo iudex names two parties,
 	// and the record names both.
 	party := auditpush.CommitIdentity(*repoDir, *commit)
@@ -1783,6 +1790,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// row swearing the source had left the box when nothing had.
 		SourcePushed: false,
 	}
+	recordHostConditions(&scan, hostConditions)
 	// The custody switch the PUSH honours, distinct from the ledger's
 	// record of what happened: --push-source with no --push sends nothing.
 	pushSource := *pushSourceFlag && strings.TrimSpace(*pushFlag) != ""

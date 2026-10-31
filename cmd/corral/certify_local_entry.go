@@ -14,6 +14,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/auditpush"
+	"github.com/pdbethke/corralai/internal/hoststat"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/sandbox"
@@ -55,6 +56,8 @@ type localRunFacts struct {
 	// unattributed. Carried here rather than re-derived at the end, so it
 	// describes the subject the verdict signed, not a later look at git.
 	repoIdentity string
+	// host is what hoststat observed over the run (Sampler.Stop).
+	host hoststat.Conditions
 	// sandbox is the jail the audit ran in (localSandboxIdentity).
 	sandbox sandbox.Identity
 	// seedSkipped is what the jail's copy left out as not text, as the
@@ -168,6 +171,7 @@ func localEntryBundle(in localAuditInput, v advpool.Verdict, t advpool.RunTeleme
 	}
 	scan.TestCommand = testCommandText(testArgv, in.repoDir)
 	scan.Toolchains = localToolchainsNotRead(v.Lang)
+	recordHostConditions(&scan, run.host)
 	scan.Runner = recordedRunner(plug, in.repoDir, testArgv, in.runner)
 	scan.Settings = runSettingsJSON(runSettings{
 		Timeout: in.timeout, SeedLimitBytes: in.seedLimit,

@@ -112,6 +112,12 @@ type Scan struct {
 	TestCommand, Runner, Settings string
 	// Toolchains is the ledger's (ledger.ScanRow.Toolchains), JSON text.
 	Toolchains string
+	// The host's conditions (ledger.ScanRow's LoadStart ... HostNotMeasured).
+	LoadStart, LoadEnd, LoadPeak *float64
+	MemAvailableStartBytes       *int64
+	PeakRSSBytes                 *int64
+	CPUMillis                    *int64
+	HostNotMeasured              string
 	// InputTokens, OutputTokens and ModelCalls are what the scan consumed
 	// from the providers, scan-wide. The per-role breakdown lives in
 	// scan_model_calls; these are the totals the run already printed to

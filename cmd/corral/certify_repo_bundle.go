@@ -126,6 +126,8 @@ func buildBundle(
 			// as-is. nil unless THIS scan reused a prior one's evidence.
 			SelectionReused: scan.SelectionReused, UnitPass: scan.UnitPass,
 			TestCommand: scan.TestCommand, Runner: scan.Runner, Settings: scan.Settings, Toolchains: scan.Toolchains,
+			LoadStart: scan.LoadStart, LoadEnd: scan.LoadEnd, LoadPeak: scan.LoadPeak,
+			MemAvailableStartBytes: scan.MemAvailableStartBytes, PeakRSSBytes: scan.PeakRSSBytes, CPUMillis: scan.CPUMillis, HostNotMeasured: scan.HostNotMeasured,
 			InputTokens: scan.InputTokens, OutputTokens: scan.OutputTokens,
 			ModelCalls:   scan.ModelCalls,
 			SourcePushed: sourcePushed,

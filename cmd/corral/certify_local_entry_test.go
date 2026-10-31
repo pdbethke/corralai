@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -131,6 +132,14 @@ func TestLocalRunWritesMachineLedgerEntry(t *testing.T) {
 	}
 	if want := localToolchainsNotRead("go"); b.Scan.Toolchains != want {
 		t.Errorf("Toolchains = %q, want %q: --local must say it reads none, not omit the field", b.Scan.Toolchains, want)
+	}
+	// The host's conditions, measured on a Linux box, else named as not.
+	if runtime.GOOS == "linux" {
+		if b.Scan.LoadStart == nil || b.Scan.LoadEnd == nil || b.Scan.LoadPeak == nil || b.Scan.CPUMillis == nil || b.Scan.MemAvailableStartBytes == nil {
+			t.Errorf("--local recorded no host conditions on Linux: %+v", b.Scan)
+		}
+	} else if b.Scan.HostNotMeasured == "" {
+		t.Errorf("--local recorded no host conditions and no reason on %s", runtime.GOOS)
 	}
 	if len(b.Files) != 1 || b.Files[0].Path != "pkg/a.go" {
 		t.Fatalf("file rows = %+v, want the one audited file", b.Files)

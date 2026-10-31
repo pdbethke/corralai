@@ -205,6 +205,7 @@ var scanRowColumns = []string{
 	"preflight_ran", "preflight_note", "finished_at", "entry_hash",
 	"author", "committer", "co_authors", "scope", "tree_dirty", "repo_identity",
 	"sandbox_backend", "sandbox_image", "seed_skipped", "generated_with", "unit_pass", "test_command", "runner", "settings", "toolchains",
+	"load_start", "load_end", "load_peak", "mem_available_start_bytes", "peak_rss_bytes", "cpu_millis", "host_not_measured",
 }
 
 // scanRowSelectList is scanRowColumns as a SELECT list for the corral_scans
@@ -255,6 +256,9 @@ func readScanRow(db *sql.DB, where string, args ...any) (ScanRow, bool, error) {
 	var engineVersion, modelSet, preflightNote, entryHash sql.NullString
 	var author, committer, coAuthors, scope, repoIdentity, sandboxBackend, sandboxImage, seedSkipped, generatedWith, unitPass, testCommand, runner, settings, toolchains sql.NullString
 	var treeDirty sql.NullBool
+	var loadStart, loadEnd, loadPeak sql.NullFloat64
+	var memAvail, peakRSS, cpuMillis sql.NullInt64
+	var hostNotMeasured sql.NullString
 	var top, totalFiles sql.NullInt64
 	// NULL header tokens: a scan none of whose calls was metered
 	// (ScanTokensUnmetered). They read back as the 0 the bundle carried; the
@@ -269,6 +273,7 @@ func readScanRow(db *sql.DB, where string, args ...any) (ScanRow, bool, error) {
 		&engineVersion, &modelSet, &top, &allCandidates, &totalFiles,
 		&preflightRan, &preflightNote, &scanFinished, &entryHash,
 		&author, &committer, &coAuthors, &scope, &treeDirty, &repoIdentity, &sandboxBackend, &sandboxImage, &seedSkipped, &generatedWith, &unitPass, &testCommand, &runner, &settings, &toolchains,
+		&loadStart, &loadEnd, &loadPeak, &memAvail, &peakRSS, &cpuMillis, &hostNotMeasured,
 	); err != nil {
 		if err == sql.ErrNoRows {
 			return ScanRow{}, false, nil
@@ -304,6 +309,9 @@ func readScanRow(db *sql.DB, where string, args ...any) (ScanRow, bool, error) {
 	s.UnitPass = unitPass.String
 	s.TestCommand, s.Runner, s.Settings = testCommand.String, runner.String, settings.String
 	s.Toolchains = toolchains.String
+	s.LoadStart, s.LoadEnd, s.LoadPeak = nullFloat64(loadStart), nullFloat64(loadEnd), nullFloat64(loadPeak)
+	s.MemAvailableStartBytes, s.PeakRSSBytes, s.CPUMillis = nullInt64(memAvail), nullInt64(peakRSS), nullInt64(cpuMillis)
+	s.HostNotMeasured = hostNotMeasured.String
 	if treeDirty.Valid {
 		v := treeDirty.Bool
 		s.TreeDirty = &v

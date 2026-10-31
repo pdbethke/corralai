@@ -359,4 +359,10 @@ func TestCertifyRepoRecordsToolchainsOnTheLedgerEntry(t *testing.T) {
 	if !strings.HasPrefix(py["python3"], "Python 3.") {
 		t.Errorf("python3 = %q, want the version the host prints", py["python3"])
 	}
+	sc := entries[0].Bundle.Scan
+	if sc.LoadStart == nil || sc.LoadEnd == nil || sc.LoadPeak == nil || sc.CPUMillis == nil || sc.MemAvailableStartBytes == nil {
+		if sc.HostNotMeasured == "" {
+			t.Errorf("--repo recorded no host conditions and no reason: %+v", sc)
+		}
+	}
 }

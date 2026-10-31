@@ -148,7 +148,14 @@ CREATE TABLE IF NOT EXISTS corral_scans (
   test_command     VARCHAR,
   runner           VARCHAR,
   settings         VARCHAR,
-  toolchains       VARCHAR
+  toolchains       VARCHAR,
+  load_start       DOUBLE,
+  load_end         DOUBLE,
+  load_peak        DOUBLE,
+  mem_available_start_bytes BIGINT,
+  peak_rss_bytes   BIGINT,
+  cpu_millis       BIGINT,
+  host_not_measured VARCHAR
 );`
 
 const auditsSchema = `
@@ -506,6 +513,15 @@ var (
 		{"runner", "runner VARCHAR"},
 		{"settings", "settings VARCHAR"},
 		{"toolchains", "toolchains VARCHAR"},
+		// The host's conditions (ScanRow.LoadStart ... HostNotMeasured).
+		// NULL before them: not recorded, which is not a load of zero.
+		{"load_start", "load_start DOUBLE"},
+		{"load_end", "load_end DOUBLE"},
+		{"load_peak", "load_peak DOUBLE"},
+		{"mem_available_start_bytes", "mem_available_start_bytes BIGINT"},
+		{"peak_rss_bytes", "peak_rss_bytes BIGINT"},
+		{"cpu_millis", "cpu_millis BIGINT"},
+		{"host_not_measured", "host_not_measured VARCHAR"},
 		// The tools the commit's footer lines declare (Identity.
 		// GeneratedWith), one per line. NULL before it: not read.
 		{"generated_with", "generated_with VARCHAR"},
@@ -1090,8 +1106,9 @@ func insertBundle(db *sql.DB, b Bundle, now time.Time, uid string) (Counts, erro
 		    preflight_ran, preflight_note, finished_at, entry_hash,
 		    author, committer, co_authors, scope, tree_dirty, repo_identity,
 		    sandbox_backend, sandbox_image, seed_skipped, generated_with, unit_pass,
-		    test_command, runner, settings, toolchains
-		  ) VALUES (`+placeholders(52)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+		    test_command, runner, settings, toolchains,
+		    load_start, load_end, load_peak, mem_available_start_bytes, peak_rss_bytes, cpu_millis, host_not_measured
+		  ) VALUES (`+placeholders(59)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 			uid, now, b.Scan.Repo, b.Scan.RunURL, b.Scan.ScanID, b.Scan.Commit,
 			b.Scan.CorralVersion, b.Scan.Substrate, b.Scan.Host, b.Scan.Cores,
 			nullIfZeroInt(b.Scan.TreesRequested), b.Scan.DiffBase,
@@ -1110,6 +1127,8 @@ func insertBundle(db *sql.DB, b Bundle, now time.Time, uid string) (Counts, erro
 			nullIfEmpty(b.Scan.UnitPass),
 			nullIfEmpty(b.Scan.TestCommand), nullIfEmpty(b.Scan.Runner), nullIfEmpty(b.Scan.Settings),
 			nullIfEmpty(b.Scan.Toolchains),
+			b.Scan.LoadStart, b.Scan.LoadEnd, b.Scan.LoadPeak,
+			b.Scan.MemAvailableStartBytes, b.Scan.PeakRSSBytes, b.Scan.CPUMillis, nullIfEmpty(b.Scan.HostNotMeasured),
 		); err != nil {
 			return Counts{}, fmt.Errorf("auditpush: insert scan row: %w", err)
 		}

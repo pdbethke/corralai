@@ -211,6 +211,21 @@ type ScanRow struct {
 	// could not be read is recorded as "not read: <reason>", never omitted.
 	// Empty on every row written before it and when no language resolved.
 	Toolchains string `json:",omitempty"`
+	// LoadStart, LoadEnd and LoadPeak are the host's 1-minute load average
+	// when the run started, when it finished and the largest sample between
+	// (internal/hoststat). MemAvailableStartBytes is /proc/meminfo's
+	// MemAvailable at the start; PeakRSSBytes the children's largest resident
+	// set (getrusage RUSAGE_CHILDREN, a process-lifetime maximum); CPUMillis
+	// the user plus system CPU of the process and its children over the run.
+	// A load average decides how much of the evidence bound a run can spend,
+	// so two runs at load 38 and load 13 are not the same run. nil, never 0,
+	// where a figure could not be read; HostNotMeasured says why. All absent
+	// on every row written before them.
+	LoadStart, LoadEnd, LoadPeak *float64 `json:",omitempty"`
+	MemAvailableStartBytes       *int64   `json:",omitempty"`
+	PeakRSSBytes                 *int64   `json:",omitempty"`
+	CPUMillis                    *int64   `json:",omitempty"`
+	HostNotMeasured              string   `json:",omitempty"`
 }
 
 // PushedByCertify is the ScanRow.PushedBy of a run's own entry.

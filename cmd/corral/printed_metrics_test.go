@@ -478,6 +478,8 @@ var printedMetrics = map[string]printedRow{
 	"cmd/corral/verify_attest.go:runVerifyLedger":      {Exempt: "verify result: entries checked and entries with a problem, computed at verify time"},
 	"cmd/corral/verify_attest.go:verifyReviewEntry":    {Exempt: exReview},
 
+	"internal/hoststat/hoststat.go:unreadable":                {Exempt: "error message: the reason a host figure could not be read, a string (the figure itself is on the record as nil with HostNotMeasured)"},
+	"internal/hoststat/hoststat_linux.go:usage":               {Exempt: "error message: the errno of a failed getrusage, a string"},
 	"internal/reposcan/cachekey.go:CacheKey":                  {Exempt: exDigestFrame},
 	"internal/reposcan/cachekey.go:DigestTestSurface":         {Exempt: exDigestFrame},
 	"internal/reposcan/cachekey.go:DigestDir":                 {Exempt: exDigestFrame},

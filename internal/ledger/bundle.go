@@ -182,16 +182,17 @@ type ScanRow struct {
 	// the pass does not serve) and on every row written before it.
 	UnitPass string `json:",omitempty"`
 	// TestCommand is the test command the run graded with, shell-joined and
-	// REDACTED (cmd/corral redactCommand: a secret-named assignment or flag
-	// value is replaced, so the public record cannot carry a credential typed
-	// after `--`). The operator's own command, else the language plugin's
+	// REDACTED by an ALLOWLIST (cmd/corral redactCommand): a token is kept
+	// only when provably safe (the executable, a launcher or runner word, a
+	// value-less flag, a path that exists in the repository) and every other
+	// one is "<redacted>" in its own position, so the public record cannot
+	// carry a credential typed after `--`. The record compares runs by this
+	// text plus Runner plus Settings; no digest of the unredacted command is
+	// kept, since one published beside its redacted shape could be
+	// brute-forced offline. The operator's own command, else the language plugin's
 	// stock one. Empty when the scan resolved no single language to name a
 	// command for (a mixed repository, a dry run) and on every earlier row.
 	TestCommand string `json:",omitempty"`
-	// TestCommandSHA256 is the sha256 hex of the UNREDACTED, shell-joined
-	// command, so two runs' commands can be compared exactly without the
-	// command being published. Empty when TestCommand is, and on earlier rows.
-	TestCommandSHA256 string `json:",omitempty"`
 	// Runner is the runner-table row (lang.Runner.ID) that command was read
 	// as: the operator's --runner, else the row the command names, else the
 	// language's default. Empty when none resolved and on every earlier row.

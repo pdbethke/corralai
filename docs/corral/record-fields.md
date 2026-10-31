@@ -377,7 +377,6 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `StatementSHA256` | key |  |
 | `Substrate` | measured |  |
 | `TestCommand` | measured |  |
-| `TestCommandSHA256` | key |  |
 | `Top` | measured |  |
 | `TotalFiles` | measured |  |
 | `TotalMillis` | measured |  |

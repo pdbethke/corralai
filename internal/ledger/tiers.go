@@ -95,7 +95,7 @@ func buildFieldTiers() map[[2]string]FieldTier {
 	add("Identity", TierDeclared, noteDeclaredCommit, "Author Committer CoAuthors GeneratedWith")
 
 	// ScanRow: one per run.
-	add("ScanRow", TierKey, "", "ScanID ScanUID EntryHash TestCommandSHA256 Repo RepoIdentity Commit DiffBase RunURL StatementSHA256 RekorLogIndex RekorUUID")
+	add("ScanRow", TierKey, "", "ScanID ScanUID EntryHash Repo RepoIdentity Commit DiffBase RunURL StatementSHA256 RekorLogIndex RekorUUID")
 	add("ScanRow", TierMeasured, "", `Audited Candidates TotalFiles Passed TreeDirty PreflightRan AllCandidates Top TreesRequested
 		Scope Substrate SandboxBackend SandboxImage ModelSet CorralVersion EngineVersion Cores SeedSkipped UnitPass TestCommand Runner Settings SelectionReused
 		PushedBy Host SourcePushed StartedAt FinishedAt TotalMillis SelectionMillis ModelCalls InputTokens OutputTokens`)

@@ -55,6 +55,16 @@ func TestRedactCommandHidesSecretsInTheCommand(t *testing.T) {
 		{"assignment inside an sh -c script", []string{"sh", "-c", "GH_TOKEN=s3cr3tpw make test"}, "s3cr3tpw"},
 		{"a script that cannot be read", []string{"sh", "-c", "tool 's3cr3tpw"}, "s3cr3tpw"},
 		{"a backquoted script", []string{"sh", "-c", "tool `echo s3cr3tpw`"}, "s3cr3tpw"},
+		{"padded base64 as a separate argument", []string{"pytest", "--token", "dXNlcjpzM2NyM3Rwdw=="}, "dXNlcjpzM2NyM3Rwdw"},
+		{"padded base64 value of a flag", []string{"pytest", "--token=dXNlcjpzM2NyM3Rwdw=="}, "dXNlcjpzM2NyM3Rwdw"},
+		{"a name with a padded value in a script", []string{"sh", "-c", "tool --k s3cr3tpw== go"}, "s3cr3tpw"},
+		{"short flag with attached value containing =", []string{"mysql", "-ps3cr3tpw=x"}, "s3cr3tpw"},
+		{"an assignment that is not in assignment position", []string{"pytest", "s3cr3tpw=x"}, "s3cr3tpw"},
+		{"dotdot after a flag equals", []string{"pytest", "--token=s3cr3tpw/.."}, "s3cr3tpw"},
+		{"dotdot after a flag", []string{"pytest", "--token", "s3cr3tpw/.."}, "s3cr3tpw"},
+		{"dotdot inside an existing path", []string{"pytest", "tests/s3cr3tpw/../a_test.py"}, "s3cr3tpw"},
+		{"dotdot after a url", []string{"curl", "https://u1:s3cr3tpw@h/../.."}, "s3cr3tpw"},
+		{"dotdot after a url assignment", []string{"env", "DATABASE_URL=postgres://u:s3cr3tpw@h/../..", "go", "test"}, "s3cr3tpw"},
 		{"a path that does not exist", []string{"pytest", "s3cr3tpw/path"}, "s3cr3tpw"},
 		{"a path escaping the repository", []string{"pytest", "../s3cr3tpw"}, "s3cr3tpw"},
 		{"an absolute path", []string{"pytest", "/home/s3cr3tpw/x"}, "s3cr3tpw"},
@@ -113,7 +123,7 @@ func TestRedactCommandKeepsWhatIsProvablySafe(t *testing.T) {
 }
 
 // The recorded text is a shell-joined command, with an argument that needs
-// quoting quoted, and its digest is of the UNREDACTED command.
+// quoting quoted.
 func TestTestCommandTextIsShellJoined(t *testing.T) {
 	root := redactRepo(t)
 	got := testCommandText([]string{"sh", "-c", "GH_TOKEN=s3cr3t go test ./..."}, root)
@@ -122,14 +132,6 @@ func TestTestCommandTextIsShellJoined(t *testing.T) {
 	}
 	if got := testCommandText(nil, root); got != "" {
 		t.Errorf("no command recorded as %q", got)
-	}
-	a := testCommandDigest([]string{"pytest", "--token=one"})
-	b := testCommandDigest([]string{"pytest", "--token=two"})
-	if a == "" || a == b || len(a) != 64 {
-		t.Errorf("digests %q %q must differ although the redacted texts are equal", a, b)
-	}
-	if testCommandDigest(nil) != "" {
-		t.Error("no command has a digest")
 	}
 }
 
@@ -184,9 +186,6 @@ func TestTheCommandAndSettingsReachTheLedger(t *testing.T) {
 	sc := entries[0].Bundle.Scan
 	if strings.Contains(sc.TestCommand, "abc123") || !strings.Contains(sc.TestCommand, "GH_TOKEN=<redacted>") || !strings.Contains(sc.TestCommand, "go test ./...") {
 		t.Errorf("TestCommand = %q", sc.TestCommand)
-	}
-	if sc.TestCommandSHA256 != testCommandDigest([]string{"sh", "-c", "GH_TOKEN=abc123 go test ./..."}) {
-		t.Errorf("TestCommandSHA256 = %q", sc.TestCommandSHA256)
 	}
 	if sc.Runner != "go-test" {
 		t.Errorf("Runner = %q", sc.Runner)

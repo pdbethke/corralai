@@ -3,8 +3,6 @@
 package main
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -83,8 +81,17 @@ func repoPathExists(repoRoot, tok string) bool {
 	if t == "..." {
 		return false
 	}
+	// The token is recorded as written, so what is tested must BE what is
+	// written: no ".." component at all (a/../b names b yet records a), and
+	// the token equal to its own cleaned form, bar a "./" prefix and one
+	// trailing slash.
+	for _, part := range strings.Split(t, "/") {
+		if part == ".." {
+			return false
+		}
+	}
 	c := filepath.Clean(t)
-	if c == ".." || strings.HasPrefix(c, ".."+string(filepath.Separator)) {
+	if c != strings.TrimSuffix(strings.TrimPrefix(t, "./"), "/") && !(t == "." || t == "./") {
 		return false
 	}
 	_, err := os.Lstat(filepath.Join(repoRoot, c))
@@ -103,25 +110,40 @@ func keepToken(tok, repoRoot string, words map[string]bool, first bool) string {
 		return tok
 	case subcommandWords[tok]:
 		return tok
-	case flagRe.MatchString(tok):
-		name := strings.TrimLeft(tok, "-")
-		if strings.HasPrefix(tok, "--") || len(name) == 1 || shortFlagsKept[name] {
-			return tok
-		}
+	case flagAllowed(tok):
+		return tok
 	case repoPathExists(repoRoot, tok):
 		return tok
 	}
 	return redactedValue
 }
 
-// redactToken is keepToken extended to the two attached-value shapes:
-// --flag=value and NAME=value keep the name and redact the value unless it
-// is itself a path that exists in the repository.
-func redactToken(tok, repoRoot string, words map[string]bool, first bool) string {
-	if m := flagValueRe.FindStringSubmatch(tok); m != nil {
-		return m[1] + "=" + valueOf(m[2], repoRoot)
+// flagAllowed is the one rule for a flag's NAME, with or without a value
+// attached: a long flag, a one-letter flag, or a listed single-dash flag.
+func flagAllowed(name string) bool {
+	if !flagRe.MatchString(name) {
+		return false
 	}
-	if m := assignmentRe.FindStringSubmatch(tok); m != nil {
+	bare := strings.TrimLeft(name, "-")
+	return strings.HasPrefix(name, "--") || len(bare) == 1 || shortFlagsKept[bare]
+}
+
+// redactToken is keepToken extended to the two attached-value shapes.
+// --flag=value keeps the flag only when its name passes flagAllowed, the
+// same rule as a flag with no value (so -ps3cr3tpw=x is not a flag but a
+// secret). NAME=value keeps NAME only in assignment position (assign: argv[0],
+// directly after env, or a leading word of a script command); anywhere else
+// an "=" is part of some value (padded base64 ends in "="), and the whole
+// token is redacted. The value of either is redacted unless it is itself a
+// path that exists in the repository.
+func redactToken(tok, repoRoot string, words map[string]bool, first, assign bool) string {
+	if m := flagValueRe.FindStringSubmatch(tok); m != nil {
+		if flagAllowed(m[1]) {
+			return m[1] + "=" + valueOf(m[2], repoRoot)
+		}
+		return redactedValue
+	}
+	if m := assignmentRe.FindStringSubmatch(tok); m != nil && assign {
 		return m[1] + "=" + valueOf(m[2], repoRoot)
 	}
 	return keepToken(tok, repoRoot, words, first)
@@ -154,12 +176,16 @@ func redactCommand(argv []string, repoRoot string) []string {
 			}
 		}
 	}
+	// assign: a NAME=value here is an environment assignment (argv[0], or
+	// directly after env, through any run of assignments).
+	assign := true
 	for i, a := range argv {
 		if i == script {
 			out[i] = redactScript(a, repoRoot, words)
 			continue
 		}
-		out[i] = redactToken(a, repoRoot, words, i == 0)
+		out[i] = redactToken(a, repoRoot, words, i == 0, assign)
+		assign = assign && (assignmentRe.MatchString(a) || filepath.Base(a) == "env")
 	}
 	return out
 }
@@ -182,8 +208,10 @@ func redactScript(script, repoRoot string, words map[string]bool) string {
 	var parts []string
 	for _, c := range cmds {
 		ws := make([]string, len(c))
+		assign := true // leading words of a command may be assignments
 		for i, w := range c {
-			ws[i] = redactToken(w, repoRoot, words, false)
+			ws[i] = redactToken(w, repoRoot, words, false, assign)
+			assign = assign && (assignmentRe.MatchString(w) || filepath.Base(w) == "env")
 		}
 		parts = append(parts, strings.Join(ws, " "))
 	}
@@ -213,17 +241,6 @@ func testCommandText(argv []string, repoRoot string) string {
 		return ""
 	}
 	return shellQuoted(redactCommand(argv, repoRoot))
-}
-
-// testCommandDigest is the sha256 hex of the UNREDACTED, shell-joined
-// argv: two runs' commands can be compared exactly without publishing the
-// command. "" for no command.
-func testCommandDigest(argv []string) string {
-	if len(argv) == 0 {
-		return ""
-	}
-	sum := sha256.Sum256([]byte(shellQuoted(argv)))
-	return hex.EncodeToString(sum[:])
 }
 
 // recordedRunner is the runner-table row ID argv is read as under plug: the

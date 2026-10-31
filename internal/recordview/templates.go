@@ -248,7 +248,7 @@ const entryTmpl = `<!doctype html>
 
 {{template "entrybanner" $.ChainView}}
 {{if $.Retracted}}<div class="banner bad"><p><strong>This review was retracted.</strong> The entry stays in the chain and no
-longer stands as the record{{if $.RetractedReason}}: {{$.RetractedReason}}{{end}}. Its findings are not counted in the record's totals.</p></div>{{end}}
+longer stands as the record{{if $.RetractedReason}}: <span title="{{tierNote "Entry" "Reason"}}">{{$.RetractedReason}}</span>{{end}}. Its findings are not counted in the record's totals.</p>{{if $.RetractedReason}}<p class="small">{{tierNote "Entry" "Reason"}}</p>{{end}}</div>{{end}}
 
 <dl class="meta">
   <dt>repo</dt><dd class="mono">{{.Repo}}</dd>
@@ -261,7 +261,8 @@ longer stands as the record{{if $.RetractedReason}}: {{$.RetractedReason}}{{end}
     {{else}}<span class="chip mute">no verifier seat ran</span>{{end}}</dd>
   <dt>substrate</dt><dd>{{.Substrate}}</dd>
   <dt>started</dt><dd>{{stamp .StartedAt}}</dd>
-  {{if .Author}}<dt>audited party</dt><dd>{{.Author}}{{if .CoAuthors}} <span class="small">· co-authored: {{.CoAuthors}}</span>{{end}}{{if .GeneratedWith}} <span class="small">· generated with: {{.GeneratedWith}}</span>{{end}}</dd>{{end}}
+  {{if .Author}}<dt>audited party</dt><dd><span title="{{tierNote "Review" "Author"}}">{{.Author}}</span>{{if .CoAuthors}} <span class="small" title="{{tierNote "Review" "CoAuthors"}}">· co-authored: {{.CoAuthors}}</span>{{end}}{{if .GeneratedWith}} <span class="small" title="{{tierNote "Review" "GeneratedWith"}}">· generated with: {{.GeneratedWith}}</span>{{end}}
+    <br><span class="small tiernote">{{tierNote "Review" "Author"}}</span></dd>{{end}}
   <dt>files shown</dt><dd>{{.FilesShown | len}} file(s){{if .Truncated}} <span class="chip warn">truncated</span>{{end}}</dd>
   {{if .Coverage}}<dt>coverage note</dt><dd>{{.Coverage}}</dd>{{end}}
 </dl>
@@ -271,7 +272,7 @@ longer stands as the record{{if $.RetractedReason}}: {{$.RetractedReason}}{{end}
 {{range $.Findings}}
 <div class="finding" id="{{.ID}}">
   <h3><span class="mono">{{.ID}}</span>
-    {{if .Severity}}<span class="chip">{{.Severity}}</span>{{end}}
+    {{if .Severity}}<span class="chip" title="{{tierNote "Finding" "Severity"}}">{{.Severity}}</span>{{end}}
     {{if eq .Outcome "reproduced"}}<span class="chip ok">reproduced</span>
     {{else if eq .Outcome "not-shown"}}<span class="chip mute">not shown{{if .OutcomeNote}} ({{.OutcomeNote}}){{end}}</span>
     {{else if eq .Outcome "never-ran"}}<span class="chip warn">never ran</span>
@@ -281,22 +282,25 @@ longer stands as the record{{if $.RetractedReason}}: {{$.RetractedReason}}{{end}
     {{if .Demoted}}<span class="chip warn">demoted</span>{{end}}
   </h3>
   <p class="claim">{{.Claim}}</p>
+  <p class="small tiernote">{{tierNote "Finding" "Claim"}}</p>
   <dl class="meta">
-    {{if .File}}<dt>where</dt><dd class="mono">{{.File}}{{if .Line}}:{{.Line}}{{end}}</dd>{{end}}
-    {{if .Tier}}<dt>tier</dt><dd>{{.Tier}}{{if .Declared}} <span class="small">(declared {{.Declared}})</span>{{end}}</dd>{{end}}
+    {{if .File}}<dt>where</dt><dd class="mono" title="{{tierNote "Finding" "File"}} ({{tierNote "Finding" "Line"}})">{{.File}}{{if .Line}}:{{.Line}}{{end}}</dd>{{end}}
+    {{if .Tier}}<dt>tier</dt><dd>{{.Tier}}{{if .Declared}} <span class="small" title="{{tierNote "Finding" "Declared"}}">(declared {{.Declared}})</span>{{end}}</dd>{{end}}
     {{if .Demoted}}<dt>demoted</dt><dd>{{.Demoted}}</dd>{{end}}
     {{if eq .Outcome "never-ran"}}<dt>never ran</dt><dd>{{.OutcomeNote}} <span class="small">— an infrastructure failure, charged to nobody</span></dd>{{end}}
   </dl>
   {{if hasPre .Script}}<details><summary class="small">the script that was executed</summary><pre>{{.Script}}</pre></details>{{end}}
   {{if hasPre .Stdout}}<details><summary class="small">what it printed</summary><pre>{{.Stdout}}</pre></details>{{end}}
   {{with .Refutation}}
-  <h3 class="small">refutation — {{.Model}} <span class="chip mute">{{.Verdict}}</span></h3>
-  {{if .Argument}}<p class="small">{{.Argument}}</p>{{end}}
+  <h3 class="small" title="model: {{tierNote "Refutation" "Model"}}; verdict: {{tierNote "Refutation" "Verdict"}}">refutation — {{.Model}} <span class="chip mute">{{.Verdict}}</span></h3>
+  {{if .Argument}}<p class="small">{{.Argument}}</p>
+  <p class="small tiernote">{{tierNote "Refutation" "Argument"}}</p>{{end}}
   {{if hasPre .Script}}<details><summary class="small">the refutation's script</summary><pre>{{.Script}}</pre></details>{{end}}
   {{end}}
   {{if .Verdict}}
   <h3 class="small">human verdict</h3>
-  <p class="small"><strong>{{.Verdict}}</strong> by {{.VerdictBy}}{{if .VerdictWhy}} — {{.VerdictWhy}}{{end}}</p>
+  <p class="small" title="{{tierNote "Adjudication" "Verdict"}}"><strong>{{.Verdict}}</strong> by {{.VerdictBy}}{{if .VerdictWhy}} — {{.VerdictWhy}}{{end}}</p>
+  <p class="small tiernote">{{tierNote "Adjudication" "Reason"}}</p>
   {{end}}
   {{if and $.Site.Write (not .Verdict) (not $.Retracted)}}{{template "controls" ctl . $.ShortSHA}}{{end}}
   <p class="small mono">ref {{.Ref}}</p>
@@ -307,6 +311,7 @@ longer stands as the record{{if $.RetractedReason}}: {{$.RetractedReason}}{{end}
 <h2>Looked at and could not break ({{.Sound | len}})</h2>
 <p class="small">Recorded so that "found nothing here" can be told apart from "never looked here".</p>
 <ul class="tight">{{range .Sound}}<li class="mono small">{{.}}</li>{{end}}</ul>
+<p class="small tiernote">{{tierNote "Review" "Sound"}}</p>
 {{end}}
 
 {{if .Opinion}}
@@ -315,11 +320,13 @@ longer stands as the record{{if $.RetractedReason}}: {{$.RetractedReason}}{{end}
 The signature covers this entry's reproductions — the scripts, their output and their exit codes.
 It does not make the opinion below true.</p></div>
 <p>{{.Opinion}}</p>
+<p class="small tiernote">{{tierNote "Review" "Opinion"}}</p>
 {{end}}
 {{if .VerifierOpinion}}
 <h2>Verifier's opinion</h2>
 <p>{{.VerifierOpinion}}</p>
-{{if .VerifierNote}}<p class="small">Note: {{.VerifierNote}}</p>{{end}}
+<p class="small tiernote">{{tierNote "Review" "VerifierOpinion"}}</p>
+{{if .VerifierNote}}<p class="small" title="{{tierNote "Review" "VerifierNote"}}">Note: {{.VerifierNote}}</p>{{end}}
 {{end}}
 {{end}}
 
@@ -344,7 +351,7 @@ const scanTmpl = `<!doctype html>
 and corral proved {{.Proven}} of those missing tests by writing a test and running it.{{else}}nothing was graded.{{end}}</p>
 
 {{if .Retracted}}<div class="banner bad"><p><strong>This audit was retracted.</strong> The entry stays in the chain and no
-longer stands as the record{{if .RetractedReason}}: {{.RetractedReason}}{{end}}.</p></div>{{end}}
+longer stands as the record{{if .RetractedReason}}: <span title="{{tierNote "Entry" "Reason"}}">{{.RetractedReason}}</span>{{end}}.</p>{{if .RetractedReason}}<p class="small">{{tierNote "Entry" "Reason"}}</p>{{end}}</div>{{end}}
 
 {{template "entrybanner" .ChainView}}
 
@@ -359,7 +366,7 @@ longer stands as the record{{if .RetractedReason}}: {{.RetractedReason}}{{end}}.
   {{if .Seats}}<dt>seats</dt><dd class="mono small">{{range .Seats}}{{.}}<br>{{end}}</dd>{{end}}
   {{if .Scan.ModelCalls}}<dt>tokens</dt><dd>{{thousands .Scan.InputTokens}} in, {{thousands .Scan.OutputTokens}} out, {{.Scan.ModelCalls}} calls</dd>{{end}}
   {{with .Scan.StartedAt}}<dt>started</dt><dd>{{stamp .}}</dd>{{end}}
-  {{if .NotAudited}}<dt>not audited</dt><dd class="small">{{range $i, $r := .NotAudited}}{{if $i}} · {{end}}{{$r.Count}} {{$r.Reason}}{{end}}</dd>{{end}}
+  {{if .NotAudited}}<dt>not audited</dt><dd class="small">{{range $i, $r := .NotAudited}}{{if $i}} · {{end}}{{$r.Count}} <span title="{{tierNote "Row" "Reason"}}">{{$r.Reason}}</span>{{end}}<br><span class="tiernote">{{tierNote "Row" "Reason"}}</span></dd>{{end}}
 </dl>
 
 {{range .Audited}}

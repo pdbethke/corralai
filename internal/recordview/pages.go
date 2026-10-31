@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/pdbethke/corralai/internal/ledger"
 )
 
 // IndexRows is how many audits and reviews the index shows before linking
@@ -32,6 +34,7 @@ type Pages struct {
 func funcs() template.FuncMap {
 	return template.FuncMap{
 		"short":    shortHash,
+		"tierNote": ledger.NoteOf,
 		"hasPre":   func(s string) bool { return strings.TrimSpace(s) != "" },
 		"date":     func(t time.Time) string { return t.UTC().Format("2006-01-02") },
 		"stamp":    func(t time.Time) string { return t.UTC().Format("2006-01-02 15:04 UTC") },

@@ -1734,6 +1734,8 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// nil unless collectSelection served a cache HIT this scan — see
 		// localExecutor.selectionReused's own doc.
 		SelectionReused: ex != nil && ex.selectionReused,
+		// The whole unit pass, from the values its "units:" lines print.
+		UnitPass: ex.unitPassJSON(),
 		// What the scan consumed. The run already printed these to stdout and
 		// then discarded them, which is how "what did that cost me" had no
 		// answer from the tool whose central caveat is that audits are
@@ -5166,6 +5168,9 @@ type localExecutor struct {
 	unitsDuration time.Duration
 	// unitsReused is set when collectUnits served a cache HIT.
 	unitsReused bool
+	// unitsRunnable is how many listed units the pass ran alone: the
+	// "running N of M listed" line's N, set where that line is printed.
+	unitsRunnable int
 	// seedLimit is the jail seed limit in bytes (--seed-limit,
 	// resolveSeedLimit), read when the first seed is built, not at
 	// construction, so the flag boundary sets it after newLocalExecutor.

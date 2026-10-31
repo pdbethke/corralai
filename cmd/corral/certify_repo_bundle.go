@@ -124,8 +124,8 @@ func buildBundle(
 			SelectionMillis: scan.SelectionMillis,
 			// Same discipline: already nullable in the ledger, rides through
 			// as-is. nil unless THIS scan reused a prior one's evidence.
-			SelectionReused: scan.SelectionReused,
-			InputTokens:     scan.InputTokens, OutputTokens: scan.OutputTokens,
+			SelectionReused: scan.SelectionReused, UnitPass: scan.UnitPass,
+			InputTokens: scan.InputTokens, OutputTokens: scan.OutputTokens,
 			ModelCalls:   scan.ModelCalls,
 			SourcePushed: sourcePushed,
 			// The --transparency receipt. Already nullable in the ledger,

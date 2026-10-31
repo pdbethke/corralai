@@ -173,6 +173,14 @@ type ScanRow struct {
 	// Empty when nothing was left out, under --substrate workspace, and on
 	// every row written before it.
 	SeedSkipped string `json:",omitempty"`
+	// UnitPass is the whole unit evidence pass of a language with no per-test
+	// evidence, as JSON TEXT (a ScanRow is compared whole, so no map): the
+	// keys listed, runnable, run, failed, cut, green_as_written, unreported,
+	// millis and reused. They are the numbers the scan's "units:" lines
+	// print, taken from the same values, so the screen and the record cannot
+	// disagree. Empty when no unit pass ran (Python, --dry-run, a language
+	// the pass does not serve) and on every row written before it.
+	UnitPass string `json:",omitempty"`
 }
 
 // PushedByCertify is the ScanRow.PushedBy of a run's own entry.

@@ -129,6 +129,9 @@ func (l *localExecutor) collectUnits(ctx context.Context, sources []string) repo
 			var cached reposcan.UnitEvidence
 			if gerr == nil && hit && json.Unmarshal(raw, &cached) == nil && cached.Ran {
 				l.unitsReused = true
+				// A pass is cached only when settled: every listed unit
+				// ran and reported, so all of them were runnable.
+				l.unitsRunnable = len(cached.Units)
 				l.unitMap = reposcan.MapFromUnits(cached, reposcan.UnitFilesFor(plug, l.unitLanding), inv, plug)
 				return cached
 			}
@@ -139,6 +142,7 @@ func (l *localExecutor) collectUnits(ctx context.Context, sources []string) repo
 	defer cancel()
 	start := time.Now()
 	ev := collectUnitEvidence(passCtx, runner, files, plug, inv, modulePath, l.unitWorkers, func(runnable, listed int) {
+		l.unitsRunnable = runnable
 		fmt.Fprintf(l.progress, "  units: running %d of %d listed test unit(s) alone under coverage, %d at a time, within %s for the whole pass…\n",
 			runnable, listed, l.unitWorkers, l.evidenceTimeout)
 	})
@@ -285,6 +289,48 @@ func unitPassUncounted(ev reposcan.UnitEvidence) int {
 		n += len(u.Uncounted)
 	}
 	return n
+}
+
+// unitPass is ScanRow.UnitPass: the unit pass's counts, each taken from the
+// function whose value the scan's units lines print, never recounted.
+type unitPass struct {
+	Listed         int   `json:"listed"`
+	Runnable       int   `json:"runnable"`
+	Run            int   `json:"run"`
+	Failed         int   `json:"failed"`
+	Cut            int   `json:"cut"`
+	GreenAsWritten int   `json:"green_as_written"`
+	Unreported     int   `json:"unreported"`
+	Millis         int64 `json:"millis"`
+	Reused         bool  `json:"reused"`
+}
+
+// unitPassJSON is the unit pass as the ledger's JSON text, "" when the scan
+// ran none (a nil executor, a language the pass does not serve, a pass that
+// refused before listing a unit). Run is len(Units) as printUnitPass prints
+// it, Failed is unitPassFailed, Cut is CutShort (evidenceCutNote's count),
+// GreenAsWritten is the line of that name, and Unreported is the
+// "the N that did not are added to every file's selection" of
+// printUnitGrading, which is Failed when the evidence grades and zero when
+// the scan fell back to the whole suite.
+func (l *localExecutor) unitPassJSON() string {
+	if l == nil || (!l.units.Ran && len(l.units.Units) == 0) {
+		return ""
+	}
+	ev := l.units
+	p := unitPass{
+		Listed: len(ev.Units), Runnable: l.unitsRunnable, Run: len(ev.Units),
+		Failed: unitPassFailed(ev), Cut: ev.CutShort(), GreenAsWritten: ev.GreenAsWritten(),
+		Millis: l.unitsDuration.Milliseconds(), Reused: l.unitsReused,
+	}
+	if l.unitGrades() {
+		p.Unreported = p.Failed
+	}
+	b, err := json.Marshal(p)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
 
 // printUnitPass is the scan's units line: how many units the pass listed and

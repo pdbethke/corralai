@@ -103,6 +103,9 @@ type Scan struct {
 	// SelectionMillis nil, and this is the ONLY column that tells them
 	// apart.
 	SelectionReused bool
+	// UnitPass is the unit evidence pass as JSON text (ledger.ScanRow.UnitPass):
+	// "" when no pass ran.
+	UnitPass string
 	// InputTokens, OutputTokens and ModelCalls are what the scan consumed
 	// from the providers, scan-wide. The per-role breakdown lives in
 	// scan_model_calls; these are the totals the run already printed to

@@ -379,6 +379,7 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `TotalMillis` | measured |  |
 | `TreeDirty` | measured |  |
 | `TreesRequested` | measured |  |
+| `UnitPass` | measured |  |
 
 ## SeatRow
 

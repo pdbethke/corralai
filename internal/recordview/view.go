@@ -100,11 +100,11 @@ type ChainView struct {
 	Kind  string
 	KeyID string
 	Note  string
-	// RetractionReason is the retracting person's words (Entry.Reason), kept
-	// apart from Note so the page can label it as declared.
-	RetractionReason string
-	SigChecked       bool
-	Keyless          bool
+	// Retracted marks a row whose Note carries a retraction reason (Entry.Reason,
+	// a person's words), so the page can label it beside the note.
+	Retracted  bool
+	SigChecked bool
+	Keyless    bool
 }
 
 // EntryView is one review entry as a page.
@@ -304,8 +304,8 @@ func Build(entries []auditpush.LedgerEntry, checks []auditpush.ChainCheck) Site 
 		// carries it: an entry's own page has its retraction banner.
 		row := cv
 		if rt, gone := retracted[e.Hash]; gone {
-			row.Note = withNote(row.Note, "RETRACTED")
-			row.RetractionReason = rt.Reason
+			row.Note = withNote(row.Note, "RETRACTED: "+rt.Reason)
+			row.Retracted = true
 		} else if !live[e.Hash] && e.Kind == auditpush.KindAdjudication {
 			row.Note = withNote(row.Note, "RETRACTED with the review it adjudicates")
 		}

@@ -464,7 +464,7 @@ const chainTmpl = `<!doctype html>
 {{range .Rows}}<tr>
 <td>{{.Pos}}</td><td class="nowrap">{{stamp .Pushed}}</td>
 <td>{{if or (eq .Kind "scan") (eq .Kind "review")}}<a href="{{entryURL .Short}}">{{.Kind}}</a>{{else}}{{.Kind}}{{end}}</td>
-<td class="small">{{.Note}}{{if .RetractionReason}}: <span title="{{tierNote "Entry" "Reason"}}">{{.RetractionReason}}</span> <span class="tiernote">({{tierNote "Entry" "Reason"}})</span>{{end}}{{if .ChainProblem}} <span class="chip bad">{{.ChainProblem}}</span>{{end}}</td>
+<td class="small">{{.Note}}{{if .Retracted}} <span class="tiernote" title="{{tierNote "Entry" "Reason"}}">({{tierNote "Entry" "Reason"}})</span>{{end}}{{if .ChainProblem}} <span class="chip bad">{{.ChainProblem}}</span>{{end}}</td>
 <td>{{if not .Verified}}<span class="chip warn">not verified</span>
 {{else if not .Signed}}<span class="chip warn">unsigned</span>
 {{else if not .SigChecked}}<span class="chip warn">signed, not checked</span>

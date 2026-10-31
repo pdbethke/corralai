@@ -314,6 +314,17 @@ type ModelCallRow struct {
 	// TokensUnmetered.
 	UnmeteredCalls int `json:",omitempty"`
 	WallMillis     int64
+	// CostMicroUSD is what the row's tokens cost, in millionths of a dollar,
+	// from the dated price table named in CostBasis (internal/pricing). It is
+	// nil, never 0, whenever there is no honest figure: an unpriced model, an
+	// unmetered seat, an agent seat billed outside corral's sight. The basis
+	// then says which. Declared tier: the tokens are measured, the price is a
+	// vendor's list price on a date. omitempty keeps an entry written before
+	// this field byte-identical to what it was.
+	CostMicroUSD *int64 `json:",omitempty"`
+	// CostBasis is the table (source and date) the figure came from, or the
+	// reason there is none. Always set on a row built by this version.
+	CostBasis string `json:",omitempty"`
 
 	StatementSHA256 string
 }

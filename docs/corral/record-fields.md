@@ -131,6 +131,8 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `CacheWriteInputTokens` | measured |  |
 | `CachedInputTokens` | measured |  |
 | `Calls` | measured |  |
+| `CostBasis` | declared | derived from a declared price table |
+| `CostMicroUSD` | declared | derived from a declared price table |
 | `InputTokens` | measured |  |
 | `Model` | measured |  |
 | `OutputTokens` | measured |  |

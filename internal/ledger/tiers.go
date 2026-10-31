@@ -131,6 +131,7 @@ func buildFieldTiers() map[[2]string]FieldTier {
 	// ModelCallRow, SeatRow, CriticFindingRow: how the models were used.
 	add("ModelCallRow", TierKey, "", "Path Repo RunURL ScanID StatementSHA256")
 	add("ModelCallRow", TierMeasured, "", "CacheWriteInputTokens CachedInputTokens Calls InputTokens OutputTokens Retries UnmeteredCalls WallMillis Model Role")
+	add("ModelCallRow", TierDeclared, "derived from a declared price table", "CostMicroUSD CostBasis")
 	add("SeatRow", TierKey, "", "Commit Path Repo")
 	add("SeatRow", TierMeasured, "", "AuthoredTests Catches MutantsPlanted MutantsSurvived Opportunities SoundTests Lang Region RegionComplexity RegionLines TestComplexity Dropped Model ModelUnresolved ParseRetries Role SeatTool Shadow ShadowDrawn Shard")
 	add("SeatRow", TierMeta, noteModelOpinion, "CriticFlags")

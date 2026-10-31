@@ -21,6 +21,7 @@ var sampleEventTS = time.Date(2026, 8, 30, 9, 0, 0, 0, time.UTC)
 func f64(v float64) *float64 { return &v }
 func ms(v int64) *int64      { return &v }
 func ip(v int) *int          { return &v }
+func i64p(v int64) *int64    { return &v }
 
 // openWarehouse opens the pushed file for reading. A push closes its own
 // handle, so a reader can take DuckDB's single-writer lock afterwards.
@@ -92,10 +93,12 @@ func sampleBundle() Bundle {
 		Calls: []ModelCallRow{
 			{Repo: "o/r", RunURL: "https://ci/1", ScanID: 7, Path: "pkg/a.go",
 				Role: "mutant-generator", Model: "m-1", Calls: 3, Retries: ip(1),
-				InputTokens: 900, OutputTokens: 210, WallMillis: 4100},
+				InputTokens: 900, OutputTokens: 210, WallMillis: 4100,
+				CostMicroUSD: i64p(3_150), CostBasis: "price table synthetic, 2000-01-01"},
 			{Repo: "o/r", RunURL: "https://ci/1", ScanID: 7, Path: "pkg/a.go",
 				Role: "test-writer", Model: "w-1", Calls: 4,
-				InputTokens: 300, OutputTokens: 130, WallMillis: 2200},
+				InputTokens: 300, OutputTokens: 130, WallMillis: 2200,
+				CostBasis: "no price for w-1 in the price table of 2000-01-01"},
 		},
 		// Each beat carries its OWN time, as a real tape does: corral_events.ts
 		// is when the beat happened, not when the push ran.

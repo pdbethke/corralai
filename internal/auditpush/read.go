@@ -533,7 +533,7 @@ func readModelCallRows(db *sql.DB, where string, args ...any) ([]ModelCallRow, e
 	rows, err := db.Query(`SELECT
 		repo, run_url, scan_id, path, role, model, calls, retries,
 		input_tokens, output_tokens, cached_input_tokens,
-		cache_write_input_tokens, unmetered_calls, wall_ms,
+		cache_write_input_tokens, unmetered_calls, cost_micro_usd, cost_basis, wall_ms,
 		statement_sha256
 	   FROM corral_model_calls WHERE `+where, args...) // #nosec G202 -- where is a constant clause from readGrains; every value is a bound parameter
 	if err != nil {
@@ -544,11 +544,12 @@ func readModelCallRows(db *sql.DB, where string, args ...any) ([]ModelCallRow, e
 	var out []ModelCallRow
 	for rows.Next() {
 		var c ModelCallRow
-		var cachedInputTokens, cacheWriteInputTokens, inputTokens, outputTokens, unmetered sql.NullInt64
+		var cachedInputTokens, cacheWriteInputTokens, inputTokens, outputTokens, unmetered, costMicro sql.NullInt64
+		var costBasis sql.NullString
 		if err := rows.Scan(
 			&c.Repo, &c.RunURL, &c.ScanID, &c.Path, &c.Role, &c.Model, &c.Calls, &c.Retries,
 			&inputTokens, &outputTokens, &cachedInputTokens,
-			&cacheWriteInputTokens, &unmetered, &c.WallMillis,
+			&cacheWriteInputTokens, &unmetered, &costMicro, &costBasis, &c.WallMillis,
 			&c.StatementSHA256,
 		); err != nil {
 			return nil, err
@@ -562,6 +563,8 @@ func readModelCallRows(db *sql.DB, where string, args ...any) ([]ModelCallRow, e
 		c.UnmeteredCalls = int(unmetered.Int64)
 		c.CachedInputTokens = nullInt64(cachedInputTokens)
 		c.CacheWriteInputTokens = nullInt64(cacheWriteInputTokens)
+		c.CostMicroUSD = nullInt64(costMicro)
+		c.CostBasis = costBasis.String
 		out = append(out, c)
 	}
 	return out, rows.Err()

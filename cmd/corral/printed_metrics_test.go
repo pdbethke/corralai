@@ -479,6 +479,7 @@ var printedMetrics = map[string]printedRow{
 	"cmd/corral/verify_attest.go:verifyReviewEntry":    {Exempt: exReview},
 
 	"internal/hoststat/hoststat.go:unreadable":                {Exempt: "error message: the reason a host figure could not be read, a string (the figure itself is on the record as nil with HostNotMeasured)"},
+	"internal/pricing/pricing.go:BasisPartlyUnmetered":        {Fields: []string{"ModelCallRow.Calls", "ModelCallRow.UnmeteredCalls", "ModelCallRow.CostBasis"}},
 	"internal/hoststat/hoststat_linux.go:usage":               {Exempt: "error message: the errno of a failed getrusage, a string"},
 	"internal/reposcan/cachekey.go:CacheKey":                  {Exempt: exDigestFrame},
 	"internal/reposcan/cachekey.go:DigestTestSurface":         {Exempt: exDigestFrame},

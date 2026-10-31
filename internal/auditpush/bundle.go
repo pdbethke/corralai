@@ -309,6 +309,8 @@ CREATE TABLE IF NOT EXISTS corral_model_calls (
   cached_input_tokens BIGINT,
   cache_write_input_tokens BIGINT,
   unmetered_calls  INTEGER,
+  cost_micro_usd   BIGINT,
+  cost_basis       VARCHAR,
   wall_ms          BIGINT,
   statement_sha256 VARCHAR,
   schema_version   INTEGER
@@ -544,6 +546,10 @@ var (
 		// rows keep NULL — "not recorded", which is true of them; every row
 		// written since carries the count, 0 included.
 		{"unmetered_calls", "unmetered_calls INTEGER"},
+		// cost_micro_usd and cost_basis are additive too: an earlier row keeps
+		// NULL, which says "no figure recorded", and is true of it.
+		{"cost_micro_usd", "cost_micro_usd BIGINT"},
+		{"cost_basis", "cost_basis VARCHAR"},
 	}
 	corralEventsMigrationCols = []struct{ name, ddl string }{
 		{"scan_uid", "scan_uid VARCHAR"},
@@ -1169,13 +1175,13 @@ func insertBundle(db *sql.DB, b Bundle, now time.Time, uid string) (Counts, erro
 		if _, err := tx.Exec(`INSERT INTO corral_model_calls (
 		    scan_uid, ts, repo, run_url, scan_id, path, role, model, calls, retries,
 		    input_tokens, output_tokens, cached_input_tokens,
-		    cache_write_input_tokens, unmetered_calls, wall_ms,
+		    cache_write_input_tokens, unmetered_calls, cost_micro_usd, cost_basis, wall_ms,
 		    statement_sha256, schema_version
-		  ) VALUES (`+placeholders(18)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+		  ) VALUES (`+placeholders(20)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 			uid, now, mc.Repo, mc.RunURL, mc.ScanID, mc.Path, mc.Role, mc.Model,
 			mc.Calls, mc.Retries, meteredTokens(mc, mc.InputTokens), meteredTokens(mc, mc.OutputTokens),
 			nullIfNilInt64(mc.CachedInputTokens), nullIfNilInt64(mc.CacheWriteInputTokens),
-			mc.UnmeteredCalls, mc.WallMillis,
+			mc.UnmeteredCalls, nullIfNilInt64(mc.CostMicroUSD), nullIfEmpty(mc.CostBasis), mc.WallMillis,
 			mc.StatementSHA256, SchemaVersion,
 		); err != nil {
 			return Counts{}, fmt.Errorf("auditpush: insert model call %s/%s: %w", mc.Path, mc.Role, err)

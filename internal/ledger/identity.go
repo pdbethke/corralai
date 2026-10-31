@@ -25,6 +25,11 @@ import "strings"
 // trailer, and the reverse, so the two are kept apart: each says only what
 // the commit declared, and a commit that declares nothing is no evidence a
 // person wrote it alone.
+//
+// Every field here is a DECLARATION, not evidence: git records whatever
+// author and committer name it is given, and anyone can write or delete a
+// trailer or a footer line. They describe the change as its commit presents
+// it, for metrics, and no verdict may rest on them.
 type Identity struct {
 	Author        string `json:"author,omitempty"`
 	Committer     string `json:"committer,omitempty"`

@@ -1078,7 +1078,9 @@ as the outcome when there is one — under the same evidence floor as every
 other seat. Both entry kinds also name the **audited party** — the commit's
 author, committer and `Co-authored-by` trailers, by name, never an address,
 and the tools its message declares in a `Generated with <tool>` footer line
-(`generated_with`; recorded, not yet graded by `models rank`)
+(`generated_with`). All of these are what the commit DECLARES: git takes
+any author name, and anyone can write or delete a trailer or a footer, so
+they are metrics about the change, never evidence of who or what wrote it
 — so the record says who wrote the change beside who judged it, and
 `models rank --seat committer` grades each party, a person or an agent
 alike, by the changes that held under audit. The first use of that row is

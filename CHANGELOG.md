@@ -22,9 +22,10 @@ history of any release, `git log v0.3.4..v0.3.5`.
   review entries (`generated_with`), in the warehouse's `corral_scans` and
   `corral_reviews`, on the signed review statement (`generatedWith`) and on
   the review page. Only whole lines of that shape count, so prose that
-  begins the same way names nothing; and a commit that declares no tool is
-  not evidence a person wrote it alone. `models rank --seat committer` does
-  not read it yet.
+  begins the same way names nothing. It is a declaration, not evidence:
+  anyone can write the line or delete it, so it is a metric about the
+  change and nothing gates or grades on it, and a commit that declares no
+  tool is not evidence a person wrote it alone.
 
 ### Fixed
 

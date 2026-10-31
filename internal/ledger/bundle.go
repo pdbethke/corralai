@@ -205,6 +205,12 @@ type ScanRow struct {
 	// runner_flag. A setting the run did not use is ABSENT, never a zero.
 	// Empty on every row written before it.
 	Settings string `json:",omitempty"`
+	// Toolchains is the interpreter and test-runner versions the run graded
+	// under, as JSON TEXT: {"<language>":{"<tool>":"<first line of its
+	// version output>"}}, each read inside the jail the run used. A tool that
+	// could not be read is recorded as "not read: <reason>", never omitted.
+	// Empty on every row written before it and when no language resolved.
+	Toolchains string `json:",omitempty"`
 }
 
 // PushedByCertify is the ScanRow.PushedBy of a run's own entry.

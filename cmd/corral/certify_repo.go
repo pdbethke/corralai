@@ -1752,6 +1752,8 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		SelectionReused: ex != nil && ex.selectionReused,
 		// The whole unit pass, from the values its "units:" lines print.
 		UnitPass: ex.unitPassJSON(),
+		// The toolchains the run graded under, read in the jail it used.
+		Toolchains: ex.toolchainsJSON(context.Background(), enumeratedSourcePaths(cands, excl)),
 		// What the run executed under: the test command (redacted), the
 		// runner row it was read as, and the settings the run used.
 		TestCommand: testCommandText(recordedCmd, *repoDir), Runner: recordedRunnerID,
@@ -5212,6 +5214,11 @@ type localExecutor struct {
 	// pass and each unit's run within it. The constructor sets
 	// selectionTimeout, the bound before the flag existed.
 	evidenceTimeout time.Duration
+	// toolchainBound bounds each version command of toolchainVersions; the
+	// constructor sets toolchainReadBound. toolchainRunner replaces the
+	// scan's jail for those reads, for a test.
+	toolchainBound  time.Duration
+	toolchainRunner coverageRunner
 	// evidenceTimeoutGiven is whether the operator named --evidence-timeout,
 	// so a run that never reads the bound (a cache hit, Python under
 	// --whole-suite) can say the flag went unused rather than drop it
@@ -5333,6 +5340,7 @@ func newLocalExecutorWithJail(repoDir string, checkArgv []string, substrate, jai
 		// them with the operator's when given (run_bounds.go).
 		seedLimit:       seedLimitBuiltin,
 		evidenceTimeout: selectionTimeout,
+		toolchainBound:  toolchainReadBound,
 		// Concurrent jobs write progress; serialize so two files' notices
 		// cannot interleave mid-line.
 		progress:    &syncWriter{w: progress},

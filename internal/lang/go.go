@@ -31,6 +31,9 @@ func (goPlugin) Scaffold() map[string]string {
 
 func (goPlugin) TestCmd() []string { return []string{"go", "test", "./..."} }
 
+// VersionCmd: see Plugin.VersionCmd.
+func (goPlugin) VersionCmd() []string { return []string{"go", "version"} }
+
 // CompileCheck type-checks the authored test. It scopes to the audited file's
 // OWN package (./dir/...) rather than the whole module (./...): a single-file
 // audit inside a monorepo must not drag in unrelated packages — above all cgo

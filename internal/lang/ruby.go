@@ -384,3 +384,6 @@ func (rubyPlugin) LineComment() string { return "#" }
 
 // DependencyDirs is Bundler's local install directory.
 func (rubyPlugin) DependencyDirs() []DepDir { return []DepDir{{Name: ".bundle"}} }
+
+// VersionCmd: see Plugin.VersionCmd.
+func (rubyPlugin) VersionCmd() []string { return []string{"ruby", "--version"} }

@@ -125,7 +125,7 @@ func buildBundle(
 			// Same discipline: already nullable in the ledger, rides through
 			// as-is. nil unless THIS scan reused a prior one's evidence.
 			SelectionReused: scan.SelectionReused, UnitPass: scan.UnitPass,
-			TestCommand: scan.TestCommand, Runner: scan.Runner, Settings: scan.Settings,
+			TestCommand: scan.TestCommand, Runner: scan.Runner, Settings: scan.Settings, Toolchains: scan.Toolchains,
 			InputTokens: scan.InputTokens, OutputTokens: scan.OutputTokens,
 			ModelCalls:   scan.ModelCalls,
 			SourcePushed: sourcePushed,

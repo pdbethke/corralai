@@ -285,3 +285,6 @@ func (tsPlugin) LineComment() string { return "//" }
 
 // DependencyDirs is the Node dependency tree, shared with javascript.
 func (tsPlugin) DependencyDirs() []DepDir { return jsFamilyDependencyDirs() }
+
+// VersionCmd: see Plugin.VersionCmd.
+func (tsPlugin) VersionCmd() []string { return []string{"node", "--version"} }

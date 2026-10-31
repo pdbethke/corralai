@@ -147,7 +147,8 @@ CREATE TABLE IF NOT EXISTS corral_scans (
   unit_pass        VARCHAR,
   test_command     VARCHAR,
   runner           VARCHAR,
-  settings         VARCHAR
+  settings         VARCHAR,
+  toolchains       VARCHAR
 );`
 
 const auditsSchema = `
@@ -504,6 +505,7 @@ var (
 		{"test_command", "test_command VARCHAR"},
 		{"runner", "runner VARCHAR"},
 		{"settings", "settings VARCHAR"},
+		{"toolchains", "toolchains VARCHAR"},
 		// The tools the commit's footer lines declare (Identity.
 		// GeneratedWith), one per line. NULL before it: not read.
 		{"generated_with", "generated_with VARCHAR"},
@@ -1088,8 +1090,8 @@ func insertBundle(db *sql.DB, b Bundle, now time.Time, uid string) (Counts, erro
 		    preflight_ran, preflight_note, finished_at, entry_hash,
 		    author, committer, co_authors, scope, tree_dirty, repo_identity,
 		    sandbox_backend, sandbox_image, seed_skipped, generated_with, unit_pass,
-		    test_command, runner, settings
-		  ) VALUES (`+placeholders(51)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+		    test_command, runner, settings, toolchains
+		  ) VALUES (`+placeholders(52)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 			uid, now, b.Scan.Repo, b.Scan.RunURL, b.Scan.ScanID, b.Scan.Commit,
 			b.Scan.CorralVersion, b.Scan.Substrate, b.Scan.Host, b.Scan.Cores,
 			nullIfZeroInt(b.Scan.TreesRequested), b.Scan.DiffBase,
@@ -1107,6 +1109,7 @@ func insertBundle(db *sql.DB, b Bundle, now time.Time, uid string) (Counts, erro
 			nullIfEmpty(b.Scan.SeedSkipped), nullIfEmpty(b.Scan.Identity.GeneratedWith),
 			nullIfEmpty(b.Scan.UnitPass),
 			nullIfEmpty(b.Scan.TestCommand), nullIfEmpty(b.Scan.Runner), nullIfEmpty(b.Scan.Settings),
+			nullIfEmpty(b.Scan.Toolchains),
 		); err != nil {
 			return Counts{}, fmt.Errorf("auditpush: insert scan row: %w", err)
 		}

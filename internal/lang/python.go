@@ -58,6 +58,9 @@ func (pyPlugin) Scaffold() map[string]string { return map[string]string{} }
 
 func (pyPlugin) TestCmd() []string { return []string{pythonBin(), "-m", "pytest", "-q"} }
 
+// VersionCmd: see Plugin.VersionCmd.
+func (pyPlugin) VersionCmd() []string { return []string{pythonBin(), "--version"} }
+
 // pyCachePrefixEnv redirects py_compile's bytecode output to the sandbox's
 // writable /tmp tmpfs. py_compile writes a .pyc into a __pycache__ dir NEXT TO
 // each source file; in the container jail the workspace is read-only to the

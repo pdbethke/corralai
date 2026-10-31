@@ -28,8 +28,8 @@ import (
 //     a later task of the record-complete plan puts it there.
 //   - "UNCOVERED: <what>": a number that arguably belongs on the record and no
 //     planned task covers; each is reported to the controller to rule on.
-//     (None are left that a task does not own, apart from the shadow draw's
-//     parameters, awaiting a ruling.)
+//     (None are left at present: every number once marked UNCOVERED is now a
+//     GAP owned by a task.)
 //   - "review metrics: phase 1b": plan ruling R5, review's printers.
 //
 // Every other Exempt names why the number is not a measurement of a run:
@@ -461,9 +461,9 @@ var printedMetrics = map[string]printedRow{
 	"cmd/corral/seedskip.go:seedSkipsLine":  {Fields: []string{"ScanRow.SeedSkipped"}},
 	"cmd/corral/setup.go:renderPickList":    {Exempt: "menu index of an interactive pick list, not a measurement"},
 
-	"cmd/corral/shadow_draw.go:drawShadowSeats": {Fields: []string{"SeatRow.ShadowDrawn"}, Exempt: "UNCOVERED: the pool size, seed, Beta parameters, sample and history rows; SeatRow.ShadowDrawn records only that a draw happened"},
-	"cmd/corral/shadow_draw.go:describeDraw":    {Fields: []string{"SeatRow.ShadowDrawn"}, Exempt: "UNCOVERED: the pool size, seed, Beta parameters, sample and history rows; SeatRow.ShadowDrawn records only that a draw happened"},
-	"cmd/corral/shadow_draw.go:describeHistory": {Fields: []string{"SeatRow.ShadowDrawn"}, Exempt: "UNCOVERED: the pool size, seed, Beta parameters, sample and history rows; SeatRow.ShadowDrawn records only that a draw happened"},
+	"cmd/corral/shadow_draw.go:drawShadowSeats": {Fields: []string{"SeatRow.ShadowDrawn"}, Exempt: "GAP: shadow draw seed, pool, Beta parameters, sample and history rows count (SeatRow.ShadowDrawn records only that a draw happened); fixed in Task 8b"},
+	"cmd/corral/shadow_draw.go:describeDraw":    {Fields: []string{"SeatRow.ShadowDrawn"}, Exempt: "GAP: shadow draw seed, pool, Beta parameters, sample and history rows count (SeatRow.ShadowDrawn records only that a draw happened); fixed in Task 8b"},
+	"cmd/corral/shadow_draw.go:describeHistory": {Fields: []string{"SeatRow.ShadowDrawn"}, Exempt: "GAP: shadow draw seed, pool, Beta parameters, sample and history rows count (SeatRow.ShadowDrawn records only that a draw happened); fixed in Task 8b"},
 
 	"cmd/corral/state.go:runStateMigrate":    {Exempt: "error message: byte sizes of two state files that both exist, no audit run"},
 	"cmd/corral/tests_cmd.go:runTestsMap":    {Exempt: "error message: the rejected --workers value"},
@@ -587,7 +587,7 @@ var printedMetrics = map[string]printedRow{
 	"internal/advpool/driver.go:tickPoolAdequacy":                        {Exempt: "error message: retry counters of a test-writer reissue"},
 	"internal/advpool/driver_writer_fanout.go:advanceWriterAttempt":      {Exempt: "error message: repair counters of a per-survivor writer reissue"},
 	"internal/advpool/gate.go:Error":                                     {Exempt: "status text: names, paths, hashes and passthrough strings printed via %v or a string operand; no measured number"},
-	"internal/advpool/gate.go:SignVerdict":                               {Fields: []string{"SeatRow.ShadowDrawn"}, Exempt: "UNCOVERED: the size of the pool a shadow challenger was drawn from; SeatRow.ShadowDrawn records only that a draw happened"},
+	"internal/advpool/gate.go:SignVerdict":                               {Fields: []string{"SeatRow.ShadowDrawn"}, Exempt: "GAP: shadow draw pool size (SeatRow.ShadowDrawn records only that a draw happened); fixed in Task 8b"},
 	"internal/advpool/gate.go:authoredTestPath":                          {Exempt: "file name suffix for an authored test, an index not a measurement"},
 	"internal/advpool/gate.go:selectionDisclosure":                       {Exempt: "status text: names, paths, hashes and passthrough strings printed via %v or a string operand; no measured number"},
 	"internal/advpool/gate.go:selectionRowErr":                           {Exempt: "error message: builds failure text from causes, ids and paths via %v; no measured number"},
@@ -750,7 +750,7 @@ var printedMetrics = map[string]printedRow{
 	"internal/sandbox/identity.go:Identify":                              {Exempt: "error message: builds failure text from causes, ids and paths via %v; no measured number"},
 	"internal/sandbox/isolator_darwin.go:Preflight":                      {Exempt: "error message: builds failure text from causes, ids and paths via %v; no measured number"},
 	"internal/sandbox/isolator_linux.go:Preflight":                       {Exempt: "error message: builds failure text from causes, ids and paths via %v; no measured number"},
-	"internal/shadowpool/shadowpool.go:FormatSeed":                       {Exempt: "UNCOVERED: the shadow draw's seed; SeatRow.ShadowDrawn is a bool and the seed is printed once at the draw"},
+	"internal/shadowpool/shadowpool.go:FormatSeed":                       {Exempt: "GAP: shadow draw seed, which --shadow-seed replays; fixed in Task 8b"},
 	"internal/statedir/legacy.go:LegacyDir":                              {Exempt: "error message: builds failure text from causes, ids and paths via %v; no measured number"},
 	"internal/statedir/migrate.go:ownedByMe":                             {Exempt: "error message: the numbers are limits, ids, exit codes, offsets and counts inside a failure text, not an audit measurement"},
 	"internal/statedir/statedir.go:noRoot":                               {Exempt: "error message: builds failure text from causes, ids and paths via %v; no measured number"},

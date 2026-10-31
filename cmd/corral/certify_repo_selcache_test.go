@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/reposcan"
 )
@@ -364,5 +365,45 @@ func TestCertifyRepoRecordsToolchainsOnTheLedgerEntry(t *testing.T) {
 		if sc.HostNotMeasured == "" {
 			t.Errorf("--repo recorded no host conditions and no reason: %+v", sc)
 		}
+	}
+}
+
+// The scan-level wiring end to end: a real `certify --repo` writes an entry
+// whose Inventory is the walk's, read back from the ledger directory, and
+// whose MaxTokensReached is nil without --max-tokens and a recorded outcome
+// with it. Deleting the lines in runCertifyRepo that copy these onto the
+// scan header fails here, which a hand-built scanstore.Scan cannot.
+func TestCertifyRepoRecordsInventoryAndTheCapOnTheLedgerEntry(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+	orig := collectSelectionEvidence
+	t.Cleanup(func() { collectSelectionEvidence = orig })
+	collectSelectionEvidence = func(ctx context.Context, runner coverageRunner, files map[string]string, p lang.Plugin, testCmd []string, sourcePaths []string) reposcan.SelectionEvidence {
+		return reposcan.SelectionEvidence{Ran: true, Raw: []byte("evidence")}
+	}
+	scan := func(extra ...string) auditpush.ScanRow {
+		root, base, goals := selCacheFixture(t)
+		dsn := filepath.Join(t.TempDir(), "scans.duckdb")
+		var out, errs bytes.Buffer
+		runCertifyRepo(selCacheArgs(root, base, goals, dsn, extra...), &out, &errs)
+		entries := scanEntriesIn(t, selCacheLedger(dsn))
+		if len(entries) != 1 {
+			t.Fatalf("ledger holds %d scan entries, want 1\nstdout:\n%s\nstderr:\n%s", len(entries), out.String(), errs.String())
+		}
+		return entries[0].Bundle.Scan
+	}
+
+	uncapped := scan()
+	if uncapped.Inventory == "" {
+		t.Fatal("the entry records no Inventory")
+	}
+	inv := decodeInventory(t, uncapped.Inventory)
+	if inv.Excluded <= 0 || len(inv.Languages) == 0 {
+		t.Errorf("Inventory %s holds no walk", uncapped.Inventory)
+	}
+	if uncapped.MaxTokensReached != nil {
+		t.Errorf("MaxTokensReached = %v with no --max-tokens, want nil", *uncapped.MaxTokensReached)
+	}
+	if capped := scan("--max-tokens", "1000000"); capped.MaxTokensReached == nil || *capped.MaxTokensReached {
+		t.Errorf("MaxTokensReached = %v under a cap nothing reached, want a recorded false", capped.MaxTokensReached)
 	}
 }

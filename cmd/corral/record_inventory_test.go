@@ -91,6 +91,9 @@ func TestTheInventoryReachesTheLedgerAndMatchesTheScreen(t *testing.T) {
 	if rs != 2 || !strings.Contains(note, fmt.Sprintf("%d rust source(s) test landing not built", rs)) {
 		t.Errorf("landing_not_built = %v, the selection note says %q", got.LandingNotBuilt, note)
 	}
+	if len(got.Languages) != 3 {
+		t.Errorf("languages = %+v, want go, python and rust", got.Languages)
+	}
 	if got.Preflight == nil || got.Preflight.Executed != 1 || got.Preflight.NotMeasured != 1 || got.Preflight.Unexercised != 1 {
 		t.Fatalf("preflight = %+v", got.Preflight)
 	}

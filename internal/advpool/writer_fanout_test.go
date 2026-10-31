@@ -605,8 +605,8 @@ func TestTimeoutVerdictCarriesTheCountsTheRecordLiftsToRow(t *testing.T) {
 	if v.DuplicateMutants != 4 || v.MutantsUnmeasured != 3 {
 		t.Errorf("DuplicateMutants=%d MutantsUnmeasured=%d, want 4 and 3", v.DuplicateMutants, v.MutantsUnmeasured)
 	}
-	if !v.ExamCoverage.Measured || v.ExamCoverage.Unplaced < 1 {
-		t.Errorf("ExamCoverage = %+v, want measured with the spanless mutants unplaced", v.ExamCoverage)
+	if !v.ExamCoverage.Measured || v.ExamCoverage.Unplaced != 3 {
+		t.Errorf("ExamCoverage = %+v, want measured with 3 unplaced (k1, m1, m2 carry no span; k2 does)", v.ExamCoverage)
 	}
 	if v.WriterAttempts == nil || v.WriterAttempts.Min != 2 || v.WriterAttempts.Max != 3 || v.WriterSeatsUngraded != 1 {
 		t.Errorf("WriterAttempts=%+v WriterSeatsUngraded=%d, want 2..3 and 1", v.WriterAttempts, v.WriterSeatsUngraded)

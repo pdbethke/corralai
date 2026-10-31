@@ -29,6 +29,14 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ### Fixed
 
+- **A baseline killed at its time bound was reported as red.** REA's
+  eleventh run (2026-10-31) printed "baseline does not pass unmutated" over
+  a tail of passing tests and no failure, then tried both retries: the suite
+  had been stopped at the 30-minute bound on one run, and the timeout was
+  dropped on the way to the report. A timed-out baseline now says so, with
+  its bound and its last output, under its own reason (`baseline-timeout`),
+  and is not retried, since leaving out red units is not a way to make a
+  suite finish in time.
 - **A baseline still red after the retry, because of a test file the
   evidence pass ran green, was not graded.** REA's tenth run (2026-10-31)
   retried `src/server/createServer.ts` without the 34 test files red in the

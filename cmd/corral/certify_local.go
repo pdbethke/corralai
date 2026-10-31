@@ -1284,7 +1284,19 @@ type jailBaselineRunner struct {
 	// keeping only run 2 would erase that. Pointer-shared for the same reason
 	// lastOutput is.
 	flaky *[]string
+	// timedOut reports that the most recent run was killed at bound, the
+	// bound on one run of the suite (adequacy.Report.BaselineTimedOut).
+	// Pointer-shared for the same reason lastOutput is.
+	timedOut *bool
+	bound    time.Duration
 }
+
+// BaselineTimedOut reports whether the most recent baseline run was killed
+// at its bound rather than finishing.
+func (b jailBaselineRunner) BaselineTimedOut() bool { return b.timedOut != nil && *b.timedOut }
+
+// BaselineBound is the bound on one baseline run.
+func (b jailBaselineRunner) BaselineBound() time.Duration { return b.bound }
 
 func (b jailBaselineRunner) RunBaseline() (bool, error) {
 	rep, err := b.scorer.ScoreReport(b.ctx, b.codeKey, b.code, b.devTest, nil, b.testCmd)
@@ -1296,6 +1308,9 @@ func (b jailBaselineRunner) RunBaseline() (bool, error) {
 	// outcome an audit can produce — into an actionable error.
 	if !rep.CompliantPass && b.lastOutput != nil {
 		*b.lastOutput = rep.BaselineOutput
+	}
+	if b.timedOut != nil {
+		*b.timedOut = rep.BaselineTimedOut
 	}
 	if rep.CompliantPass && b.flaky != nil {
 		*b.flaky = unionTestNames(*b.flaky, rep.BaselineFlaky)
@@ -1368,6 +1383,8 @@ func baselineRunnerFor(ctx context.Context, in localAuditInput) (reposcan.Baseli
 		// attributed to each other.
 		lastOutput: new(string),
 		flaky:      new([]string),
+		timedOut:   new(bool),
+		bound:      timeout,
 	}, prep.cleanup, nil
 }
 

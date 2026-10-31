@@ -657,3 +657,42 @@ func TestTheSecondRetryIsTheLast(t *testing.T) {
 		t.Errorf("%d baseline(s); output lacks %q:\n%s", len(cmds), want, out.String())
 	}
 }
+
+// timedOutBaseline is a baseline the jail killed at its bound.
+type timedOutBaseline struct{}
+
+func (timedOutBaseline) RunBaseline() (bool, error)   { return false, nil }
+func (timedOutBaseline) BaselineOutput() string       { return " ✓ a passing test, then nothing" }
+func (timedOutBaseline) BaselineTimedOut() bool       { return true }
+func (timedOutBaseline) BaselineBound() time.Duration { return 30 * time.Minute }
+
+// REA's eleventh run (2026-10-31): the baseline was killed at the run's bound
+// and the file was reported as a baseline that "does not pass", then retried
+// twice, though leaving out red units cannot make a suite finish in time. A
+// timed-out baseline is said to be one, with its bound, under its own reason,
+// and is not retried.
+func TestATimedOutBaselineSaysSoAndIsNotRetried(t *testing.T) {
+	var cmds [][]string
+	var in localAuditInput
+	var out strings.Builder
+	ex := redUnitExecutor(t, nil, &cmds, &in, &out)
+	ex.newBaseline = func(_ context.Context, li localAuditInput) (reposcan.BaselineRunner, func(), error) {
+		cmds = append(cmds, slices.Clone(li.checkArgv))
+		return timedOutBaseline{}, func() {}, nil
+	}
+	res, err := ex.Execute(context.Background(), tsJob("src/a.ts", "tests/one.test.ts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Gradable || res.Reason != reposcan.ReasonBaselineTimeout || len(cmds) != 1 {
+		t.Fatalf("result %+v after %d baseline(s), want baseline-timeout after one; output:\n%s", res, len(cmds), out.String())
+	}
+	for _, want := range []string{"src/a.ts: baseline timed out: the unmutated suite did not finish within 30m0s", "then nothing"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("output lacks %q:\n%s", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "retried without") || strings.Contains(out.String(), "does not pass unmutated") {
+		t.Errorf("a timed-out baseline was retried or called red:\n%s", out.String())
+	}
+}

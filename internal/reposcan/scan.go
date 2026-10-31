@@ -17,7 +17,12 @@ import (
 const (
 	ReasonBaselineFailed = "baseline-failed"
 	ReasonFlakyBaseline  = "flaky-baseline"
-	ReasonExecutorError  = "executor-error"
+	// ReasonBaselineTimeout: the unmutated suite was killed at the bound on
+	// one run before it finished. Distinct from ReasonBaselineFailed, whose
+	// gloss calls the suite red in this environment: a suite that ran out
+	// of time said nothing about pass or fail.
+	ReasonBaselineTimeout = "baseline-timeout"
+	ReasonExecutorError   = "executor-error"
 	// ReasonTestCmdCannotCollect: the project's own test command would not RUN
 	// the test this audit writes, so no gap could be proven even if one were
 	// found. corral refuses before spending anything. This is a fact about the

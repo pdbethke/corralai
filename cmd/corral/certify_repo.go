@@ -4545,6 +4545,8 @@ func reasonGloss(reason string) string {
 		return " — no testable property: the file is purely declarative (interfaces, constants, generated code), so there is nothing a mutant could violate"
 	case reposcan.ReasonBaselineFailed:
 		return " — the project's own suite did not pass on the UNMUTATED code in this environment; a build/environment problem, not a test-quality verdict"
+	case reposcan.ReasonBaselineTimeout:
+		return " — the unmutated suite did not finish within one run's bound (--timeout), so nothing could be graded against it; raise --timeout, or narrow what the file's selection runs"
 	case reposcan.ReasonFlakyBaseline:
 		return " — the unmutated suite gave different answers on repeated runs, so no mutant result from it could be trusted"
 	case reposcan.ReasonExecutorError:
@@ -5655,6 +5657,11 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 		l.note("%s: unstable baseline — not graded\n", j.Path)
 		return reposcan.FileResult{Gradable: false, Reason: reposcan.ReasonFlakyBaseline}, nil
 	}
+	// A baseline killed at its bound is not red, and leaving units out
+	// cannot be relied on to make it finish: neither retry runs.
+	if res, ok := l.timedOutBaseline(j, runner); ok {
+		return res, nil
+	}
 	// Stable means every run AGREED — including agreeing to fail. A suite that
 	// is consistently red is a legitimate ungradable (that is the existing
 	// BaselineFailed case), and auditing it anyway would spend mutant
@@ -5693,6 +5700,9 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 				rec = &recordingBaseline{inner: runner}
 				if stable, err = reposcan.CheckBaselineStable(rec, l.baselineRuns); err != nil {
 					return reposcan.FileResult{}, l.fail(j, err)
+				}
+				if res, ok := l.timedOutBaseline(j, runner); ok {
+					return res, nil
 				}
 				switch {
 				case !stable:
@@ -5746,6 +5756,9 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 			rec = &recordingBaseline{inner: runner}
 			if stable, err = reposcan.CheckBaselineStable(rec, l.baselineRuns); err != nil {
 				return reposcan.FileResult{}, l.fail(j, err)
+			}
+			if res, ok := l.timedOutBaseline(j, runner); ok {
+				return res, nil
 			}
 			switch {
 			case !stable:
@@ -5883,6 +5896,27 @@ func (l *localExecutor) redUnitRetry(j reposcan.Job, sel lang.Selection) (lang.S
 	}
 	retry.Excluded = red
 	return retry, red, ""
+}
+
+// timedOutBaseline is the file's result when runner's last baseline was
+// killed at its bound: said as a timeout, with the bound and the suite's
+// last output, under its own reason. ok is false for a baseline that
+// finished, red or green, and for a runner that cannot say.
+func (l *localExecutor) timedOutBaseline(j reposcan.Job, runner reposcan.BaselineRunner) (reposcan.FileResult, bool) {
+	to, ok := runner.(interface {
+		BaselineTimedOut() bool
+		BaselineBound() time.Duration
+	})
+	if !ok || !to.BaselineTimedOut() {
+		return reposcan.FileResult{}, false
+	}
+	l.note("%s: baseline timed out: the unmutated suite did not finish within %s, the bound on one run (--timeout) — not graded, and not retried: leaving units out is not a way to make it finish\n", j.Path, to.BaselineBound())
+	if br, ok := runner.(interface{ BaselineOutput() string }); ok {
+		if out := strings.TrimSpace(br.BaselineOutput()); out != "" {
+			l.note("%s: the suite's last output before it was stopped:\n%s\n", j.Path, indentLines(out, "    "))
+		}
+	}
+	return reposcan.FileResult{Gradable: false, Reason: reposcan.ReasonBaselineTimeout}, true
 }
 
 // baselineRedRetry is the second retry's selection: in's selection without

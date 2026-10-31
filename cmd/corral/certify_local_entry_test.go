@@ -129,6 +129,9 @@ func TestLocalRunWritesMachineLedgerEntry(t *testing.T) {
 	if b.Scan.TreeDirty == nil || *b.Scan.TreeDirty {
 		t.Errorf("tree_dirty = %v, want a measured false for a clean checkout", b.Scan.TreeDirty)
 	}
+	if want := localToolchainsNotRead("go"); b.Scan.Toolchains != want {
+		t.Errorf("Toolchains = %q, want %q: --local must say it reads none, not omit the field", b.Scan.Toolchains, want)
+	}
 	if len(b.Files) != 1 || b.Files[0].Path != "pkg/a.go" {
 		t.Fatalf("file rows = %+v, want the one audited file", b.Files)
 	}

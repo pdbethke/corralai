@@ -33,6 +33,19 @@ func vitestVersionCmd(argv []string) ([]string, bool) {
 	return append(slices.Clone(argv[:i+1]), "--version"), true
 }
 
+// jestVersionCmd is argv up to jest's binary word or its entry script
+// (node_modules/jest/bin/jest.js), then --version.
+func jestVersionCmd(argv []string) ([]string, bool) {
+	i := wordIndex(argv, "jest")
+	if i < 0 {
+		i = entryScriptIndex(argv, "jest", "bin/jest.js")
+	}
+	if i < 0 {
+		return nil, false
+	}
+	return append(slices.Clone(argv[:i+1]), "--version"), true
+}
+
 // FirstLine is the first non-blank line of a version command's output,
 // trimmed; "" when there is none. It is what the ledger records, because a
 // version banner's later lines (copyright, build options) are noise that would

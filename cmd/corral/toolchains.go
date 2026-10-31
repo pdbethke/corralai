@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -18,6 +19,14 @@ import (
 // courtesy to the record: it must never stall the audit it describes, so a
 // command that has not answered by then is recorded as not read.
 const toolchainReadBound = 30 * time.Second
+
+// toolchainReadBudget bounds the whole read, every language and tool of it
+// together: the per-command bound alone would let ten tools hold the end of an
+// audit for five minutes.
+const toolchainReadBudget = 60 * time.Second
+
+// errBudgetRan is the cause recorded when the overall budget expires.
+var errBudgetRan = errors.New("the version read's overall budget ran out")
 
 // notRead is the value recorded for a toolchain that could not be read. The
 // record says so rather than omit the key: a missing key reads as "nothing
@@ -58,10 +67,12 @@ func (l *localExecutor) toolchainVersions(ctx context.Context, langName string) 
 	}
 	inv, rerr := lang.Resolve(plug, l.repoDir, argv, l.runnerFor(langName))
 	if rerr != nil {
+		out["runner"] = notRead("no runner row resolved for this command")
 		return out
 	}
 	row, found := lang.RunnerFor(plug, inv)
 	if !found {
+		out["runner"] = notRead("no runner row resolved for this command")
 		return out
 	}
 	if row.VersionCmd == nil {
@@ -84,6 +95,17 @@ func (l *localExecutor) versionJail(langName string, plug lang.Plugin) (coverage
 	if l.toolchainRunner != nil {
 		return l.toolchainRunner, map[string]string{}, nil
 	}
+	// Only a jail the run ALREADY prepared: building a repo seed here would
+	// spend unbounded time after the audit. The workspace substrate seeds
+	// nothing, so scanRunner is cheap there.
+	if l.substrate != substrateWorkspace {
+		if l.seeds == nil {
+			return nil, nil, fmt.Errorf("no jail was prepared for %s in this run", langName)
+		}
+		if _, ok := l.seeds.peek(langName); !ok {
+			return nil, nil, fmt.Errorf("no jail was prepared for %s in this run", langName)
+		}
+	}
 	return l.scanRunner(langName, plug, toolchainMaxOutput, l.toolchainBound)
 }
 
@@ -97,6 +119,9 @@ const toolchainMaxOutput = 64 << 10
 func (l *localExecutor) readVersion(ctx context.Context, run coverageRunner, files map[string]string, cmd []string) string {
 	if l.toolchainBound <= 0 {
 		return notRead("no bound was set for reading versions")
+	}
+	if ctx.Err() != nil {
+		return notRead(budgetReason(ctx))
 	}
 	rctx, cancel := context.WithTimeout(ctx, l.toolchainBound)
 	defer cancel()
@@ -112,15 +137,30 @@ func (l *localExecutor) readVersion(ctx context.Context, run coverageRunner, fil
 	select {
 	case a := <-ch:
 		if a.err != nil {
-			return notRead(oneLine(a.err.Error()))
+			if msg := oneLine(a.err.Error()); msg != "" {
+				return notRead(msg)
+			}
+			return notRead(cmd[0] + ": unknown error")
 		}
 		if v := lang.FirstLine(a.out); v != "" {
 			return v
 		}
-		return notRead("the command printed nothing")
+		return notRead(cmd[0] + " printed nothing")
 	case <-rctx.Done():
+		if ctx.Err() != nil {
+			return notRead(budgetReason(ctx))
+		}
 		return notRead(fmt.Sprintf("%s did not answer within %s", strings.Join(cmd, " "), l.toolchainBound))
 	}
+}
+
+// budgetReason says why a read was cut off by its parent context: the overall
+// budget, or the operator's interrupt.
+func budgetReason(ctx context.Context) string {
+	if c := context.Cause(ctx); errors.Is(c, errBudgetRan) {
+		return c.Error()
+	}
+	return "interrupted"
 }
 
 // oneLine is s's first line, so a multi-line error cannot spread over the
@@ -141,6 +181,9 @@ func (l *localExecutor) toolchainsJSON(ctx context.Context, sources []string) st
 		names = append(names, n)
 	}
 	sort.Strings(names)
+	// ONE budget for the whole read, under the run's own (signal) context.
+	ctx, cancel := context.WithTimeoutCause(ctx, l.toolchainBudget, errBudgetRan)
+	defer cancel()
 	rec := map[string]map[string]string{}
 	for _, n := range names {
 		if v := l.toolchainVersions(ctx, n); len(v) > 0 {
@@ -151,6 +194,23 @@ func (l *localExecutor) toolchainsJSON(ctx context.Context, sources []string) st
 		return ""
 	}
 	b, err := json.Marshal(rec)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// localToolchainsNotRead is ScanRow.Toolchains for a `certify --local` run.
+// --local builds its jail inside buildJailWiring, per substrate and per file,
+// with no command runner to ask a version of without restructuring it, so it
+// reads none; the field says so for the language instead of being absent.
+func localToolchainsNotRead(langName string) string {
+	if langName == "" {
+		return ""
+	}
+	b, err := json.Marshal(map[string]map[string]string{
+		langName: {"toolchains": notRead("certify --local does not read toolchain versions yet")},
+	})
 	if err != nil {
 		return ""
 	}

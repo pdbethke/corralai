@@ -42,7 +42,7 @@ func (v *versionJail) Enumerate(_ context.Context, _ map[string]string, cmd []st
 func toolchainExec(j *versionJail, checkArgv []string) *localExecutor {
 	return &localExecutor{
 		repoDir: "", checkArgv: checkArgv, substrate: substrateJail,
-		toolchainRunner: j, toolchainBound: 150 * time.Millisecond,
+		toolchainRunner: j, toolchainBound: 150 * time.Millisecond, toolchainBudget: 5 * time.Second,
 	}
 }
 
@@ -60,10 +60,10 @@ func TestToolchainVersionsAreTheFirstLineOfEachCommand(t *testing.T) {
 
 func TestARunnerRowWithNoVersionCommandSaysSoInsteadOfBeingAbsent(t *testing.T) {
 	j := &versionJail{out: map[string]string{"node --version": "v22.23.4\n"}}
-	l := toolchainExec(j, []string{"node", "./node_modules/jest/bin/jest.js"})
+	l := toolchainExec(j, []string{"mocha", "--bail"})
 	got := l.toolchainVersions(context.Background(), "javascript")
-	if want := "not read: the jest row has no version command"; got["jest"] != want {
-		t.Errorf("jest = %q, want %q (all: %v)", got["jest"], want, got)
+	if want := "not read: the mocha row has no version command"; got["mocha"] != want {
+		t.Errorf("mocha = %q, want %q (all: %v)", got["mocha"], want, got)
 	}
 }
 
@@ -116,5 +116,84 @@ func TestNilExecutorRecordsNoToolchains(t *testing.T) {
 	var l *localExecutor
 	if got := l.toolchainsJSON(context.Background(), []string{"a.py"}); got != "" {
 		t.Errorf("toolchainsJSON on no executor = %q, want empty", got)
+	}
+}
+
+// One budget covers every language and tool: a fake that sleeps past it, across
+// two languages, costs the budget and no more, and what it cut off says so.
+func TestTheOverallBudgetBoundsTheWholeRead(t *testing.T) {
+	j := &versionJail{block: map[string]bool{
+		"python3 --version": true, "python3 -m pytest --version": true,
+		"node --version": true,
+	}}
+	l := toolchainExec(j, nil)
+	l.toolchainBound = 10 * time.Second // the per-command bound alone would allow 30s+
+	l.toolchainBudget = 200 * time.Millisecond
+	start := time.Now()
+	raw := l.toolchainsJSON(context.Background(), []string{"a.py", "b.js"})
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("the read took %s with a 200ms overall budget", d)
+	}
+	var rec map[string]map[string]string
+	if err := json.Unmarshal([]byte(raw), &rec); err != nil {
+		t.Fatalf("toolchainsJSON = %q: %v", raw, err)
+	}
+	want := "not read: the version read's overall budget ran out"
+	for _, c := range []struct{ lang, tool string }{{"python", "python3"}, {"python", "pytest"}, {"javascript", "node"}} {
+		if rec[c.lang][c.tool] != want {
+			t.Errorf("%s/%s = %q, want %q (record %v)", c.lang, c.tool, rec[c.lang][c.tool], want, rec)
+		}
+	}
+}
+
+func TestAnInterruptedReadSaysSo(t *testing.T) {
+	j := &versionJail{out: map[string]string{"node --version": "v22.23.4\n"}}
+	l := toolchainExec(j, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if got := l.toolchainVersions(ctx, "javascript")["node"]; got != "not read: interrupted" {
+		t.Errorf("node = %q, want not read: interrupted", got)
+	}
+}
+
+func TestAnEmptyErrorStillGivesAReason(t *testing.T) {
+	j := &versionJail{fail: map[string]error{"ruby --version": errors.New("")}, out: map[string]string{}}
+	got := toolchainExec(j, nil).toolchainVersions(context.Background(), "ruby")
+	if got["ruby"] != "not read: ruby: unknown error" {
+		t.Errorf("ruby = %q", got["ruby"])
+	}
+	j2 := &versionJail{out: map[string]string{"go version": "  \n"}}
+	got = toolchainExec(j2, nil).toolchainVersions(context.Background(), "go")
+	if got["go"] != "not read: go printed nothing" {
+		t.Errorf("go = %q", got["go"])
+	}
+}
+
+// A jail the run never prepared is not built here: the read must not spend
+// unbounded time seeding a repository after the audit.
+func TestNoJailPreparedMeansNothingIsBuiltOrRun(t *testing.T) {
+	built := 0
+	l := &localExecutor{
+		substrate: substrateJail, toolchainBound: time.Second, toolchainBudget: time.Second,
+		seeds: newSeedCache(func(string) (repoSeed, error) { built++; return repoSeed{}, nil }),
+	}
+	got := l.toolchainVersions(context.Background(), "python")
+	want := "not read: no jail was prepared for python in this run"
+	if got["python3"] != want || got["pytest"] != want {
+		t.Errorf("got %v, want every tool %q", got, want)
+	}
+	if built != 0 {
+		t.Errorf("the read built %d seed(s); it must only use one the run already built", built)
+	}
+	if _, ok := l.seeds.peek("python"); ok {
+		t.Error("peek reported a seed nobody built")
+	}
+}
+
+func TestLocalToolchainsNeverSilentlyAbsent(t *testing.T) {
+	got := localToolchainsNotRead("go")
+	want := `{"go":{"toolchains":"not read: certify --local does not read toolchain versions yet"}}`
+	if got != want {
+		t.Errorf("localToolchainsNotRead = %q, want %q", got, want)
 	}
 }

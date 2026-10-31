@@ -1753,7 +1753,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// The whole unit pass, from the values its "units:" lines print.
 		UnitPass: ex.unitPassJSON(),
 		// The toolchains the run graded under, read in the jail it used.
-		Toolchains: ex.toolchainsJSON(context.Background(), enumeratedSourcePaths(cands, excl)),
+		Toolchains: ex.toolchainsJSON(auditCtx, enumeratedSourcePaths(cands, excl)),
 		// What the run executed under: the test command (redacted), the
 		// runner row it was read as, and the settings the run used.
 		TestCommand: testCommandText(recordedCmd, *repoDir), Runner: recordedRunnerID,
@@ -5217,7 +5217,9 @@ type localExecutor struct {
 	// toolchainBound bounds each version command of toolchainVersions; the
 	// constructor sets toolchainReadBound. toolchainRunner replaces the
 	// scan's jail for those reads, for a test.
-	toolchainBound  time.Duration
+	toolchainBound time.Duration
+	// toolchainBudget bounds the whole read (toolchainReadBudget).
+	toolchainBudget time.Duration
 	toolchainRunner coverageRunner
 	// evidenceTimeoutGiven is whether the operator named --evidence-timeout,
 	// so a run that never reads the bound (a cache hit, Python under
@@ -5341,6 +5343,7 @@ func newLocalExecutorWithJail(repoDir string, checkArgv []string, substrate, jai
 		seedLimit:       seedLimitBuiltin,
 		evidenceTimeout: selectionTimeout,
 		toolchainBound:  toolchainReadBound,
+		toolchainBudget: toolchainReadBudget,
 		// Concurrent jobs write progress; serialize so two files' notices
 		// cannot interleave mid-line.
 		progress:    &syncWriter{w: progress},

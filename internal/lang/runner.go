@@ -279,7 +279,8 @@ var runners = []Runner{
 		FirstFailure: firstOf(jestFailures), FailedTests: jestFailures, DeselectCmd: jestDeselectCmd, FailedUnits: jestFailedUnits,
 		ListUnits: jestListUnits, ParseUnits: jestParseUnits, UnitCmd: oneUnit(jestUnitsCmd), UnitCoruns: jestUnitCoruns,
 		UnitsCmd: jestUnitsCmd, UnitsCoruns: eachUnitCoruns(jestUnitCoruns), UnitForFile: fileUnitForFile, UnitNoun: "test files",
-		Note: "listing, one-test, one-file and several-file runs verified on jest 30.5",
+		VersionCmd: jestVersionCmd,
+		Note:       "listing, one-test, one-file and several-file runs verified on jest 30.5",
 	},
 	{
 		ListsFullNames: true,

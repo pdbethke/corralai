@@ -42,6 +42,19 @@ func TestVitestRowReadsItsVersionFromTheEntryScript(t *testing.T) {
 	}
 }
 
+func TestJestRowReadsItsVersionFromTheEntryScript(t *testing.T) {
+	p, _ := ByName("javascript")
+	argv := []string{"node", "./node_modules/jest/bin/jest.js", "--ci"}
+	r, ok := RunnerFor(p, Cmd(argv))
+	if !ok || r.ID != "jest" || r.VersionCmd == nil {
+		t.Fatalf("want the jest row with a version command, got %q ok=%v", r.ID, ok)
+	}
+	got, ok := r.VersionCmd(argv)
+	if want := []string{"node", "./node_modules/jest/bin/jest.js", "--version"}; !ok || !slices.Equal(got, want) {
+		t.Errorf("VersionCmd = %q, %v, want %q", got, ok, want)
+	}
+}
+
 func TestPytestRowReadsItsVersionBehindItsLauncher(t *testing.T) {
 	p, _ := ByName("python")
 	r, ok := RunnerFor(p, Cmd([]string{"python3", "-m", "pytest", "-q"}))
@@ -63,6 +76,7 @@ func TestCapturedVersionOutputsStartWithTheirVersion(t *testing.T) {
 	for file, want := range map[string]string{
 		"vitest-version.txt":            "vitest/5.0.3",
 		"pytest-version.txt":            "pytest 9.1.1",
+		"jest-version.txt":              "30.5.2",
 		"toolchain-node24-version.txt":  "v24.22.1",
 		"toolchain-node-version.txt":    "v22.",
 		"toolchain-go-version.txt":      "go version go1.",

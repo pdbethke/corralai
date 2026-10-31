@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -319,5 +320,43 @@ func TestSelectionCacheKeyDigestsTheCommandThatActuallyRuns(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(ranA, " "), "pkg_a") {
 		t.Fatalf("fixture: the instrumented python command carries no source root: %q", ranA)
+	}
+}
+
+// The wiring end to end: a real `certify --repo` on the workspace substrate
+// (no bwrap needed) writes a ledger entry whose Toolchains names the run's
+// language and carries the interpreter version the host really prints, read
+// back from the ledger directory.
+func TestCertifyRepoRecordsToolchainsOnTheLedgerEntry(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+	root, base, goals := selCacheFixture(t)
+	dsn := filepath.Join(t.TempDir(), "scans.duckdb")
+
+	orig := collectSelectionEvidence
+	t.Cleanup(func() { collectSelectionEvidence = orig })
+	collectSelectionEvidence = func(ctx context.Context, runner coverageRunner, files map[string]string, p lang.Plugin, testCmd []string, sourcePaths []string) reposcan.SelectionEvidence {
+		return reposcan.SelectionEvidence{Ran: true, Raw: []byte("evidence")}
+	}
+	var out, errs bytes.Buffer
+	runCertifyRepo(selCacheArgs(root, base, goals, dsn), &out, &errs)
+
+	entries := scanEntriesIn(t, selCacheLedger(dsn))
+	if len(entries) != 1 {
+		t.Fatalf("ledger holds %d scan entries, want 1\nstdout:\n%s\nstderr:\n%s", len(entries), out.String(), errs.String())
+	}
+	raw := entries[0].Bundle.Scan.Toolchains
+	if raw == "" {
+		t.Fatalf("the entry records no Toolchains\nstdout:\n%s", out.String())
+	}
+	var rec map[string]map[string]string
+	if err := json.Unmarshal([]byte(raw), &rec); err != nil {
+		t.Fatalf("Toolchains %q is not the documented JSON: %v", raw, err)
+	}
+	py, ok := rec["python"]
+	if !ok {
+		t.Fatalf("Toolchains %q does not name the run's language (python)", raw)
+	}
+	if !strings.HasPrefix(py["python3"], "Python 3.") {
+		t.Errorf("python3 = %q, want the version the host prints", py["python3"])
 	}
 }

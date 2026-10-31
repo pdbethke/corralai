@@ -94,7 +94,7 @@ func repoPathExists(repoRoot, tok string) bool {
 	if c != strings.TrimSuffix(strings.TrimPrefix(t, "./"), "/") && !(t == "." || t == "./") {
 		return false
 	}
-	_, err := os.Lstat(filepath.Join(repoRoot, c))
+	_, err := os.Lstat(filepath.Join(repoRoot, c)) // #nosec G703 -- tok is relative, has no ".." component and equals its own cleaned form (checked above), so the join cannot leave repoRoot; Lstat only tests existence
 	return err == nil
 }
 

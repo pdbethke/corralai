@@ -9,16 +9,20 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
-	"strings"
 	"time"
 
+	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
 // toolchainReadBound bounds each version command. A version read is a
 // courtesy to the record: it must never stall the audit it describes, so a
 // command that has not answered by then is recorded as not read.
-const toolchainReadBound = 30 * time.Second
+//
+// A var, not a const, only so a test driving a whole `certify --repo` can
+// shorten it: newLocalExecutor reads it at construction.
+var toolchainReadBound = 30 * time.Second
 
 // toolchainReadBudget bounds the whole read, every language and tool of it
 // together: the per-command bound alone would let ten tools hold the end of an
@@ -48,13 +52,13 @@ func (l *localExecutor) toolchainVersions(ctx context.Context, langName string) 
 	if !ok {
 		return out
 	}
-	run, files, err := l.versionJail(langName, plug)
+	run, files, why := l.versionJail(langName, plug)
 	read := func(key string, cmd []string) {
-		if err != nil {
-			out[key] = notRead(err.Error())
+		if why != "" {
+			out[key] = notRead(why)
 			return
 		}
-		out[key] = l.readVersion(ctx, run, files, cmd)
+		out[key] = l.readVersion(ctx, run, files, key, cmd)
 	}
 	if cmd := plug.VersionCmd(); len(cmd) > 0 {
 		read(filepath.Base(cmd[0]), cmd)
@@ -90,22 +94,36 @@ func (l *localExecutor) toolchainVersions(ctx context.Context, langName string) 
 
 // versionJail is the runner a version is read in: a test's fake when one is
 // set, else the scan's jail for the language (or, on the workspace substrate,
-// the checkout's own runner).
-func (l *localExecutor) versionJail(langName string, plug lang.Plugin) (coverageRunner, map[string]string, error) {
+// the checkout's own runner). When there is none it returns why, as a fixed
+// reason: the error that stopped it can carry host paths and the
+// operator's command, and what it returns is published.
+func (l *localExecutor) versionJail(langName string, plug lang.Plugin) (coverageRunner, map[string]string, string) {
 	if l.toolchainRunner != nil {
-		return l.toolchainRunner, map[string]string{}, nil
+		return l.toolchainRunner, map[string]string{}, ""
 	}
 	// Only a jail the run ALREADY prepared: building a repo seed here would
 	// spend unbounded time after the audit. The workspace substrate seeds
 	// nothing, so scanRunner is cheap there.
 	if l.substrate != substrateWorkspace {
 		if l.seeds == nil {
-			return nil, nil, fmt.Errorf("no jail was prepared for %s in this run", langName)
+			return nil, nil, fmt.Sprintf("no jail was prepared for %s in this run", langName)
 		}
 		if _, ok := l.seeds.peek(langName); !ok {
-			return nil, nil, fmt.Errorf("no jail was prepared for %s in this run", langName)
+			return nil, nil, fmt.Sprintf("no jail was prepared for %s in this run", langName)
 		}
 	}
+	run, files, err := versionScanRunner(l, langName, plug)
+	if err != nil {
+		return nil, nil, fmt.Sprintf("the jail for %s could not be prepared", langName)
+	}
+	return run, files, ""
+}
+
+// versionScanRunner is the scan's own runner for a version read. A package
+// var, the seam collectSelectionEvidence uses, so a test of a whole
+// `certify --repo` can stand in for the version commands without a real
+// toolchain.
+var versionScanRunner = func(l *localExecutor, langName string, plug lang.Plugin) (coverageRunner, map[string]string, error) {
 	return l.scanRunner(langName, plug, toolchainMaxOutput, l.toolchainBound)
 }
 
@@ -116,42 +134,83 @@ const toolchainMaxOutput = 64 << 10
 // to the recorded value. The run happens on its own goroutine so that a
 // runner which ignores its context still cannot hold the audit past the
 // bound; the goroutine is abandoned in that case.
-func (l *localExecutor) readVersion(ctx context.Context, run coverageRunner, files map[string]string, cmd []string) string {
+//
+// A reason it records names the tool (key: a binary's base name or a runner
+// row's id) and never the command or an error's text. The command is the
+// operator's own up to the runner word, env assignments and flags included,
+// and an error names argv[0] and host paths; the record is published, and
+// the test command's redaction (recordedTestCommand) does not reach here.
+// So each failure is one fixed reason per class.
+//
+// Only an exit of 0 is a version. The jail's Enumerate returns no error for a
+// non-zero exit, so a failing `pytest --version` (a conftest ImportError)
+// would otherwise have its first line recorded as pytest's version; the exit
+// code comes from EnumerateDetailed, and a runner without it reads nothing.
+func (l *localExecutor) readVersion(ctx context.Context, run coverageRunner, files map[string]string, key string, cmd []string) string {
 	if l.toolchainBound <= 0 {
 		return notRead("no bound was set for reading versions")
 	}
 	if ctx.Err() != nil {
 		return notRead(budgetReason(ctx))
 	}
+	detailed, ok := run.(detailedCoverageRunner)
+	if !ok {
+		return notRead(fmt.Sprintf("the runner for the %s version command reports no exit code", key))
+	}
 	rctx, cancel := context.WithTimeout(ctx, l.toolchainBound)
 	defer cancel()
 	type answer struct {
-		out string
+		res sandbox.EnumerateResult
 		err error
 	}
 	ch := make(chan answer, 1)
 	go func() {
-		o, e := run.Enumerate(rctx, files, cmd)
-		ch <- answer{o, e}
+		r, e := detailed.EnumerateDetailed(rctx, files, cmd)
+		ch <- answer{r, e}
 	}()
 	select {
 	case a := <-ch:
 		if a.err != nil {
-			if msg := oneLine(a.err.Error()); msg != "" {
-				return notRead(msg)
+			if ctx.Err() != nil {
+				return notRead(budgetReason(ctx))
 			}
-			return notRead(cmd[0] + ": unknown error")
+			return notRead(l.versionErrorReason(rctx, key, a.err))
 		}
-		if v := lang.FirstLine(a.out); v != "" {
+		if a.res.ExitCode != 0 {
+			return notRead(fmt.Sprintf("the %s version command exited %d", key, a.res.ExitCode))
+		}
+		if v := lang.FirstLine(a.res.Output); v != "" {
 			return v
 		}
-		return notRead(cmd[0] + " printed nothing")
+		return notRead(fmt.Sprintf("the %s version command printed nothing", key))
 	case <-rctx.Done():
 		if ctx.Err() != nil {
 			return notRead(budgetReason(ctx))
 		}
-		return notRead(fmt.Sprintf("%s did not answer within %s", strings.Join(cmd, " "), l.toolchainBound))
+		return notRead(l.versionTimeoutReason(key))
 	}
+}
+
+// versionErrorReason is the fixed reason for an error a version command
+// returned, by its class; its text is never used (readVersion's comment).
+func (l *localExecutor) versionErrorReason(rctx context.Context, key string, err error) string {
+	var snap adequacy.ErrSnapToolchain
+	var unbindable adequacy.ErrUnbindableToolchain
+	switch {
+	case errors.Is(err, adequacy.ErrTestTimeout), errors.Is(err, context.DeadlineExceeded), rctx.Err() != nil:
+		return l.versionTimeoutReason(key)
+	case errors.As(err, &snap):
+		return fmt.Sprintf("the %s binary resolves to a snap, which cannot run in the sandbox", key)
+	case errors.As(err, &unbindable):
+		return fmt.Sprintf("the %s binary lives where the sandbox may not bind it", key)
+	default:
+		return fmt.Sprintf("the %s version command could not be run", key)
+	}
+}
+
+// versionTimeoutReason is the reason for a version command the bound cut off.
+func (l *localExecutor) versionTimeoutReason(key string) string {
+	return fmt.Sprintf("the %s version command did not answer within %s", key, l.toolchainBound)
 }
 
 // budgetReason says why a read was cut off by its parent context: the overall
@@ -162,10 +221,6 @@ func budgetReason(ctx context.Context) string {
 	}
 	return "interrupted"
 }
-
-// oneLine is s's first line, so a multi-line error cannot spread over the
-// record.
-func oneLine(s string) string { return lang.FirstLine(s) }
 
 // toolchainsJSON is ScanRow.Toolchains: the toolchains of every language the
 // scan's sources are in, as {"<language>":{"<tool>":"<version>"}} JSON text

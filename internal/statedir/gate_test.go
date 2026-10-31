@@ -60,6 +60,35 @@ var homeAnchoredClaude = regexp.MustCompile(`(?:~|\$HOME|\$\{HOME\}|/root|/home/
 //
 // Claude Code's own skills directory (.claude/skills) is an integration,
 // not state, and is legal everywhere.
+// namesClaudePath reports whether a Go string literal names ".claude" as a
+// path. An occurrence is a HOST LABEL, not a path, only when it sits in the
+// authority of a URL (after "://", before the first "/") and is followed by
+// "." (platform.claude.com, claude.ai). Chosen over "followed by ." alone
+// because Claude Code's own config file, ~/.claude.json, is followed by "." and
+// is exactly what this gate exists to catch: it has no "://", so it stays
+// caught, as do ".claude", "~/.claude/x" and a Join(h, ".claude").
+func namesClaudePath(lit string) bool {
+	for from := 0; ; {
+		i := strings.Index(lit[from:], ".claude")
+		if i < 0 {
+			return false
+		}
+		i += from
+		if !urlHostLabel(lit, i) {
+			return true
+		}
+		from = i + len(".claude")
+	}
+}
+
+func urlHostLabel(lit string, i int) bool {
+	scheme := strings.LastIndex(lit[:i], "://")
+	if scheme < 0 || strings.Contains(lit[scheme+3:i], "/") {
+		return false
+	}
+	return strings.HasPrefix(lit[i+len(".claude"):], ".")
+}
+
 func violations(path string, src []byte) []string {
 	var out []string
 	if strings.HasSuffix(path, ".go") {
@@ -72,7 +101,7 @@ func violations(path string, src []byte) []string {
 			if tok == token.EOF {
 				break
 			}
-			if tok == token.STRING && strings.Contains(lit, ".claude") && path != legacyFile && path != agentTableFile {
+			if tok == token.STRING && namesClaudePath(lit) && path != legacyFile && path != agentTableFile {
 				out = append(out, fset.Position(pos).String()+": string literal names .claude")
 			}
 			if (tok == token.STRING || tok == token.COMMENT) && strings.Contains(lit, ".claude/corralai") && path != legacyFile {
@@ -112,6 +141,21 @@ func isBinary(src []byte) bool {
 		n = 8000
 	}
 	return bytes.IndexByte(src[:n], 0) >= 0
+}
+
+func TestGateTellsAHostNameFromAPath(t *testing.T) {
+	src := func(lit string) []byte { return []byte("package x\nvar p = " + lit + "\n") }
+	for _, ok := range []string{`"https://platform.claude.com/docs"`, `"https://claude.com/pricing"`, `"https://a.claude.ai"`} {
+		if v := violations("internal/x/x.go", src(ok)); len(v) != 0 {
+			t.Errorf("%s flagged: %v", ok, v)
+		}
+	}
+	for _, bad := range []string{`".claude"`, `"~/.claude/x"`, `filepath.Join(h, ".claude")`, `"~/.claude.json"`,
+		`"https://x.com/.claude.com/y"`, `"https://platform.claude.com/ok" + "~/.claude.json"`, `"https://h/a/.claude.b"`} {
+		if len(violations("internal/x/x.go", src(bad))) == 0 {
+			t.Errorf("%s not flagged", bad)
+		}
+	}
 }
 
 func TestGateCatchesAPlantedPath(t *testing.T) {

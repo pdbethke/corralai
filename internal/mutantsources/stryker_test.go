@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"os"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -589,5 +590,73 @@ func TestStrykerPathsNamesTheReportedFiles(t *testing.T) {
 		if _, err := StrykerPaths([]byte(bad)); err == nil {
 			t.Errorf("%s: StrykerPaths accepted a report ReadStryker refuses", name)
 		}
+	}
+}
+
+// Final review, Minor 7: the report's id, mutatorName, status and
+// framework.version reach the signed record (mutant ids, SourceOperator,
+// SourceTool, ToolMutants' status counts). Each is restricted to a plain
+// token first; a hostile value (a newline, a host path, a very long string)
+// is recorded as a fixed phrase, and the mutant is still graded when it is
+// otherwise valid. Two different hostile ids stay two mutants.
+func TestStrykerValuesReachTheRecordOnlyAsPlainTokens(t *testing.T) {
+	src := "a();\nb();\nc();\n"
+	hostile := []string{"1\n/home/someone/zz-marker", "../../etc/passwd", strings.Repeat("9", 500)}
+	type pos struct {
+		Line   int `json:"line"`
+		Column int `json:"column"`
+	}
+	var ms []map[string]any
+	for i, id := range hostile {
+		ms = append(ms, map[string]any{
+			"id": id, "mutatorName": "Op\n/home/someone/zz-marker", "replacement": "x()", "status": "Survived",
+			"location": map[string]pos{"start": {i + 1, 1}, "end": {i + 1, 4}},
+		})
+	}
+	ms = append(ms, map[string]any{
+		"id": "plain-7", "mutatorName": "BlockStatement", "replacement": "x()", "status": "Weird /home/someone/zz-marker",
+		"location": map[string]pos{"start": {1, 1}, "end": {1, 4}},
+	})
+	rep, err := json.Marshal(map[string]any{
+		"schemaVersion": "1.0",
+		"framework":     map[string]any{"name": "StrykerJS", "version": "10.0.0\n/home/someone/zz-marker"},
+		"files":         map[string]any{"f.js": map[string]any{"language": "javascript", "source": src, "mutants": ms}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadStryker(rep, map[string][]byte{"f.js": []byte(src)}, budgetOf(10), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fm := got["f.js"]
+	if len(fm.Taken) != len(hostile) {
+		t.Fatalf("taken %d mutants, want all %d hostile-id survivors still graded: %+v", len(fm.Taken), len(hostile), fm.Counts)
+	}
+	plain := regexp.MustCompile(`^[A-Za-z0-9._@+-]{1,80}$`)
+	recorded := []string{fm.Tool}
+	for _, m := range fm.Taken {
+		if !strings.HasPrefix(m.ID, "t/stryker/") || !plain.MatchString(strings.TrimPrefix(m.ID, "t/stryker/")) {
+			t.Errorf("mutant id %q is not t/stryker/<plain token>", m.ID)
+		}
+		s := fm.Sources[m.ID]
+		recorded = append(recorded, m.ID, s.Tool, s.Operator, s.Status)
+	}
+	for k := range fm.Counts {
+		recorded = append(recorded, k)
+	}
+	for _, v := range recorded {
+		if strings.Contains(v, "zz-marker") || strings.Contains(v, "\n") || strings.Contains(v, "passwd") || len(v) > 100 {
+			t.Errorf("a recorded value carries the report's raw text: %q", v)
+		}
+	}
+	if fm.Tool != "stryker@"+NotAPlainToken || fm.Sources[fm.Taken[0].ID].Operator != NotAPlainToken {
+		t.Errorf("tool %q operator %q, want the fixed phrase", fm.Tool, fm.Sources[fm.Taken[0].ID].Operator)
+	}
+	if fm.Counts[NotAPlainToken] != 1 {
+		t.Errorf("the hostile status is not counted under the fixed phrase: %+v", fm.Counts)
+	}
+	if tool, _ := StrykerTool(rep); tool != fm.Tool {
+		t.Errorf("StrykerTool = %q, want ReadStryker's %q", tool, fm.Tool)
 	}
 }

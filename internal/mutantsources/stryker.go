@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"path"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -99,6 +100,37 @@ const (
 	// indistinguishable there; the first is kept.
 	dropDuplicateID = "dropped:duplicate-id"
 )
+
+// NotAPlainToken is what the record holds in place of a report value
+// (a mutant's id, mutatorName or status, the framework version) that is not
+// a plain token: the report is the operator's file, the record is public and
+// signed, and a free-text value from it could carry a newline, a host path
+// or a page of text. A fixed phrase because it is recorded.
+const NotAPlainToken = "not-a-plain-token"
+
+// plainToken matches a report value the record may hold as written: the
+// characters a Stryker id, mutator name, status or version uses in
+// practice, bounded so no value can be a page of text.
+var plainToken = regexp.MustCompile(`^[A-Za-z0-9._@+-]{1,64}$`)
+
+// recordable is v as the record holds it: v when it is a plain token or
+// empty (an absent value stays absent), else NotAPlainToken.
+func recordable(v string) string {
+	if v == "" || plainToken.MatchString(v) {
+		return v
+	}
+	return NotAPlainToken
+}
+
+// strykerMutantID is a Stryker mutant's id on the record. An id that is not
+// a plain token is named by a digest of it, never its text, so two
+// different hostile ids stay two mutants and the same one stays one.
+func strykerMutantID(id string) string {
+	if id == "" || plainToken.MatchString(id) {
+		return "t/stryker/" + id
+	}
+	return "t/stryker/" + NotAPlainToken + "-" + sha256Hex([]byte(id))[:16]
+}
 
 // strykerReport is the part of the mutation-testing-report-schema JSON this
 // reader uses. The shape was read from a real StrykerJS 10.0.0 report
@@ -193,11 +225,12 @@ func ReadStryker(reportJSON []byte, files map[string][]byte, budget func(path st
 		// cannot stand in for a first that failed its proof.
 		seen := map[string]bool{}
 		for _, sm := range rf.Mutants {
-			fm.Counts[sm.Status]++
-			if !takenStatuses[sm.Status] {
+			status := recordable(sm.Status)
+			fm.Counts[status]++
+			if !takenStatuses[status] {
 				continue
 			}
-			id := "t/stryker/" + sm.ID
+			id := strykerMutantID(sm.ID)
 			if seen[id] {
 				fm.Counts[dropDuplicateID]++
 				continue
@@ -214,7 +247,7 @@ func ReadStryker(reportJSON []byte, files map[string][]byte, budget func(path st
 				continue
 			}
 			candidates = append(candidates, m)
-			sources[id] = MutantSource{Kind: KindTool, Tool: tool, Operator: sm.MutatorName, Status: sm.Status}
+			sources[id] = MutantSource{Kind: KindTool, Tool: tool, Operator: recordable(sm.MutatorName), Status: status}
 		}
 		fm.Taken = spreadSample(candidates, n, seed)
 		if d := len(candidates) - len(fm.Taken); d > 0 {
@@ -268,7 +301,7 @@ func StrykerTool(reportJSON []byte) (string, error) {
 	return strykerTool(rep), nil
 }
 
-func strykerTool(rep strykerReport) string { return "stryker@" + rep.Framework.Version }
+func strykerTool(rep strykerReport) string { return "stryker@" + recordable(rep.Framework.Version) }
 
 // parseStryker reads a report and refuses one whose framework or version
 // this package cannot vouch for.

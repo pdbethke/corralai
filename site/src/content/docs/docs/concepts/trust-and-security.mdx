@@ -192,6 +192,28 @@ Keyless signing has been exercised only against an in-process test Fulcio and
 Rekor; it has not yet been run end to end in GitHub Actions. The run must have
 the `id-token: write` permission, which keyless signing requires.
 
+Every verified entry reads at one of five levels, in the same words
+everywhere it is shown:
+
+- `unsigned`: nothing shows who wrote it
+- `keyless-unpinned`: signed keylessly by a GitHub Actions workflow of this
+  repository, on the ref it names; any branch could have signed, because no
+  workflow is pinned
+- `keyless-pinned`: signed keylessly by the workflow and ref this ledger's root
+  pinned
+- `keyless-pinned-unchecked`: signed keylessly by the workflow and ref this
+  ledger's pin names; the pin was not checked against a root key you named
+- `key`: signed by a key this ledger's root holds or registered
+
+A keyless entry records the workflow, ref and trigger its certificate names.
+Every keyless entry reads `keyless-unpinned` until the ledger's owner opts in to
+a pin with `corral ledger signer pin` (one root-signed entry naming the workflow
+and the full ref); afterwards an entry from any other workflow or ref fails
+verification. The pin's root key is trust on first use: `LEDGER_PUBKEY` lives on
+the ledger branch, so also publish the root public key outside it (for example
+on your default branch) and pass it with `--pub`. The pin is tested against an
+in-process test Sigstore; a real GitHub Actions run with a pin is owed.
+
 Verification is therefore *against a repository you name*:
 
 ```bash

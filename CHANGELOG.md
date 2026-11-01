@@ -13,6 +13,19 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ### Added
 
+- **Signature levels, and an opt-in keyless workflow pin.** Every verified
+  ledger entry now reads at one of five levels (`unsigned`, `keyless-unpinned`,
+  `keyless-pinned`, `keyless-pinned-unchecked`, `key`) in `corral verify`,
+  `corral ui`, the public site and `--json`, and a keyless entry records the
+  workflow, ref and trigger its certificate names. **Existing keyless entries
+  now read "unpinned"**: that is what they always were (any branch of the
+  repository could have signed), now said. Nothing that verified before stops
+  verifying. `corral ledger signer pin` / `unpin` let the ledger's owner pin the
+  workflow and ref allowed to sign; an entry outside the pin fails, entries
+  before it keep their level. `corral setup` prints the filled-in command when
+  the checkout's workflow uses the Action with a ledger, and writes nothing.
+  Tested against an in-process test Sigstore only; a real Action run with a pin
+  is owed. See [`docs/corral/github-action.md`](docs/corral/github-action.md).
 - **The signed record now holds every number a certify run prints, or a
   written reason why not, and every field says what it can be trusted
   for.** Each recorded field carries one of four

@@ -18,9 +18,7 @@ func TestHostConditionsAreMeasuredOnLinux(t *testing.T) {
 		t.Skip("the readers are Linux's; hoststat_other.go is tested below")
 	}
 	s := Start(10 * time.Millisecond)
-	end := time.Now().Add(50 * time.Millisecond)
-	for time.Now().Before(end) {
-	}
+	spinCPU(t, 50*time.Millisecond)
 	if err := exec.Command("true").Run(); err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +30,7 @@ func TestHostConditionsAreMeasuredOnLinux(t *testing.T) {
 		t.Errorf("peak %v below start %v or end %v", *c.LoadPeak, *c.LoadStart, *c.LoadEnd)
 	}
 	if *c.CPUMillis < 40 {
-		t.Errorf("CPUMillis = %d after a 50ms spin", *c.CPUMillis)
+		t.Errorf("CPUMillis = %d after spending 50ms of CPU", *c.CPUMillis)
 	}
 	if c.WallMillis < 50 {
 		t.Errorf("WallMillis = %d", c.WallMillis)

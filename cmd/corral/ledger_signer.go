@@ -35,11 +35,11 @@ const ledgerRootKeyEnv = "CORRALAI_LEDGER_ROOT_KEY"
 func rootSignerFromEnv() (auditpush.Ed25519LedgerSigner, ed25519.PublicKey, error) {
 	raw := os.Getenv(ledgerRootKeyEnv)
 	if strings.TrimSpace(raw) == "" {
-		return auditpush.Ed25519LedgerSigner{}, nil, fmt.Errorf("%s is not set — a root operation needs the ledger's root seed (hex Ed25519), which lives offline: `pass show corralai/ledger-root-key`. The machine's certify key is never used as the root", ledgerRootKeyEnv)
+		return auditpush.Ed25519LedgerSigner{}, nil, fmt.Errorf("%s is not set — a root operation needs the ledger's root seed (hex Ed25519), which you keep offline; set it from there for this one command. The machine's certify key is never used as the root", ledgerRootKeyEnv)
 	}
 	priv, err := buildstore.ParseSigningKeySeed([]byte(raw))
 	if err != nil {
-		return auditpush.Ed25519LedgerSigner{}, nil, fmt.Errorf("%s is not a hex-encoded 32-byte Ed25519 seed — `pass show corralai/ledger-root-key`", ledgerRootKeyEnv)
+		return auditpush.Ed25519LedgerSigner{}, nil, fmt.Errorf("%s is not a hex-encoded 32-byte Ed25519 seed — set it to the ledger's root seed, from where you keep it offline", ledgerRootKeyEnv)
 	}
 	pub := priv.Public().(ed25519.PublicKey)
 	return auditpush.Ed25519LedgerSigner{KeyID: auditpush.KeyFingerprint(pub), Key: priv}, pub, nil

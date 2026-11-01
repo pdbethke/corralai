@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
@@ -16,6 +17,7 @@ import (
 	"github.com/pdbethke/corralai/internal/buildstore"
 	"github.com/pdbethke/corralai/internal/ledger"
 	"github.com/pdbethke/corralai/internal/ledger/ledgertest"
+	"github.com/pdbethke/corralai/internal/statedir"
 )
 
 const (
@@ -342,5 +344,159 @@ func TestPinNeverPushes(t *testing.T) {
 	}
 	if !strings.Contains(out, "git -C "+dir+" push") {
 		t.Fatalf("the push command is not printed:\n%s", out)
+	}
+}
+
+// newRootPinned is a keyless ledger the owner just rooted and pinned with
+// --new-root: one keyless entry, then the pin. It returns the seed written.
+func newRootPinned(t *testing.T, s *ledgertest.Sigstore, dir string) string {
+	t.Helper()
+	appendKeyless(t, s, dir, "aaaa1111", pinClaims())
+	seedPath := filepath.Join(t.TempDir(), "root.seed")
+	if code, out := run(t, pinArgs(dir, "--repo-id", pinTestRepoID, "--new-root", "--root-key-out", seedPath)...); code != 0 {
+		t.Fatalf("pin --new-root: exit %d\n%s", code, out)
+	}
+	raw, err := os.ReadFile(seedPath) // #nosec G304 -- the test's own temp file
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.TrimSpace(string(raw))
+}
+
+// The seed is never written where corral reads a signing key of its own:
+// the certify key file (wherever CORRALAI_CERTIFY_KEY_FILE moves it) holds
+// exactly this format, and every later certify would sign as the root.
+func TestPinNewRootRefusesASeedPathCorralReadsAsAKey(t *testing.T) {
+	s := keylessPinEnv(t)
+	dir := t.TempDir()
+	appendKeyless(t, s, dir, "aaaa1111", pinClaims())
+	certifyKey := filepath.Join(t.TempDir(), "certify.key")
+	t.Setenv("CORRALAI_CERTIFY_KEY_FILE", certifyKey)
+	state, err := statedir.Dir(statedir.State)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ path, want string }{
+		{certifyKey, "CORRALAI_CERTIFY_KEY_FILE"},
+		{filepath.Join(state, "root.seed"), "state directory"},
+		{filepath.Join(state, "corralai_certify_key"), "state directory"},
+	} {
+		code, out := run(t, pinArgs(dir, "--repo-id", pinTestRepoID, "--new-root", "--root-key-out", tc.path)...)
+		if code == 0 || !strings.Contains(out, tc.want) || !strings.Contains(out, "never written where corral looks for keys") {
+			t.Fatalf("%s: exit %d, want a refusal naming %q:\n%s", tc.path, code, tc.want, out)
+		}
+		if _, err := os.Stat(tc.path); !os.IsNotExist(err) {
+			t.Fatalf("%s was written (%v)", tc.path, err)
+		}
+	}
+	if n := ledgerFileCount(t, dir); n != 1 {
+		t.Fatalf("%d entries after refusals, want 1", n)
+	}
+}
+
+// A first-time keyless owner who leaves out --new-root is told it is the way.
+func TestPinWithoutNewRootOnARootlessLedgerSaysHowToMakeOne(t *testing.T) {
+	s := keylessPinEnv(t)
+	dir := t.TempDir()
+	appendKeyless(t, s, dir, "aaaa1111", pinClaims())
+	t.Setenv(ledgerRootKeyEnv, seedHex(0x11))
+	code, out := run(t, pinArgs(dir, "--repo-id", pinTestRepoID)...)
+	if code != 2 || !strings.Contains(out, "has no root yet") || !strings.Contains(out, "--new-root --root-key-out <path>") {
+		t.Fatalf("exit %d, want the refusal pointing at --new-root:\n%s", code, out)
+	}
+	if n := ledgerFileCount(t, dir); n != 1 {
+		t.Fatalf("%d entries, want 1", n)
+	}
+}
+
+// After the first pin the owner holds the root seed in the environment, and
+// unpin and a second pin go through the root gate on the keyless chain; each
+// keyless entry is judged by the pin in force where it stands.
+func TestUnpinThenRepinUnderTheNewRoot(t *testing.T) {
+	s := keylessPinEnv(t)
+	dir := t.TempDir()
+	seed := newRootPinned(t, s, dir)
+	appendKeyless(t, s, dir, "bbbb2222", pinClaims())
+	t.Setenv(ledgerRootKeyEnv, seed)
+	if code, out := run(t, "signer", "unpin", dir, "--ledger-repo", testKeylessRepo, "--reason", "moving the workflow"); code != 0 {
+		t.Fatalf("unpin: exit %d\n%s", code, out)
+	}
+	appendKeyless(t, s, dir, "cccc3333", pinClaims())
+	if code, out := run(t, pinArgs(dir, "--repo-id", pinTestRepoID)...); code != 0 {
+		t.Fatalf("second pin: exit %d\n%s", code, out)
+	}
+	appendKeyless(t, s, dir, "dddd4444", pinClaims())
+	rawPub, _ := hex.DecodeString(pubHexOfSeed(t, seed))
+	trust, err := ledgerTrust(rawPub, testKeylessRepo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checks, err := auditpush.VerifyLedgerDirTrust(dir, trust)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []ledger.SigLevel{ledger.LevelKeylessUnpinned, "", ledger.LevelKeylessPinned, "", ledger.LevelKeylessUnpinned, "", ledger.LevelKeylessPinned}
+	if len(checks) != len(want) {
+		t.Fatalf("%d entries, want %d", len(checks), len(want))
+	}
+	for i, c := range checks {
+		if c.Problem != "" {
+			t.Fatalf("%s: %s", c.File, c.Problem)
+		}
+		if want[i] != "" && c.Level != want[i] {
+			t.Errorf("entry %d (%s): level %q, want %q", i, c.File, c.Level, want[i])
+		}
+		if want[i] == "" && c.Level != ledger.LevelKey {
+			t.Errorf("entry %d (%s), a root-signed signer entry: level %q, want %q", i, c.File, c.Level, ledger.LevelKey)
+		}
+	}
+}
+
+// A --repo-id the chain's own keyless entries contradict is a mistake, not
+// a pin: refused, naming both ids.
+func TestPinRefusesARepoIDTheChainContradicts(t *testing.T) {
+	s := keylessPinEnv(t)
+	dir := t.TempDir()
+	appendKeyless(t, s, dir, "aaaa1111", pinClaims())
+	for _, args := range [][]string{
+		pinArgs(dir, "--repo-id", "9999", "--new-root", "--root-key-out", filepath.Join(t.TempDir(), "root.seed")),
+	} {
+		code, out := run(t, args...)
+		if code != 2 || !strings.Contains(out, "9999") || !strings.Contains(out, pinTestRepoID) {
+			t.Fatalf("exit %d, want a refusal naming 9999 and %s:\n%s", code, pinTestRepoID, out)
+		}
+	}
+	// A fetched id is held to the same rule.
+	fetchRepoID = func(context.Context, string) (string, error) { return "9999", nil }
+	seedPath := filepath.Join(t.TempDir(), "root.seed")
+	if code, out := run(t, pinArgs(dir, "--new-root", "--root-key-out", seedPath)...); code != 2 || !strings.Contains(out, "9999") {
+		t.Fatalf("fetched id: exit %d\n%s", code, out)
+	}
+	if _, err := os.Stat(seedPath); !os.IsNotExist(err) {
+		t.Fatalf("a seed was written for a refused pin (%v)", err)
+	}
+	if n := ledgerFileCount(t, dir); n != 1 {
+		t.Fatalf("%d entries, want 1", n)
+	}
+}
+
+// A reader with only the repository name, no root key, still verifies a
+// pinned keyless ledger: the barrier to reading is never raised by a pin.
+// The pinned entry reads as pinned-but-unchecked, never as checked.
+func TestVerifyWithoutPubStillPassesAfterAPin(t *testing.T) {
+	s := keylessPinEnv(t)
+	dir := t.TempDir()
+	newRootPinned(t, s, dir)
+	appendKeyless(t, s, dir, "bbbb2222", pinClaims())
+	var out, errb bytes.Buffer
+	if code := runVerifyLedger(dir, "", testKeylessRepo, "", &out, &errb); code != 0 {
+		t.Fatalf("verify --ledger-repo without --pub: exit %d\n%s%s", code, out.String(), errb.String())
+	}
+	t.Logf("verify output:\n%s%s", out.String(), errb.String())
+	if !strings.Contains(out.String(), ledger.LevelSentence(ledger.LevelKeylessPinnedUnchecked)) {
+		t.Fatalf("the pinned entry does not read as pinned-unchecked:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), ledger.LevelSentence(ledger.LevelKeylessPinned)) {
+		t.Fatalf("with no root key a pinned entry read as checked:\n%s", out.String())
 	}
 }

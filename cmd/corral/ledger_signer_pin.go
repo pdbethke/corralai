@@ -20,6 +20,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/ledger"
+	"github.com/pdbethke/corralai/internal/statedir"
 )
 
 // ledgerPubKeyFile is the file at the root of a ledger directory that names
@@ -119,8 +120,17 @@ func runSignerPin(args []string, stdout, stderr io.Writer) int {
 		if !newRootGate(dir, repo, *rootKeyOut, stderr) {
 			return 2
 		}
-	} else if root, _, ok = rootGate(verb, dir, repo, stderr); !ok {
-		return 2
+	} else {
+		// A first pin on a keyless ledger has no root to sign it, and
+		// rootGate's refusals (no seed set, no entry the root signed) would
+		// never say that --new-root is the way to make one.
+		if entries, err := auditpush.ReadLedgerDir(dir); err == nil && !hasKeySignedEntry(entries) {
+			fmt.Fprintf(stderr, "corral ledger signer pin: %s has no root yet — no entry in it is signed by an ed25519 key, so no seed can sign a pin for it. To make the root and pin in one step, pass --new-root --root-key-out <path> (the seed is written there, 0600, for you to store offline); nothing written\n", dir)
+			return 2
+		}
+		if root, _, ok = rootGate(verb, dir, repo, stderr); !ok {
+			return 2
+		}
 	}
 	id := strings.TrimSpace(*repoID)
 	if id == "" {
@@ -131,6 +141,10 @@ func runSignerPin(args []string, stdout, stderr io.Writer) int {
 		}
 		id = got
 		fmt.Fprintf(stdout, "repository id of %s, read from api.github.com: %s\n", repo, id)
+	}
+	if msg := repoIDMismatch(dir, repo, id); msg != "" {
+		fmt.Fprintf(stderr, "corral ledger signer pin: %s; nothing written\n", msg)
+		return 2
 	}
 	pin := &auditpush.KeylessPin{RepoID: id}
 	for i := range workflows {
@@ -270,8 +284,11 @@ func newRootGate(dir, repo, seedOut string, stderr io.Writer) bool {
 	if err != nil {
 		return no("%v", err)
 	}
-	for _, e := range entries {
-		if e.Signature != "" {
+	if hasKeySignedEntry(entries) {
+		for _, e := range entries {
+			if e.Signature == "" {
+				continue
+			}
 			return no("this chain already has a root; set CORRALAI_LEDGER_ROOT_KEY to that root's seed and drop --new-root (%s is ed25519-signed by %s)", e.File, e.KeyID)
 		}
 	}
@@ -301,33 +318,124 @@ func newRootGate(dir, repo, seedOut string, stderr io.Writer) bool {
 	} else if inside {
 		return no("--root-key-out %s is inside the ledger directory %s, where publishing the ledger would publish the seed", seedOut, dir)
 	}
+	if why, err := keyPathConflict(seedOut); err != nil {
+		return no("--root-key-out %s: %v", seedOut, err)
+	} else if why != "" {
+		return no("--root-key-out %s %s", seedOut, why)
+	}
 	return true
+}
+
+// hasKeySignedEntry reports whether any entry carries an ed25519 signature:
+// the mark of a chain that already has a root (a signer entry or checkpoint
+// is always root-signed, and a keyless entry carries a bundle, not a
+// Signature).
+func hasKeySignedEntry(entries []auditpush.LedgerEntry) bool {
+	for _, e := range entries {
+		if e.Signature != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// keyPathConflict refuses a seed destination where corral reads a signing
+// key of its own. The certify key file holds a hex Ed25519 seed, exactly
+// what --new-root writes, and is often absent, so O_EXCL does not stop it:
+// a root seed written there would sign every later certify, review and demo
+// entry as the root. The rule is the state directory as a whole, plus each
+// key file wherever its override variable moves it. The reason is "" when
+// the path is clear.
+func keyPathConflict(seedOut string) (string, error) {
+	if state, err := statedir.Dir(statedir.State); err == nil {
+		inside, err := pathWithin(seedOut, state)
+		if err != nil {
+			return "", err
+		}
+		if inside {
+			return fmt.Sprintf("is inside corral's state directory %s, where corral keeps the signing keys it reads; a root seed is never written where corral looks for keys", state), nil
+		}
+	}
+	for _, f := range []statedir.File{statedir.CertifyKey, statedir.BrainKey} {
+		keyPath := strings.TrimSpace(os.Getenv(f.Override))
+		if keyPath == "" {
+			continue // the default location is inside the state directory, checked above
+		}
+		same, err := pathWithin(seedOut, keyPath)
+		if err != nil {
+			return "", err
+		}
+		if same {
+			return fmt.Sprintf("is the file %s names (%s), which corral reads as a signing key; a root seed is never written where corral looks for keys", f.Override, keyPath), nil
+		}
+	}
+	return "", nil
+}
+
+// repoIDMismatch compares the pin's repository id with the id every
+// verified keyless entry's certificate already carries: a pin naming a
+// different id would refuse the very runs that signed this chain, which is
+// a mistyped --repo-id (or a lookup that reached another repository), not
+// an owner's intent. "" when nothing disagrees.
+func repoIDMismatch(dir, repo, id string) string {
+	trust, err := ledgerTrust(nil, repo)
+	if err != nil {
+		return err.Error()
+	}
+	checks, err := auditpush.VerifyLedgerDirTrust(dir, trust)
+	if err != nil {
+		return err.Error()
+	}
+	for _, c := range checks {
+		if c.Cert != nil && c.Cert.RepoID != "" && c.Cert.RepoID != id {
+			return fmt.Sprintf("the pin names repository id %s, but %s was signed by a run of repository id %s — check --repo-id", id, c.File, c.Cert.RepoID)
+		}
+	}
+	return ""
 }
 
 // pathWithin reports whether path is dir or under it, after both are made
 // absolute and their existing directories' symlinks resolved, so a symlink
 // or a ".." cannot place the seed in the ledger directory unnoticed.
 func pathWithin(path, dir string) (bool, error) {
-	realDir, err := filepath.EvalSymlinks(dir)
+	realDir, err := resolvePath(dir)
 	if err != nil {
 		return false, err
 	}
-	if realDir, err = filepath.Abs(realDir); err != nil {
-		return false, err
-	}
-	abs, err := filepath.Abs(path)
+	realPath, err := resolvePath(path)
 	if err != nil {
 		return false, err
 	}
-	parent := filepath.Dir(abs)
-	if realParent, err := filepath.EvalSymlinks(parent); err == nil {
-		parent = realParent
-	}
-	rel, err := filepath.Rel(realDir, filepath.Join(parent, filepath.Base(abs)))
+	rel, err := filepath.Rel(realDir, realPath)
 	if err != nil {
 		return false, err
 	}
 	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))), nil
+}
+
+// resolvePath makes p absolute and resolves symlinks in as much of it as
+// exists: the deepest existing ancestor is resolved and the missing rest
+// re-joined, so a path that does not exist yet (the seed's destination, a
+// state directory not yet made) is compared by where it would land.
+func resolvePath(p string) (string, error) {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return "", err
+	}
+	rest := ""
+	for cur := abs; ; {
+		if real, err := filepath.EvalSymlinks(cur); err == nil {
+			return filepath.Join(real, rest), nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return abs, nil
+		}
+		rest = filepath.Join(filepath.Base(cur), rest)
+		cur = parent
+	}
 }
 
 // writeNewRoot writes the seed to seedOut (0600, refusing a file that

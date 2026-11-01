@@ -101,7 +101,6 @@ func stripLeading(s string) string {
 // the single implementation; parseMutants discards the diagnosis.
 func parseMutantsDiag(resp, original string) ([]adequacy.Mutant, MutantParseDiag) {
 	const mark = "===MUTATION_"
-	parentHash := hex.EncodeToString(sha256Sum(original))
 	var out []adequacy.Mutant
 	var d MutantParseDiag
 
@@ -118,11 +117,12 @@ func parseMutantsDiag(resp, original string) ([]adequacy.Mutant, MutantParseDiag
 			d.Malformed++
 			continue
 		}
-		switch {
-		case search == "" || search == replace:
+		m, why := ProveHunk(original, fmt.Sprintf("m%d", len(out)+1), search, replace)
+		switch why {
+		case HunkNoOp:
 			d.NoOp++
 			continue
-		case !strings.Contains(original, search):
+		case HunkAnchorNotFound:
 			d.AnchorNotFound++
 			// Would it have matched but for indentation? That is the difference
 			// between "this model cannot do the task" and "this model is one
@@ -131,37 +131,81 @@ func parseMutantsDiag(resp, original string) ([]adequacy.Mutant, MutantParseDiag
 				d.WhitespaceOnly++
 			}
 			continue
-		}
-		// The hunk is VALIDATED here and then KEPT as the mutant. Apply is the
-		// same algorithm that used to run at this point and materialise the
-		// whole file; the difference is that the file it produces is thrown
-		// away and re-made inside the jail, so nothing between here and there
-		// carries a copy of the source.
-		m := adequacy.Mutant{
-			ID:           fmt.Sprintf("m%d", len(out)+1),
-			ParentSHA256: parentHash,
-			// VERBATIM, whatever the model emitted. stripLeading above is a
-			// DIAGNOSIS and never an anchor: a SEARCH whose indentation was
-			// mangled is counted and dropped, never matched loosely. So the
-			// only anchors that reach a Mutant are ones that matched these
-			// exact bytes, and storing them as-is reproduces this same splice.
-			Search:  search,
-			Replace: replace,
-		}
-		if _, aerr := m.Apply(original); aerr != nil {
-			// Apply refused after the anchor was known present, so the
-			// remaining causes are non-uniqueness and the integrity round-trip.
-			i := strings.Index(original, search)
-			if strings.Contains(original[i+len(search):], search) {
-				d.AnchorNotUnique++
-			} else {
-				d.IntegrityFailed++
-			}
+		case HunkAnchorNotUnique:
+			d.AnchorNotUnique++
+			continue
+		case HunkIntegrityFailed:
+			d.IntegrityFailed++
 			continue
 		}
-		m.Span = adequacy.HunkSpan(original, search)
 		d.Kept++
 		out = append(out, m)
 	}
 	return out, d
+}
+
+// HunkRejection names why ProveHunk refused a hunk. HunkProven (empty) means
+// it did not.
+type HunkRejection string
+
+const (
+	HunkProven HunkRejection = ""
+	// HunkNoOp is an empty SEARCH, or a REPLACE identical to it.
+	HunkNoOp HunkRejection = "no-op"
+	// HunkAnchorNotFound means SEARCH is absent from the original's bytes.
+	HunkAnchorNotFound HunkRejection = "anchor-not-found"
+	// HunkAnchorNotUnique means SEARCH occurs more than once, so the edit
+	// site is ambiguous.
+	HunkAnchorNotUnique HunkRejection = "anchor-not-unique"
+	// HunkIntegrityFailed means Apply refused the edit for a reason other
+	// than the three above.
+	HunkIntegrityFailed HunkRejection = "integrity-failed"
+)
+
+// ProveHunk is THE single-region proof a mutant must pass before corral will
+// grade it: SEARCH is non-empty, differs from REPLACE, and occurs exactly once
+// in original, so the mutant is a provable single-point edit of those bytes.
+// The mutant it returns carries original's hash as ParentSHA256 and the span
+// SEARCH occupies, which is what lets Apply later refuse any other bytes.
+//
+// It is exported, and parseMutantsDiag is built on it, so that a mutant from
+// another producer — a mutation tool's report, translated into a hunk — is
+// held to exactly the check a model's block is, and not to a second copy that
+// could drift from it. The check itself is adequacy.Mutant.Apply; this only
+// names which of its refusals happened.
+func ProveHunk(original, id, search, replace string) (adequacy.Mutant, HunkRejection) {
+	switch {
+	case search == "" || search == replace:
+		return adequacy.Mutant{}, HunkNoOp
+	case !strings.Contains(original, search):
+		return adequacy.Mutant{}, HunkAnchorNotFound
+	}
+	// The hunk is VALIDATED here and then KEPT as the mutant. Apply is the
+	// same algorithm that used to run at this point and materialise the
+	// whole file; the difference is that the file it produces is thrown
+	// away and re-made inside the jail, so nothing between here and there
+	// carries a copy of the source.
+	m := adequacy.Mutant{
+		ID:           id,
+		ParentSHA256: hex.EncodeToString(sha256Sum(original)),
+		// VERBATIM, whatever the producer emitted. parseMutantsDiag's
+		// stripLeading is a DIAGNOSIS and never an anchor: a SEARCH whose
+		// indentation was mangled is counted and dropped, never matched
+		// loosely. So the only anchors that reach a Mutant are ones that
+		// matched these exact bytes, and storing them as-is reproduces this
+		// same splice.
+		Search:  search,
+		Replace: replace,
+	}
+	if _, err := m.Apply(original); err != nil {
+		// Apply refused after the anchor was known present, so the
+		// remaining causes are non-uniqueness and the integrity round-trip.
+		i := strings.Index(original, search)
+		if strings.Contains(original[i+1:], search) {
+			return adequacy.Mutant{}, HunkAnchorNotUnique
+		}
+		return adequacy.Mutant{}, HunkIntegrityFailed
+	}
+	m.Span = adequacy.HunkSpan(original, search)
+	return m, HunkProven
 }

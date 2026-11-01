@@ -11,6 +11,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path"
@@ -37,6 +38,7 @@ import (
 	"github.com/pdbethke/corralai/internal/scanstore"
 	"github.com/pdbethke/corralai/internal/shadowpool"
 	"github.com/pdbethke/corralai/internal/statedir"
+	"github.com/pdbethke/corralai/internal/testmap"
 )
 
 // defaultScanTop bounds a scan by default. Provisional: large enough to be
@@ -87,6 +89,8 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	jsonOut := fs.Bool("json", false, "with --dry-run, emit the repository's audit surface as JSON instead of the human report: per-language counts, every auditable file with its inferred test pairing, and the machine-stable exclusion tally. Needs no key, no jail and no money — it is the free inventory a UI or a tenant's own tooling can consume instead of scraping stdout")
 	substrateFlag := fs.String("substrate", substrateJail, "where the audit runs: "+substrateJail+" (bwrap) or "+substrateWorkspace+" (mutate --repo in place; the caller IS the isolation boundary, e.g. an ephemeral CI runner)")
 	jailFlag := fs.String("jail", "", "sandbox backend for --substrate jail: bwrap (Linux) or container, or sandbox-exec (macOS) (default: auto-detect for this OS). \"container\" runs every test command in CORRALAI_EXEC_IMAGE, an image carrying the project's toolchain, so nothing has to be installed on the host")
+	seedLimitFlag := fs.Int("seed-limit", 0, seedLimitHelp+". --substrate jail only")
+	evidenceTimeoutFlag := fs.Duration("evidence-timeout", 0, evidenceTimeoutHelp)
 	pathFlag := fs.String("path", "", "bound the scan to this subtree of --repo (a directory, relative to it), keeping the repository whole: tests are still found anywhere in it, and the audit's copies still carry the root's build files (a Cargo workspace manifest, a monorepo's package.json). Pair it with a test command scoped the same way, e.g. cargo test -p <crate>")
 	diffBase := fs.String("diff-base", "", "bound the scan to files changed since this git ref: every candidate that changed, or whose paired test changed, is audited. In a PR the diff IS the bound, so the default --top does not apply on this path; an EXPLICIT --top still does, auditing that many of the changed files by rank and reporting the rest as not audited")
 	pushFlag := fs.String("push", "", "append this scan's per-file verdicts to a DuckDB you own — a path, or `md:<db>` for MotherDuck (which reads motherduck_token from the environment; the database is created on first push if it does not already exist — a MotherDuck SHARE is a read target and cannot be pushed to). corral has no hosted tier and keeps nothing: the warehouse is yours, and any DuckDB works, so this is a destination rather than a lock-in. Append-only. Every row carries the ledger's scan id (0 when --record was not given), and — traceable only with --attest — the sha256 of the signed statement it came from, so a row can be checked against something a third party can verify; without --attest, statement_sha256 is honestly empty rather than fabricated; and with --attest, a statement that FAILS to write withholds the push too, since a row that cannot name the statement it came from is not written. It answers what one pull request cannot — a single kill rate is a sample, and the same unchanged diff has scored 0.85 and 0.90; forty of them are a distribution")
@@ -319,6 +323,38 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	}
 	if *jailFlag != "" && *substrateFlag == substrateWorkspace {
 		fmt.Fprintf(stderr, "corral certify --repo: --jail %s has no effect with --substrate %s, which runs no sandbox; drop one of them\n", *jailFlag, substrateWorkspace)
+		return 2
+	}
+	// The two operator-settable bounds (run_bounds.go). --seed-limit bounds
+	// the jail's seed, and the workspace substrate builds none, so there it
+	// would be a setting that silently does nothing.
+	if flagWasSet(fs, "seed-limit") && *substrateFlag == substrateWorkspace {
+		fmt.Fprintf(stderr, "corral certify --repo: --seed-limit has no effect with --substrate %s, which seeds no jail; drop it\n", substrateWorkspace)
+		return 2
+	}
+	// A dry run without --evidence builds no executor: no seed, no pass,
+	// so neither bound would be read.
+	if *dryRun && !*evidenceFlag {
+		for _, name := range []string{"seed-limit", "evidence-timeout"} {
+			if flagWasSet(fs, name) {
+				fmt.Fprintf(stderr, "corral certify --repo: --%s has no effect on --dry-run without --evidence, which runs no evidence pass and seeds no jail; add --evidence or drop it\n", name)
+				return 2
+			}
+		}
+	}
+	// --evidence-timeout is NOT refused under --whole-suite: the unit pass
+	// still runs there (candidacy needs it) and reads the bound. Only
+	// Python's instrumented run is skipped, and which language a scan
+	// resolves is not known until enumeration, so that case is said on the
+	// selection line instead (evidenceTimeoutUnused).
+	seedLimit, err := resolveSeedLimit(fs, *seedLimitFlag)
+	if err != nil {
+		fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
+		return 2
+	}
+	evidenceTimeout, err := resolveEvidenceTimeout(fs, *evidenceTimeoutFlag)
+	if err != nil {
+		fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
 		return 2
 	}
 
@@ -744,6 +780,8 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// repo can mix languages.
 		ex = newLocalExecutorWithJail(*repoDir, checkArgv, *substrateFlag, *jailFlag, *timeoutFlag, stdout)
 		ex.wholeSuite = *wholeSuiteFlag
+		ex.seedLimit, ex.evidenceTimeout = seedLimit, evidenceTimeout
+		ex.evidenceTimeoutGiven = flagWasSet(fs, "evidence-timeout")
 		// Set here, not with the grading settings below: the unit pass runs
 		// before any job exists and resolves the operator's --runner and
 		// the scan's worker count as grading will.
@@ -1008,7 +1046,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	noSourcesNote := ""
 	if ex != nil && !skipEvidence {
 		// Both evidence passes run under the operator's Ctrl-C: either can
-		// last selectionTimeout, and before this they ran under a context
+		// last the evidence bound, and before this they ran under a context
 		// nothing cancelled, so an interrupt killed the process outright.
 		// Scoped to this phase — the audit below registers its own — so
 		// goal derivation between the two keeps the behaviour it had.
@@ -1022,6 +1060,16 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		if len(selectionSources) == 0 {
 			noSourcesNote = noEvidenceSourcesNote(excl)
 		}
+		// The scan's evidence language: resolveSelectionPlugin does no I/O
+		// (it only inspects the enumerated sources and the operator's own
+		// testCmd), so it is asked once, here, and every pass below reads
+		// the same answer. A language the unit pass serves runs no per-test
+		// instrumented run, so the selection pass's own lines — "running the
+		// suite once with per-test coverage", "WHOLE suite — no selector" —
+		// would describe work never done and a grading that is not the
+		// scan's; its grading line is printed after the unit pass instead.
+		plug, _, _, _ := ex.resolveSelectionPlugin(selectionSources)
+		unitLanguage := runsUnitPass(plug)
 		if len(selectionSources) > 0 {
 			// Announced only when it is about to happen: under --whole-suite
 			// collectSelection returns immediately without running anything, and
@@ -1031,9 +1079,9 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			// minutes-long) instrumented run collectSelection would otherwise be
 			// about to start — so the announce line can say "reused" instead of
 			// "running" for a run that is never going to happen.
-			if !*wholeSuiteFlag {
+			if !*wholeSuiteFlag && !unitLanguage {
 				if ex.selectionCachePeek(selectionSources) {
-					fmt.Fprintln(stdout, "  selection: reused — tree unchanged since an earlier scan (cached evidence)")
+					fmt.Fprintln(stdout, "  selection: reused — tree unchanged since an earlier scan (cached evidence)"+ex.evidenceTimeoutUnused("cached evidence, no run"))
 				} else {
 					fmt.Fprintln(stdout, "  selection: running the suite once with per-test coverage instrumentation…")
 				}
@@ -1043,8 +1091,15 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			// here would tick for --whole-suite too, which returns from that call
 			// having run nothing at all.
 			ex.selection = ex.collectSelection(evidenceCtx, selectionSources)
-			if !ex.selection.Ran {
-				fmt.Fprintf(stdout, "  selection: grading by the WHOLE suite — %s\n", ex.selection.Note)
+			if !ex.selection.Ran && !unitLanguage {
+				unused := ""
+				if *wholeSuiteFlag {
+					unused = ex.evidenceTimeoutUnused("--whole-suite runs no instrumented run")
+				}
+				fmt.Fprintf(stdout, "  selection: grading by the WHOLE suite — %s%s\n", ex.selection.Said(), unused)
+			}
+			if line := failedInEvidenceLine(ex.selection.Map); ex.selection.Ran && line != "" {
+				fmt.Fprintf(stdout, "  selection: %s\n", line)
 			}
 			// SCAN-SCOPED: this instrumented run happens ONCE, for the whole
 			// repo, before any per-file driver exists — the driver has no
@@ -1059,26 +1114,28 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 				})
 			}
 		}
-		selectionMethod = ex.selectionMethod()
-
-		// WIDEN: the SAME plugin resolution collectSelection just used, asked
-		// again here rather than threaded out of it: resolveSelectionPlugin
-		// does no I/O (it only inspects the already-enumerated sources and
-		// the operator's own testCmd), so a second call costs nothing.
-		plug, _, _, _ := ex.resolveSelectionPlugin(selectionSources)
+		// WIDEN: by the SAME plugin resolution collectSelection used.
 		var idx reposcan.EvidenceIndex
 		var idxOK bool
 		if plug != nil {
 			idx, idxOK = reposcan.ParseEvidenceIndex(ex.selection, plug)
 		}
 		// THE UNIT PASS, for a language with no per-test selector: the
-		// evidence that widens its candidacy. Apart from grading — it runs
-		// under --whole-suite too, and selectionMethod above has already
-		// been decided without it.
-		if len(selectionSources) > 0 && runsUnitPass(plug) {
+		// evidence that widens its candidacy AND grades its files — each by
+		// the units whose own run executed it, plus every unit that reported
+		// nothing (selectionFor). It runs under --whole-suite too, because
+		// candidacy needs it; there it grades nothing (selectionMethod).
+		//
+		// It once decided candidacy only, and selectionMethod was taken
+		// before it ran, from the selection pass alone. The evidence that
+		// pairs a file with a unit is the evidence that says which units run
+		// it, so grading the file by every unit threw away a measurement the
+		// scan had already paid for.
+		if len(selectionSources) > 0 && unitLanguage {
 			ex.unitInventory = repoInventory
 			ex.units = ex.collectUnits(evidenceCtx, selectionSources)
 			printUnitPass(stdout, ex)
+			printUnitGrading(stdout, ex, plug.Name())
 			if ex.unitsDuration > 0 {
 				ex.events.forScan("phase_units", "", map[string]any{
 					"duration_ms": ex.unitsDuration.Milliseconds(),
@@ -1092,6 +1149,8 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			}
 			unitsPartial = idxOK && unitPassFailed(ex.units) > 0
 		}
+		// Decided once both passes have run: the unit pass grades too.
+		selectionMethod = ex.selectionMethod()
 		// The evidence phase is over: Ctrl-C from here is the next phase's
 		// to handle. An interrupted pass has already said which units it
 		// never ran; it widens nothing and caches nothing, and the run
@@ -1375,13 +1434,13 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	}
 	selectionNote := ""
 	if ex != nil {
-		selectionNote = ex.selection.Note
+		selectionNote = ex.selection.Said()
 		// For a language the unit pass serves, ITS reason is why candidacy
 		// is pairing-only; the selection note ("no selector for …") is
 		// about grading.
 		switch {
 		case ex.units.Note != "":
-			selectionNote = ex.units.Note
+			selectionNote = ex.units.Said()
 		case ex.unitLandingNote != "":
 			selectionNote = ex.unitLandingNote
 		case ex.units.Ran && !evidenceCandidacyOK:
@@ -1652,7 +1711,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		KillRate: killRatePtr(rep.KillRate), CacheHits: rep.CacheHits,
 		PreflightRan: preflightResult.Ran, PreflightNote: preflightResult.Note,
 		StartedAt: startedAt, FinishedAt: finishedAt,
-		Author: party.Author, Committer: party.Committer, CoAuthors: party.CoAuthors,
+		Author: party.Author, Committer: party.Committer, CoAuthors: party.CoAuthors, GeneratedWith: party.GeneratedWith,
 		// The box and the build, so a wall-clock number in this ledger can be
 		// interpreted at all. TreesRequested is the workspace substrate's
 		// resolved per-file tree count — an INTENTION; the per-file probe
@@ -1734,7 +1793,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			Passed:    boolPtr(exitCode == 0),
 			PushedBy:  auditpush.PushedByCertify,
 			TreeDirty: auditedTreeDirty, RepoIdentity: repoIdentity(*repoDir),
-			Sandbox: ex.sandboxIdentity(),
+			Sandbox: ex.sandboxIdentity(), SeedSkipped: ex.seedSkipped(),
 		})
 	// The hunks onto the mutant rows: `code` is the mutant's source, and
 	// the custody rule already withholds it (BlankUnpushedSource) unless
@@ -2740,7 +2799,10 @@ const preflightTimeout = 5 * time.Minute
 // grades a different question.
 const selectionMaxOutput = 64 << 20
 
-// selectionTimeout: see selectionMaxOutput.
+// selectionTimeout: see selectionMaxOutput. It is the evidence bound when the
+// operator names none; --evidence-timeout replaces it (run_bounds.go), since
+// a suite ~11x requests' is not the largest corral meets: REA's 2,186 vitest
+// units left 1,918 not run at 15 minutes.
 const selectionTimeout = 15 * time.Minute
 
 // coverageRunner is the minimal seam runPreflight needs to hand to
@@ -2983,11 +3045,13 @@ func (l *localExecutor) runPreflight(ctx context.Context, sources []string) repo
 	// preparation is the expensive part, and a language with no coverage
 	// instrumentation would get only this note after paying for it.
 	if _, note := reposcan.PreflightCommand(plug, testCmd); note != "" {
-		return reposcan.CoverageMap{Note: note}
+		return reposcan.PreflightRefused(note, testCmd)
 	}
 	runner, files, rerr := l.scanRunner(langName, plug, preflightMaxOutput, preflightTimeout)
 	if rerr != nil {
-		return reposcan.CoverageMap{Note: fmt.Sprintf("preflight: %v", rerr)}
+		// Recorded by its reason (Note is the scan row's published
+		// PreflightNote); the error is the terminal's (TerminalDetail).
+		return reposcan.CoverageMap{Note: "preflight: the jail could not be prepared", TerminalDetail: fmt.Sprintf("preflight: %v", rerr)}
 	}
 
 	// DEFAULT TO THE REPO'S FILESYSTEM ROOT, and let Go override it.
@@ -3015,7 +3079,7 @@ func (l *localExecutor) runPreflight(ctx context.Context, sources []string) repo
 	// opt OUT rather than remember to opt in.
 	repoRoot, merr := l.coverageModulePath(langName)
 	if merr != nil {
-		return reposcan.CoverageMap{Note: fmt.Sprintf("preflight: %v", merr)}
+		return reposcan.CoverageMap{Note: "preflight: the coverage module path could not be read", TerminalDetail: fmt.Sprintf("preflight: %v", merr)}
 	}
 
 	return reposcan.Preflight(ctx, runner, files, plug, testCmd, repoRoot)
@@ -3099,7 +3163,7 @@ func (l *localExecutor) resolveSelectionPlugin(sources []string) (plug lang.Plug
 // already a field, not something this method has to derive.
 //
 // ok is false whenever no key can be computed at all: plug has no
-// TestSelector, Instrument refuses testCmd, or TreeDigest could not name a
+// TestEvidence, Instrument refuses testCmd, or TreeDigest could not name a
 // tree (outside a git work tree, or a git failure) — every one of those
 // means "this scan cannot be cache-keyed", never a value worth caching
 // against.
@@ -3187,7 +3251,7 @@ func (l *localExecutor) collectSelection(ctx context.Context, sources []string) 
 		if keyOK {
 			if raw, hit, err := l.selectionCache.SelectionCacheGet(ctx, treeDigest, cmdDigest, langName, l.substrate); err == nil && hit {
 				l.selectionReused = true
-				return reposcan.SelectionEvidence{Raw: raw, Ran: true}
+				return reposcan.NewSelectionEvidence(plug, testCmd, raw)
 			}
 		}
 	}
@@ -3199,15 +3263,29 @@ func (l *localExecutor) collectSelection(ctx context.Context, sources []string) 
 	if _, note := reposcan.SelectionCommand(plug, testCmd, sources); note != "" {
 		return reposcan.SelectionEvidence{Note: note}
 	}
-	runner, files, err := l.scanRunner(langName, plug, selectionMaxOutput, selectionTimeout)
+	if l.evidenceTimeout <= 0 {
+		return reposcan.SelectionEvidence{Note: "selection: no evidence bound was set (--evidence-timeout)"}
+	}
+	runner, files, err := l.scanRunner(langName, plug, selectionMaxOutput, l.evidenceTimeout)
 	if err != nil {
-		return reposcan.SelectionEvidence{Note: fmt.Sprintf("selection: %v", err)}
+		// Recorded by its reason (Note is every file's published Fallback);
+		// the error is said on the terminal (TerminalDetail).
+		return reposcan.SelectionEvidence{Note: "selection: the jail could not be prepared", TerminalDetail: fmt.Sprintf("selection: %v", err)}
 	}
 	// THE INSTRUMENTED RUN, and the only statement in this function that runs
 	// the project's suite. The clock is here, and only here: every return
 	// above is a decision, not a run, and must record no time.
+	watch := &timeoutWatch{}
 	start := time.Now()
-	ev := collectSelectionEvidence(ctx, runner, files, plug, testCmd, sources)
+	ev := collectSelectionEvidence(ctx, watch.wrap(runner), files, plug, testCmd, sources)
+	// A run the bound stopped already says it failed and why, in the
+	// runner's words; it did not say which bound, or that one flag moves it.
+	if !ev.Ran && watch.hit() {
+		ev.Note += evidenceBoundNote(l.evidenceTimeout)
+		if ev.TerminalDetail != "" {
+			ev.TerminalDetail += evidenceBoundNote(l.evidenceTimeout)
+		}
+	}
 	// Recorded even when the run produced no usable evidence: the suite still
 	// executed, and the minutes it burned are part of what this scan cost.
 	l.selectionDuration = time.Since(start)
@@ -3221,14 +3299,60 @@ func (l *localExecutor) collectSelection(ctx context.Context, sources []string) 
 }
 
 // selectionMethod is the scan's test-selection method for auditConfigKey:
-// "coverage-context" when the selection pass produced evidence, else "". It
-// reads the selection pass ONLY — the unit pass (l.units) decides candidacy,
-// never how a file is graded, so it must not move the key.
+// "coverage-context" when the selection pass produced evidence,
+// "unit-evidence" when the unit pass did (unitGrades), else "" — and ""
+// under --whole-suite, which grades nothing by evidence whatever ran.
+//
+// It read the selection pass ONLY while the unit pass decided candidacy
+// alone. Since the unit pass grades too (every language but Python is
+// graded by the units its evidence links), a scan graded by units measures
+// something different from a whole-suite one, and a key that could not tell
+// them apart would serve one's verdict for the other.
 func (l *localExecutor) selectionMethod() string {
-	if l.selection.Ran {
-		return "coverage-context"
+	switch {
+	case l.wholeSuite:
+		return ""
+	case l.selection.Ran:
+		return testmap.MethodCoverageContext
+	case l.unitGrades():
+		return testmap.MethodUnitEvidence
 	}
 	return ""
+}
+
+// unitGrades reports whether the unit pass's map grades the scan's files of
+// its language: the pass ran and at least one unit reported evidence. A pass
+// in which no unit reported (it timed out before any finished) grades
+// nothing — every file falls back to the whole suite with the pass's note
+// (testmap.Select refuses it, Review Focus 5) — so it must not name a method
+// the scan's files were not graded by. A map naming no runner row
+// grades nothing either: every file falls back, naming the missing row
+// (reposcan.NoRunnerRow), so the scan's method and line must not claim
+// otherwise.
+func (l *localExecutor) unitGrades() bool {
+	return l.units.Ran && l.unitMap.Method != "" && l.unitMap.Runner != "" && len(l.unitMap.Unreported()) < len(l.unitMap.Tests)
+}
+
+// unitsNotRunReason is why a file of langName has no unit evidence to be
+// graded by when the unit pass did not run: the pass's own reason, as the
+// units line printed it, or — for a pass that never started (no source to
+// run for, a diff that touched none), which has none — a sentence saying
+// so. An empty reason would be an undisclosed whole-suite grade.
+func (l *localExecutor) unitsNotRunReason(langName string) string {
+	if l.units.Note != "" {
+		return l.units.Note
+	}
+	return fmt.Sprintf("no unit evidence was collected for %s", langName)
+}
+
+// unitsNotRunSaid is unitsNotRunReason as the terminal says it, with the
+// error or output behind it (UnitEvidence.Said). Never a Fallback: that is
+// recorded, and takes the fixed reason.
+func (l *localExecutor) unitsNotRunSaid(langName string) string {
+	if said := l.units.Said(); said != "" {
+		return said
+	}
+	return l.unitsNotRunReason(langName)
 }
 
 // collectSelectionEvidence is reposcan.CollectSelectionEvidence behind a
@@ -3395,7 +3519,7 @@ func splitPreflightFindings(sourceFiles []string, cm reposcan.CoverageMap) prefl
 func printPreflightReport(w io.Writer, cm reposcan.CoverageMap, sourceFiles []string) {
 	fmt.Fprintln(w, "\nCoverage pre-flight (coverage-derived evidence from one instrumented suite run, not proof):")
 	if !cm.Ran {
-		fmt.Fprintf(w, "  could not run: %s\n", cm.Note)
+		fmt.Fprintf(w, "  could not run: %s\n", cm.Said())
 		return
 	}
 	f := splitPreflightFindings(sourceFiles, cm)
@@ -4002,6 +4126,114 @@ func selectionRuleBreakdown(rules map[string]int) string {
 	return "; " + strings.Join(parts, ", ")
 }
 
+// unitEvidenceLine is the line for a file graded by the units its evidence
+// links: the count in the runner row's own noun (a file, a package and a
+// cargo target are different grains, and "tests" would claim a finer one),
+// and, when units with no evidence were added for caution, how many and the
+// first one's reason, so the reader can tell evidence from caution. A row
+// that names no noun says so rather than borrowing one (no defaults).
+func unitEvidenceLine(f reposcan.WeakFile) string {
+	noun := f.UnitNoun
+	detail := "unit evidence"
+	if noun == "" {
+		detail += "; the runner row names no unit noun"
+	}
+	detail += cautionDetail(f, "unit", "units")
+	if noun != "" {
+		noun = " " + noun
+	}
+	return fmt.Sprintf("graded by %s of %s%s (%s)", groupThousands(f.SelectedTests), groupThousands(f.SuiteTests), noun, detail)
+}
+
+// failedInEvidenceLine says, once per scan, that tests failed in the
+// instrumented run and what was done with them: kept out of the evidence and
+// added to every file's selection. The unit pass says the same of its
+// failed units ("units: N run, M failed"); without this line a run whose
+// evidence held red tests would read exactly like one whose suite was green.
+// "" when none failed.
+func failedInEvidenceLine(m testmap.Map) string {
+	red := m.Unreported()
+	if len(red) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s failed in the instrumented run; their coverage is not used, and they run with every file's selection and every mutant (%s)",
+		pluralCount(len(red), "test", "tests"), redUnitsNames(red))
+}
+
+// pluralCount is "1 test" or "3 tests".
+func pluralCount(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return fmt.Sprintf("%d %s", n, many)
+}
+
+// redUnitsNames is the first few of names and how many more, so a long list
+// stays one line.
+func redUnitsNames(names []string) string {
+	const shown = 3
+	if len(names) <= shown {
+		return strings.Join(names, ", ")
+	}
+	return fmt.Sprintf("%s and %d more", strings.Join(names[:shown], ", "), len(names)-shown)
+}
+
+// cautionDetail is what a file's selection line adds when the selection is
+// not only what the evidence chose: how many nodes (units, or tests) were
+// added because they reported no evidence, and how many that failed
+// unmutated were left out after the baseline failed with them, each with
+// the first one's reason. "" when neither, so a line without either is
+// byte-identical to what it was.
+func cautionDetail(f reposcan.WeakFile, one, many string) string {
+	var out string
+	if f.Unreported > 0 {
+		word := many
+		if f.Unreported == 1 {
+			word = one
+		}
+		out += fmt.Sprintf("; %d %s with no evidence added: %s", f.Unreported, word, firstLineOf(f.UnreportedReason))
+	}
+	if f.Excluded > 0 {
+		word, it := many, "them"
+		if f.Excluded == 1 {
+			word, it = one, "it"
+		}
+		out += fmt.Sprintf("; %d %s that failed unmutated left out after the baseline failed with %s: %s", f.Excluded, word, it, firstLineOf(f.ExcludedReason))
+	}
+	if f.ExcludedRedInBaseline != "" {
+		out += "; red in the baseline though green in the evidence pass: " + strings.ReplaceAll(f.ExcludedRedInBaseline, "\n", "; ")
+	}
+	return out
+}
+
+// firstLineOf is a unit's reason as the file's line can hold it: its first
+// line, marked "…" when there was more. A failed unit's reason carries the
+// runner's own output (a compiler's error runs to a dozen lines), which the
+// verdict and the ledger keep whole.
+func firstLineOf(reason string) string {
+	if first, _, more := strings.Cut(reason, "\n"); more {
+		return strings.TrimRight(first, " ") + " …"
+	}
+	return reason
+}
+
+// groupThousands renders n with a comma between thousands ("1,339"), for the
+// unit line only: the older lines print bare integers and stay byte-stable.
+func groupThousands(n int) string {
+	s := strconv.Itoa(n)
+	neg := strings.HasPrefix(s, "-")
+	if neg {
+		s = s[1:]
+	}
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "," + s[i:]
+	}
+	if neg {
+		s = "-" + s
+	}
+	return s
+}
+
 // printWeakFile prints one "weakest files" line, including the marker and
 // the disambiguating proven-missed count — factored out so the truncation
 // fallback (F4, below) renders a byte-identical line for a file that falls
@@ -4089,19 +4321,21 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 		// to take 234 for the number every mutant survived, when the true
 		// figure may be 3. The method is the verdict's own, never stamped
 		// here, so the label cannot outlive the measurement it names.
-		fmt.Fprintf(w, "   graded by %d of %d tests — %d to %d per mutant, median %d (%s%s)",
+		fmt.Fprintf(w, "   graded by %d of %d tests — %d to %d per mutant, median %d (%s%s%s)",
 			f.SelectedTests, f.SuiteTests,
 			f.TestsPerMutant.Min, f.TestsPerMutant.Max, f.TestsPerMutant.Median,
-			f.SelectionMethod, selectionRuleBreakdown(f.Rules))
+			f.SelectionMethod, selectionRuleBreakdown(f.Rules), cautionDetail(f, "test", "tests"))
 	case f.SelectionMethod != "" && !f.Uncovered && f.PerMutant:
 		// Per-mutant, but no mutant was graded — every one was rejected by
 		// the compile gate, which leaves the spread at {0,0,0}. "0 to 0 per
 		// mutant, median 0" would report a range as measured when nothing
 		// was measured at all, so the line says which measurement it is and
 		// then says it found nothing to measure.
-		fmt.Fprintf(w, "   graded by %d of %d tests (%s; no mutant graded)", f.SelectedTests, f.SuiteTests, f.SelectionMethod)
+		fmt.Fprintf(w, "   graded by %d of %d tests (%s; no mutant graded%s)", f.SelectedTests, f.SuiteTests, f.SelectionMethod, cautionDetail(f, "test", "tests"))
+	case f.SelectionMethod == testmap.MethodUnitEvidence && !f.Uncovered:
+		fmt.Fprint(w, "   "+unitEvidenceLine(f))
 	case f.SelectionMethod != "" && !f.Uncovered:
-		fmt.Fprintf(w, "   graded by %d of %d tests (%s)", f.SelectedTests, f.SuiteTests, f.SelectionMethod)
+		fmt.Fprintf(w, "   graded by %d of %d tests (%s%s)", f.SelectedTests, f.SuiteTests, f.SelectionMethod, cautionDetail(f, "test", "tests"))
 	case f.SelectionMethod != "" && f.ImportOnly:
 		// Checked before the plain Uncovered case, same reason as the
 		// marker above: "none execute it" would be the same false claim in
@@ -4128,6 +4362,12 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 	// fabricated "file" — for a run that predates this disclosure.
 	if f.PromptShape != "" {
 		fmt.Fprintf(w, " — prompts: %s", f.PromptShape)
+	}
+	if f.AuthoredFallback != "" {
+		// The dev pass's line above says how the RATE was graded; this says
+		// the authored pass fell back independently, so a proven count here
+		// is a whole-command measurement (advpool.TestSelection.AuthoredFallback).
+		fmt.Fprintf(w, "\n   authored test graded by the whole suite: %s", f.AuthoredFallback)
 	}
 	if f.MutantBudget.Total > 0 {
 		// The exam's size and why: a reader comparing two files' kill rates
@@ -4322,6 +4562,8 @@ func reasonGloss(reason string) string {
 		return " — no testable property: the file is purely declarative (interfaces, constants, generated code), so there is nothing a mutant could violate"
 	case reposcan.ReasonBaselineFailed:
 		return " — the project's own suite did not pass on the UNMUTATED code in this environment; a build/environment problem, not a test-quality verdict"
+	case reposcan.ReasonBaselineTimeout:
+		return " — the unmutated suite did not finish within one run's bound (--timeout), so nothing could be graded against it; raise --timeout, or narrow what the file's selection runs"
 	case reposcan.ReasonFlakyBaseline:
 		return " — the unmutated suite gave different answers on repeated runs, so no mutant result from it could be trusted"
 	case reposcan.ReasonExecutorError:
@@ -4906,17 +5148,40 @@ type localExecutor struct {
 
 	// units is the scan's unit evidence pass (collectUnits): each test
 	// UNIT the operator's command collects, run alone under coverage, for
-	// a language with no per-test selector. It decides CANDIDACY only —
-	// which unpaired files an execution pairs — and never grading:
-	// selectionMethod reads selection, never units, so no cache key moves.
+	// a language with no per-test selector. It decides CANDIDACY — which
+	// unpaired files an execution pairs — and, through unitMap, GRADING:
+	// each file of its language is graded by the units that executed it
+	// plus every unit that reported nothing (selectionFor), and
+	// selectionMethod names it, so the cache key moves with it. (It decided
+	// candidacy alone until the engine could grade by units; see
+	// certify_repo_units.go's header.)
 	// Zero value: no pass ran.
 	units reposcan.UnitEvidence
+	// unitMap is units as a test map (reposcan.MapFromUnits), built where
+	// the pass's invocation is known; the zero Map when no pass ran.
+	unitMap testmap.Map
 	// unitsDuration is how long the pass's own runs took, measured around
 	// them as selectionDuration is; zero when nothing ran (a cache hit, a
 	// refusal before any run).
 	unitsDuration time.Duration
 	// unitsReused is set when collectUnits served a cache HIT.
 	unitsReused bool
+	// seedLimit is the jail seed limit in bytes (--seed-limit,
+	// resolveSeedLimit), read when the first seed is built, not at
+	// construction, so the flag boundary sets it after newLocalExecutor.
+	// The constructor sets seedLimitBuiltin: an executor nobody configured
+	// seeds as every jail did before the flag existed.
+	seedLimit int64
+	// evidenceTimeout bounds the evidence pass (--evidence-timeout,
+	// resolveEvidenceTimeout): Python's one instrumented run, and the unit
+	// pass and each unit's run within it. The constructor sets
+	// selectionTimeout, the bound before the flag existed.
+	evidenceTimeout time.Duration
+	// evidenceTimeoutGiven is whether the operator named --evidence-timeout,
+	// so a run that never reads the bound (a cache hit, Python under
+	// --whole-suite) can say the flag went unused rather than drop it
+	// silently.
+	evidenceTimeoutGiven bool
 	// unitWorkers is how many units run at once: the scan's own worker
 	// setting (resolveScanWorkers — --swarm on the jail, one on the
 	// workspace, whose one checkout the units share), set where the
@@ -5028,6 +5293,11 @@ func newLocalExecutorWithJail(repoDir string, checkArgv []string, substrate, jai
 		baselineRuns: 2,
 		substrate:    substrate,
 		timeout:      timeout,
+		// The bounds that applied before --seed-limit and
+		// --evidence-timeout existed; each verb's flag boundary replaces
+		// them with the operator's when given (run_bounds.go).
+		seedLimit:       seedLimitBuiltin,
+		evidenceTimeout: selectionTimeout,
 		// Concurrent jobs write progress; serialize so two files' notices
 		// cannot interleave mid-line.
 		progress:    &syncWriter{w: progress},
@@ -5078,11 +5348,14 @@ func newLocalExecutorWithJail(repoDir string, checkArgv []string, substrate, jai
 	// The scan exposes no --bind-dir/--no-bind-deps: nil/false are the
 	// documented defaults (auto-detected dep dirs are bound, nothing extra).
 	if substrate != substrateWorkspace {
+		// One seed per language over the same tree: what they say in
+		// common (the files the copy leaves out) is said once per scan.
+		seedOut := newOnceLines(l.progress)
 		l.seeds = newSeedCache(func(langName string) (repoSeed, error) {
 			if l.jailErr != nil {
 				return repoSeed{cleanup: func() {}}, l.jailErr
 			}
-			return buildRepoSeed("corral certify --repo", repoDir, langName, l.iso, nil, false, l.progress)
+			return buildRepoSeed("corral certify --repo", repoDir, langName, l.iso, nil, false, l.seedLimit, seedOut)
 		})
 	}
 	return l
@@ -5093,6 +5366,16 @@ func newLocalExecutorWithJail(repoDir string, checkArgv []string, substrate, jai
 // like the provider-key preflight: discovering it per file would report every
 // file as ungradable for a reason the first job could have stated instantly.
 func (l *localExecutor) preflight() error { return l.jailErr }
+
+// seedSkipped is what every seed the scan built left out as not text, as
+// the ledger's JSON text; "" for a dry run, the workspace substrate (no
+// seed) and a scan whose copies left out nothing.
+func (l *localExecutor) seedSkipped() string {
+	if l == nil || l.seeds == nil {
+		return ""
+	}
+	return seedSkippedJSON(l.seeds.skipped())
+}
 
 // sandboxIdentity is the jail the scan ran in; zero for a dry run (no
 // executor) and for the workspace substrate.
@@ -5127,7 +5410,10 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 		tokenBudget:    l.tokenBudget,
 		toolProbe:      l.toolProbe,
 		repoDir:        l.repoDir,
-		codePath:       j.Path,
+		// Read only when the job builds its own seed (no shared one): the
+		// scan's bound, so the two can never seed under different limits.
+		seedLimit: l.seedLimit,
+		codePath:  j.Path,
 		// j.TestPath is empty for an evidence-only candidate BY
 		// CONSTRUCTION (see reposcan.WidenCandidacyByEvidence): the whole
 		// point is that no filename convention paired one. Leaving testPath
@@ -5166,6 +5452,10 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 		// pool's own authored test, which no evidence run ever saw.
 		baseArgv:  l.baseCmd(j),
 		selection: sel,
+		// The scan's map, which sel was made from: the pool builds every
+		// later command from sel through the engine, which reads the row and
+		// the grain from it (advpool.RunSpec.SelectionMap).
+		selectionMap: l.mapFor(j),
 		// The scan's one instrumented run, carried onto every file's spec —
 		// see localExecutor.selectionDuration.
 		selectionDuration: l.selectionDuration,
@@ -5384,6 +5674,11 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 		l.note("%s: unstable baseline — not graded\n", j.Path)
 		return reposcan.FileResult{Gradable: false, Reason: reposcan.ReasonFlakyBaseline}, nil
 	}
+	// A baseline killed at its bound is not red, and leaving units out
+	// cannot be relied on to make it finish: neither retry runs.
+	if res, ok := l.timedOutBaseline(j, runner); ok {
+		return res, nil
+	}
 	// Stable means every run AGREED — including agreeing to fail. A suite that
 	// is consistently red is a legitimate ungradable (that is the existing
 	// BaselineFailed case), and auditing it anyway would spend mutant
@@ -5392,6 +5687,108 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 	// the entire LLM bill, for every file, to reach an answer the first two
 	// runs already gave. The BaselineFailed handling below stays as the
 	// backstop for anything this misses.
+	// A red baseline may be red only because a unit that already failed on
+	// unmutated code in the evidence pass sits in this file's selection for
+	// caution (every unreported unit joins every selection). Such a unit
+	// can kill no mutant, so the file is retried ONCE without it, and graded
+	// by the retry only if its baseline is stably green. The retry's
+	// selection, naming what it left out, replaces the job's everywhere, so
+	// the pool's every later command is built from the exam that passed.
+	// tried is the input the last baseline ran: the job's own, or the
+	// retry's, which the second retry narrows further.
+	tried := in
+	if stable && !rec.last {
+		if retry, red, why := l.redUnitRetry(j, in.selection); red == nil {
+			l.note("%s: baseline failed; not retried: %s\n", j.Path, why)
+		} else {
+			what := redUnitsPhrase(red)
+			if retry.Fallback != "" {
+				l.note("%s: baseline failed with %s; cannot retry without %s: %s\n", j.Path, what, pronounFor(red), retry.Fallback)
+			} else {
+				release()
+				retryIn := in
+				retryIn.selection = retry
+				retryIn.checkArgv = l.testCmd(j, retry)
+				r2, c2, err := l.newBaseline(ctx, retryIn)
+				if err != nil {
+					return reposcan.FileResult{}, l.fail(j, err)
+				}
+				runner, cleanup, released = r2, c2, false
+				rec = &recordingBaseline{inner: runner}
+				if stable, err = reposcan.CheckBaselineStable(rec, l.baselineRuns); err != nil {
+					return reposcan.FileResult{}, l.fail(j, err)
+				}
+				if res, ok := l.timedOutBaseline(j, runner); ok {
+					return res, nil
+				}
+				switch {
+				case !stable:
+					l.note("%s: baseline failed with %s; retried without %s: unstable — not graded\n", j.Path, what, pronounFor(red))
+					return reposcan.FileResult{Gradable: false, Reason: reposcan.ReasonFlakyBaseline}, nil
+				case rec.last:
+					l.note("%s: baseline failed with %s; retried without %s: green — graded without %s\n", j.Path, what, pronounFor(red), pronounFor(red))
+					in = retryIn
+				default:
+					l.note("%s: baseline failed with %s; retried without %s: still red\n", j.Path, what, pronounFor(red))
+					tried = retryIn
+				}
+			}
+		}
+	}
+	// A baseline still red may be red only because of units the evidence
+	// pass ran green alone, which fail beside the rest of the selection:
+	// flaky, or broken by a unit run with them, or red as the operator's
+	// command runs them. Each fails on unmutated code here, so it can kill
+	// no mutant here, and a flaky one would credit a kill to chance. The
+	// file is retried ONCE more without the units the baseline's own output
+	// names failing, each rerun alone first so the record says which of
+	// those it was, and graded only if that baseline is stably green.
+	// Retried once, never until green: a third red is a red no unit
+	// accounts for, and the run says so.
+	if stable && !rec.last {
+		var out string
+		if br, ok := runner.(interface{ BaselineOutput() string }); ok {
+			out = br.BaselineOutput()
+		}
+		retry, red, why := l.baselineRedRetry(ctx, j, tried, out)
+		switch {
+		case red == nil && why != "":
+			l.note("%s: baseline still red; not retried again: %s\n", j.Path, why)
+		case red == nil:
+		case retry.Fallback != "":
+			l.note("%s: baseline red with %s; cannot retry without %s: %s\n", j.Path, baselineRedPhrase(red), pronounFor(red), retry.Fallback)
+		default:
+			for _, u := range red {
+				l.note("%s: %s: %s\n", j.Path, u, retry.ExcludedWhy[u])
+			}
+			release()
+			retryIn := tried
+			retryIn.selection = retry
+			retryIn.checkArgv = l.testCmd(j, retry)
+			r2, c2, err := l.newBaseline(ctx, retryIn)
+			if err != nil {
+				return reposcan.FileResult{}, l.fail(j, err)
+			}
+			runner, cleanup, released = r2, c2, false
+			rec = &recordingBaseline{inner: runner}
+			if stable, err = reposcan.CheckBaselineStable(rec, l.baselineRuns); err != nil {
+				return reposcan.FileResult{}, l.fail(j, err)
+			}
+			if res, ok := l.timedOutBaseline(j, runner); ok {
+				return res, nil
+			}
+			switch {
+			case !stable:
+				l.note("%s: baseline red with %s; retried without %s: unstable — not graded\n", j.Path, baselineRedPhrase(red), pronounFor(red))
+				return reposcan.FileResult{Gradable: false, Reason: reposcan.ReasonFlakyBaseline}, nil
+			case rec.last:
+				l.note("%s: baseline red with %s; retried without %s: green — graded without %s\n", j.Path, baselineRedPhrase(red), pronounFor(red), pronounFor(red))
+				in = retryIn
+			default:
+				l.note("%s: baseline red with %s; retried without %s: still red\n", j.Path, baselineRedPhrase(red), pronounFor(red))
+			}
+		}
+	}
 	if !rec.last {
 		// Print the runner's OWN output, not just the fact of failure. Twice in
 		// one day a paid audit dead-ended here with nothing to go on: a Python
@@ -5487,6 +5884,170 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 	return res, nil
 }
 
+// redUnitRetry is the job's selection again without the units (or, for
+// per-test evidence, the tests) in sel whose own run FAILED on unmutated
+// code in the evidence pass, with them named on its Excluded and returned;
+// nil when there are none (or the selection is not one evidence made), so a
+// red baseline has nothing to retry without, and then why, for the run to
+// say. A retry the engine refuses comes back with its Fallback set and is
+// not run. See reposcan.WithoutRedUnits.
+func (l *localExecutor) redUnitRetry(j reposcan.Job, sel lang.Selection) (lang.Selection, []string, string) {
+	if sel.Method != testmap.MethodUnitEvidence && sel.Method != testmap.MethodCoverageContext {
+		why := "it was graded by the whole suite, not by a selection to retry without"
+		if sel.Fallback != "" {
+			why = fmt.Sprintf("it was graded by the whole suite (%s), not by a selection to retry without", sel.Fallback)
+		}
+		return lang.Selection{}, nil, why
+	}
+	p, ok := lang.ByName(j.Lang)
+	if !ok {
+		return lang.Selection{}, nil, fmt.Sprintf("no language plugin is named %q", j.Lang)
+	}
+	base := l.checkArgv
+	if len(base) == 0 {
+		base = p.TestCmd()
+	}
+	retry, red := reposcan.WithoutRedUnits(l.mapFor(j), p, l.repoDir, j.Path, j.TestPath, base, sel)
+	if red == nil {
+		return lang.Selection{}, nil, "no unit in its selection failed unmutated in the evidence pass"
+	}
+	retry.Excluded = red
+	return retry, red, ""
+}
+
+// timedOutBaseline is the file's result when runner's last baseline was
+// killed at its bound: said as a timeout, with the bound and the suite's
+// last output, under its own reason. ok is false for a baseline that
+// finished, red or green, and for a runner that cannot say.
+func (l *localExecutor) timedOutBaseline(j reposcan.Job, runner reposcan.BaselineRunner) (reposcan.FileResult, bool) {
+	to, ok := runner.(interface {
+		BaselineTimedOut() bool
+		BaselineBound() time.Duration
+	})
+	if !ok || !to.BaselineTimedOut() {
+		return reposcan.FileResult{}, false
+	}
+	l.note("%s: baseline timed out: the unmutated suite did not finish within %s, the bound on one run (--timeout) — not graded, and not retried: leaving units out is not a way to make it finish\n", j.Path, to.BaselineBound())
+	if br, ok := runner.(interface{ BaselineOutput() string }); ok {
+		if out := strings.TrimSpace(br.BaselineOutput()); out != "" {
+			l.note("%s: the suite's last output before it was stopped:\n%s\n", j.Path, indentLines(out, "    "))
+		}
+	}
+	return reposcan.FileResult{Gradable: false, Reason: reposcan.ReasonBaselineTimeout}, true
+}
+
+// baselineRedRetry is the second retry's selection: in's selection without
+// the units its red baseline's output names failing (reposcan.
+// WithoutBaselineRedUnits), each rerun alone, as the operator's command runs
+// it, for its ExcludedWhy; nil and "" for a selection that is not a unit
+// selection (Python's test-grain selection has its own failure handling,
+// and a whole-suite run was already said not to be retried), and nil and
+// why when the output names none of its units. A retry the engine refuses
+// comes back with its Fallback set and is not run.
+func (l *localExecutor) baselineRedRetry(ctx context.Context, j reposcan.Job, in localAuditInput, output string) (lang.Selection, []string, string) {
+	sel := in.selection
+	if sel.Method != testmap.MethodUnitEvidence {
+		return lang.Selection{}, nil, ""
+	}
+	p, ok := lang.ByName(j.Lang)
+	if !ok {
+		return lang.Selection{}, nil, fmt.Sprintf("no language plugin is named %q", j.Lang)
+	}
+	base := l.baseCmd(j)
+	retry, red, why := reposcan.WithoutBaselineRedUnits(l.mapFor(j), p, l.repoDir, j.Path, j.TestPath, base, sel, output)
+	if red == nil || retry.Fallback != "" {
+		return retry, red, why
+	}
+	retry.ExcludedWhy = maps.Clone(sel.ExcludedWhy)
+	if retry.ExcludedWhy == nil {
+		retry.ExcludedWhy = make(map[string]string, len(red))
+	}
+	inv, err := lang.Resolve(p, l.repoDir, base, l.runnerFor(j.Lang))
+	for _, u := range red {
+		retry.ExcludedWhy[u] = l.aloneWhy(ctx, p, inv, err, in, j.Path, u)
+	}
+	return retry, red, ""
+}
+
+// The reasons a unit the evidence pass ran green is left out of a red
+// baseline's retry, by what running it alone showed. Each is a fixed phrase:
+// it is stored on the verdict (lang.Selection.ExcludedWhy, then
+// TestSelection.ExcludedReason and ExcludedRedInBaseline), which is signed
+// into the ledger and published, so it never carries a runner's error text,
+// the operator's argv or a host path. The error itself is printed to the
+// run's progress output when it happens (aloneWhy), and stored nowhere.
+const (
+	redBesideOthers  = "red in the baseline, green run alone as your command runs it: flaky, or broken by a test file run beside it"
+	redAlone         = "red in the baseline and red run alone as your command runs it, though green alone in the evidence pass"
+	redNotRerun      = "red in the baseline; not rerun alone: "
+	redNoCommand     = redNotRerun + "its runner command could not be resolved"
+	redNoUnitCommand = redNotRerun + "the runner has no command that runs it alone"
+	redNoJail        = redNotRerun + "the jail could not be prepared"
+	redNotCompleted  = redNotRerun + "the run did not complete"
+)
+
+// aloneWhy runs unit alone in the job's jail, by the operator's command
+// narrowed to it, and says which of the reasons above it is. A call that
+// fails is said once on the progress output with its error, for the
+// operator, and recorded by its fixed reason alone.
+func (l *localExecutor) aloneWhy(ctx context.Context, p lang.Plugin, inv lang.Invocation, invErr error, in localAuditInput, path, unit string) string {
+	notRerun := func(why string, err error) string {
+		l.note("%s: %s: %s: %v\n", path, unit, why, err)
+		return why
+	}
+	if invErr != nil {
+		return notRerun(redNoCommand, invErr)
+	}
+	cmd, ok := lang.UnitRunCmd(p, inv, unit)
+	if !ok {
+		return redNoUnitCommand
+	}
+	alone := in
+	alone.checkArgv = cmd
+	r, cleanup, err := l.newBaseline(ctx, alone)
+	if err != nil {
+		return notRerun(redNoJail, err)
+	}
+	defer cleanup()
+	green, err := r.RunBaseline()
+	switch {
+	case err != nil:
+		return notRerun(redNotCompleted, err)
+	case green:
+		return redBesideOthers
+	default:
+		return redAlone
+	}
+}
+
+// baselineRedPhrase names the units a red baseline's output named failing,
+// as redUnitsPhrase does for the evidence pass's.
+func baselineRedPhrase(red []string) string {
+	noun := "units its output names failing"
+	if len(red) == 1 {
+		noun = "unit its output names failing"
+	}
+	return fmt.Sprintf("%d %s (%s)", len(red), noun, redUnitsNames(red))
+}
+
+// redUnitsPhrase names the units a red baseline is retried without: how
+// many, and the first few by name, so 545 of them stay one line.
+func redUnitsPhrase(red []string) string {
+	noun := "units that failed"
+	if len(red) == 1 {
+		noun = "unit that failed"
+	}
+	return fmt.Sprintf("%d %s unmutated in the evidence pass (%s)", len(red), noun, redUnitsNames(red))
+}
+
+// pronounFor is "it" for one unit and "them" for several.
+func pronounFor(red []string) string {
+	if len(red) == 1 {
+		return "it"
+	}
+	return "them"
+}
+
 // selectionFor answers ONE job from the scan's single instrumented run: which
 // tests demonstrably execute this file, and the narrowed command that runs
 // just those. Every non-answer is a Selection with an empty Method and a
@@ -5498,6 +6059,14 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 // The base handed to the selector is the operator's `-- <cmd>` when they gave
 // one, else the plugin's stock recursive command: the operator's markers and
 // flags are honoured, and the selection only ever narrows what they chose.
+//
+// Which evidence answers depends on the language: Python's per-test
+// selection pass (lang.TestEvidence), or, for every other language, the
+// unit pass's map — the units whose own run executed the file, plus every
+// unit that reported nothing (reposcan.UnitSelectionFor). The unit pass
+// once decided candidacy only, and every non-Python file graded against the
+// whole suite whatever its evidence said; the evidence was already there,
+// per unit, and the engine that narrows Python's selection narrows by it.
 func (l *localExecutor) selectionFor(j reposcan.Job) lang.Selection {
 	if l.wholeSuite {
 		return lang.Selection{Fallback: "--whole-suite"}
@@ -5510,7 +6079,26 @@ func (l *localExecutor) selectionFor(j reposcan.Job) lang.Selection {
 	if len(base) == 0 {
 		base = p.TestCmd()
 	}
-	return l.selection.For(p, l.repoDir, j.Path, j.TestPath, base)
+	if _, perTest := p.(lang.TestEvidence); perTest {
+		return l.selection.For(p, l.repoDir, j.Path, j.TestPath, base)
+	}
+	if !l.units.Ran {
+		return lang.Selection{Fallback: l.unitsNotRunReason(j.Lang)}
+	}
+	return reposcan.UnitSelectionFor(l.unitMap, p, l.repoDir, j.Path, j.TestPath, base)
+}
+
+// mapFor is the test map j's Selection was made from — the one every later
+// command for the job is built from (localAuditInput.selectionMap, testCmd):
+// the selection pass's for a language with per-test evidence, the unit
+// pass's for every other.
+func (l *localExecutor) mapFor(j reposcan.Job) testmap.Map {
+	if p, ok := lang.ByName(j.Lang); ok {
+		if _, perTest := p.(lang.TestEvidence); !perTest {
+			return l.unitMap
+		}
+	}
+	return l.selection.Map
 }
 
 // baseCmd is the job's UNNARROWED command: the operator's `-- <cmd>` if they
@@ -5548,7 +6136,7 @@ func (l *localExecutor) baseCmd(j reposcan.Job) []string {
 // unknown language yields nil and the audit fails closed downstream rather
 // than grading with someone else's command.
 func (l *localExecutor) testCmd(j reposcan.Job, sel lang.Selection) []string {
-	return advpool.DevCommandArgv(sel, j.Lang, l.baseCmd(j), j.TestPath)
+	return advpool.DevCommandArgv(sel, l.mapFor(j), j.Lang, l.baseCmd(j), l.repoDir, j.TestPath)
 }
 
 // printLanguageProfile renders the per-language inventory the enumeration
@@ -5761,7 +6349,14 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 			SelectedTests:     f.SelectedTests,
 			SuiteTests:        f.SuiteTests,
 			SelectionFallback: f.SelectionFallback,
-			Uncovered:         f.Uncovered,
+			// How much of the selection is caution rather than evidence, and
+			// whether the authored pass ran the whole command: both change
+			// what the signed rate answers.
+			SelectionUnreported:  f.Unreported,
+			SelectionExcluded:    f.Excluded,
+			SelectionExcludedRed: f.ExcludedRedInBaseline,
+			AuthoredFallback:     f.AuthoredFallback,
+			Uncovered:            f.Uncovered,
 			// And at which grain: a signed rate averaged over mutants that
 			// each faced a different test set needs the spread to be read
 			// as the measurement it is.

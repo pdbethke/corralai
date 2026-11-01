@@ -183,14 +183,15 @@ func BuildReviewAttestation(r review.Review) map[string]any {
 	// statement, not only in the entry), the seats' tools and versions,
 	// the language, the audited party.
 	for k, v := range map[string]string{
-		"coverage":     r.Coverage,
-		"reviewerTool": r.ReviewerTool,
-		"verifierTool": r.VerifierTool,
-		"lang":         r.Lang,
-		"author":       r.Author,
-		"committer":    r.Committer,
-		"coAuthors":    r.CoAuthors,
-		"verifierNote": r.VerifierNote,
+		"coverage":      r.Coverage,
+		"reviewerTool":  r.ReviewerTool,
+		"verifierTool":  r.VerifierTool,
+		"lang":          r.Lang,
+		"author":        r.Author,
+		"committer":     r.Committer,
+		"coAuthors":     r.CoAuthors,
+		"generatedWith": r.GeneratedWith,
+		"verifierNote":  r.VerifierNote,
 	} {
 		if v != "" {
 			predicate[k] = v

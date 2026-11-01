@@ -34,6 +34,7 @@ import (
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/sandbox"
 	"github.com/pdbethke/corralai/internal/shadowpool"
+	"github.com/pdbethke/corralai/internal/testmap"
 )
 
 // THERE ARE NO DEFAULT MODELS. Not here, not anywhere on the audit path.
@@ -148,7 +149,8 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 	fs.Var(&bindDirFlag, "bind-dir", "extra repo-relative dependency dir to mount read-only into the jail instead of copying it into the workspace (repeatable; node_modules/vendor/.venv/venv/.bundle are auto-detected) — --repo-dir mode only")
 	ledgerFlag := fs.String("ledger", "", "ALSO write this run's ledger entry to this ledger DIRECTORY, beside the machine ledger (the state directory's ledger, see corral state paths; override CORRALAI_MACHINE_LEDGER) every --local run writes to. Refused inside --repo-dir: --local never writes into the checkout. One signed, hash-linked entry per run; corral verify --ledger <dir> walks the chain")
 	noLedgerFlag := fs.Bool("no-ledger", false, "write no entry to the machine ledger (an explicit --ledger is still written)")
-	noBindDepsFlag := fs.Bool("no-bind-deps", false, "copy dependency dirs into the jail workspace instead of bind-mounting them read-only (the pre-bind behavior; subject to the workspace size cap)")
+	noBindDepsFlag := fs.Bool("no-bind-deps", false, "copy dependency dirs into the jail workspace instead of bind-mounting them read-only (the pre-bind behavior; subject to the seed limit, --seed-limit)")
+	seedLimitFlag := fs.Int("seed-limit", 0, seedLimitHelp+". --repo-dir mode only")
 	if err := fs.Parse(flagArgs); err != nil {
 		return flagParseExit(err)
 	}
@@ -259,6 +261,17 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 
 	if strings.TrimSpace(*repoDirFlag) == "" && (len(bindDirFlag) > 0 || *noBindDepsFlag) {
 		fmt.Fprintln(stderr, "corral certify --local: --bind-dir/--no-bind-deps require --repo-dir (they configure how the cloned tree is seeded into the jail; a single --code file has no dependency dirs to bind or copy)")
+		return 2
+	}
+	// --seed-limit bounds the tree --repo-dir seeds; a single --code file
+	// seeds no tree, so without --repo-dir it would be silently unread.
+	if strings.TrimSpace(*repoDirFlag) == "" && flagWasSet(fs, "seed-limit") {
+		fmt.Fprintln(stderr, "corral certify --local: --seed-limit requires --repo-dir (it bounds the repository text seeded into the jail; a single --code file seeds no repository)")
+		return 2
+	}
+	seedLimit, slerr := resolveSeedLimit(fs, *seedLimitFlag)
+	if slerr != nil {
+		fmt.Fprintf(stderr, "corral certify --local: %v\n", slerr)
 		return 2
 	}
 	// --bind-dir asks to BIND a dir read-only; --no-bind-deps asks to COPY every
@@ -398,6 +411,9 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 	// --record-mutants decides only whether the set is ALSO written to a file.
 	rc := newMutantSetRecorder()
 	mutantSink := rc.sink
+	// seedSkipped is what the jail's copy left out as not text, handed back
+	// by the audit (localAuditInput.seedSink) for the ledger entry.
+	var seedSkipped []seedSkip
 	// interruptRefused: the run was stopped and refused its record, so the
 	// mutant set — partial, or empty — is not written either.
 	interruptRefused := false
@@ -482,11 +498,13 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 		localEndpoints: localEndpoints,
 		tokenBudget:    agentbackend.NewTokenBudget(*maxTokensFlag),
 		bindDirs:       bindDirFlag, noBindDeps: *noBindDepsFlag,
+		seedLimit: seedLimit,
 
 		repo: subjectRepo, commit: subjectCommit, subjectResolved: true,
 
 		presetMutants: presetMutants, mutantSink: mutantSink,
-		prior: loadedPrior,
+		seedSink: func(s []seedSkip) { seedSkipped = s },
+		prior:    loadedPrior,
 
 		matrix: *matrixFlag, record: rec, bugCatchDB: bugCatchDBPath, criticScoreDB: criticScoreDBPath,
 		mutantAttemptsDB: mutantAttemptsDBPath,
@@ -519,7 +537,8 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 	if b, berr := localEntryBundle(in, verdict, measured, startedAt, localRunFacts{
 		treeDirty: auditedTreeDirty, repoIdentity: subjectIdentity,
 		mutantsFrom: mutantsFromSHA, recorder: rc,
-		sandbox: localSandboxIdentity(*jailFlag, stderr),
+		sandbox:     localSandboxIdentity(*jailFlag, stderr),
+		seedSkipped: seedSkippedJSON(seedSkipped),
 	}); berr != nil {
 		fmt.Fprintf(stderr, "corral certify --local: no ledger entry written: %v\n", berr)
 	} else {
@@ -643,6 +662,10 @@ type localAuditInput struct {
 	jail       string
 	bindDirs   []string
 	noBindDeps bool
+	// seedLimit is the jail seed limit in bytes (--seed-limit,
+	// resolveSeedLimit), handed to buildRepoSeed when the job builds its
+	// own seed; a scan's shared seed was already built under the scan's.
+	seedLimit int64
 	// runner is the operator's --runner: the runner-table row behind
 	// checkArgv when corral cannot read it (lang.Resolve). "" = detect.
 	runner string
@@ -662,6 +685,10 @@ type localAuditInput struct {
 	// suite must run instead. Zero on the `--local` path, which is exactly
 	// the pre-selection behaviour.
 	selection lang.Selection
+	// selectionMap is the scan's test map selection was made from, carried
+	// to the RunSpec and the scorer so every later command built from
+	// selection names the same runner row and grain. Zero with selection.
+	selectionMap testmap.Map
 
 	// presetMutants REPLAYS a recorded mutant set for THIS file instead of
 	// generating one: the run seeds no mutant-generator seat and grades the
@@ -735,6 +762,10 @@ type localAuditInput struct {
 	// vendoring and the tree walk twice for every audited file. Nil (the
 	// `certify --local` position) means this run builds — and owns — its own.
 	seed *repoSeed
+	// seedSink, when non-nil, is handed what the jail's copy left out as not
+	// text, once the run has its seed: certify --local records it on its
+	// ledger entry (a repo scan reads its seedCache instead).
+	seedSink func([]seedSkip)
 
 	// iso, when non-nil, is a pre-resolved sandbox shared across a scan's
 	// jobs. Resolving probes the backend, which is a scan-wide constant —
@@ -1201,9 +1232,9 @@ func prepareAuditJail(ctx context.Context, in localAuditInput, plug lang.Plugin,
 		iso:     iso, timeout: timeout, testTimeout: in.mutantTimeout,
 		codePath: in.codePath, testPath: tp, repoDir: repoDir, langName: plug.Name(), fsPath: fsPath,
 		code: code, devTest: devTest, checkArgv: in.checkArgv, inv: inv,
-		baseArgv: in.baseArgv, selection: in.selection,
-		bindDirFlag: in.bindDirs, noBindDepsFlag: in.noBindDeps, stdout: stdout,
-		seed: in.seed, substrate: in.substrate, mutantConcurrency: in.mutantConcurrency,
+		baseArgv: in.baseArgv, selection: in.selection, selectionMap: in.selectionMap,
+		bindDirFlag: in.bindDirs, noBindDepsFlag: in.noBindDeps, seedLimit: in.seedLimit, stdout: stdout,
+		seed: in.seed, seedSink: in.seedSink, substrate: in.substrate, mutantConcurrency: in.mutantConcurrency,
 		concurrency: in.concurrency, pool: in.pool, noFailFast: in.noFailFast,
 	})
 	if err != nil {
@@ -1253,7 +1284,19 @@ type jailBaselineRunner struct {
 	// keeping only run 2 would erase that. Pointer-shared for the same reason
 	// lastOutput is.
 	flaky *[]string
+	// timedOut reports that the most recent run was killed at bound, the
+	// bound on one run of the suite (adequacy.Report.BaselineTimedOut).
+	// Pointer-shared for the same reason lastOutput is.
+	timedOut *bool
+	bound    time.Duration
 }
+
+// BaselineTimedOut reports whether the most recent baseline run was killed
+// at its bound rather than finishing.
+func (b jailBaselineRunner) BaselineTimedOut() bool { return b.timedOut != nil && *b.timedOut }
+
+// BaselineBound is the bound on one baseline run.
+func (b jailBaselineRunner) BaselineBound() time.Duration { return b.bound }
 
 func (b jailBaselineRunner) RunBaseline() (bool, error) {
 	rep, err := b.scorer.ScoreReport(b.ctx, b.codeKey, b.code, b.devTest, nil, b.testCmd)
@@ -1265,6 +1308,9 @@ func (b jailBaselineRunner) RunBaseline() (bool, error) {
 	// outcome an audit can produce — into an actionable error.
 	if !rep.CompliantPass && b.lastOutput != nil {
 		*b.lastOutput = rep.BaselineOutput
+	}
+	if b.timedOut != nil {
+		*b.timedOut = rep.BaselineTimedOut
 	}
 	if rep.CompliantPass && b.flaky != nil {
 		*b.flaky = unionTestNames(*b.flaky, rep.BaselineFlaky)
@@ -1337,6 +1383,8 @@ func baselineRunnerFor(ctx context.Context, in localAuditInput) (reposcan.Baseli
 		// attributed to each other.
 		lastOutput: new(string),
 		flaky:      new([]string),
+		timedOut:   new(bool),
+		bound:      timeout,
 	}, prep.cleanup, nil
 }
 
@@ -1653,6 +1701,9 @@ type runSubject struct {
 	// landing is the wiring's AuthoredLanding — the same value the scorer
 	// and validator write with (jailWiring.landing).
 	landing advpool.AuthoredLanding
+	// authoredTestPath is where the wiring's scorer writes the authored
+	// test (JailScorer.AuthoredTestPath), so the verdict judges that file.
+	authoredTestPath string
 	// inv is the resolved test command (auditJailPrep.inv).
 	inv lang.Invocation
 }
@@ -1735,7 +1786,7 @@ func newAuditRunSpec(in localAuditInput, roles auditRoles, subj runSubject) advp
 		Repo: subj.repo, Commit: subj.commit, Goal: strings.TrimSpace(in.goal),
 		CodePath: subj.codePath, Code: subj.code,
 		DevTestPath: subj.devTestPath, DevTestCode: subj.devTest,
-		Landing: subj.landing,
+		Landing: subj.landing, AuthoredTestPath: subj.authoredTestPath,
 		// Quoted, not space-joined: TestCmd is a STRING that gets re-split
 		// downstream, and a plain Join is not reversible — an argument
 		// containing a space (an inline -e script, --filter="a b") comes back
@@ -1752,6 +1803,12 @@ func newAuditRunSpec(in localAuditInput, roles auditRoles, subj runSubject) advp
 		// one-test and list commands go through the same package script.
 		Invocation: subj.inv,
 		Selection:  in.selection,
+		// The map the Selection was made from, and the checkout it was made
+		// for: the same two values the scorer carries (buildJailWiring), so
+		// the dev pass and the authored pass build from one row and one
+		// grain.
+		SelectionMap: in.selectionMap,
+		RepoDir:      in.repoDir,
 		// Concurrency carries the workspace substrate's probe answer onto
 		// the RunSpec the driver actually reads — the ONLY hop that does,
 		// so every verdict, report line and ledger row can disclose how
@@ -2027,8 +2084,9 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 		codePath: codeKey, code: string(code),
 		devTestPath: devTestKey, devTest: string(devTest),
 		lang: plug.Name(), importPath: prep.importPath,
-		landing: prep.wiring.landing,
-		inv:     prep.inv,
+		landing:          prep.wiring.landing,
+		authoredTestPath: prep.wiring.scorer.AuthoredTestPath(codeKey),
+		inv:              prep.inv,
 	})
 
 	// Signatures are best-effort (mirrors the brain's StartRun): a failure just
@@ -2243,11 +2301,14 @@ type jailWiringInput struct {
 	// as a bare checkArgv.
 	inv            lang.Invocation
 	selection      lang.Selection
+	selectionMap   testmap.Map // localAuditInput.selectionMap
 	bindDirFlag    []string
 	noBindDepsFlag bool
+	seedLimit      int64 // localAuditInput.seedLimit
 	stdout         io.Writer
-	seed           *repoSeed // non-nil: use this prebuilt, SHARED seed instead of building one
-	substrate      string    // "" or substrateJail = the bwrap jail (today's behavior); substrateWorkspace = mutate repoDir in place, no jail
+	seed           *repoSeed        // non-nil: use this prebuilt, SHARED seed instead of building one
+	seedSink       func([]seedSkip) // localAuditInput.seedSink
+	substrate      string           // "" or substrateJail = the bwrap jail (today's behavior); substrateWorkspace = mutate repoDir in place, no jail
 	// mutantConcurrency is how many mutants this file scores at once — on
 	// the jail substrate, that many disposable jails; on the workspace
 	// substrate, that many PRIVATE TREES in the pool. See
@@ -2540,7 +2601,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		// has ONE tree, and a scorer told to run six mutants at once against
 		// it would queue five of them behind the borrow channel for the whole
 		// audit. The number that scores must be the number that exists.
-		w.scorer = advpool.JailScorer{Jail: pool, RepoDir: in.repoDir, BaseFiles: base, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Landing: w.landing, Concurrency: pool.Trees(), Lang: in.langName, Selection: in.selection, FailureParser: failureParser, FailFast: failFast}
+		w.scorer = advpool.JailScorer{Jail: pool, RepoDir: in.repoDir, BaseFiles: base, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Landing: w.landing, Concurrency: pool.Trees(), Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, FailFast: failFast}
 		w.validator = advpool.JailValidator{Jail: pool, RepoDir: in.repoDir, BaseFiles: base, DevTestPath: w.devTestKey, Landing: w.landing}
 		w.jailEnum = advpool.JailEnumerator{Jail: pool, BaseFiles: base}
 		// w.depBinds stays nil: there is nothing to bind read-only when the
@@ -2561,11 +2622,14 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 			// langs, non-modules, or already-vendored repos). Seed from the
 			// returned dir.
 			var serr error
-			seed, serr = buildRepoSeed("corral certify --local", in.repoDir, in.langName, in.iso, in.bindDirFlag, in.noBindDepsFlag, in.stdout)
+			seed, serr = buildRepoSeed("corral certify --local", in.repoDir, in.langName, in.iso, in.bindDirFlag, in.noBindDepsFlag, in.seedLimit, in.stdout)
 			if serr != nil {
 				return w, serr
 			}
 			w.cleanup = seed.cleanup
+		}
+		if in.seedSink != nil {
+			in.seedSink(seed.skipped)
 		}
 		depBinds := seed.binds
 		w.depBinds = depBinds
@@ -2597,26 +2661,49 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		// RunSpec.Matrix, so wiring it here costs nothing when --matrix is off
 		// (the flag is the real gate).
 		enumerator := newRunEnumerator(in.iso, in.timeout, depBinds)
-		w.scorer = advpool.JailScorer{Jail: jail, RepoDir: in.repoDir, BaseFiles: repoFiles, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Landing: w.landing, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, FailureParser: failureParser, FailFast: failFast}
+		w.scorer = advpool.JailScorer{Jail: jail, RepoDir: in.repoDir, BaseFiles: repoFiles, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Landing: w.landing, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, FailFast: failFast}
 		w.validator = advpool.JailValidator{Jail: jail, RepoDir: in.repoDir, BaseFiles: repoFiles, DevTestPath: w.devTestKey, Landing: w.landing}
 		w.jailEnum = advpool.JailEnumerator{Jail: enumerator, BaseFiles: repoFiles}
 		if len(depBinds) > 0 {
 			names := make([]string, 0, len(depBinds))
 			for _, b := range depBinds {
-				names = append(names, b.Rel)
+				names = append(names, b.Rel+" ("+depMountWords(in.iso, b.Host)+")")
 			}
-			fmt.Fprintf(in.stdout, "deps: bound %d dir(s) read-only (%s) — not copied into the jail seed\n", len(depBinds), strings.Join(names, ", "))
+			fmt.Fprintf(in.stdout, "deps: bound %d dir(s), never changed on the host — not copied into the jail seed: %s\n", len(depBinds), strings.Join(names, ", "))
 		}
 	} else {
 		w.codeKey = filepath.Base(in.codePath)
 		w.devTestKey = filepath.Base(in.testPath)
 		jail := newRunJail(in.iso, in.timeout, nil)
 		enumerator := newRunEnumerator(in.iso, in.timeout, nil)
-		w.scorer = advpool.JailScorer{Jail: jail, MutantTimeout: in.testTimeout, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, FailureParser: failureParser, FailFast: failFast}
+		w.scorer = advpool.JailScorer{Jail: jail, MutantTimeout: in.testTimeout, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, FailFast: failFast}
 		w.validator = advpool.JailValidator{Jail: jail}
 		w.jailEnum = advpool.JailEnumerator{Jail: enumerator}
 	}
 	return w, nil
+}
+
+// depMountWords is how iso mounts the dependency directory at host, for the
+// deps line and review's jail note: one copy-on-write overlay (the run may
+// write, the writes are discarded with it), read-only per entry because the
+// directory's filesystem cannot be an overlay's lower layer although this
+// bwrap overlays, or read-only (a backend that does not overlay). A
+// directory that cannot be listed comes first: every dependency bind is
+// PerEntry, its per-entry binds expand to nothing, and bwrap does not
+// overlay it (sandbox.OverlaysDir needs its listing for the cache masks), so
+// no backend mounts it and the line must not name a mount.
+func depMountWords(iso sandbox.Isolator, host string) string {
+	if _, err := os.ReadDir(host); err != nil {
+		return "not mounted: it could not be read"
+	}
+	switch {
+	case sandbox.OverlaysDir(iso, host):
+		return "copy-on-write, writable in the run only"
+	case sandbox.Overlays(iso):
+		return "read-only, bound per entry: its filesystem cannot be overlaid"
+	default:
+		return "read-only"
+	}
 }
 
 // localSwarmAutoCap keeps a default (no --swarm) run polite: even on a

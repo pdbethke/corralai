@@ -9,6 +9,304 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [Unreleased]
+
+### Added
+
+- **The audited party includes the tools a commit's footer declares.** A
+  commit message line `Generated with <tool>` (or `by`), after an optional
+  emoji, with the tool as a Markdown link's text or as a few plain words, is
+  read beside the `Co-authored-by` trailers: Claude Code writes
+  `🤖 Generated with [Claude Code](https://claude.com/claude-code)`, and a
+  tool can declare itself there and not in a trailer. Recorded on scan and
+  review entries (`generated_with`), in the warehouse's `corral_scans` and
+  `corral_reviews`, on the signed review statement (`generatedWith`) and on
+  the review page. Only whole lines of that shape count, so prose that
+  begins the same way names nothing. It is a declaration, not evidence:
+  anyone can write the line or delete it, so it is a metric about the
+  change and nothing gates or grades on it, and a commit that declares no
+  tool is not evidence a person wrote it alone.
+
+### Fixed
+
+- **A test unit's failure text could be published in the ledger.** Why a
+  unit gave no evidence, or was left out of a red baseline's retry, is
+  stored on the verdict (`unreported_reason`, `excluded_reason`,
+  `excluded_red_in_baseline`) and signed into the ledger, and that reason
+  quoted the failure itself: the runner's error, which can name host paths,
+  the last lines the failed run printed, which can echo a secret from the
+  operator's command, and, for a unit with no one-unit command, the
+  operator's whole command line. Each reason is now one fixed phrase per
+  kind of failure, with the exit code where one was read (`run failed: exit
+  1`, `could not run: the jail could not start it`, `not run: the command
+  could not be built`, `red in the baseline; not rerun alone: the jail could
+  not be prepared`). The full error and output are still printed on the
+  run's own output, beside the unit they belong to, and stored nowhere.
+  One reason still carries words from the command: a unit red only with
+  the evidence pass's change and green as your command runs it names the
+  runner flags that change replaced (`--pool=forks`, say), which are
+  corral's own edit to the command, not its arguments at large.
+- **Why a file graded by the whole suite could publish the operator's
+  command line.** That reason is the entry's `selection_fallback`, written
+  on every ledger entry whether or not source is pushed, and it quoted the
+  test command (`no runner row for [...]`, `cannot instrument test command
+  [...]`, a unit listing's command in backticks), the runner's error and
+  what a failed evidence run printed. A command written as `API_KEY=...
+  vitest run` put the key in the public record. Each such reason is now one
+  fixed phrase (`the unit pass could not list units: the listing exited
+  1`, `the unit pass did not run: the jail could not start it`,
+  `selection evidence run failed: the jail could not start it`), and the
+  command, error and output are printed on the scan's own lines only. A
+  unit's `coverage unavailable` and `unparseable` reasons keep their class
+  and leave the tool's text to the terminal too.
+- **Why the coverage pre-flight did not run could publish the operator's
+  command line.** The scan row's `preflight_note`, written on every ledger
+  entry, quoted the jail's error, the coverage reporter's parse error
+  (which can quote a report line naming a host path) and the test command
+  (`no coverage instrumentation for test command [...]`). Each is now a
+  fixed phrase (`preflight: the jail could not be prepared`, `coverage
+  pre-flight run failed: the jail could not start it`, `coverage report
+  unparseable: the coverage report could not be read`), with the error
+  printed on the scan's pre-flight line only.
+- **A baseline killed at its time bound was reported as red.** REA's
+  eleventh run (2026-10-31) printed "baseline does not pass unmutated" over
+  a tail of passing tests and no failure, then tried both retries: the suite
+  had been stopped at the 30-minute bound on one run, and the timeout was
+  dropped on the way to the report. A timed-out baseline now says so, with
+  its bound and its last output, under its own reason (`baseline-timeout`),
+  and is not retried, since leaving out red units is not a way to make a
+  suite finish in time.
+- **A baseline still red after the retry, because of a test file the
+  evidence pass ran green, was not graded.** REA's tenth run (2026-10-31)
+  retried `src/server/createServer.ts` without the 34 test files red in the
+  evidence pass, and its baseline was still red with one file failing:
+  `tests/boundary/cli/runtimeUrlPrefixMappingCli.test.ts`, green in the
+  evidence pass, in the ninth run's whole suite and three times out of three
+  run alone afterwards, and red in both baseline runs beside the other 597
+  files. A baseline still red is now retried once more without the test files
+  its own output names failing, each run alone first so the run says which
+  it was: red beside the others and green alone (flaky, or broken by a file
+  run with it), or red alone as your command runs it. The retry may leave out
+  files the evidence says execute the file, but never all of them: graded
+  only by files that reported no evidence, the rate would measure tests
+  nobody showed run it, so that retry is refused. Retried once, never until
+  green: a third red baseline is not graded. The files left out this way are
+  named, with why, on the run's line, the verdict
+  (`excluded_red_in_baseline`), the ledger row (`selection_excluded_red`)
+  and the signed statement (`selectionExcludedRed`). Read from vitest's and
+  jest's output; another runner's output names no unit corral reads yet, so
+  its file is not retried a second time, and the run says so.
+- **vitest 5's failures were never named.** vitest 5 colours its report with
+  no terminal and no colour variable (measured on 5.0.3 in the jail's
+  environment), so its `FAIL` headings reached the failure parser wrapped in
+  escape codes and named nothing: no `killed_by` label on a kill, and no
+  salvage of a partly failing authored test, on any vitest 5 run. Every
+  runner's output is now read with its escape codes removed, and a vitest
+  project's name before the file is read in both of its forms.
+- **Every file of a repository with units that cannot run alone was graded
+  by the whole suite.** vitest runs every file a filter is a substring of,
+  and a unit selection whose command would also run an unnamed unit was
+  refused, so the file fell back to every unit. Every selection holds the
+  units that reported no evidence, and on REA those included 120 that cannot
+  run alone, so every file was graded by all 2,186 units and no red unit
+  could be retried without (REA's ninth run named the unit). A graded
+  selection now names each unit its command would also run, until nothing
+  new comes in; the authored test's own pass still refuses, since that test
+  proves a survivor only by killing it alone, and a retry whose command
+  would bring back a unit it left out as red is refused, naming it.
+- **A large unit selection was graded by the whole suite.** A unit-grain
+  selection over 32 KiB of command line (a readability cap) was refused, and
+  the file fell back to every unit: REA's seventh run selected 850 units
+  (44,997 bytes) and was graded by all 2,186, with a red baseline nothing
+  could be retried without. A unit selection is now refused only past
+  96 KiB, what the jail's one `sh -c` argument can carry on Linux (128 KiB,
+  less the jail's prelude and quoting; a test executes it). A widened
+  test-grain set past that bound is refused rather than run, since run it
+  could only fail to exec and read as a red baseline.
+- **A unit red only under the evidence pass's own flags was treated as red.**
+  vitest units run in the threads pool for the evidence pass, and a test
+  that calls `process.chdir()` (REA's `cliJsonPaths.test.ts`) fails there
+  and nowhere else. A unit the pass finds red is now run once more exactly
+  as your command runs it; green that way, it is not red, so the
+  red-baseline retry never leaves it out. That run takes no coverage, so the
+  unit reports no evidence and runs with every file; the scan line counts
+  such units.
+- **A failing baseline printed the start of its output, not the failures.**
+  The baseline kept the first 64 KiB, and on REA that was passing tests, cut
+  before vitest's failure summary. It now keeps the last 64 KiB, in the same
+  one run. A red baseline that is not retried also says why: graded by the
+  whole suite (with the reason), or no unit in its selection failed in the
+  evidence pass.
+
+- **The jail's copy of a repository left files out without saying so.** Any
+  file over 1 MiB, and any file that is not UTF-8 text outside a test tree,
+  was skipped, and a test that read one failed on unmutated code with nothing
+  to say why. REA's acceptance tests run its built
+  `dist/cli-runtime/cli.js` (2.7 MiB), and five `certify --repo` runs ended
+  COULD-NOT-GRADE before the cause was found.
+  - The 1 MiB per-file limit is gone. Libraries over 1 MiB are ordinary, and
+    the limit protected nothing the total did not: `--seed-limit` still bounds
+    the copy and refuses loudly. A tree with large text files now copies them,
+    and may need a larger `--seed-limit`. A file bigger than the remaining
+    room is measured as a stream, never held whole.
+  - A file left out because it is not text is named on the run's output (one
+    line, by reason, largest first) and recorded on the ledger entry
+    (`ScanRow.SeedSkipped`, warehouse column `seed_skipped`: JSON text, an
+    array of `{"path","why"}`, `why` today always `not-text`), by `certify
+    --repo` and `certify --local`, and the record page lists it with its
+    reason. What a run could not see shapes what it measured, so it is part
+    of the record.
+
+- **The unit evidence pass recorded partial coverage as clean evidence on
+  vitest projects that use the forks pool.** The forks pool ends its workers
+  with SIGTERM, and a worker ended that way writes no V8 coverage. A unit
+  whose test spawned a subprocess, or whose configuration the main process
+  imported, still named some project files (the ones those processes wrote),
+  so it passed as a successful unit holding none of the worker's coverage.
+  On REA (vitest 5.0.3, a copy holding three of its test files, the jail, 3
+  workers), `hopperClient.protocol.test.ts`, `ciQualification.test.ts` and
+  `ghidraEndpointLifetime.test.ts` executed 1, 4 and 13 source files under
+  forks and 40, 11 and 59 under `--pool=threads` (n=1 for forks, n=3 for
+  threads, identical each run). In REA's earlier forks-era map, all 87
+  forks-project units marked successful had this shape. The pass now runs
+  every vitest unit with `--pool=threads` itself, replacing any `--pool` the
+  operator wrote. It says so once per pass, on `certify --repo`'s units line
+  and on `corral tests map`'s `evidence:` line
+  (`the evidence pass runs each unit with --pool=threads`, plus `in place of
+  --pool=forks` when it replaced one), and in the reason of any unit that
+  failed. Grading is unchanged: mutants still run the operator's own
+  command. A unit that is red under threads is reported with no evidence
+  rather than counted from partial coverage. An unreported unit is selected
+  for every file, so it costs time, never a wrong selection. One known case:
+  REA's `cli-boundary` project sets `execArgv: --max-old-space-size=384`,
+  which a worker thread refuses, so all 154 of its units are now unreported.
+  **Maps and evidence passes made before this fix under-select on forks-pool
+  vitest projects:** a file that a unit's worker executed may be missing
+  that unit. The unit-pass cache key now includes the flags the pass adds, so
+  a cached forks-era pass is not reused. This is also a one-time cache miss:
+  `reposcan.VerdictGeneration` is now 37.
+- **One test already failing in the jail made every file ungradable.** A
+  unit that reports no evidence is added to every file's selection, so
+  partial evidence never under-selects. A unit that reports none because its
+  own run failed on unmutated code therefore put a failing test in every
+  file's selection, and every baseline was red. On REA (545 of 2,186 units
+  red in the jail) and on corral's own Go tree (18 of 99) a `certify --repo`
+  run graded nothing. (This entry first said REA's acceptance tests were red
+  because their gitignored build output never reaches the jail. That was
+  wrong: the jail's copy does not filter gitignored files. Read from the
+  code and not yet run: they import `dist/cli-runtime/cli.js`, which is over
+  the 1 MiB per-file limit the jail's copy silently skips. Since run: one
+  acceptance test file passes 36 of 36 with that file present and fails 23
+  without it. The retry below does not rescue REA, because its acceptance
+  units were never run alone in the evidence pass, so none of them is a unit
+  that ran and failed.) Now a file whose baseline is red
+  is retried once without the units whose run failed in the evidence pass;
+  if that baseline is green, two runs out of two, the file is graded by it.
+  Only a unit that ran and failed is left out: one the time limit cut, one
+  never run alone, or one whose jail did not start proved nothing and stays.
+  A failing unit can kill no mutant, but it may pass under your own command
+  where it failed under the pass's (vitest runs under `--pool=threads` in
+  the pass), so the run says what it did, per file:
+  `baseline failed with N units that failed unmutated in the evidence pass
+  (…); retried without them: green — graded without them`, and the file's
+  line, the ledger row (`selection_excluded`), the attestation
+  (`selectionExcluded`) and `corral scans` carry the count. A retry that is
+  still red is not graded, and says it was tried.
+  `reposcan.VerdictGeneration` is now 38.
+- **A single failing Python test threw away all of a run's selection
+  evidence.** The instrumented pytest run refused any non-zero exit, so on
+  github/spec-kit, where 2 tests fail only under coverage and 13,445 pass,
+  every file was graded by the whole suite (7 to 13 minutes a mutant). The
+  run now keeps its evidence when pytest exits 1 ("tests failed"), provided
+  a small plugin it loads (`-p corral_failed`) has named every failed test
+  by node id; any other non-zero exit still refuses it. A failed test's
+  coverage is not used: it is added to every file's selection and to every
+  mutant's command instead, so a narrowed baseline still runs it, as the
+  whole suite would. If it makes a baseline red, the retry above leaves it
+  out and says so.
+- **TypeScript files in a repository that also has JavaScript were graded
+  by the whole suite, despite their evidence.** JavaScript and TypeScript
+  share one unit-evidence run (one vitest command collects both), which the
+  scan names after the first language alphabetically, `javascript`; a
+  TypeScript file was then refused with "the unit pass ran for javascript,
+  so it has no evidence about typescript file …". On REA that was 1,784 of
+  its 1,881 auditable files, including every top-ranked one. A unit map now
+  answers for every language whose instrumented command is the same run,
+  and still for no other.
+
+### Changed
+
+- **The unit evidence pass is faster on a bwrap that can overlay.** On such
+  a bwrap (`--tmp-overlay`, 0.10 and later), the pass copies the tree into
+  the jail once per pass instead of once per unit. Each unit runs on its own
+  copy-on-write overlay of that seed, and its writes go away with the run.
+  Each dependency directory (`node_modules`) is mounted as one copy-on-write
+  overlay instead of one read-only bind per entry. Its top-level cache
+  directories (every dot-directory that is not a symlink, except `.bin` and
+  `.pnpm`) start empty on every run. Whether a dependency directory can be overlaid is checked once
+  per filesystem. A directory that cannot be overlaid (NFS, FUSE, ecryptfs,
+  another overlay) keeps per-entry read-only binds, and the deps line says so.
+  A bwrap that cannot overlay at all keeps a fresh copy per unit, and the
+  units line says `units ran on a fresh copy each (this bwrap cannot
+  overlay)`. Measured on REA's full map (2,186 units, 8 workers, the
+  jail, a shared 24-core box, n=1 per run): **36m54s** before this change (load
+  mean 10.0), **29m22s** and **30m45s** after it (load means 10.4 and 11.2).
+  About the same number of units produced evidence in each (1,640, 1,641 and
+  1,640). One change in evidence is caused by the overlay, and it is
+  deliberate: REA's `dependencyInstall.test.ts` reads
+  `node_modules/.package-lock.json`, which the per-entry binds never mounted
+  (they skipped dot-entries), so it was red before and is green under the
+  overlay, which shows the file as it is on the host. Separately, run-to-run
+  noise: in the 30m45s run one wall-clock test
+  (`javascriptStaticAnalysis.routeProperties.test.ts`, `< 2000` ms) went
+  red, where it had been green in the 29m22s run. At 16 workers the same map
+  took 20m42s (n=1, load mean 21.9), but under that load three units went
+  red: two timed out and one failed its own wall-clock assertion.
+- **The dependency overlay applies to every jailed run, graded runs
+  included, and can move a verdict.** The mount described in the bullet
+  above is not specific to the evidence pass: on a bwrap that can overlay,
+  the baseline and every mutant run mount `node_modules` the same way.
+  Against the per-entry read-only binds, such a run now sees top-level
+  dot-files in `node_modules` and its `.pnpm` store (the binds skipped
+  every dot-entry but `.bin`, so, read from the code and not yet run on a
+  pnpm project, a package pnpm did not hoist to the top level did not
+  resolve), can write an existing dependency file for the rest of the run
+  (it was EROFS), and follows a top-level symlink that leaves `node_modules`
+  (an npm-workspace link such as `node_modules/pkg -> ../packages/pkg`,
+  which the binds left out) to the workspace's copy of its target. A test
+  that depends on any of these can change result between this release and
+  the last; the measured case is REA's `dependencyInstall.test.ts` above,
+  red under the binds and green under the overlay (measured in the evidence
+  pass, not in a graded run). It is kept on graded runs on purpose: the
+  jail should see the dependency tree the host has. A bwrap older than 0.10,
+  a dependency directory whose filesystem cannot be overlaid, and
+  `--jail container` keep the per-entry binds. A dependency directory that
+  cannot be listed is not overlaid either (its cache directories could not
+  be masked); no backend mounts it, and the deps line now says `not mounted:
+  it could not be read` where it used to name a mount. Covered by
+  `reposcan.VerdictGeneration` 37. (This changelog first described the
+  overlay under the evidence pass alone, which understated what it
+  changes.)
+- **Go units in the evidence pass share one build cache, and never a cached
+  result.** The first unit runs with a `GOCACHE` the pass owns, and its
+  result is that unit's evidence. Every later unit gets that cache as a
+  copy-on-write overlay: it reads the cache, and its writes are discarded
+  with the run, so no unit changes what another reads. (This said
+  "read-only overlay"; a unit can write the cache, and the write is
+  thrown away.) Every go unit runs with `-count=1`, replacing any `-count`
+  the operator wrote, because a shared cache also holds test
+  results and `go test` would replay one as a run that never happened.
+  Measured on corral's own packages at one worker (n=3 each, load not
+  recorded per run):
+  `internal/testmap` took 6.21 s with an empty cache and 1.96 s with the
+  shared one, and `internal/lang` took 15.07 s and 11.13 s. Over corral's whole map
+  (99 units, 8 workers), two runs took 60 s and 90 s (load means 9.0
+  and 14.1), against 480 s for the build just before the change on the same
+  copy. That 480 s run had a load mean of 93.3, so it shows the maps are
+  identical (1,935 edges in each), not how much faster the change is. When
+  no cache can be shared, the units line says `each unit started from an
+  empty GOCACHE (no shared cache: <why>)`.
+
 ## [v1.0.0-rc.29] — 2026-10-26
 
 ### Added
@@ -112,7 +410,9 @@ history of any release, `git log v0.3.4..v0.3.5`.
 ### Changed
 
 - **`VerdictGeneration` is now 34, so every cached verdict is measured once
-  more.** Three things in this release can move a verdict: jest and vitest
+  more.** (This said 34 until 2026-10-28; the tag's
+  `internal/reposcan/generation.go` is 35, so the number is 35.) Three
+  things in this release can move a verdict: jest and vitest
   one-test and salvage commands refuse a name filter bundled into short
   options (`-ct foo`), which a 33 verdict's commands accepted; pre-flight
   results changed (a file with no executable lines is omitted rather than

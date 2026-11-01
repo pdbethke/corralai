@@ -90,6 +90,7 @@ func TestPrepareAuditJailFindsTestByRecursiveSearch(t *testing.T) {
 		codePath:  "src/itsdangerous/signer.py",
 		lang:      "python",
 		checkArgv: []string{"python3", "-m", "pytest", "tests/test_itsdangerous/test_signer.py"},
+		seedLimit: seedLimitBuiltin,
 	}, plug, time.Minute, &stdout)
 	// The disclosure line is written BEFORE any jail/sandbox work, so it must
 	// be present regardless of whether this host can go on to actually run

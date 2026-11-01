@@ -2,8 +2,13 @@
 
 # Test selection: which tests grade a file, and why the record says
 
-**Status:** shipped, 2026-08-29. Coverage-guided selection is the default for
-Python; `--scope-tests` is removed.
+**Status:** shipped for Python 2026-08-29 (`--scope-tests` removed then).
+Unreleased on `feat/test-selection` (2026-10-30): selection is the default for
+every language, from one selection engine (`internal/testmap`). Python reads
+per-test coverage contexts; every other language reads the unit evidence pass
+(each test unit run alone under coverage). Where a runner has no unit form
+(mocha, minitest), the file is graded by the whole suite and the record says
+so. The table under "Per-language evidence" says which.
 
 ## The cost expression, and today's measurement
 
@@ -69,6 +74,17 @@ narrowed baseline passes, and a kill rate is reported for a suite the
 whole-suite baseline would have refused (#164). Selection is a subset of the
 whole suite's guarantees only when the whole suite is green.
 
+(Corrected 2026-10-29. The rule above refused ANY non-zero exit, and on
+github/spec-kit that threw away a whole run's evidence over 2 failures among
+13,447 tests: every file fell back to the whole suite, 0 evidence-paired. The
+run now keeps its evidence on pytest's exit 1 only when a plugin corral adds
+to the run (`corral_failed`) named every failed test. Those tests get no
+edges and join every file's selection and every mutant's command, so #164's
+property holds: a failing test never silently leaves a narrowed baseline. Any
+other non-zero exit, or a failure the plugin did not name, still refuses. On
+spec-kit: evidence-paired 0 → 154, candidates 121 → 275 (dry runs, 13m34s and
+12m33s).)
+
 The scan bounds the evidence run separately from the coverage pre-flight —
 `selectionMaxOutput` (64 MiB, ~50× the measured v2 payload) and
 `selectionTimeout` (15 min, ~11× requests) in `cmd/corral/certify_repo.go`.
@@ -127,15 +143,74 @@ and an uncovered file prints its own marker rather than a number:
 | language | evidence today | mechanism | status |
 |---|---|---|---|
 | Python | coverage contexts | `pytest-cov`, one instrumented run of the whole suite, per-test contexts read back per file | shipped |
-| JavaScript / TypeScript | module graph | the harness's own dependency graph from source file to spec file | next, not built |
-| Go | package dependencies | the package graph already used for compile-checking | next, not built |
-| Ruby | none | no evidence source identified yet | whole-suite, disclosed |
+| JavaScript / TypeScript | unit evidence | each test file run alone under coverage (vitest, run in the threads pool; jest; `node --test`); mocha has no unit form, so whole suite, disclosed; one run answers both languages | unreleased |
+| Go | unit evidence | each package's tests run alone under `-coverprofile` | unreleased |
+| Ruby | unit evidence (rspec) | each spec file run alone under coverage; minitest has no unit form, so whole suite, disclosed | unreleased |
+| PHP | unit evidence | each test file run alone under pcov/Xdebug | unreleased |
+| Rust | unit evidence | each Cargo target run alone | unreleased |
+
+(This table said JavaScript/TypeScript would select by "the harness's own
+dependency graph" and Go by "the package graph", both "next, not built". Neither
+was built. Both were replaced by execution evidence, for the reason
+"Why selection is by execution evidence only" gives: an import proves a test
+mentions a file, not that it runs it. The live per-runner answer is generated:
+[`docs/corral/language-support.md`](../corral/language-support.md).)
+
+Unit evidence carries one rule Python's does not need: a unit that reported no
+evidence (its run failed, the time limit cut it, it could not run alone) is in
+**every** file's selection, because nothing says which files it would have
+reached. That keeps selection a subset of the whole suite's guarantees, and it
+has a cost measured below: a unit that failed unmutated makes every baseline
+red, so a red baseline is retried once without the units whose own run failed
+in the evidence pass, and graded only if that retry is stably green.
 
 A language without a selector, a project without the required tool
 (`pytest-cov` absent, say), or a run whose evidence cannot be read all fall
 back to the whole suite, and the fallback reason is recorded verbatim —
 `no selector for ruby`, or the read error — rather than silently grading
 against nothing.
+
+## Measured on real repositories (2026-10-29 and 2026-10-30)
+
+Every run below is `certify --repo` (or its free `--dry-run`) on the
+maintainer's 24-core workstation, in the bwrap jail, n=1, on subscription seats
+(`--writer-model codex --mutant-model claude-code:claude-sonnet-5-5
+--critic-model claude-code:claude-haiku-5-5`), the box shared with other work.
+Third-party repositories first. No REA run has been graded yet, and each try
+is listed because each found a defect.
+
+**morluto/rea @ 87a5be3** (TypeScript, vitest, 2,186 test files; `--top 1
+--seed-limit 128 --evidence-timeout 45m -- node ./node_modules/vitest/vitest.mjs
+run`). Evidence pass about 30 minutes; the file chosen each time was
+`src/server/createServer.ts`.
+
+| try | binary | outcome | what it found | fixed in |
+|---|---|---|---|---|
+| 3 | 575f956a | COULD-NOT-GRADE, 1h27m | 545 units that failed alone in the jail were put in every selection, so every baseline was red | 42b8e89e (retry once without them) |
+| 4 | 42b8e89e | COULD-NOT-GRADE, 1h30m, no retry | the unit map is named `javascript`, and a TypeScript file was refused it, so it was graded by the whole suite | b96bb69a |
+| 5 | b96bb69a | COULD-NOT-GRADE, 1h30m, no retry | the acceptance tests failed because the jail copy silently dropped `dist/cli-runtime/cli.js` (2.7 MiB) under a 1 MiB per-file limit; confirmed by running one acceptance file on the host with and without it (36 of 36 pass; 23 fail) | a43780bb, 4fd1d387 (limit removed, left-out files recorded) |
+| 6 | 4fd1d387 | COULD-NOT-GRADE, 1h45m | units with no evidence fell from 547 to 321 and the acceptance tests passed, but the baseline still failed and its printed output was the first 64 KiB, cut before vitest names what failed; no word on the retry | f61675fd (show the tail; say why no retry) |
+
+REA's built output is a further question this branch does not answer: its
+acceptance tests run `dist/`, which is built on the host and never rebuilt per
+mutant, so a source mutant cannot reach them. That is the build-step design
+that follows this branch.
+
+**github/spec-kit @ 2a23a84** (Python, 13,447 tests). Dry runs only. The
+instrumented run had 2 failures, so the old exit rule threw its evidence away:
+evidence-paired 0, every file whole-suite (13m34s). After 895d11e9:
+evidence-paired 154, candidates 121 → 275 (12m33s).
+
+**The foreign sweep** (`scripts/foreign-sweep.sh`, 8 SHA-pinned repos, dry run):
+all 9 rows match `testdata/foreign-sweep-expected.tsv` on this branch.
+
+**corral's own Go tree — a mechanics check, not evidence.** An auditor
+grading itself proves nothing to anyone else; this run shows only that the
+retry works end to end. `internal/testmap/select.go` at df7fabff: 18 of 99
+units failed alone in the jail, the baseline was retried without them and was
+green, kill rate 0.81 (29 of 36 graded, 95% CI 0.65–0.90), 7 survivors, all 7
+proven by an authored test. 11m49s; dev pass median 21 s per mutant. Load
+was high from unrelated work (1-minute 20.9 at the start).
 
 ## The authored-test consequence
 
@@ -488,3 +563,225 @@ re-derivation per file it touches; `DELETE FROM selection_cache` costs the
 next scan one suite run — never a wrong answer, only a paid-for one.
 Eviction (by age, by row count, or on `corral scans` disk-pressure) is a
 parked follow-up, not yet built.
+
+## Evidence pass mechanics
+
+**Status:** Unreleased (written 2026-10-28, on `feat/test-selection`).
+
+The unit evidence pass (the one `certify --repo` runs,
+and `corral tests map`) lists the units the operator's command collects. It
+runs each unit alone, under coverage, in the jail, and keeps a unit's
+coverage only when that unit's own suite exited 0. Four changes were tried.
+Three shipped. The first fixes what the pass measured. The second and third
+cut what the pass costs, and the second also changes one REA unit's evidence
+(below). The fourth, a shared vitest transform cache, was measured slower and
+dropped.
+
+Some figures below are carried by the commit messages that made the
+changes: 99cdebfe, 761549e6, 33786970, 0b3aeb2d, 2a56d7f8 and 7ab00ef9. The
+rest come from an unpublished session record of measurements taken on the
+maintainer's workstation, a 24-core box. Each figure is n=1 unless stated
+otherwise. The box was shared with other work throughout. A run's load is
+given beside it where it was recorded, and a figure whose load was not
+recorded says so.
+
+### vitest units run in the threads pool
+
+**Correction.** The vitest row used to tell the operator to run with
+`--pool=threads`. A forks-pool unit read `no worker coverage … run with
+--pool=threads` when its V8 coverage named no project file. That advice
+under-counted, because forks coverage is often partial rather than empty.
+The forks pool ends its workers with SIGTERM, and a worker ended that way
+writes no V8 coverage. A unit whose test spawned a subprocess, or whose
+configuration the main process imported, still named the files those
+processes wrote, so it passed as clean evidence that held nothing from the
+worker. On REA (vitest 5.0.3, three test files, 3 workers),
+`hopperClient.protocol.test.ts`, `ciQualification.test.ts` and
+`ghidraEndpointLifetime.test.ts` executed 1, 4 and 13 source files under
+forks and 40, 11 and 59 under threads (n=1 for forks, n=3 for threads).
+Every one of the 87 forks-project units that REA's forks-era map marked
+successful had this shape.
+
+The row's `EvidenceArgs` now does this itself: it removes the operator's
+`--pool` and puts `--pool=threads` last, for the evidence pass only. Grading
+still runs the operator's command. The operator learns of it once per pass
+from `UnitEvidence.Changed` (`the evidence pass runs each unit with
+--pool=threads in place of --pool=forks`), and in the reason of any unit
+that failed. `Changed` is a separate field from `UnitEvidence.Note`, because
+a non-empty `Note` means the pass did not run. The unit-pass cache key digests
+the command with these flags, so a forks-era pass is never served again.
+`VerdictGeneration` went to 37.
+
+Two alternatives were tried and rejected:
+
+- A preload that calls `v8.takeCoverage()` on SIGTERM. In a 160-file forks
+  batch it produced worker coverage for 30 of 93 files on one run and 84 on
+  the next. It also turned a subprocess the test itself SIGTERMs into
+  `uncounted: ranges do not fit`. The suspected cause, vitest's 500 ms window
+  between SIGTERM and SIGKILL, was not verified.
+- A per-project fallback to forks for units that cannot start in a thread.
+  This was not built. A unit that is red under threads stays unreported, and
+  an unreported unit is selected for every file. That makes the run slower,
+  never wrong. The cost is real: REA's `cli-boundary` project sets
+  `execArgv: --max-old-space-size=384`, which `new Worker` refuses, so all
+  154 of its units now go unreported.
+
+This changed the evidence, not just the time. Over REA's full map (2,186
+units, 8 workers), the forks-era map had 763 units with evidence and
+took 46m50s (load not recorded). The first threads map had 1,640 and took
+36m54s (load mean 10.0), on a copy with REA's compiled `dist/` that was
+close to the earlier one but not proven identical. Of the 87 forks-project units, 85 still had
+evidence, each with a superset of its old executed set (3,157 executed files
+summed before, 6,861 after). The other two are `cli-boundary` units. The two
+times measure different amounts of work, so they are not a speed comparison.
+
+### One seed per pass, one overlay per dependency directory
+
+Before this change, each unit's jail was assembled from a fresh copy of the
+tree, plus one `--ro-bind` per entry of each dependency directory. That had
+two costs, both measured:
+
+- **Jail start.** REA's `node_modules` has 381 entries. Replaying the
+  recorded bwrap argv with `true` as the command took 2.44 s median (n=7,
+  383 `--ro-bind`s, load not recorded). With `node_modules` as one mount it
+  took 0.04 s, and the cost grew with concurrency. Over a 16-file sample
+  (n=3 reps at each worker count, load not recorded per run), jail start
+  was 0.93 s median at one worker and 2.5 s at eight, the largest fixed
+  cost per unit. The seed write was 0.18 s and 0.26 s.
+- **ENOSPC.** At 12, 16 and 24 workers, every unit failed with ENOSPC: the
+  tmpfs ran out of inodes. Each seed is about 8k inodes, and other sessions
+  had 994k of the 1,048,576 in use. A copy per run is a hazard in itself.
+
+On a bwrap that can overlay, the pass now writes the seed once and mounts it
+in each unit with `--overlay-src S --tmp-overlay S`, at the same path every
+time. Each dependency directory becomes one `--overlay-src Host
+--tmp-overlay Target` instead of per-entry binds. In both cases the unit can
+write, the write goes away with the run, and the host is never changed.
+
+**The dependency overlay is not the evidence pass's alone.** It is built in
+the sandbox's argv (`bwrapIsolator.Wrap`, for every `PerEntry` bind), so on
+a bwrap that can overlay the baseline and every graded mutant run get it
+too. This section first described it as part of the pass only, which
+understated it. Against the per-entry binds, a graded run now sees
+top-level dot-files in `node_modules` and its `.pnpm` store (so, read from
+the code and not yet run on a pnpm project, a package pnpm did not hoist
+to the top level now resolves), can write an existing dependency
+file for the rest of the run (it was EROFS), and follows a top-level
+symlink that leaves `node_modules` (an npm-workspace link such as
+`node_modules/pkg -> ../packages/pkg`, which the per-entry binds refused
+because a bind follows its source) to the workspace's copy of its target.
+Each can move a verdict. The alternative was to keep per-entry binds for
+graded runs and overlay only the pass. It was rejected: the overlay shows
+the jail the dependency tree the host has, which is the tree the
+operator's own test command runs against, and the per-entry binds' omission
+of dot-files was a side effect of avoiding EROFS on caches, not a decision
+about what a test may read. The cost is that a verdict on such a project
+can differ from one graded before this change, which
+`reposcan.VerdictGeneration` 37 records.
+
+The overlay's view of `node_modules` is the real one, dot-entries included.
+That brought two consequences:
+
+- **Host caches are masked.** Every top-level dot-directory of an overlaid
+  dependency directory that is not a symlink gets `--tmpfs`, except `.bin`
+  and `.pnpm`. pnpm's
+  `.pnpm` is the store that every top-level entry links into, not a cache,
+  so masking it would break every pnpm install. So `.vite` (which holds
+  vitest's results) and `.cache` start empty on every run, as they did
+  before. A warm host cache must not steer a graded run.
+- **One evidence change is accepted.** REA's `dependencyInstall.test.ts`
+  reads `node_modules/.package-lock.json`. Under per-entry binds, which
+  skipped dot-entries, it failed with ENOENT. Under the overlay it is green.
+  The per-entry binds skipped dot-entries only to avoid EROFS on cache
+  directories, and copy-on-write removes that reason. The host's tree has
+  that file, and the jail now sees what the host sees.
+
+**Whether to overlay is decided per filesystem.** A probe on corral's temp
+directory says nothing about a `node_modules` on NFS, FUSE, ecryptfs or
+another overlayfs. So each dependency directory's filesystem is probed once
+(cached by `st_dev`), and a refusal keeps that directory on per-entry binds.
+The deps line names the mount for each directory: `copy-on-write, writable
+in the run only`, `read-only, bound per entry: its filesystem cannot be
+overlaid`, `read-only`, or `not mounted: it could not be read`. That last is
+a directory that cannot be listed: its cache masks cannot be computed, so
+it is not overlaid, and its per-entry binds expand to nothing. The deps line
+and the mount read one decision (`dirOverlay` in the bwrap isolator), so the
+line cannot say copy-on-write for a directory the run mounted another way. A bwrap that cannot overlay at all (bwrap 0.9 has
+no `--tmp-overlay`) keeps a fresh copy per unit. `Changed` then says `units
+ran on a fresh copy each (this bwrap cannot overlay)`, and the container
+backend is named in place of "this bwrap" where it applies.
+
+**Measured** on REA's full map, 8 workers: 29m22s (load mean 10.4) and,
+after the review fixes, 30m45s (load mean 11.2), against 36m54s (load mean
+10.0) for the threads map before it. Those maps had 1,641 and 1,640 units with
+evidence against 1,640, so this comparison is like with like. Between the
+threads map and the 29m22s run, edges differed only by `dependencyInstall`
+and by executed-count drift in 33 units green in both. The nearest noise
+control is not a clean one: the 29m22s run and the 16-worker run below, made
+by one binary but at 8 and 16 workers (load means 10.4 and 21.9), differed
+in 37 such units. So the 33 units are comparable to drift seen with no code
+change, though not measured against a same-settings repeat. In the 30m45s
+run, one wall-clock test (`routeProperties`, `< 2000` ms) went red. At
+16 workers the map took 20m42s (load mean 21.9) with no ENOSPC. Under
+that load three units went red: two timed out and one was the same
+wall-clock test.
+
+**Known gap.** The real-bwrap overlay tests are expected to skip in CI
+(the bubblewrap ubuntu-latest's apt installs: 0.9.0 on ubuntu-24.04; not
+yet checked in a CI run), with a
+SKIP reason that says the overlay path was not exercised. They have run, and
+passed, only on a machine whose bwrap can overlay: 0.11.1 on the workstation
+they were run on.
+
+### Frozen caches, and `-count=1`
+
+Every jailed Go unit used to start from an empty `GOCACHE` and rebuild the
+standard library and the module's dependencies. At one worker (n=3 each,
+load not recorded per run),
+`internal/testmap` took 6.21 s that way and 1.96 s with a warm cache, and
+`internal/lang` took 15.07 s and 11.13 s.
+
+The pass now owns one cache directory per pass, mounted at `/corral-cache`
+with `GOCACHE` pointed at it. The first unit runs with it bound writable,
+and that run's result is that unit's evidence: it is not run twice. Every
+later unit gets the cache as an overlay, so it can read and write the cache,
+but its writes never reach it. A warm write after a frozen run is refused,
+and so is a second warm write. A cache directory read-only by file mode
+makes Go fail with EACCES, so read-only has to come from the overlay.
+
+**Why `-count=1` is forced.** A shared `GOCACHE` holds test results as well
+as build output, and `go test` replays a cached result as `(cached)`. A
+replayed result is not a run, and the pass's evidence must come from a run.
+So every Go unit runs with `-count=1`, replacing any `-count` the operator
+wrote, and `Changed` says so. `TestFrozenGoCacheNeverReplaysAResult` is the
+negative control: in the jail, after the warm run, a frozen run without
+`-count=1` prints `(cached)` and the warm run's output, and with it the test
+runs again.
+
+**Measured** over corral's own map (99 units, 8 workers): 60 s and 90 s
+(load means 9.0 and 14.1), against 480 s for the build before the change on
+the same copy. The maps were identical, 1,935 edges each. That 480 s run had
+a load mean of 93.3, and a map saved earlier took 8m23s (503 s) with its
+load not recorded. So these runs establish that the evidence is unchanged and the
+pass got faster. They do not establish by how much.
+
+When no cache can be shared, `Changed` says `each unit started from an empty
+GOCACHE (no shared cache: <why>)`.
+
+**vitest's transform cache was tried and dropped.** vitest 5.0.3 takes
+`--fsModuleCache --fsModuleCachePath <dir>`. A prototype warmed on the very
+files it then ran, so every lookup hit, cut a 16-file sample's summed
+per-unit time (without its one 70 s file) from 52.8 s to 34.8 s at eight
+workers (n=3 each, load not recorded per run). Extrapolated, that was an estimate of
+about 24 minutes for REA's map. The real row was measured on REA's full map at
+8 workers, with the runs alternated: 30m50s and 30m36s with the cache,
+30m08s without (load means 11.3, 11.6 and 10.8). That is 1.9% slower, against
+a keep-or-drop gate of 10% faster, so the row was reverted. The cache was in
+use: in a 3-unit smoke run it grew during the warm unit, and the full runs'
+scan lines named it. The likely
+reason, inferred and not measured per unit, is that a cache warmed by one
+unit holds only that unit's module graph, and transform was a small share of
+a unit's time (one unit: `Duration 7.50s (tests 85%, transform 10%, import
+5%)`). The generic plumbing stays, tested: a row's cache can refuse itself
+from files read through the jail's own view of the tree, and the words a
+cache adds are named on the scan line.

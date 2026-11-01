@@ -944,10 +944,13 @@ measured but not yet used for candidacy. What ran on real repositories, and
 what did not, is in
 [docs/corral/evidence-pairing.md](docs/corral/evidence-pairing.md).
 
-Today this is implemented for Python (pytest with `pytest-cov`). A language
-or harness without a selector, a project without `pytest-cov`, or a run whose
-evidence cannot be read grades against the **whole suite, and the record says
-why** (`graded by the whole suite (no selector for ruby)`). `--whole-suite`
+Selection uses the same evidence in every language (unreleased; until this
+branch it was Python only). Python reads `pytest-cov`'s per-test contexts; every other language
+grades a file by the test units its evidence pass saw execute it, plus every
+unit that reported no evidence, since nothing says which files those would
+reach. A runner with no one-unit form (mocha, minitest), a project without
+`pytest-cov`, or a run whose evidence cannot be read grades against the
+**whole suite, and the record says why**. `--whole-suite`
 asks for that deliberately. Coverage evidence also decides **candidacy**. A
 library file the evidence positively measured at zero covering tests is
 excluded rather than audited, under one of three honest names — `uncovered —
@@ -1073,7 +1076,11 @@ the reviewer by the claims that held of those checked, the verifier by the
 verdicts that agreed with the outcome, a person's adjudication counting
 as the outcome when there is one — under the same evidence floor as every
 other seat. Both entry kinds also name the **audited party** — the commit's
-author, committer and `Co-authored-by` trailers, by name, never an address
+author, committer and `Co-authored-by` trailers, by name, never an address,
+and the tools its message declares in a `Generated with <tool>` footer line
+(`generated_with`). All of these are what the commit DECLARES: git takes
+any author name, and anyone can write or delete a trailer or a footer, so
+they are metrics about the change, never evidence of who or what wrote it
 — so the record says who wrote the change beside who judged it, and
 `models rank --seat committer` grades each party, a person or an agent
 alike, by the changes that held under audit. The first use of that row is

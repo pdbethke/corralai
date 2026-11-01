@@ -4,6 +4,8 @@ package lang
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"sort"
@@ -205,29 +207,61 @@ func cargoPackageName(id string) (string, bool) {
 	return name, cargoTargetName.MatchString(name)
 }
 
-// cargoUnitSelector is the package and target-selection flags for a unit.
-func cargoUnitSelector(unit string) ([]string, bool) {
-	pkg, target, ok := strings.Cut(unit, "/")
+// cargoUnitParts splits a unit into its package and its target-selection
+// flags (`--lib`, `--test it`, `--bin x`).
+func cargoUnitParts(unit string) (pkg string, target []string, ok bool) {
+	pkg, t, ok := strings.Cut(unit, "/")
 	if !ok || !cargoTargetName.MatchString(pkg) {
-		return nil, false
+		return "", nil, false
 	}
-	sel := []string{"-p", pkg}
-	if target == "lib" {
-		return append(sel, "--lib"), true
+	if t == "lib" {
+		return pkg, []string{"--lib"}, true
 	}
-	kind, name, ok := strings.Cut(target, ":")
+	kind, name, ok := strings.Cut(t, ":")
 	if !ok || (kind != "test" && kind != "bin") || !cargoTargetName.MatchString(name) {
-		return nil, false
+		return "", nil, false
 	}
-	return append(sel, "--"+kind, name), true
+	return pkg, []string{"--" + kind, name}, true
 }
 
-// cargoUnitCmd runs one target of one package: argv with its own package and
-// target selection replaced by the unit's, every other option (features,
+// cargoUnitsSelector is the package and target-selection flags for the
+// units: each package once (`-p`), then each target once. cargo selects
+// targets ACROSS the packages it is given, so the flags select the cross
+// product of the units' packages and targets; cargoUnitsCoruns names what
+// that adds.
+func cargoUnitsSelector(units []string) ([]string, bool) {
+	if !unitSet(units) {
+		return nil, false
+	}
+	var pkgs, targets []string
+	for _, u := range units {
+		pkg, target, ok := cargoUnitParts(u)
+		if !ok {
+			return nil, false
+		}
+		if !slices.Contains(pkgs, pkg) {
+			pkgs = append(pkgs, pkg)
+		}
+		if t := strings.Join(target, " "); !slices.Contains(targets, t) {
+			targets = append(targets, t)
+		}
+	}
+	var sel []string
+	for _, p := range pkgs {
+		sel = append(sel, "-p", p)
+	}
+	for _, t := range targets {
+		sel = append(sel, strings.Fields(t)...)
+	}
+	return sel, true
+}
+
+// cargoUnitsCmd runs targets of packages: argv with its own package and
+// target selection replaced by the units', every other option (features,
 // profile, target dir) and the test-binary arguments kept.
-func cargoUnitCmd(argv []string, unit string) ([]string, bool) {
+func cargoUnitsCmd(argv []string, units []string) ([]string, bool) {
 	head, opts, tail, ok := cargoTestSplit(argv)
-	sel, okSel := cargoUnitSelector(unit)
+	sel, okSel := cargoUnitsSelector(units)
 	if !ok || !okSel {
 		return nil, false
 	}
@@ -237,6 +271,115 @@ func cargoUnitCmd(argv []string, unit string) ([]string, bool) {
 		cmd = append(append(cmd, "--"), tail...)
 	}
 	return cmd, true
+}
+
+// cargoUnitsCoruns: a run of units also runs every other target of the
+// cross product cargoUnitsSelector selects — one of the units' packages
+// and one of their targets (measured on cargo 1.90: units-a/lib with
+// units-b/test:it ran units-a's it and units-b's lib as well, capture
+// cargo-units-multi-coruns). An other that cannot be read as a unit is
+// reported as collected: nothing shows it is not.
+func cargoUnitsCoruns(units []string, other string) bool {
+	if slices.Contains(units, other) {
+		return false
+	}
+	opkg, otarget, ok := cargoUnitParts(other)
+	if !ok {
+		return true
+	}
+	pkgIn, targetIn := false, false
+	for _, u := range units {
+		pkg, target, ok := cargoUnitParts(u)
+		if !ok {
+			return true
+		}
+		pkgIn = pkgIn || pkg == opkg
+		targetIn = targetIn || slices.Equal(target, otarget)
+	}
+	return pkgIn && targetIn
+}
+
+// rustUnitTarget places a test file in its package's targets: the package
+// that owns it (owningCrateDir), and the integration-test target a
+// tests/<name>.rs or tests/<name>/main.rs is, or the library for src/lib.rs
+// and for any file under src/ of a package with src/lib.rs and no binary. A
+// binary's source (src/main.rs, src/bin/), any other src/ file of a package
+// that also has a binary, a module below tests/, a bench or an example is no
+// unit here, and neither is a target cargo was told about in Cargo.toml
+// rather than finding it by its place, which this reads no further than the
+// place.
+func rustUnitTarget(repoRoot, testFile string) (pkg, kind, name string, ok bool) {
+	f, ok := repoRelative(testFile)
+	if !ok || repoRoot == "" {
+		return "", "", "", false
+	}
+	pkg, dir, err := owningCrateDir(repoRoot, f)
+	if err != nil {
+		return "", "", "", false
+	}
+	root, err := filepath.Abs(repoRoot)
+	if err != nil {
+		return "", "", "", false
+	}
+	rel, err := filepath.Rel(dir, filepath.Join(root, filepath.FromSlash(f)))
+	if err != nil {
+		return "", "", "", false
+	}
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	switch {
+	case len(parts) == 2 && parts[0] == "tests" && strings.HasSuffix(parts[1], ".rs"):
+		name = strings.TrimSuffix(parts[1], ".rs")
+	case len(parts) == 3 && parts[0] == "tests" && parts[2] == "main.rs":
+		name = parts[1]
+	case parts[0] == "src" && len(parts) > 1 && rel != filepath.Join("src", "main.rs") && parts[1] != "bin":
+		if !exists(filepath.Join(dir, "src", "lib.rs")) {
+			return "", "", "", false
+		}
+		// src/lib.rs is the library's root. Any other file under src/ in a
+		// package that also has a binary may be a module the binary
+		// declares (`mod foo;` in main.rs), which --lib never compiles: its
+		// test would be silently uncollected, so it is refused.
+		binary := exists(filepath.Join(dir, "src", "main.rs")) || exists(filepath.Join(dir, "src", "bin"))
+		if rel != filepath.Join("src", "lib.rs") && binary {
+			return "", "", "", false
+		}
+		return pkg, "lib", "", true
+	default:
+		return "", "", "", false
+	}
+	return pkg, "test", name, cargoTargetName.MatchString(name)
+}
+
+// exists reports whether p is present on disk.
+func exists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
+}
+
+// cargoUnitForFile is rustUnitTarget in cargo test's unit spelling.
+func cargoUnitForFile(repoRoot, testFile string) (string, bool) {
+	pkg, kind, name, ok := rustUnitTarget(repoRoot, testFile)
+	switch {
+	case !ok:
+		return "", false
+	case kind == "lib":
+		return pkg + "/lib", true
+	}
+	return pkg + "/test:" + name, true
+}
+
+// nextestUnitForFile is rustUnitTarget as nextest's binary id: the library
+// is the package's own id, an integration test `<package>::<name>`.
+func nextestUnitForFile(repoRoot, testFile string) (string, bool) {
+	pkg, kind, name, ok := rustUnitTarget(repoRoot, testFile)
+	if !ok {
+		return "", false
+	}
+	id := pkg
+	if kind == "test" {
+		id += "::" + name
+	}
+	return id, nextestBinaryID.MatchString(id)
 }
 
 // cargoWithout is opts without the flags of the sets and the values they
@@ -366,18 +509,22 @@ func nextestParseUnits(stdout string) []string {
 
 var nextestBinaryID = regexp.MustCompile(`^[A-Za-z0-9_-]+(::[A-Za-z0-9_-]+(/[A-Za-z0-9_-]+)?)?$`)
 
-// nextestUnitCmd runs one test binary: argv with `-E 'binary_id(=<id>)'`
-// before any "--". nextest ANDs a filterset with the name filters (measured:
+// nextestUnitsCmd runs test binaries: argv with one `-E 'binary_id(=<id>)'`
+// per unit before any "--". nextest ORs filtersets (capture
+// nextest-filtersets-union), so the run is the union of the binaries and
+// nothing else (capture nextest-units-multi). nextest ANDs a filterset with the name filters (measured:
 // `integrates -E 'binary_id(=units-a)'` ran none of units-a's tests and
 // `-E 'binary_id(=units-a)' -- adds_more` ran one), so the operator's
 // filters still apply inside the binary, as they did to the listing, which
 // listed only binaries with a matching test.
-func nextestUnitCmd(argv []string, unit string) ([]string, bool) {
+func nextestUnitsCmd(argv []string, units []string) ([]string, bool) {
 	pre, opts, tail, ok := nextestRunSplit(argv)
-	if !ok || !nextestBinaryID.MatchString(unit) {
+	if !ok || !unitSet(units) || slices.ContainsFunc(units, func(u string) bool { return !nextestBinaryID.MatchString(u) }) {
 		return nil, false
 	}
 	cmd := append(append(slices.Clone(pre), "run"), opts...)
-	cmd = append(cmd, "-E", "binary_id(="+unit+")")
+	for _, u := range units {
+		cmd = append(cmd, "-E", "binary_id(="+u+")")
+	}
 	return append(cmd, tail...), true
 }

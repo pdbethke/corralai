@@ -106,6 +106,15 @@ func TestBuildBundleCarriesTheSandbox(t *testing.T) {
 	}
 }
 
+// What the jail's copy left out survives the same field-by-field copy.
+func TestBuildBundleCarriesWhatTheSeedLeftOut(t *testing.T) {
+	b := buildBundle(scanstore.Scan{Repo: "o/r", Commit: "c", Substrate: substrateJail}, 1, nil, nil, nil, nil,
+		auditpush.Link{}, false, "o/r", "c", "", bundleMeta{SeedSkipped: `[{"path":"logo.png","why":"not-text"}]`})
+	if b.Scan.SeedSkipped != `[{"path":"logo.png","why":"not-text"}]` {
+		t.Errorf("scan row seed skipped = %q", b.Scan.SeedSkipped)
+	}
+}
+
 type namedJail string
 
 func (n namedJail) Name() string                                           { return string(n) }

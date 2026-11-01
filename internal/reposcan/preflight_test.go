@@ -166,8 +166,10 @@ func TestPreflight_CommandFailed(t *testing.T) {
 	if got.Executed != nil {
 		t.Fatalf("Executed = %v, want nil", got.Executed)
 	}
-	if !strings.Contains(got.Note, "boom: sandbox timeout") {
-		t.Fatalf("Note = %q, want it to carry the underlying error", got.Note)
+	// The terminal carries the error; the recorded Note (the scan row's
+	// published PreflightNote) names the class and quotes none of it.
+	if !strings.Contains(got.Said(), "boom: sandbox timeout") || strings.Contains(got.Note, "boom") {
+		t.Fatalf("Note = %q, Said = %q, want the underlying error in Said only", got.Note, got.Said())
 	}
 }
 
@@ -253,7 +255,7 @@ func TestPreflight_Unparseable(t *testing.T) {
 	if got.Executed != nil {
 		t.Fatalf("Executed = %v, want nil", got.Executed)
 	}
-	if !strings.Contains(got.Note, "mode") {
-		t.Fatalf("Note = %q, want it to carry the parse error", got.Note)
+	if !strings.Contains(got.Said(), "mode") || !strings.Contains(got.Note, "unparseable") || strings.Contains(got.Note, "mode") {
+		t.Fatalf("Note = %q, Said = %q, want the class in Note and the parse error in Said only", got.Note, got.Said())
 	}
 }

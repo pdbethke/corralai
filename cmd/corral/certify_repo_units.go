@@ -19,12 +19,23 @@ import (
 )
 
 // The unit evidence pass in certify --repo: for a language with no per-test
-// selector (every language but Python), each test unit the operator's command
+// evidence (every language but Python), each test unit the operator's command
 // collects is run alone under coverage once (reposcan.CollectUnitEvidence),
-// and the result widens CANDIDACY exactly as Python's selection evidence does
-// — a source file only a unit's execution pairs becomes a candidate, landing
-// beside that unit. It never touches grading: selectionMethod, and so
-// auditConfigKey and every verdict's cache key, read only the selection pass.
+// and the result does for that language both things Python's selection
+// evidence does. It widens CANDIDACY — a source file only a unit's execution
+// pairs becomes a candidate, landing beside that unit — and it GRADES: each
+// file is graded by the units whose own run executed it, plus every unit
+// that reported no evidence (selectionFor, through the one selection engine
+// in internal/testmap), and the scan's method is "unit-evidence"
+// (selectionMethod), so auditConfigKey and every verdict's cache key say so.
+//
+// It decided candidacy alone at first, and grading stayed whole-suite: the
+// evidence that pairs a file with a unit is the same evidence that says
+// which units run it, so every planted bug in a non-Python file was graded
+// by tests the scan had already measured never reach it. Grading by it
+// waited for the engine that could refuse what it cannot run exactly (a
+// selection that would also collect a unit nobody named) and for failed
+// units to be carried rather than dropped.
 //
 // Python keeps its own path because its selector already attributes
 // coverage per test from one run; a unit pass there would be a second,
@@ -39,15 +50,15 @@ var collectUnitEvidence = func(ctx context.Context, runner coverageRunner, files
 }
 
 // runsUnitPass reports whether the unit pass is the evidence path for plug:
-// a resolved language with no per-test selector. A nil plug (no language, or
+// a resolved language with no per-test evidence (lang.TestEvidence). A nil plug (no language, or
 // an ambiguous mixed repository) runs no pass; the selection line has
 // already said why.
 func runsUnitPass(plug lang.Plugin) bool {
 	if plug == nil {
 		return false
 	}
-	_, selects := plug.(lang.TestSelector)
-	return !selects
+	_, perTest := plug.(lang.TestEvidence)
+	return !perTest
 }
 
 // collectUnits runs the unit pass for the scan's language over sources (the
@@ -56,10 +67,12 @@ func runsUnitPass(plug lang.Plugin) bool {
 // refusal is a Note, never fatal: the scan stays name-paired for that
 // language, and says so.
 //
-// Its bounds are the scan's own: the whole pass runs under selectionTimeout
-// (units not started by then are recorded "not run (time limit)", the ones
-// that finished keep their evidence), each unit's command under the same
-// per-command cap the selection run has, and l.unitWorkers units at a time.
+// Its bounds are the scan's own: the whole pass runs under l.evidenceTimeout
+// (--evidence-timeout, else selectionTimeout; units not started by then are
+// recorded "not run (time limit)", the ones that finished keep their
+// evidence, and the scan line counts the ones it cut and names the flag),
+// each unit's command under the same bound and the per-command output cap
+// the selection run has, and l.unitWorkers units at a time.
 //
 // It also sets l.unitLanding, the repository a unit's authored test lands in,
 // which the caller hands to reposcan.UnitTestFile — on a cache hit as on a
@@ -72,17 +85,26 @@ func (l *localExecutor) collectUnits(ctx context.Context, sources []string) repo
 	if !runsUnitPass(plug) {
 		return reposcan.UnitEvidence{Note: fmt.Sprintf("%s grades through its own per-test selector, so it runs no unit pass", langName)}
 	}
+	// Each refusal below is recorded by its fixed reason (Note, which
+	// becomes every file's Fallback in the published ledger) and said with
+	// its error on the terminal (TerminalDetail).
 	inv, err := lang.Resolve(plug, l.repoDir, testCmd, l.runnerFor(langName))
 	if err != nil {
-		return reposcan.UnitEvidence{Note: fmt.Sprintf("%s: %v", langName, err)}
+		return reposcan.UnitEvidence{Note: fmt.Sprintf("%s: the unit pass did not run: its command could not be built", langName),
+			TerminalDetail: fmt.Sprintf("%s: %v", langName, err)}
 	}
 	modulePath, err := l.coverageModulePath(langName)
 	if err != nil {
-		return reposcan.UnitEvidence{Note: fmt.Sprintf("%s: %v", langName, err)}
+		return reposcan.UnitEvidence{Note: fmt.Sprintf("%s: the unit pass did not run: the coverage module path could not be read", langName),
+			TerminalDetail: fmt.Sprintf("%s: %v", langName, err)}
 	}
-	runner, files, err := l.scanRunner(langName, plug, selectionMaxOutput, selectionTimeout)
+	if l.evidenceTimeout <= 0 {
+		return reposcan.UnitEvidence{Note: fmt.Sprintf("%s: unit pass: no evidence bound was set (--evidence-timeout)", langName)}
+	}
+	runner, files, err := l.scanRunner(langName, plug, selectionMaxOutput, l.evidenceTimeout)
 	if err != nil {
-		return reposcan.UnitEvidence{Note: fmt.Sprintf("%s: unit pass: %v", langName, err)}
+		return reposcan.UnitEvidence{Note: fmt.Sprintf("%s: the unit pass did not run: the jail could not be prepared", langName),
+			TerminalDetail: fmt.Sprintf("%s: unit pass: %v", langName, err)}
 	}
 	// The landing map. The jail's seed holds the tree's text, and the
 	// runner applies it to the jail; the workspace runner applies files to
@@ -107,19 +129,28 @@ func (l *localExecutor) collectUnits(ctx context.Context, sources []string) repo
 			var cached reposcan.UnitEvidence
 			if gerr == nil && hit && json.Unmarshal(raw, &cached) == nil && cached.Ran {
 				l.unitsReused = true
+				l.unitMap = reposcan.MapFromUnits(cached, reposcan.UnitFilesFor(plug, l.unitLanding), inv, plug)
 				return cached
 			}
 		}
 	}
 
-	passCtx, cancel := context.WithTimeout(ctx, selectionTimeout)
+	passCtx, cancel := context.WithTimeout(ctx, l.evidenceTimeout)
 	defer cancel()
 	start := time.Now()
 	ev := collectUnitEvidence(passCtx, runner, files, plug, inv, modulePath, l.unitWorkers, func(runnable, listed int) {
 		fmt.Fprintf(l.progress, "  units: running %d of %d listed test unit(s) alone under coverage, %d at a time, within %s for the whole pass…\n",
-			runnable, listed, l.unitWorkers, selectionTimeout)
+			runnable, listed, l.unitWorkers, l.evidenceTimeout)
 	})
 	l.unitsDuration = time.Since(start)
+	if ev.Ran {
+		// The map grading reads (selectionFor), built here because this is
+		// where the invocation the pass ran under — and so the runner row
+		// that reads its units — is known. A pass that did not run builds
+		// none: there is nothing to grade by, and selectionFor says why
+		// from ev.Note.
+		l.unitMap = reposcan.MapFromUnits(ev, reposcan.UnitFilesFor(plug, l.unitLanding), inv, plug)
+	}
 	if ev.Settled() && keyOK {
 		if raw, merr := json.Marshal(ev); merr == nil {
 			l.pendingUnitsPut = &pendingSelectionCachePut{TreeDigest: treeDigest, CmdDigest: cmdDigest, Plugin: unitsCachePlugin(langName), Substrate: l.substrate, Raw: raw}
@@ -131,8 +162,9 @@ func (l *localExecutor) collectUnits(ctx context.Context, sources []string) repo
 // unitsCacheKey is the selection cache key a unit pass is stored under: the
 // tree (treeDigestOnce, as selection's), and a digest over the two command
 // shapes that produced the evidence — the unit listing argv, and the
-// coverage instrument wrapped around the operator's command, which is the
-// wrapper every one-unit command is run under. ok is false when either
+// coverage instrument wrapped around the operator's command with the
+// evidence pass's own flags (lang.EvidenceUnitCmd), which is the wrapper
+// and the flags every one-unit command is run under. ok is false when either
 // cannot be named: no listing (the pass refuses before running anything,
 // so there is nothing to cache) or a tree outside git.
 func (l *localExecutor) unitsCacheKey(plug lang.Plugin, inv lang.Invocation) (treeDigest, cmdDigest string, ok bool) {
@@ -144,7 +176,11 @@ func (l *localExecutor) unitsCacheKey(plug lang.Plugin, inv lang.Invocation) (tr
 	if !ok {
 		return "", "", false
 	}
-	covCmd, ok := reporter.CoverageCmd(inv.Argv)
+	// The evidence flags the pass adds (lang.EvidenceUnitCmd) are part of
+	// what produced the evidence: a vitest pass from before --pool=threads
+	// holds forks-pool units recorded clean without their worker's coverage,
+	// and must not be served for a pass that would run them in threads.
+	covCmd, ok := reporter.CoverageCmd(lang.EvidenceUnitCmd(plug, inv, inv.Argv))
 	if !ok {
 		return "", "", false
 	}
@@ -258,7 +294,7 @@ func unitPassUncounted(ev reposcan.UnitEvidence) int {
 func printUnitPass(w io.Writer, ex *localExecutor) {
 	ev := ex.units
 	if !ev.Ran {
-		fmt.Fprintf(w, "  units: %s\n", ev.Note)
+		fmt.Fprintf(w, "  units: %s\n", ev.Said())
 		return
 	}
 	// No duration here: the scan's report is compared run against run
@@ -266,9 +302,23 @@ func printUnitPass(w io.Writer, ex *localExecutor) {
 	// event's to record.
 	basis := fmt.Sprintf("%d at a time", ex.unitWorkers)
 	if ex.unitsReused {
-		basis = "reused — tree unchanged since an earlier scan (cached evidence)"
+		basis = "reused — tree unchanged since an earlier scan (cached evidence)" + ex.evidenceTimeoutUnused("cached evidence, no run")
 	}
 	fmt.Fprintf(w, "  units: %d run, %d failed (%s)\n", len(ev.Units), unitPassFailed(ev), basis)
+	// Said once, green or red: the evidence came from a command the
+	// operator did not write (lang.EvidenceNote).
+	if ev.Changed != "" {
+		fmt.Fprintf(w, "  units: %s\n", ev.Changed)
+	}
+	// The one failure more time would fix, said with the bound and the flag
+	// that raises it: a large suite that meets the bound otherwise reads as
+	// a list of "not run (time limit)" with no way past it named.
+	if cut := ev.CutShort(); cut > 0 {
+		fmt.Fprintf(w, "  units: %s\n", evidenceCutNote(cut, ex.evidenceTimeout))
+	}
+	if n := ev.GreenAsWritten(); n > 0 {
+		fmt.Fprintf(w, "  units: %d unit(s) red only with the evidence pass's change are green as your command runs them: they stay in every file's selection and run with every mutant\n", n)
+	}
 	// Capped as printEvidencePairings caps its list: on a large suite that
 	// hits the time limit every unit has a line, and the full list is the
 	// count line above plus --dry-run --json (ruling R30).
@@ -283,10 +333,16 @@ func printUnitPass(w io.Writer, ex *localExecutor) {
 		}
 		listed++
 		if u.Err != "" {
-			// A failed unit's reason ends with its output tail, which can
-			// run over several lines; each is indented under the unit so
-			// it reads as that unit's, not as a line of the scan.
-			fmt.Fprintf(w, "    %s: %s\n", u.Unit, strings.ReplaceAll(u.Err, "\n", "\n      "))
+			// A failed unit's reason is followed by its TerminalDetail — the
+			// runner's error or its output tail, for the operator here and
+			// never in the record — which can run over several lines; each
+			// is indented under the unit so it reads as that unit's, not as
+			// a line of the scan.
+			line := u.Err
+			if u.TerminalDetail != "" {
+				line += ": " + u.TerminalDetail
+			}
+			fmt.Fprintf(w, "    %s: %s\n", u.Unit, strings.ReplaceAll(line, "\n", "\n      "))
 		}
 		// The files a unit measured and could not count are a COUNT here
 		// and a list in the --dry-run --json inventory (ruling R22): listed
@@ -300,5 +356,36 @@ func printUnitPass(w io.Writer, ex *localExecutor) {
 	}
 	if ex.unitLandingNote != "" {
 		fmt.Fprintf(w, "  units: %s\n", ex.unitLandingNote)
+	}
+}
+
+// printUnitGrading is the scan's selection line for a language the unit
+// pass serves, printed once the pass has decided how the scan grades: by
+// the units each file's evidence links, with how many units are in every
+// selection only because they reported nothing; or by the whole suite, and
+// why. It is the line the selection pass prints for Python, said about the
+// evidence that actually grades.
+func printUnitGrading(w io.Writer, ex *localExecutor, langName string) {
+	ev := ex.units
+	switch {
+	case ex.wholeSuite:
+		fmt.Fprintln(w, "  selection: grading by the WHOLE suite — --whole-suite")
+	case ex.unitGrades():
+		failed := unitPassFailed(ev)
+		line := fmt.Sprintf("  selection: grading each %s file by the test units its evidence says execute it (%d of %d unit(s) reported", langName, len(ev.Units)-failed, len(ev.Units))
+		if failed > 0 {
+			line += fmt.Sprintf("; the %d that did not are added to every file's selection", failed)
+		}
+		fmt.Fprintln(w, line+")")
+	case !ev.Ran:
+		fmt.Fprintf(w, "  selection: grading by the WHOLE suite — %s\n", ex.unitsNotRunSaid(langName))
+	case reposcan.NoRunnerRow(ex.unitMap) != "":
+		fmt.Fprintf(w, "  selection: grading by the WHOLE suite — %s\n", reposcan.NoRunnerRow(ex.unitMap))
+	default:
+		why := fmt.Sprintf("no unit of %d reported evidence", len(ev.Units))
+		if ev.Said() != "" {
+			why += ": " + ev.Said()
+		}
+		fmt.Fprintf(w, "  selection: grading by the WHOLE suite — %s\n", why)
 	}
 }

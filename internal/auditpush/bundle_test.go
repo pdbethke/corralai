@@ -811,6 +811,24 @@ func TestScanSandboxReachesTheWarehouse(t *testing.T) {
 	}
 }
 
+// TestScanSeedSkippedReachesTheWarehouse: what the jail's copy left out is
+// enumerated in the INSERT and the read like every scan field.
+func TestScanSeedSkippedReachesTheWarehouse(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "w.duckdb")
+	b := sampleBundle()
+	b.Scan.SeedSkipped = `[{"path":"assets/logo.png","why":"not-text"}]`
+	if _, err := PushBundle(target, b); err != nil {
+		t.Fatalf("PushBundle: %v", err)
+	}
+	got, ok, err := readScanRow(openWarehouse(t, target), "repo = ?", "o/r")
+	if err != nil || !ok {
+		t.Fatalf("readScanRow: ok=%v err=%v", ok, err)
+	}
+	if got.SeedSkipped != b.Scan.SeedSkipped {
+		t.Errorf("seed_skipped round trip = %q, want %q", got.SeedSkipped, b.Scan.SeedSkipped)
+	}
+}
+
 // covering_units is its own column, NULL when unmeasured, and the reader
 // hands back exactly what the writer was given — the round trip the
 // warehouse-rows hash depends on (a field written and not read back would

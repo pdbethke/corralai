@@ -162,6 +162,11 @@ Usage:
                                   listed. Reads the ledger only; writes nothing. --changed
                                   <base> takes the files changed since a ref; --max-items
                                   bounds it and names the cut
+  corral tests map --repo-dir <dir> [--jail bwrap|container] [--workers N] [--out <file>] -- <test cmd>
+                                  the test map certify --repo grades by — which test units execute
+                                  which source files — built through the same evidence path with no
+                                  model call: sources, units, the ones no unit executes and each unit
+                                  that contributed no evidence, with why. --out writes it as JSON
   corral verify --attest <path> [flags]
                                   the checker for a certify --repo --attest statement: verifies
                                   its DSSE signature (against --pub or the local certify key,
@@ -304,7 +309,7 @@ Usage of certify --local:
   -n-mutants --n-mutants 5
     	PER-SEAT seeded-violation mutant budget, when you want to set the exam by hand. Unset (0), the budget is DERIVED from the file's complexity — about one fault per decision point, floor 5, ceiling 40 — and the verdict says which rule it used. Set, it is NOT the run's total: total mutants scale with --max-shards (default 8) seats, and DOUBLE again if you name a --shadow-model. E.g. --n-mutants 5 with 8 seats means up to ~40 full dev-suite executions; `--n-mutants 20` roughly ~320
   -no-bind-deps
-    	copy dependency dirs into the jail workspace instead of bind-mounting them read-only (the pre-bind behavior; subject to the workspace size cap)
+    	copy dependency dirs into the jail workspace instead of bind-mounting them read-only (the pre-bind behavior; subject to the seed limit, --seed-limit)
   -no-fail-fast
     	grade every mutant with the WHOLE selected test set instead of stopping at the first failing test. By default a killed mutant stops at the one test that killed it (pytest -x, go test -failfast, jest --bail, phpunit --stop-on-failure), which is most of the per-mutant cost on a repo with a real suite; the verdict is identical either way, and the baseline always runs everything. COSTS: turning this off makes each killed mutant pay for its whole selected set again — on a 77s suite that is the dominant term in the audit. Use it only if your suite is order-dependent or flaky in a way that makes an early stop misleading.
   -no-ledger
@@ -329,6 +334,8 @@ Usage of certify --local:
     	audit --code IN THE CONTEXT of this cloned repo/package: the whole tree is seeded into the jail, the file is mutated in place, and the project's OWN test command (given after --) grades it — so real multi-file projects with package imports work (--code/--test are repo-relative)
   -runner string
     	the test runner behind the test command, when corral cannot read it from the command or its package script (a runner id: go-test, pytest, jest, vitest, mocha, node-test, rspec, phpunit, cargo-nextest, ...; docs/corral/language-support.md lists them). Overrides detection; corral still runs your command as given, and adds a runner's own arguments (fail-fast, one-test runs) only where the command or its script names that runner
+  -seed-limit int
+    	MiB of repository text the jail is seeded with before the repository is refused as too large (without this flag: 64). Counted over every text file the seed copies, whatever its size: binaries outside test fixtures, .git, build output and bound dependency dirs are not counted, and the run names every binary it leaves out. The cost of raising it: the seed is held in memory once per language per run, and every baseline and mutant run writes the whole seed to its own fresh directory under $TMPDIR and removes it afterwards, so the disk in use is the seed times the runs in flight at once. The unit evidence pass writes it once and overlays it copy-on-write for each unit when bwrap has --tmp-overlay (0.10 and later), and otherwise also writes one per unit, and says so. --repo-dir mode only
   -shadow-model string
     	challenger model that attacks every region a SECOND time for a region-controlled head-to-head. OFF unless named. Recorded for comparison — NEVER gates the verdict
   -shadow-pool string
@@ -1102,6 +1109,48 @@ Usage of state migrate:
 usage: corral state paths  (takes no arguments; prints each file's root, name, override variable and resolved path)
 ```
 
+## `corral tests` flags
+
+```
+corral tests — the repository's test map: which test units execute which source files.
+
+  corral tests map --repo-dir <dir> [--jail bwrap|container] [--workers N] [--seed-limit MiB]
+                   [--evidence-timeout D] [--out <file>] -- <test cmd>
+                                  build the map through the evidence path certify --repo grades by
+                                  (the same selection cache included), call no model, and print how
+                                  many sources and units it holds, the sources no unit executes and
+                                  each unit that contributed no evidence, with why. --out writes
+                                  the map as JSON. --seed-limit and --evidence-timeout raise
+                                  the jail seed limit (64 MiB) and the evidence bound (15m)
+```
+
+## `corral tests map` flags
+
+```
+usage: corral tests map --repo-dir <dir> [--jail bwrap|container] [--workers N] [--seed-limit MiB] [--evidence-timeout D] [--out <file>] -- <test cmd>
+
+  -cache-db string
+    	path to corral's local CACHE of instrumented test selections (default: $CORRALAI_CACHE_DB, else $CACHE/corralai_cache.duckdb, see corral state paths); a byte-identical tree reuses the evidence certify --repo collected
+  -evidence-timeout duration
+    	how long the evidence pass may run (without this flag: 15m): Python's one instrumented suite run, or the whole unit pass of every other language, where each unit's own run is bounded the same. A unit not started when it passes is recorded "not run (time limit)" and one still running is stopped; both report no evidence, and every selection then includes them. The run says how many units it cut and names this flag. A Go duration, e.g. 2h
+  -jail string
+    	sandbox backend for --substrate jail: bwrap (Linux), container or sandbox-exec (macOS) (default: auto-detect for this OS)
+  -no-selection-cache
+    	skip the selection cache: always run the evidence pass, and keep nothing
+  -out string
+    	write the test map to this file as JSON that corral's own map reader reads back
+  -repo-dir string
+    	path of the repository to map (required)
+  -runner string
+    	the test runner behind the test command, when corral cannot read it from the command or its package script (a runner id: go-test, pytest, jest, vitest, mocha, node-test, rspec, phpunit, cargo-nextest, ...; docs/corral/language-support.md lists them). Overrides detection; corral still runs your command as given, and adds a runner's own arguments (fail-fast, one-test runs) only where the command or its script names that runner
+  -seed-limit int
+    	MiB of repository text the jail is seeded with before the repository is refused as too large (without this flag: 64). Counted over every text file the seed copies, whatever its size: binaries outside test fixtures, .git, build output and bound dependency dirs are not counted, and the run names every binary it leaves out. The cost of raising it: the seed is held in memory once per language per run, and every baseline and mutant run writes the whole seed to its own fresh directory under $TMPDIR and removes it afterwards, so the disk in use is the seed times the runs in flight at once. The unit evidence pass writes it once and overlays it copy-on-write for each unit when bwrap has --tmp-overlay (0.10 and later), and otherwise also writes one per unit, and says so. --substrate jail only
+  -substrate string
+    	where the evidence runs: jail (bwrap) or workspace (the checkout itself; the caller IS the isolation boundary, e.g. an ephemeral CI runner), as certify --repo (default "jail")
+  -workers int
+    	test units run alone under coverage at once. REQUIRED when the language's evidence is a unit pass on --substrate jail (every language but Python); corral names no count. --substrate workspace runs one at a time, as certify --repo does, and takes no count
+```
+
 ## `corral ui` flags
 
 ```
@@ -1162,6 +1211,8 @@ Usage of certify --repo:
     	enumerate and emit jobs, then stop — no audits run
   -evidence
     	with --dry-run: run the evidence pass in the sandbox (no model, no key) so the plan shows what a real run would audit
+  -evidence-timeout duration
+    	how long the evidence pass may run (without this flag: 15m): Python's one instrumented suite run, or the whole unit pass of every other language, where each unit's own run is bounded the same. A unit not started when it passes is recorded "not run (time limit)" and one still running is stopped; both report no evidence, and every selection then includes them. The run says how many units it cut and names this flag. A Go duration, e.g. 2h
   -goals string
     	JSON file mapping repo-relative paths to goals (default: derive a goal per file)
   -jail string
@@ -1212,6 +1263,8 @@ Usage of certify --repo:
     	the test runner behind the test command, when corral cannot read it from the command or its package script (a runner id: go-test, pytest, jest, vitest, mocha, node-test, rspec, phpunit, cargo-nextest, ...; docs/corral/language-support.md lists them). Overrides detection; corral still runs your command as given, and adds a runner's own arguments (fail-fast, one-test runs) only where the command or its script names that runner
   -scope-tests
     	REMOVED — see --whole-suite. Selection by coverage evidence is now the default
+  -seed-limit int
+    	MiB of repository text the jail is seeded with before the repository is refused as too large (without this flag: 64). Counted over every text file the seed copies, whatever its size: binaries outside test fixtures, .git, build output and bound dependency dirs are not counted, and the run names every binary it leaves out. The cost of raising it: the seed is held in memory once per language per run, and every baseline and mutant run writes the whole seed to its own fresh directory under $TMPDIR and removes it afterwards, so the disk in use is the seed times the runs in flight at once. The unit evidence pass writes it once and overlays it copy-on-write for each unit when bwrap has --tmp-overlay (0.10 and later), and otherwise also writes one per unit, and says so. --substrate jail only
   -shadow-model string
     	challenger model that attacks every region a SECOND time. OFF unless named. Recorded for comparison — NEVER gates the verdict
   -shadow-pool string

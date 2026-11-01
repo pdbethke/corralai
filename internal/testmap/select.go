@@ -1,0 +1,654 @@
+// SPDX-License-Identifier: Elastic-2.0
+
+package testmap
+
+import (
+	"errors"
+	"fmt"
+	"path/filepath"
+	"slices"
+	"sort"
+
+	"github.com/pdbethke/corralai/internal/lang"
+)
+
+// The selection engine: the one place a map and a runner row become a
+// lang.Selection and the commands that run it. It knows no language. Every
+// language fact it needs is a row field (CollectionBase, TestsCmd, TestUnit,
+// CarryArgs for test-grain maps; UnitsCmd, UnitsCoruns, UnitForFile for
+// unit-grain ones), and every selection fact is in the map. Its rules are
+// the ones Python's selector applied (pyPlugin's Select, ForSpan and
+// WithAuthoredTest, deleted once every caller used this engine), and
+// python_equivalence_test.go holds the engine to that selector's recorded
+// output on every input its tests used: moving the rules here must not move
+// what Python selects.
+
+// MaxArgv bounds the selection a test-grain command carries, measured as
+// argvLen. Past it a test-grain selection names the units its tests live in
+// instead — a superset, still the evidence's, never the whole suite. 32 KiB
+// is the size at which a command stops being something a person can read in a
+// record.
+//
+// It used to bound unit-grain selections too, which have nothing coarser to
+// widen to, so past it a file was graded by the WHOLE suite: on REA
+// (2026-10-30) 850 selected units, 44,997 bytes, became 2,186 units and a
+// red baseline nothing could be retried without. Readability is not worth
+// that. A unit selection is bounded by MaxCommandBytes instead.
+const MaxArgv = 32 * 1024
+
+// MaxCommandBytes is the most selection any command may carry, measured as
+// argvLen, because it is what the jail can run: the command reaches the
+// kernel as ONE argument of `sh -c` (shellJoin, after the jail's ulimit
+// prelude, each argument quoted), and Linux caps one argument at
+// MAX_ARG_STRLEN, 32 pages (128 KiB). 96 KiB leaves the prelude and the
+// quoting their room. Past it a selection is refused, never run: run, it
+// fails to exec (E2BIG) and reads as a red baseline the code never caused.
+// TestMaxCommandBytesFitsOneShellArgument executes the bound.
+const MaxCommandBytes = 96 * 1024
+
+// grainOf is the node grain a map's method produces. A method this build
+// does not know is refused, never read as one or the other: the grain
+// decides which row command runs the selection.
+func grainOf(m Map) (string, error) {
+	switch m.Method {
+	case MethodCoverageContext:
+		return GrainTest, nil
+	case MethodUnitEvidence:
+		return GrainUnit, nil
+	}
+	return "", fmt.Errorf("testmap: %s map has method %q, which names no grain; want %q or %q", m.Lang, m.Method, MethodCoverageContext, MethodUnitEvidence)
+}
+
+// Select narrows testCmd to the tests (or units) whose recorded execution
+// reached codePath.
+//
+//   - codePath absent from the map is an error, never "uncovered": a file a
+//     run did not measure may be missing for reasons unrelated to whether
+//     the suite executed it (an editable install measured outside the root).
+//     The message says whether its paired test was seen, as Python's did.
+//   - codePath measured with no edge is uncovered: a Selection with Method,
+//     Of and Base and no Cmd.
+//   - At unit grain, a map in which no unit reported evidence is refused
+//     before the file is looked up, with the pass's own Note: every unit
+//     would be "unreported", and a command of all of them is the whole
+//     suite under a name that says it was narrowed (Review Focus 5). An
+//     edge selects its unit when the unit executed the file, loaded it
+//     (import-time code ran, R24), or measured it and could not count it
+//     (Uncounted: it may have run it, and nothing says it did not). Only a
+//     unit that measured the file, executed none of it and did not load it
+//     selects nothing — that edge records a measurement (a -coverpkg run
+//     measures every package it builds), not an execution. Every unreported
+//     unit joins every selection, so partial evidence never under-selects
+//     (Review Focus 1). A measured file no reported unit executes is then
+//     graded by the unreported units, and is uncovered only when there are
+//     none.
+//   - Otherwise the ids are sorted so the command, and the cache key built
+//     from it, is stable. A test-grain set over MaxArgv widens to its nodes'
+//     units and drops its line evidence, which is keyed by ids that will no
+//     longer run. A unit-grain set has nothing coarser to widen to and
+//     refuses over the cap; it also refuses when its command would run a
+//     listed unit it does not name, so no run collects a set nobody chose.
+//
+// Base is the row's CollectionBase of testCmd (so appending narrows rather
+// than joining a directory testCmd already names), or testCmd for a row
+// whose arguments narrow as they are.
+func Select(m Map, r lang.Runner, testCmd []string, repoRoot, codePath, testPath string) (lang.Selection, error) {
+	return SelectExcluding(m, r, testCmd, repoRoot, codePath, testPath, nil)
+}
+
+// SelectExcluding is Select with the unreported units named in exclude left
+// out of the selection. It exists for one caller: a file whose baseline is
+// red because a unit that already failed on unmutated code was added to its
+// selection for caution (a red unit can kill no mutant, and every selection
+// holds every unreported unit, so one red unit makes every baseline red).
+// Exclusion only ever drops caution: a unit with a selecting edge to the file
+// is selected whatever exclude says, since the edge is evidence it ran green,
+// and the corun guard still sees every listed unit, so a command that would
+// also run an excluded unit is refused, not run. nil excludes nothing.
+func SelectExcluding(m Map, r lang.Runner, testCmd []string, repoRoot, codePath, testPath string, exclude map[string]bool) (lang.Selection, error) {
+	return selectWithout(m, r, testCmd, repoRoot, codePath, testPath, exclude, false)
+}
+
+// SelectLeavingOut is SelectExcluding with the units in exclude left out
+// whether or not an edge selects them. It exists for one caller too: a
+// baseline still red after SelectExcluding's retry, whose own output names
+// units failing that the evidence pass ran GREEN (reposcan.
+// WithoutBaselineRedUnits). Their edge says they ran green alone; the
+// baseline says they fail beside the rest of the selection, on the same
+// unmutated code, so the edge no longer says they can grade it. It refuses
+// a selection that would leave out every unit an edge selects: graded only
+// by units that reported no evidence, the file's rate would measure tests
+// nobody showed execute it.
+func SelectLeavingOut(m Map, r lang.Runner, testCmd []string, repoRoot, codePath, testPath string, exclude map[string]bool) (lang.Selection, error) {
+	return selectWithout(m, r, testCmd, repoRoot, codePath, testPath, exclude, true)
+}
+
+// selectWithout is both: exclude drops unreported units, and with evidence
+// set, edge units too.
+func selectWithout(m Map, r lang.Runner, testCmd []string, repoRoot, codePath, testPath string, exclude map[string]bool, evidence bool) (lang.Selection, error) {
+	grain, err := grainOf(m)
+	if err != nil {
+		return lang.Selection{}, err
+	}
+	if err := canRun(r, grain); err != nil {
+		return lang.Selection{}, err
+	}
+	if grain == GrainUnit {
+		if err := someUnitReported(m); err != nil {
+			return lang.Selection{}, err
+		}
+	}
+	want := filepath.ToSlash(codePath)
+	src, measured := m.Sources[want]
+	if !measured {
+		wantTest := filepath.ToSlash(testPath)
+		if _, saw := m.Sources[wantTest]; !saw || wantTest == "" {
+			return lang.Selection{}, fmt.Errorf("testmap: %s selection evidence never saw %s or its paired test %q — did the suite run it?", m.Lang, codePath, testPath)
+		}
+		return lang.Selection{}, fmt.Errorf("testmap: %s selection evidence measured %d file(s) but never %s, though its paired test %q did run — its coverage may not have been recorded under the repo root (e.g. an editable/src-layout install); falling back to the whole suite", m.Lang, len(m.Sources), codePath, testPath)
+	}
+
+	base := slices.Clone(testCmd)
+	if r.CollectionBase != nil {
+		base = r.CollectionBase(testCmd, repoRoot)
+	}
+	sel := lang.Selection{Method: m.Method, Of: m.Of, Base: base}
+	if grain == GrainTest {
+		// A measured file carries a (possibly empty) line map: it is what
+		// tells ForSpan "measured, and nothing reached this span" apart from
+		// "no line evidence at all".
+		sel.Lines = map[string][]lang.LineRange{}
+		if len(src.Static) > 0 {
+			sel.Static = slices.Clone(src.Static)
+		}
+	}
+	var dropEdges map[string]bool
+	if evidence {
+		dropEdges = exclude
+	}
+	ids, err := selectedIDs(m, grain, want, &sel, exclude, dropEdges)
+	if err != nil {
+		return lang.Selection{}, err
+	}
+	if len(ids) == 0 {
+		return sel, nil
+	}
+	sort.Strings(ids)
+
+	if grain == GrainUnit {
+		cmd, ran, err := unitsCmd(m, r, base, ids, true, exclude)
+		if err != nil {
+			return lang.Selection{}, err
+		}
+		sel.Tests, sel.Cmd = ran, cmd
+		return sel, nil
+	}
+
+	for _, id := range ids {
+		if m.Tests[id].Err != "" {
+			sel.Always = append(sel.Always, id)
+		}
+	}
+	if argvLen(ids) > MaxArgv {
+		units, err := widenByNode(m, ids)
+		if err != nil {
+			return lang.Selection{}, err
+		}
+		// The line evidence is keyed by test id, and the ids just gave way to
+		// their units. Kept, it would leave ForSpan looking up ids that no
+		// longer run, matching nothing, and labelling every mutant
+		// "unreached" — a positive claim about a file that was not narrowed
+		// at all. Evidence that cannot narrow is no line evidence.
+		//
+		// A widened set still over the cap is RUN, not refused: that is what
+		// Python's selector did with it, and its behaviour does not move
+		// (ledger ruling, Task 5). Only a unit-grain set, which had no earlier
+		// answer, refuses over the cap.
+		sel.Lines, sel.Static, sel.Always = nil, nil, nil
+		ids = units
+		// Still over what the jail can carry: refused, not run. (The ruling
+		// above kept Python's answer of running such a set; past this bound
+		// that answer could only fail to exec, so it is corrected here.)
+		if n := argvLen(ids); n > MaxCommandBytes {
+			return lang.Selection{}, fmt.Errorf("testmap: %d selected test files take %d bytes of command line, over the %d bytes the jail's one shell argument can carry", len(ids), n, MaxCommandBytes)
+		}
+	}
+	cmd, ok := r.TestsCmd(base, ids)
+	if !ok {
+		return lang.Selection{}, fmt.Errorf("testmap: the %s runner cannot run the %d selected tests from the test command", r.ID, len(ids))
+	}
+	sel.Tests, sel.Cmd = ids, cmd
+	return sel, nil
+}
+
+// selectedIDs is the nodes Select runs for the measured source want: every
+// node with an edge to it that selects (a unit edge that measured the file and
+// executed none of it, did not load it and could not count it selects
+// nothing), plus, in a unit map, every unreported unit. It is the one
+// predicate behind Select and Uncovered, so a summary of a map cannot call a
+// file uncovered that grading would select units for. When sel is non-nil, a
+// test-grain edge's lines are recorded on it. An unreported unit in exclude
+// is not added (SelectExcluding); an edge's unit is, unless dropEdges names
+// it (SelectLeavingOut), and then a selection left with no edge's unit is
+// refused.
+func selectedIDs(m Map, grain, want string, sel *lang.Selection, exclude, dropEdges map[string]bool) ([]string, error) {
+	seen := map[string]bool{}
+	var ids []string
+	edges, dropped := 0, 0
+	for _, e := range m.EdgesTo(want) {
+		n, ok := m.Tests[e.Test]
+		if !ok {
+			return nil, fmt.Errorf("testmap: %s map has an edge from %q to %s, but no node %q", m.Lang, e.Test, want, e.Test)
+		}
+		if n.Grain != grain {
+			return nil, fmt.Errorf("testmap: %s map is %s, but node %q has grain %q, not %q", m.Lang, m.Method, e.Test, n.Grain, grain)
+		}
+		if grain == GrainUnit && e.Executed == 0 && !e.Loaded && e.Uncounted == "" {
+			continue
+		}
+		if dropEdges[e.Test] {
+			if !seen[e.Test] {
+				seen[e.Test] = true
+				dropped++
+			}
+			continue
+		}
+		if !seen[e.Test] {
+			seen[e.Test] = true
+			ids = append(ids, e.Test)
+			edges++
+		}
+		if sel != nil && grain == GrainTest && len(e.Lines) > 0 {
+			sel.Lines[e.Test] = append(sel.Lines[e.Test], e.Lines...)
+		}
+	}
+	// Every unreported node joins every selection: a unit whose own run
+	// reported nothing, and a test that failed in the coverage-context run
+	// (#164: a failing test never silently leaves a narrowed baseline).
+	for _, id := range m.Unreported() {
+		if !seen[id] && !exclude[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	if dropped > 0 && edges == 0 {
+		return nil, fmt.Errorf("testmap: leaving out the %d unit(s) red in the baseline would leave out every unit the %s evidence says executes %s", dropped, m.Lang, want)
+	}
+	return ids, nil
+}
+
+// Uncovered are the measured sources grading would select no node for: no
+// edge that selects and, in a unit map, no unreported unit. Both lists are
+// sorted. Unselected are the measured sources with no selecting EDGE, which
+// is a superset: the extra ones are graded by the unreported units, so a
+// reader must not be told they are uncovered. Both ask selectedIDs, Select's
+// own predicate.
+func Uncovered(m Map) (uncovered, unselectedButGraded []string) {
+	grain, err := grainOf(m)
+	if err != nil {
+		return nil, nil
+	}
+	for p, src := range m.Sources {
+		// A file with no executable statements has nothing for a test to
+		// execute, and one with static (import/load-time) coverage was
+		// executed, only never by a test directly: neither is "uncovered",
+		// in either group.
+		if !src.HasStatements || src.HasStatic {
+			continue
+		}
+		ids, err := selectedIDs(m, grain, p, nil, nil, nil)
+		if err != nil {
+			continue
+		}
+		if len(ids) == 0 {
+			uncovered = append(uncovered, p)
+			continue
+		}
+		if len(ids) == len(m.Unreported()) {
+			// Every selected id is an unreported unit: no unit that reported
+			// selected the file (the reverse can only coincide when a
+			// reporting unit also selects, which adds an id).
+			unselectedButGraded = append(unselectedButGraded, p)
+		}
+	}
+	sort.Strings(uncovered)
+	sort.Strings(unselectedButGraded)
+	return uncovered, unselectedButGraded
+}
+
+// someUnitReported refuses a unit map in which no listed unit contributed
+// evidence: the pass timed out before any unit finished, or every unit
+// failed. The pass's own Note says why, verbatim, so the whole-suite
+// fallback names the real cause rather than a file it never measured.
+func someUnitReported(m Map) error {
+	if len(m.Unreported()) < len(m.Tests) {
+		return nil
+	}
+	why := fmt.Sprintf("testmap: the %s unit pass reported no unit's evidence (%d listed, none reported), so no unit can be selected", m.Lang, len(m.Tests))
+	if m.Note != "" {
+		why += ": " + m.Note
+	}
+	return errors.New(why)
+}
+
+// UnreportedIn is how many of sel's units are in it only because they
+// reported no evidence (m's Unreported), which Select adds to every
+// unit-grain selection. It is counted back out of the selection, rather
+// than carried on it, so the count is always of units that will actually
+// run: a selection the engine refused carries no Tests and counts zero.
+func UnreportedIn(m Map, sel lang.Selection) int {
+	n := 0
+	for _, id := range sel.Tests {
+		if node, ok := m.Tests[id]; ok && node.Err != "" {
+			n++
+		}
+	}
+	return n
+}
+
+// FirstUnreportedReason is the Err of the first unit in sel that is there
+// only because it reported no evidence, in the selection's own order, so the
+// scan line can say why units were added. "" when there is none.
+func FirstUnreportedReason(m Map, sel lang.Selection) string {
+	for _, id := range sel.Tests {
+		if node, ok := m.Tests[id]; ok && node.Err != "" {
+			return node.Err
+		}
+	}
+	return ""
+}
+
+// RanRedIn is the units of sel that are there only because they reported no
+// evidence AND whose own run failed, by red's reading of a node's Err, in the
+// selection's order. red is the caller's because the wording of a unit's
+// reason belongs to the pass that wrote it (reposcan), not to the map. These
+// are the units a red baseline may be retried without (SelectExcluding).
+func RanRedIn(m Map, sel lang.Selection, red func(Node) bool) []string {
+	var out []string
+	for _, id := range sel.Tests {
+		if node, ok := m.Tests[id]; ok && node.Err != "" && red(node) {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// canRun refuses a row with no command for the map's grain, before any
+// evidence is read: there is nothing a selection could be run with.
+func canRun(r lang.Runner, grain string) error {
+	if grain == GrainTest && r.TestsCmd == nil {
+		return fmt.Errorf("testmap: the %s runner has no command for chosen tests, so a test-grain map cannot select for it", r.ID)
+	}
+	if grain == GrainUnit && r.UnitsCmd == nil {
+		return fmt.Errorf("testmap: the %s runner has no command for chosen units, so a unit-grain map cannot select for it", r.ID)
+	}
+	return nil
+}
+
+// unitsCmd is the command running units, and the units it runs. With
+// closed, those are units plus every listed unit the row would also run
+// (UnitsCoruns), added by name until nothing new comes in, so the selection
+// names exactly what runs; a unit added that way that exclude left out (the
+// red-baseline retry) refuses the command rather than run it again. Without
+// closed, a command that would also run an unnamed unit is refused: the
+// authored pass, whose test must kill alone. Refused too past
+// MaxCommandBytes, and wherever the row's UnitsCmd refuses (a name filter in
+// argv, a launcher with no arguments).
+//
+// It used to refuse any command that would also run an unnamed unit. On REA
+// (2026-10-30) that graded every file by the whole suite: every selection
+// held the 120 units that cannot run alone, each running another.
+func unitsCmd(m Map, r lang.Runner, argv, units []string, closed bool, exclude map[string]bool) ([]string, []string, error) {
+	units = slices.Clone(units)
+	for {
+		other, ok := corunsUnnamed(m, r, units)
+		if !ok {
+			break
+		}
+		if !closed {
+			return nil, nil, fmt.Errorf("testmap: running the selected units with the %s runner would also run %q, which no evidence selected", r.ID, other)
+		}
+		if exclude[other] {
+			return nil, nil, fmt.Errorf("testmap: running the selected units with the %s runner would also run %q, which the retry left out as red", r.ID, other)
+		}
+		units = append(units, other)
+		sort.Strings(units)
+	}
+	if n := argvLen(units); n > MaxCommandBytes {
+		return nil, nil, fmt.Errorf("testmap: %d selected units take %d bytes of command line, over the %d bytes the jail's one shell argument can carry, and a unit has nothing coarser to widen to", len(units), n, MaxCommandBytes)
+	}
+	cmd, ok := r.UnitsCmd(argv, units)
+	if !ok {
+		return nil, nil, fmt.Errorf("testmap: the %s runner cannot run exactly the selected units %v from the test command", r.ID, units)
+	}
+	return cmd, units, nil
+}
+
+// corunsUnnamed is the first listed unit (in id order, so the reason is
+// stable) that a run of units would collect without naming it.
+func corunsUnnamed(m Map, r lang.Runner, units []string) (string, bool) {
+	if r.UnitsCoruns == nil {
+		return "", false
+	}
+	var listed []string
+	for id, n := range m.Tests {
+		if n.Grain == GrainUnit && !slices.Contains(units, id) {
+			listed = append(listed, id)
+		}
+	}
+	sort.Strings(listed)
+	for _, other := range listed {
+		if r.UnitsCoruns(units, other) {
+			return other, true
+		}
+	}
+	return "", false
+}
+
+// widenByNode replaces sorted test ids with the sorted, distinct units their
+// nodes record.
+func widenByNode(m Map, ids []string) ([]string, error) {
+	set := map[string]bool{}
+	for _, id := range ids {
+		u := m.Tests[id].Unit
+		if u == "" {
+			return nil, fmt.Errorf("testmap: %d selected tests exceed the %d-byte command-line cap, and test %q records no unit to widen to", len(ids), MaxArgv, id)
+		}
+		set[u] = true
+	}
+	return sortedKeys(set), nil
+}
+
+func sortedKeys(set map[string]bool) []string {
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// ForSpan narrows sel to the tests whose recorded lines reach span, ordered
+// kill-likeliest first, and says why with a lang.SpanRule. Anything it cannot
+// narrow — no span, no line evidence among the tests that will run (a unit
+// selection, or one widened past the argv cap), a Selection whose Cmd is not
+// Base + Tests, a row that cannot build the narrowed command — runs the
+// file's own selection unchanged. A span on an import-time line, or one no
+// test reaches, runs it too, labelled so: "unreached" is a claim about
+// coverage, made only where the evidence could have said otherwise.
+func ForSpan(sel lang.Selection, r lang.Runner, span lang.LineRange) (cmd []string, tests []string, rule string) {
+	file := func(rule string) ([]string, []string, string) {
+		return append([]string{}, sel.Cmd...), append([]string{}, sel.Tests...), rule
+	}
+	if span.IsZero() || !sel.NarrowableByLine() {
+		return file(lang.SpanRuleFile)
+	}
+	for _, s := range sel.Static {
+		if s.Overlaps(span) {
+			return file(lang.SpanRuleStatic)
+		}
+	}
+	var ids []string
+	for _, id := range sel.Tests {
+		for _, rg := range sel.Lines[id] {
+			if rg.Overlaps(span) {
+				ids = append(ids, id)
+				break
+			}
+		}
+	}
+	if len(ids) == 0 {
+		return file(lang.SpanRuleUnreached)
+	}
+	// KILL-LIKELIEST FIRST. A test that executes more of the mutated span is
+	// likelier to observe the change; with per-mutant fail-fast the average
+	// killed mutant then costs the tests up to its killer, not the whole set.
+	// This reorders exactly the ids selected above, so "did any selected test
+	// fail" — the verdict — cannot move.
+	sortBySpanCoverage(ids, sel, span)
+	// Tests with no line evidence to narrow by (Selection.Always) run for
+	// every span, after the ones the evidence ranks.
+	for _, id := range sel.Always {
+		if !slices.Contains(ids, id) {
+			ids = append(ids, id)
+		}
+	}
+	if argvLen(ids) > MaxArgv {
+		if r.TestUnit == nil {
+			return file(lang.SpanRuleFile)
+		}
+		set := map[string]bool{}
+		for _, id := range ids {
+			set[r.TestUnit(id)] = true
+		}
+		ids = sortedKeys(set)
+	}
+	base := sel.Base
+	if base == nil {
+		// Cmd is Base + Tests by construction. A Selection that does not
+		// hold that runs the file selection rather than slicing a command
+		// apart on an assumption it just failed.
+		if len(sel.Cmd) < len(sel.Tests) {
+			return file(lang.SpanRuleFile)
+		}
+		base = sel.Cmd[:len(sel.Cmd)-len(sel.Tests)]
+	}
+	if r.TestsCmd == nil {
+		return file(lang.SpanRuleFile)
+	}
+	out, ok := r.TestsCmd(base, ids)
+	if !ok {
+		return file(lang.SpanRuleFile)
+	}
+	return out, ids, lang.SpanRuleLines
+}
+
+// sortBySpanCoverage orders ids by how many of span's own lines each test
+// executed, descending, tie-broken by id ascending — a TOTAL order, so two
+// runs of the same evidence build the same command, which a signed record
+// requires.
+func sortBySpanCoverage(ids []string, sel lang.Selection, span lang.LineRange) {
+	reach := make(map[string]int, len(ids))
+	for _, id := range ids {
+		n := 0
+		for _, r := range sel.Lines[id] {
+			lo, hi := max(r.Start, span.Start), min(r.End, span.End)
+			if hi >= lo {
+				n += hi - lo + 1
+			}
+		}
+		reach[id] = n
+	}
+	sort.SliceStable(ids, func(i, j int) bool {
+		if reach[ids[i]] != reach[ids[j]] {
+			return reach[ids[i]] > reach[ids[j]]
+		}
+		return ids[i] < ids[j]
+	})
+}
+
+// WithAuthoredTest is the command for the pool's pass: the selection plus
+// the test the pool wrote, so the authored test runs beside the tests that
+// already reach the file. ok=false means no command runs exactly that; the
+// caller grades the authored test whole-suite and says why.
+//
+// Test grain (m's method is coverage-context): the authored path goes after
+// sel.Cmd through the row's TestsCmd. An uncovered selection builds on
+// sel.Base, the operator's command without its collection targets, so the
+// authored test runs ALONE rather than beside every test a directory target
+// would collect; sel.Base is nil only for a Selection the engine did not
+// build, where testCmd is all there is. The row's CarryArgs of testCmd are
+// kept: the salvage pass puts `--deselect <failing test>` on testCmd, and a
+// rebuild from sel.Cmd that dropped it re-ran the failing test and salvaged
+// nothing.
+//
+// Unit grain: UnitsCmd over the selected units plus the unit the authored
+// file belongs to (UnitForFile, which reads manifests under repoRoot) — the
+// unit it was written into, even one the evidence never listed. Refused when
+// no unit holds the file, when the run would also collect a listed unit
+// nobody named, or wherever UnitsCmd refuses. m supplies the method that
+// decides the grain and the listed units the corun check needs; a Selection
+// carries neither.
+func WithAuthoredTest(m Map, sel lang.Selection, r lang.Runner, testCmd []string, repoRoot, authoredTestPath string) ([]string, bool) {
+	cmd, err := AuthoredTestCmd(m, sel, r, testCmd, repoRoot, authoredTestPath)
+	return cmd, err == nil
+}
+
+// AuthoredTestCmd is WithAuthoredTest with the reason it has no command. A
+// caller that runs something else in its place (the whole command) must
+// say so where the measurement is recorded, and this is the sentence it
+// says.
+func AuthoredTestCmd(m Map, sel lang.Selection, r lang.Runner, testCmd []string, repoRoot, authoredTestPath string) ([]string, error) {
+	grain, err := grainOf(m)
+	if err != nil {
+		return nil, err
+	}
+	if err := canRun(r, grain); err != nil {
+		return nil, err
+	}
+	if grain == GrainUnit {
+		if r.UnitForFile == nil {
+			return nil, fmt.Errorf("testmap: the %s runner cannot name the unit a test file belongs to, so %s cannot be added to a unit selection", r.ID, authoredTestPath)
+		}
+		u, ok := r.UnitForFile(repoRoot, authoredTestPath)
+		if !ok {
+			return nil, fmt.Errorf("testmap: no %s unit holds %s, so it cannot be added to a unit selection", r.ID, authoredTestPath)
+		}
+		units := slices.Clone(sel.Tests)
+		if !slices.Contains(units, u) {
+			units = append(units, u)
+		}
+		sort.Strings(units)
+		// Strict, never closed over coruns: the authored test proves a
+		// survivor only by killing it alone, and a unit added beside it
+		// could make the kill and be credited to it.
+		cmd, _, err := unitsCmd(m, r, testCmd, units, false, nil)
+		return cmd, err
+	}
+
+	base := sel.Cmd
+	if len(sel.Tests) == 0 {
+		base = testCmd
+		if sel.Base != nil {
+			base = sel.Base
+		}
+	}
+	out, ok := r.TestsCmd(base, []string{authoredTestPath})
+	if !ok {
+		return nil, fmt.Errorf("testmap: the %s runner cannot add %s to the test command", r.ID, authoredTestPath)
+	}
+	if r.CarryArgs != nil {
+		out = append(out, r.CarryArgs(testCmd)...)
+	}
+	return out, nil
+}
+
+// argvLen approximates the length of a command line carrying args, as one
+// space-joined string — the measure MaxArgv bounds.
+func argvLen(args []string) int {
+	n := 0
+	for _, a := range args {
+		n += len(a) + 1
+	}
+	return n
+}

@@ -61,9 +61,12 @@ type Review struct {
 	// The audited party: who made the commit, by name — author, committer,
 	// and the Co-authored-by trailers one per line (an agent, in code an
 	// agent helped write). Empty when the checkout could not say.
-	Author        string `json:"author,omitempty"`
-	Committer     string `json:"committer,omitempty"`
-	CoAuthors     string `json:"co_authors,omitempty"`
+	Author    string `json:"author,omitempty"`
+	Committer string `json:"committer,omitempty"`
+	CoAuthors string `json:"co_authors,omitempty"`
+	// GeneratedWith is the tools the commit's footer lines declare, one per
+	// line (ledger.Identity.GeneratedWith).
+	GeneratedWith string `json:"generated_with,omitempty"`
 	Scope         string `json:"scope"`
 	ReviewerModel string `json:"reviewer_model"`
 	// ReviewerTool / VerifierTool name the coding CLI and its version when

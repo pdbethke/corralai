@@ -44,7 +44,7 @@ func TestCertifyLocalResolvesTheScriptBehindNpmTest(t *testing.T) {
 	var stdout bytes.Buffer
 	prep, err := prepareAuditJail(context.Background(), localAuditInput{
 		repoDir: repo, codePath: "src/calc.js", testPath: "src/calc.test.js", lang: "javascript",
-		checkArgv: []string{"npm", "test"},
+		checkArgv: []string{"npm", "test"}, seedLimit: seedLimitBuiltin,
 	}, plug, time.Minute, &stdout)
 	if !strings.Contains(stdout.String(), "npm test → jest (package.json scripts.test)") {
 		t.Errorf("stdout = %q, want the line saying how the runner was found", stdout.String())

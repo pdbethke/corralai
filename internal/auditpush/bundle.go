@@ -138,10 +138,12 @@ CREATE TABLE IF NOT EXISTS corral_scans (
   author           VARCHAR,
   committer        VARCHAR,
   co_authors       VARCHAR,
+  generated_with   VARCHAR,
   tree_dirty       BOOLEAN,
   repo_identity    VARCHAR,
   sandbox_backend  VARCHAR,
-  sandbox_image    VARCHAR
+  sandbox_image    VARCHAR,
+  seed_skipped     VARCHAR
 );`
 
 const auditsSchema = `
@@ -486,6 +488,12 @@ var (
 		// SandboxImage). NULL before them: not recorded.
 		{"sandbox_backend", "sandbox_backend VARCHAR"},
 		{"sandbox_image", "sandbox_image VARCHAR"},
+		// What the jail's copy left out as not text (ScanRow.SeedSkipped),
+		// JSON text. NULL before it: not recorded.
+		{"seed_skipped", "seed_skipped VARCHAR"},
+		// The tools the commit's footer lines declare (Identity.
+		// GeneratedWith), one per line. NULL before it: not read.
+		{"generated_with", "generated_with VARCHAR"},
 	}
 	corralMutantsMigrationCols = []struct{ name, ddl string }{
 		{"scan_uid", "scan_uid VARCHAR"},
@@ -1066,8 +1074,8 @@ func insertBundle(db *sql.DB, b Bundle, now time.Time, uid string) (Counts, erro
 		    engine_version, model_set, top, all_candidates, total_files,
 		    preflight_ran, preflight_note, finished_at, entry_hash,
 		    author, committer, co_authors, scope, tree_dirty, repo_identity,
-		    sandbox_backend, sandbox_image
-		  ) VALUES (`+placeholders(45)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+		    sandbox_backend, sandbox_image, seed_skipped, generated_with
+		  ) VALUES (`+placeholders(47)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 			uid, now, b.Scan.Repo, b.Scan.RunURL, b.Scan.ScanID, b.Scan.Commit,
 			b.Scan.CorralVersion, b.Scan.Substrate, b.Scan.Host, b.Scan.Cores,
 			nullIfZeroInt(b.Scan.TreesRequested), b.Scan.DiffBase,
@@ -1082,6 +1090,7 @@ func insertBundle(db *sql.DB, b Bundle, now time.Time, uid string) (Counts, erro
 			nullIfEmpty(b.Scan.Identity.Author), nullIfEmpty(b.Scan.Identity.Committer), nullIfEmpty(b.Scan.Identity.CoAuthors),
 			nullIfEmpty(b.Scan.Scope), nullBool(b.Scan.TreeDirty), nullIfEmpty(b.Scan.RepoIdentity),
 			nullIfEmpty(b.Scan.SandboxBackend), nullIfEmpty(b.Scan.SandboxImage),
+			nullIfEmpty(b.Scan.SeedSkipped), nullIfEmpty(b.Scan.Identity.GeneratedWith),
 		); err != nil {
 			return Counts{}, fmt.Errorf("auditpush: insert scan row: %w", err)
 		}

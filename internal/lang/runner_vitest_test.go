@@ -58,3 +58,55 @@ func TestVitestEntryScriptIsTheVitestRow(t *testing.T) {
 		t.Errorf("vitest's entry script ran as %q", r.Name)
 	}
 }
+
+// The unit evidence pass runs vitest in the threads pool: the forks pool
+// SIGTERMs its workers, which then write no V8 coverage, and the pass would
+// record whatever the main process and subprocesses wrote as a clean unit
+// (measured 2026-10-27 on vitest 5.0.3). --pool=threads goes LAST and
+// replaces the operator's own --pool in either spelling; every other flag,
+// --poolOptions included, is left as the operator wrote it.
+func TestVitestEvidenceArgsThreadsPool(t *testing.T) {
+	ts, _ := ByName("typescript")
+	for _, c := range []struct{ unit, want []string }{
+		{[]string{"node", "./node_modules/vitest/vitest.mjs", "run", "tests/a.test.ts"},
+			[]string{"node", "./node_modules/vitest/vitest.mjs", "run", "tests/a.test.ts", "--pool=threads"}},
+		{[]string{"vitest", "run", "--pool=forks", "tests/a.test.ts"},
+			[]string{"vitest", "run", "tests/a.test.ts", "--pool=threads"}},
+		{[]string{"vitest", "run", "--pool", "forks", "tests/a.test.ts"},
+			[]string{"vitest", "run", "tests/a.test.ts", "--pool=threads"}},
+		{[]string{"vitest", "run", "--pool=threads", "tests/a.test.ts"},
+			[]string{"vitest", "run", "tests/a.test.ts", "--pool=threads"}},
+		{[]string{"vitest", "run", "--poolOptions.forks.singleFork", "tests/a.test.ts"},
+			[]string{"vitest", "run", "--poolOptions.forks.singleFork", "tests/a.test.ts", "--pool=threads"}},
+	} {
+		inv := Cmd([]string{"vitest", "run"})
+		if got := EvidenceUnitCmd(ts, inv, c.unit); !slices.Equal(got, c.want) {
+			t.Errorf("EvidenceUnitCmd(%q) = %q, want %q", c.unit, got, c.want)
+		}
+	}
+	// The note says what the pass changed in the operator's command, by
+	// meaning: a replaced pool is named, and the operator's own threads
+	// pool, in either spelling, is no change at all.
+	for _, c := range []struct {
+		argv []string
+		want string
+	}{
+		{[]string{"vitest", "run"}, "the evidence pass runs each unit with --pool=threads"},
+		{[]string{"vitest", "run", "--pool=forks"}, "the evidence pass runs each unit with --pool=threads in place of --pool=forks"},
+		{[]string{"vitest", "run", "--pool", "forks"}, "the evidence pass runs each unit with --pool=threads in place of --pool forks"},
+		{[]string{"vitest", "run", "--pool=threads"}, ""},
+		{[]string{"vitest", "run", "--pool", "threads"}, ""},
+	} {
+		if got := EvidenceNote(ts, Cmd(c.argv)); got != c.want {
+			t.Errorf("EvidenceNote(%q) = %q, want %q", c.argv, got, c.want)
+		}
+	}
+	// A row without the field leaves the command alone and has no note.
+	jest := []string{"jest", "tests/a.test.ts"}
+	if got := EvidenceUnitCmd(ts, Cmd([]string{"jest"}), jest); !slices.Equal(got, jest) {
+		t.Errorf("jest EvidenceUnitCmd = %q, want it unchanged", got)
+	}
+	if got := EvidenceNote(ts, Cmd([]string{"jest"})); got != "" {
+		t.Errorf("jest EvidenceNote = %q, want \"\"", got)
+	}
+}

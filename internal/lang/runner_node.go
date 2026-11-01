@@ -209,18 +209,18 @@ func nodeParseUnits(stdout string) []string {
 	return units
 }
 
-// nodeUnitCmd runs one test file: argv with the operator's files and globs
-// replaced by the unit, every option kept but its shard (withoutFlag). Options come before the first
-// file (nodeWith), and node's own option table (runner_node_options.go)
-// says which of them read the next word; anything it cannot place is
-// refused.
-func nodeUnitCmd(argv []string, unit string) ([]string, bool) {
-	if unit == "" || !narrowable(argv, nodeFilters...) || !slices.Contains(argv, "--test") {
+// nodeUnitsCmd runs the test files: argv with the operator's files and globs
+// replaced by the units, every option kept but its shard (withoutFlag).
+// Options come before the first file (nodeWith), and node's own option
+// table (runner_node_options.go) says which of them read the next word;
+// anything it cannot place is refused.
+func nodeUnitsCmd(argv []string, units []string) ([]string, bool) {
+	if !fileUnits(units) || !narrowable(argv, nodeFilters...) || !slices.Contains(argv, "--test") {
 		return nil, false
 	}
 	flags, ok := dropFileArgs(withoutFlag(argv[1:], "--test-shard"), false, nodeOptionTakesValue)
 	if !ok {
 		return nil, false
 	}
-	return append(append([]string{argv[0]}, flags...), unit), true
+	return append(append([]string{argv[0]}, flags...), units...), true
 }

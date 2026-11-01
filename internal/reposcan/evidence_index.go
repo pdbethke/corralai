@@ -114,25 +114,24 @@ func (idx EvidenceIndex) Measured(path string) bool {
 // ParseEvidenceIndex builds an EvidenceIndex from one scan's selection
 // evidence, for a single language plugin. ok is false exactly when there is
 // no usable index to build — the evidence never ran, the plugin has no
-// selector (a selector-less language, e.g. under --whole-suite), or the
-// evidence could not be parsed — every one of which is the "fall back to
+// selector (a selector-less language, e.g. under --whole-suite), or no map
+// was built from the evidence — every one of which is the "fall back to
 // pairing-only candidacy" case the design calls for.
 //
-// It reuses lang.TestSelector.Index — the SAME parsing Select uses for the
-// per-file path — rather than re-reading the evidence's own document format
-// a second time from this package.
+// It reads the evidence's test map (Map.Coverage) — the SAME map every
+// file's selection is made from — rather than re-reading the evidence's own
+// document format a second time from this package.
 func ParseEvidenceIndex(ev SelectionEvidence, plug lang.Plugin) (EvidenceIndex, bool) {
 	if !ev.Ran {
 		return EvidenceIndex{}, false
 	}
-	sel, ok := plug.(lang.TestSelector)
-	if !ok {
+	if _, ok := plug.(lang.TestEvidence); !ok {
 		return EvidenceIndex{}, false
 	}
-	raw, err := sel.Index(ev.Raw)
-	if err != nil || raw == nil {
+	if ev.Map.Method == "" {
 		return EvidenceIndex{}, false
 	}
+	raw := ev.Map.Coverage()
 
 	files := make(map[string]evidenceFileEntry, len(raw))
 	for path, fc := range raw {

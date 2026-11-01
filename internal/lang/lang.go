@@ -481,8 +481,8 @@ func PreambleFor(p Plugin, code string) string {
 	return strings.Join(lines[:defaultPreambleLines], "\n")
 }
 
-// Selection is what one TestSelector.Select call decided for one source
-// file: the tests that EXECUTED it, as evidence from a run, and the narrowed
+// Selection is what the selection engine (internal/testmap.Select) decided
+// for one source file: the tests that EXECUTED it, as evidence from a run, and the narrowed
 // command that runs just those.
 //
 // Empty Tests with Method set means the evidence ran and no test executed
@@ -515,6 +515,25 @@ type Selection struct {
 	// what ForSpan narrows by.
 	Lines  map[string][]LineRange
 	Static []LineRange
+	// Always is the selected tests that run for EVERY mutant whatever its
+	// span, because no line evidence says which spans they reach: tests that
+	// failed in the coverage-context run, whose coverage is not evidence,
+	// added for caution (testmap.Select). ForSpan keeps them in each
+	// per-mutant command. Nil when there are none, and for a unit selection,
+	// which is never narrowed by line.
+	Always []string
+	// Excluded is the units left OUT of this selection because their own
+	// run failed on unmutated code in the evidence pass, and a baseline that
+	// held them was red (the baseline retry, reposcan.WithoutRedUnits). It
+	// is nil for every selection the evidence chose unaided; a non-nil one
+	// is a different exam, which the verdict discloses.
+	Excluded []string
+	// ExcludedWhy is why each unit of Excluded that the evidence pass ran
+	// GREEN was left out: it failed in a red baseline and the second retry
+	// dropped it (reposcan.WithoutBaselineRedUnits), with what running it
+	// alone showed. A unit Excluded for its own red evidence run has no
+	// entry; its reason is the map's. nil when there are none.
+	ExcludedWhy map[string]string
 }
 
 // NarrowableByLine reports whether the Selection's line evidence can actually
@@ -550,68 +569,51 @@ func (r LineRange) Overlaps(o LineRange) bool {
 	return !r.IsZero() && !o.IsZero() && r.Start <= o.End && o.Start <= r.End
 }
 
-// TestSelector is an OPTIONAL plugin extension that narrows the project's
-// own test command to the tests that EXECUTE a given source file, using
-// evidence from a run — coverage contexts or the harness's module graph —
-// never a filename convention.
+// TestEvidence is the OPTIONAL plugin extension that makes per-test selection
+// possible: the command that produces whole-suite evidence in ONE run,
+// derived from the operator's own testCmd so their markers and flags are
+// honoured (ok=false: this command cannot be instrumented, and the caller
+// grades whole-suite, disclosed), and a reader that turns its output into an
+// EvidenceDoc. It parses evidence only and selects nothing: the test map
+// (internal/testmap) is built from the EvidenceDoc, and the selection engine
+// there narrows the command through the runner row, for every language.
 //
-// It exists for the cost model: scoring runs the command once per mutant,
-// so an audit costs O(mutants × runtime of that command). It is also a
-// MEASUREMENT change, deliberately: "do the tests FOR THIS FILE catch the
+// Selection exists for the cost model: scoring runs the command once per
+// mutant, so an audit costs O(mutants × runtime of that command). It is also
+// a MEASUREMENT change, deliberately: "do the tests FOR THIS FILE catch the
 // bug?" is the question a per-file kill rate claims to answer. The design
-// note docs/design/test-selection.md
-// records the filename-based scoping that inverted a verdict (1.00 → 0.00)
-// and why only execution evidence is acceptable here.
-type TestSelector interface {
-	// Instrument returns the command that produces selection evidence for
-	// the whole suite in ONE run, derived from the operator's own testCmd so
-	// their markers and flags are honoured. ok=false: this command cannot be
-	// instrumented — the caller grades whole-suite, disclosed.
+// note docs/design/test-selection.md records the filename-based scoping that
+// inverted a verdict (1.00 → 0.00) and why only execution evidence is
+// acceptable here.
+type TestEvidence interface {
 	Instrument(testCmd []string) (cmd []string, ok bool)
-	// Select reads that run's output and returns the narrowed command for
-	// codePath plus what it selected. It also returns Base — testCmd with
-	// the operator's own collection targets removed, resolved against
-	// repoRoot — because on a runner that UNIONS positional arguments
-	// (pytest does) appending to the raw command narrows nothing at all.
-	// testPath is the file's paired test. A codePath ABSENT from the
-	// evidence is NEVER "uncovered" — only a file PRESENT in the evidence
-	// with zero covering tests is (absence of evidence is not evidence of
-	// absence: a file whose paired test genuinely ran, testPath present,
-	// can still be missing from the report for reasons that have nothing
-	// to do with whether the suite executed it, e.g. an editable/src-layout
-	// install whose sources coverage measures OUTSIDE the repo root and
-	// drops). Select therefore always errors on an absent codePath — the
-	// caller grades whole-suite and discloses the error text.
-	Select(evidence []byte, repoRoot, codePath, testPath string, testCmd []string) (Selection, error)
-	// WithAuthoredTest returns the command for the POOL pass: the selection
-	// plus the pool's authored test at authoredTestPath, so the authored
-	// test is collected even though no evidence run ever saw it. When
-	// sel.Tests is empty the result runs the authored test alone — built on
-	// sel.Base when the Selection carries one, so "alone" is true rather
-	// than "alongside whatever the operator's targets collect".
-	WithAuthoredTest(sel Selection, testCmd []string, authoredTestPath string) []string
-	// ForSpan narrows sel to the tests whose recorded coverage reaches span.
-	// It never returns an empty command: the fallbacks all run the file's
-	// selection, because corral reports what it ran, not what coverage
-	// predicted. Only meaningful when len(sel.Tests) > 0.
-	ForSpan(sel Selection, span LineRange) (cmd []string, tests []string, rule string)
-	// Index parses ONE instrumented run's evidence — the exact document
-	// Select reads — into a per-file readout covering EVERY measured file at
-	// once, rather than narrowing to a single codePath. It exists for
-	// evidence-first candidacy: "which files does any test cover, and by how
-	// much" is a repo-wide question, and calling Select once per source file
-	// just to answer it would re-parse the same document a file-count worth
-	// of times. Implementations MUST share Select's own parsing rather than
-	// hand-roll a second reader of the same format.
-	//
-	// Paths are relative in the same sense Select's codePath is; a plugin
-	// that needs an absolute repoRoot to relativize evidence paths applies
-	// the empty-root case Select already handles (most evidence paths are
-	// already repo-relative — see python's alignPyPath).
-	Index(evidence []byte) (map[string]FileCoverage, error)
+	Evidence(raw []byte) (EvidenceDoc, error)
 }
 
-// FileCoverage is one measured file's entry from TestSelector.Index: every
+// EvidenceDoc is one evidence run, per file, before any path is aligned or
+// any test is named a unit.
+type EvidenceDoc struct {
+	// Of is how many tests the run collected.
+	Of int
+	// Files is keyed by the path exactly as the evidence stores it.
+	Files map[string]FileEvidence
+	// Failed is the ids of the tests that failed in the evidence run. A
+	// failing test's coverage is not evidence (it may stop before the code
+	// it would have run), so the map keeps no edge for it and adds it to
+	// every selection instead. Nil when every test passed.
+	Failed []string
+}
+
+// FileEvidence is what the run recorded for one source file. A test listed
+// with no ranges was seen to cover the file without a line count.
+type FileEvidence struct {
+	Tests         map[string][]LineRange // test id -> executed ranges of this file
+	Static        []LineRange            // executed outside any test (import time)
+	HasStatements bool                   // the file has executable statements at all
+}
+
+// FileCoverage is one measured file's entry in a test map's per-file readout
+// (internal/testmap's Map.Coverage): every
 // covering test (by whatever selector the evidence stores as a test's
 // identity), mapped to how many of THIS file's lines it executed. A caller
 // ranking "which test covers this file the most" reads it directly, without
@@ -714,7 +716,7 @@ func JailPreflight(p Plugin, testCmd []string) error {
 	return nil
 }
 
-// SelectionDiagnoser is an OPTIONAL TestSelector extension: a plugin that
+// SelectionDiagnoser is an OPTIONAL TestEvidence extension: a plugin that
 // can recognize its own instrumented selection run's failure text —
 // whatever a runner could capture, possibly just an exit code's worth of
 // stderr tail — and explain, in an operator's own vocabulary, what to do
@@ -730,7 +732,7 @@ type SelectionDiagnoser interface {
 	DiagnoseSelectionFailure(text string) string
 }
 
-// LibraryCodeClassifier is an OPTIONAL TestSelector extension: a selector
+// LibraryCodeClassifier is an OPTIONAL TestEvidence extension: a selector
 // that can tell whether one file sits inside IMPORTABLE LIBRARY CODE, as
 // opposed to project tooling that merely happens to share the language —
 // docs config (docs/conf.py), a setup/build script (setup.py, noxfile.py),
@@ -759,7 +761,7 @@ type LibraryCodeClassifier interface {
 	IsLibraryCode(path string, hasPath func(string) bool) bool
 }
 
-// SourceRootInstrumenter is an OPTIONAL TestSelector extension: a selector
+// SourceRootInstrumenter is an OPTIONAL TestEvidence extension: a selector
 // that can narrow (or otherwise use) its instrumented run to a
 // caller-supplied set of SOURCE ROOTS — the distinct top-level directories
 // the scan's own file enumeration found the language's OWN, non-test

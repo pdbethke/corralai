@@ -98,9 +98,9 @@ func jestParseUnits(stdout string) []string {
 	return paths
 }
 
-// jestUnitCmd runs exactly one listed test file: argv, without its shard
-// (the listing applied it), with --runTestsByPath and the unit, and an
-// ignore pattern that ignores every path not ending in /unit.
+// jestUnitsCmd runs exactly the listed test files. For one unit it is argv,
+// without its shard (the listing applied it), with --runTestsByPath and the
+// unit, and an ignore pattern that ignores every path not ending in /unit.
 //
 // --runTestsByPath reads the unit as an exact path from the working
 // directory, which is what the unit is named from, so a unit cannot match
@@ -115,11 +115,25 @@ func jestParseUnits(stdout string) []string {
 // only the paths on the command line are candidates, and the unit was
 // listed under the configured ones. A listed file whose path ends in
 // /unit would also survive the pattern; jestUnitCoruns marks that unit.
-func jestUnitCmd(argv []string, unit string) ([]string, bool) {
-	if unit == "" || !jestNarrowable(argv) {
+//
+// Several units are several paths after --runTestsByPath and one ignore
+// pattern that keeps a path ending in any of them (measured on jest 30.5.2:
+// capture jest-units-multi).
+func jestUnitsCmd(argv []string, units []string) ([]string, bool) {
+	if !fileUnits(units) || !jestNarrowable(argv) {
 		return nil, false
 	}
-	return append(withoutFlag(argv, "--shard"), "--runTestsByPath", unit, "--testPathIgnorePatterns=^(?!.*"+jsRegexQuote("/"+unit)+"$)"), true
+	keep := make([]string, len(units))
+	for i, u := range units {
+		keep[i] = jsRegexQuote("/" + u)
+	}
+	alt := keep[0]
+	if len(keep) > 1 {
+		alt = "(?:" + strings.Join(keep, "|") + ")"
+	}
+	cmd := append(withoutFlag(argv, "--shard"), "--runTestsByPath")
+	cmd = append(cmd, units...)
+	return append(cmd, "--testPathIgnorePatterns=^(?!.*"+alt+"$)"), true
 }
 
 // jestUnitCoruns: other survives unit's ignore pattern when its path ends

@@ -4,8 +4,13 @@ package adequacy
 
 import (
 	"context"
+	"crypto/sha256"
+	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -407,5 +412,397 @@ func TestShellSplitUnterminatedQuoteDoesNotLoseInput(t *testing.T) {
 	got := ShellSplit(`ruby -e 'puts 1`)
 	if len(got) != 3 || got[2] != "puts 1" {
 		t.Fatalf("unterminated quote lost input: %q", got)
+	}
+}
+
+// overlayJailOrSkip is the real bwrap backend, skipped (and so printed by
+// the CI census) when bwrap is unusable or cannot overlay: a bwrap older
+// than 0.10 has no --tmp-overlay, and Seed refuses it with ErrNoOverlay.
+func overlayJailOrSkip(t *testing.T) sandbox.Isolator {
+	t.Helper()
+	backend, err := sandbox.Resolve(sandbox.Config{})
+	if err != nil || backend == nil {
+		t.Skipf("no sandbox backend available (bwrap): %v", err)
+	}
+	if !sandbox.Overlays(backend) {
+		t.Skipf("%s cannot overlay; overlay path unexercised", backendVersion(backend))
+	}
+	return backend
+}
+
+// overlayDirOrSkip skips unless backend overlays a dependency directory on
+// dir's filesystem (sandbox.OverlaysDir).
+func overlayDirOrSkip(t *testing.T, backend sandbox.Isolator, dir string) {
+	t.Helper()
+	if !sandbox.OverlaysDir(backend, dir) {
+		t.Skipf("%s cannot overlay a dependency directory on the filesystem of %s; dependency overlay path unexercised", backendVersion(backend), dir)
+	}
+}
+
+// backendVersion names the backend for a skip message: bwrap's own
+// --version line when it is bwrap.
+func backendVersion(backend sandbox.Isolator) string {
+	if backend.Name() == "bwrap" {
+		if out, err := exec.Command("bwrap", "--version").Output(); err == nil {
+			return strings.TrimSpace(string(out))
+		}
+	}
+	return backend.Name()
+}
+
+func seedOrFatal(t *testing.T, e Enumerator, files map[string]string) SeededJail {
+	t.Helper()
+	s, err := e.(bwrapJail).Seed(files, nil)
+	if err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	return s
+}
+
+// treeDigest is a listing of every path under root with each file's sha256,
+// so a before/after comparison catches an added, removed or changed file.
+func treeDigest(t *testing.T, root string) string {
+	t.Helper()
+	var b strings.Builder
+	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(root, p)
+		if d.IsDir() {
+			fmt.Fprintf(&b, "%s/\n", rel)
+			return nil
+		}
+		data, err := os.ReadFile(p) // #nosec G304 -- the test's own temp tree
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(&b, "%s %x\n", rel, sha256.Sum256(data))
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b.String()
+}
+
+// Two runs of one seed see the same tree.
+func TestSeededJailRunsSeeIdenticalTree(t *testing.T) {
+	e := NewEnumerator(overlayJailOrSkip(t), 30*time.Second)
+	files := map[string]string{"a.txt": "x"}
+	s := seedOrFatal(t, e, files)
+	for i := range 2 {
+		out, err := s.Enumerate(context.Background(), files, []string{"cat", "a.txt"})
+		if err != nil || out != "x" {
+			t.Errorf("run %d: out=%q err=%v, want \"x\"", i+1, out, err)
+		}
+	}
+}
+
+// What one run writes — into the seed or into a dependency directory — no
+// later run sees, and neither the seed nor the host's dependency directory
+// changes. This is the guarantee a fresh copy per run gave, now given by
+// the kernel: each run's writes land in its own tmpfs upper layer.
+func TestSeededJailWritesDoNotLeak(t *testing.T) {
+	backend := overlayJailOrSkip(t)
+	nm := filepath.Join(t.TempDir(), "node_modules")
+	if err := os.MkdirAll(filepath.Join(nm, "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nm, "pkg", "index.js"), []byte("dep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	overlayDirOrSkip(t, backend, nm)
+	e := NewEnumerator(backend, 30*time.Second, WithReadOnlyBinds([]DepBind{{Host: nm, Rel: "node_modules"}}))
+	files := map[string]string{"a.txt": "x"}
+	s := seedOrFatal(t, e, files)
+	seedDir := s.(*seededJail).dir
+	seedBefore, nmBefore := treeDigest(t, seedDir), treeDigest(t, nm)
+
+	write := "echo y > b.txt && echo z > a.txt && echo w > node_modules/new.js && echo v > node_modules/pkg/index.js && mkdir node_modules/.vite && cat b.txt node_modules/new.js"
+	res, err := s.EnumerateDetailed(context.Background(), files, []string{"sh", "-c", write})
+	if err != nil || res.ExitCode != 0 || strings.TrimSpace(res.Output) != "y\nw" {
+		t.Fatalf("run 1 could not write: %+v err=%v", res, err)
+	}
+	check := "test ! -e b.txt && test ! -e node_modules/new.js && test ! -e node_modules/.vite && cat a.txt node_modules/pkg/index.js"
+	res, err = s.EnumerateDetailed(context.Background(), files, []string{"sh", "-c", check})
+	if err != nil || res.ExitCode != 0 || res.Output != "xdep" {
+		t.Errorf("run 2 saw run 1's writes: %+v err=%v", res, err)
+	}
+	if got := treeDigest(t, seedDir); got != seedBefore {
+		t.Errorf("the host seed changed:\nbefore %s\nafter  %s", seedBefore, got)
+	}
+	if got := treeDigest(t, nm); got != nmBefore {
+		t.Errorf("the host node_modules changed:\nbefore %s\nafter  %s", nmBefore, got)
+	}
+}
+
+// A seeded jail runs only the tree it was seeded with. Any other map — even
+// one with equal contents — is refused before anything runs, so a caller
+// can never get a result for a tree that is not the one in the seed.
+func TestSeededJailRefusesAnotherMap(t *testing.T) {
+	e := NewEnumerator(overlayJailOrSkip(t), 30*time.Second)
+	files := map[string]string{"a.txt": "x"}
+	s := seedOrFatal(t, e, files)
+	// Nothing a jailed command writes reaches the host (that is the
+	// point), so "it never ran" is shown by time: the command sleeps 5 s,
+	// and a refusal returns at once.
+	other := map[string]string{"a.txt": "x"}
+	start := time.Now()
+	if _, err := s.Enumerate(context.Background(), other, []string{"sleep", "5"}); err == nil {
+		t.Error("Enumerate ran a map that was not the seeded one")
+	}
+	if _, err := s.EnumerateDetailed(context.Background(), other, []string{"sleep", "5"}); err == nil {
+		t.Error("EnumerateDetailed ran a map that was not the seeded one")
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Errorf("the refusals took %s: the command ran", d)
+	}
+}
+
+// The run's working directory is the seed's own host path, so every path a
+// run prints is the path a fresh copy at that location would print.
+func TestSeededJailPathUnchanged(t *testing.T) {
+	e := NewEnumerator(overlayJailOrSkip(t), 30*time.Second)
+	files := map[string]string{"a.txt": "x"}
+	s := seedOrFatal(t, e, files)
+	out, err := s.Enumerate(context.Background(), files, []string{"pwd"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := s.(*seededJail).dir; strings.TrimSpace(out) != want {
+		t.Errorf("pwd = %q, want the seed's host path %q", strings.TrimSpace(out), want)
+	}
+}
+
+// An overlaid dependency directory is not a bind: a symlink in it that
+// leaves the directory is resolved inside the jail, where the host path it
+// names is not mounted, so it exposes nothing (the per-entry binds refused
+// to mount such a link for the same reason).
+func TestSeededJailDependencySymlinkReachesNothing(t *testing.T) {
+	backend := overlayJailOrSkip(t)
+	secret := t.TempDir()
+	if err := os.WriteFile(filepath.Join(secret, "key"), []byte("SECRET"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	nm := filepath.Join(t.TempDir(), "node_modules")
+	if err := os.MkdirAll(nm, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secret, filepath.Join(nm, "evil")); err != nil {
+		t.Fatal(err)
+	}
+	overlayDirOrSkip(t, backend, nm)
+	e := NewEnumerator(backend, 30*time.Second, WithReadOnlyBinds([]DepBind{{Host: nm, Rel: "node_modules"}}))
+	files := map[string]string{"a.txt": "x"}
+	s := seedOrFatal(t, e, files)
+	out, _ := s.Enumerate(context.Background(), files, []string{"sh", "-c", "readlink node_modules/evil; cat node_modules/evil/key 2>&1; true"})
+	if strings.Contains(out, "SECRET") {
+		t.Errorf("a dependency symlink exposed a host file: %q", out)
+	}
+	// The link itself is there (the overlay shows Host as it is); it is
+	// its target that the jail does not have.
+	if !strings.Contains(out, secret) {
+		t.Errorf("the dependency symlink is not in the jail, so this proves nothing: %q", out)
+	}
+}
+
+// Seed refuses a backend that cannot overlay, naming ErrNoOverlay, and
+// writes nothing: the caller runs each unit on a fresh copy instead and
+// says so.
+func TestSeedRefusesABackendThatCannotOverlay(t *testing.T) {
+	j := NewEnumerator(&captureIsolator{name: "container"}, time.Second).(bwrapJail)
+	s, err := j.Seed(map[string]string{"a.txt": "x"}, &lang.EvidenceCache{Env: "GOCACHE"})
+	var no *sandbox.NoOverlayError
+	if !errors.Is(err, ErrNoOverlay) || !errors.As(err, &no) || no.Backend != "container" || s != nil {
+		t.Errorf("Seed = (%v, %v), want (nil, ErrNoOverlay naming the container backend)", s, err)
+	}
+}
+
+// After Close, a seeded jail runs nothing, and its seed is gone.
+func TestSeededJailRunsNothingAfterClose(t *testing.T) {
+	e := NewEnumerator(overlayJailOrSkip(t), 30*time.Second)
+	files := map[string]string{"a.txt": "x"}
+	s, err := e.(bwrapJail).Seed(files, &lang.EvidenceCache{Env: "GOCACHE"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, cache := s.(*seededJail).dir, s.(*seededJail).cacheDir
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("the seed %s outlived Close: %v", dir, err)
+	}
+	if cache == "" {
+		t.Error("the seed shares no cache, so its removal is unexercised")
+	} else if _, err := os.Stat(cache); !os.IsNotExist(err) {
+		t.Errorf("the shared cache %s outlived Close: %v", cache, err)
+	}
+	if _, err := s.Enumerate(context.Background(), files, []string{"true"}); err == nil {
+		t.Error("a closed seeded jail ran a command")
+	}
+}
+
+// The jail offers Seed in exactly the shape reposcan's seedingRunner reads
+// it in (reposcan does not import this package, so the match is
+// structural, and a drift in either signature would silently turn the unit
+// pass back into a fresh copy per unit). NewEnumerator's value is what
+// certify --repo hands the unit pass on the jail substrate.
+func TestEnumeratorOffersReposcansSeed(t *testing.T) {
+	var e Enumerator = NewEnumerator(nil, time.Second)
+	if _, ok := e.(interface {
+		Seed(files map[string]string, cache *lang.EvidenceCache) (sandbox.SeededRunner, error)
+	}); !ok {
+		t.Error("the jail enumerator has no Seed(map[string]string, *lang.EvidenceCache) (sandbox.SeededRunner, error)")
+	}
+}
+
+// An overlaid dependency directory's cache directories start empty on every
+// run, as they did under the per-entry binds: a host node_modules/.vite
+// (vitest's results cache) is not what the jail sees, a write into it does
+// not reach the host, and dot-FILES and .pnpm stay visible.
+func TestOverlaidDependencyCacheStartsEmpty(t *testing.T) {
+	backend := overlayJailOrSkip(t)
+	nm := filepath.Join(t.TempDir(), "node_modules")
+	for _, d := range []string{".vite", ".pnpm"} {
+		if err := os.MkdirAll(filepath.Join(nm, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, body := range map[string]string{".vite/x": "cached", ".pnpm/store": "s", ".package-lock.json": "lock"} {
+		if err := os.WriteFile(filepath.Join(nm, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	overlayDirOrSkip(t, backend, nm)
+	e := NewEnumerator(backend, 30*time.Second, WithReadOnlyBinds([]DepBind{{Host: nm, Rel: "node_modules"}}))
+	files := map[string]string{"a.txt": "x"}
+	script := "test -d node_modules/.vite && test ! -e node_modules/.vite/x && echo y > node_modules/.vite/y && cat node_modules/.package-lock.json node_modules/.pnpm/store"
+	for name, run := range map[string]func() (sandbox.EnumerateResult, error){
+		"fresh copy": func() (sandbox.EnumerateResult, error) {
+			return e.(bwrapJail).EnumerateDetailed(context.Background(), files, []string{"sh", "-c", script})
+		},
+		"seed": func() (sandbox.EnumerateResult, error) {
+			return seedOrFatal(t, e, files).EnumerateDetailed(context.Background(), files, []string{"sh", "-c", script})
+		},
+	} {
+		res, err := run()
+		if err != nil || res.ExitCode != 0 || strings.TrimSpace(res.Output) != "locks" {
+			t.Errorf("%s: %+v err=%v, want an empty writable .vite and visible .package-lock.json and .pnpm", name, res, err)
+		}
+		if _, err := os.Stat(filepath.Join(nm, ".vite", "y")); err == nil {
+			t.Errorf("%s: a write into node_modules/.vite reached the host", name)
+		}
+	}
+}
+
+// seedCacheOrSkip is a seed sharing a GOCACHE, skipped when this host's
+// temp filesystem cannot be an overlay's lower layer (the seed then shares
+// no cache, and says why).
+func seedCacheOrSkip(t *testing.T, e Enumerator, files map[string]string) SeededJail {
+	t.Helper()
+	s, err := e.(bwrapJail).Seed(files, &lang.EvidenceCache{Env: "GOCACHE"})
+	if err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	if c := s.Cache(); c.Target == "" {
+		t.Skipf("no shared cache on this host (%s); frozen-cache path unexercised", c.Unshared)
+	}
+	return s
+}
+
+// The one warming run writes into the shared cache; a frozen run that
+// writes another file and deletes the first changes nothing on the host.
+// Both runs find the cache through GOCACHE, which the jail sets.
+func TestFrozenCacheIsNotWritten(t *testing.T) {
+	e := NewEnumerator(overlayJailOrSkip(t), 30*time.Second)
+	files := map[string]string{"a.txt": "x"}
+	s := seedCacheOrSkip(t, e, files)
+	host := s.(*seededJail).cacheDir
+
+	res, err := s.Warm(context.Background(), files, []string{"sh", "-c", `echo first > "$GOCACHE/first" && echo "$GOCACHE"`})
+	if err != nil || res.ExitCode != 0 || strings.TrimSpace(res.Output) != sandbox.CacheTarget {
+		t.Fatalf("warm: %+v err=%v, want GOCACHE=%s and a write", res, err, sandbox.CacheTarget)
+	}
+	before := treeDigest(t, host)
+	if !strings.Contains(before, "first ") {
+		t.Fatalf("the warming write did not reach the host cache: %s", before)
+	}
+	res, err = s.EnumerateDetailed(context.Background(), files, []string{"sh", "-c", `cat "$GOCACHE/first" && echo second > "$GOCACHE/second" && rm "$GOCACHE/first" && test ! -e "$GOCACHE/first"`})
+	if err != nil || res.ExitCode != 0 || strings.TrimSpace(res.Output) != "first" {
+		t.Fatalf("frozen: %+v err=%v, want it to read the warm write and write over it", res, err)
+	}
+	if got := treeDigest(t, host); got != before {
+		t.Errorf("a frozen run changed the host cache:\nbefore %s\nafter  %s", before, got)
+	}
+	// A frozen run never sees another's writes either.
+	if out, err := s.Enumerate(context.Background(), files, []string{"sh", "-c", `ls "$GOCACHE"`}); err != nil || strings.TrimSpace(out) != "first" {
+		t.Errorf("a later frozen run sees %q (err=%v), want only the warm write", out, err)
+	}
+	// Warm happens once, before any frozen run.
+	if _, err := s.Warm(context.Background(), files, []string{"true"}); err == nil {
+		t.Error("a second Warm, after frozen runs, was run")
+	}
+}
+
+// Warm is refused on a seed that shares no cache, and on a map that is not
+// the seeded one, before anything runs.
+func TestWarmRefusals(t *testing.T) {
+	e := NewEnumerator(overlayJailOrSkip(t), 30*time.Second)
+	files := map[string]string{"a.txt": "x"}
+	if _, err := seedOrFatal(t, e, files).Warm(context.Background(), files, []string{"true"}); err == nil {
+		t.Error("Warm ran on a seed with no shared cache")
+	}
+	s := seedCacheOrSkip(t, e, files)
+	if _, err := s.Warm(context.Background(), map[string]string{"a.txt": "x"}, []string{"true"}); err == nil {
+		t.Error("Warm ran a map that was not the seeded one")
+	}
+}
+
+// A real go, in the jail, over a warmed and then frozen GOCACHE: the
+// frozen cache is really shared (without -count=1, go replays the warm
+// run's cached result, the negative control), and the unit evidence pass's
+// command (lang.EvidenceUnitCmd adds -count=1) runs the test again rather
+// than replaying it. The test prints the time, so a replay is its old line.
+func TestFrozenGoCacheNeverReplaysAResult(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("no go on PATH")
+	}
+	e := NewEnumerator(overlayJailOrSkip(t), 3*time.Minute)
+	files := map[string]string{
+		"go.mod":      "module example.com/m\n\ngo 1.21\n",
+		"p/p.go":      "package p\n\nfunc One() int { return 1 }\n",
+		"p/p_test.go": "package p\n\nimport (\n\t\"fmt\"\n\t\"testing\"\n\t\"time\"\n)\n\nfunc TestOne(t *testing.T) {\n\tfmt.Println(\"RAN\", time.Now().UnixNano())\n\tif One() != 1 {\n\t\tt.Fatal(\"no\")\n\t}\n}\n",
+	}
+	s := seedCacheOrSkip(t, e, files)
+	g, _ := lang.ByName("go")
+	unit := []string{"go", "test", "-v", "example.com/m/p"}
+	evidence := lang.EvidenceUnitCmd(g, lang.Cmd([]string{"go", "test", "-v", "./..."}), unit)
+	if !slices.Contains(evidence, "-count=1") {
+		t.Fatalf("the evidence command %q has no -count=1", evidence)
+	}
+	ran := func(out string) string {
+		for _, line := range strings.Split(out, "\n") {
+			if strings.HasPrefix(line, "RAN ") {
+				return line
+			}
+		}
+		return ""
+	}
+
+	warm, err := s.Warm(context.Background(), files, unit)
+	if err != nil || warm.ExitCode != 0 || ran(warm.Output) == "" {
+		t.Fatalf("warm: %+v err=%v", warm, err)
+	}
+	replay, err := s.EnumerateDetailed(context.Background(), files, unit)
+	if err != nil || replay.ExitCode != 0 || !strings.Contains(replay.Output, "(cached)") || ran(replay.Output) != ran(warm.Output) {
+		t.Fatalf("negative control: without -count=1 a frozen run should replay the warm result, got %+v err=%v; the cache is not shared, so this proves nothing", replay, err)
+	}
+	fresh, err := s.EnumerateDetailed(context.Background(), files, evidence)
+	if err != nil || fresh.ExitCode != 0 || strings.Contains(fresh.Output, "(cached)") || ran(fresh.Output) == "" || ran(fresh.Output) == ran(warm.Output) {
+		t.Errorf("the evidence command replayed a cached result: %+v err=%v (warm printed %q)", fresh, err, ran(warm.Output))
 	}
 }

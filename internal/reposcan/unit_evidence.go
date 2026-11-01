@@ -6,7 +6,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"path"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -49,7 +51,20 @@ type UnitResult struct {
 	// import-only, not uncovered (ruling R24). Nil for a reporter that does
 	// not report loading.
 	Loaded []string
-	Err    string
+	// Err is the unit's reason as the record keeps it: one fixed phrase per
+	// failure class, with an exit code where one was read. It reaches the
+	// verdict (TestSelection.UnreportedReason, ExcludedReason) and so the
+	// signed, published ledger, so it never holds a runner's error text, an
+	// output tail, the operator's argv or a host path.
+	Err string
+	// TerminalDetail is what the operator needs to act on Err — the runner's error,
+	// the failed run's output tail — for the scan's units line on the
+	// terminal (printUnitPass) and nothing else. It is never marshalled (the
+	// selection cache stores this struct as JSON) and never copied into the
+	// test map, so it cannot reach a verdict.
+	// Named TerminalDetail, never Detail: a ledger row's Detail is recorded,
+	// and a field of that name is one assignment from leaking into it.
+	TerminalDetail string `json:"-"`
 }
 
 // UnitEvidence is one scan's unit pass. Ran false means there is no unit
@@ -61,11 +76,30 @@ type UnitResult struct {
 type UnitEvidence struct {
 	Ran   bool
 	Units []UnitResult
-	Note  string
+	// Note is why the pass did not run, as the record keeps it: it becomes
+	// every file's TestSelection.Fallback (testmap's someUnitReported, the
+	// scan's unitsNotRunReason), which the ledger publishes on every entry,
+	// so it is one fixed phrase per reason and never quotes the operator's
+	// command, a runner's error or what a run printed.
+	Note string
+	// TerminalDetail is Note as the operator's terminal says it: the same reason
+	// with the command, the error and the output tail that explain it. It
+	// is never marshalled and never read into a selection. "" when Note
+	// says everything (Said).
+	// Named TerminalDetail, never Detail: a ledger row's Detail is recorded,
+	// and a field of that name is one assignment from leaking into it.
+	TerminalDetail string `json:"-"`
+	// Changed is what the pass changed in the operator's command to run
+	// each unit (lang.EvidenceNote: vitest's threads pool), "" for nothing.
+	// It is set on a pass that ran, every unit green or not, so the scan
+	// line can say once that the evidence came from a command the operator
+	// did not write. It is not Note, which says why a pass did NOT run.
+	Changed string `json:",omitempty"`
 }
 
 // Reasons a unit contributes nothing. They are written into UnitResult.Err
-// verbatim, and the scan line repeats them.
+// verbatim, and the scan line repeats them. Each is fixed text (an exit code
+// aside): what a failure printed goes in UnitResult.TerminalDetail, for the terminal.
 const (
 	unitNotRunTimeLimit   = "not run (time limit)"
 	unitNotRunInterrupted = "not run (interrupted)"
@@ -74,15 +108,41 @@ const (
 	unitTruncated         = "report truncated"
 	unitNotAlone          = "not run: its one-unit form would also run another unit"
 	unitNoSuiteExit       = "no suite exit status in the report"
+	// unitRunFailed prefixes every reason for a unit that RAN and failed on
+	// unmutated code: a red test, a build error, a process that did not exit
+	// normally. It is the one reason that proves the unit red in the jail,
+	// which is what WithoutRedUnits keys on.
+	unitRunFailed = "run failed: "
+	// unitGreenAsWritten is a unit red only with the evidence pass's change
+	// to its command (vitest's --pool=threads: REA's cliJsonPaths.test.ts
+	// calls process.chdir(), which threads forbid), and green when run
+	// again exactly as the operator's command runs it (recheckAsWritten).
+	// It is not red, so the red-baseline retry never leaves it out; that
+	// run took no coverage, so it reports no evidence and runs with every
+	// file.
+	unitGreenAsWritten = "not measured: red with the evidence pass's change (%s), green as the operator's command runs it, which took no coverage"
 	// unitCouldNotRun prefixes a runner's own error: the unit never ran,
 	// for a reason outside the tree (a jail that could not start).
 	unitCouldNotRun = "could not run: "
-	// unitCoverageUnavailable prefixes the instrument's own reason.
-	unitCoverageUnavailable = "coverage unavailable: "
+	// unitJailCouldNotStart is unitCouldNotRun's one reason: the runner's
+	// own error (an OS error naming host paths, a bwrap message) is the
+	// unit's TerminalDetail, never its Err.
+	unitJailCouldNotStart = unitCouldNotRun + "the jail could not start it"
+	// unitNoCommand is a unit the operator's command has no one-unit form
+	// for. It once quoted that command, argv and all, into the record.
+	unitNoCommand = "not run: the command could not be built"
+	// unitCoverageUnavailable prefixes the instrument's own reason, which
+	// is the unit's TerminalDetail; unitCoverageUnavailableRecord is the Err.
+	unitCoverageUnavailable       = "coverage unavailable: "
+	unitCoverageUnavailableRecord = unitCoverageUnavailable + "the coverage instrument reported it unavailable"
+	// unitUnparseable is a report the reducer's parser refused; the
+	// parser's message is the unit's TerminalDetail.
+	unitUnparseable = "unparseable: the coverage report could not be read"
 )
 
 // CollectUnitEvidence lists the units inv collects and runs each one's
-// coverage command (CoverageCmd over UnitRunCmd) once, workers at a time.
+// coverage command (CoverageCmd over EvidenceUnitCmd over UnitRunCmd) once,
+// workers at a time.
 //
 // It never stretches its budget: ctx is the caller's deadline for the whole
 // pass, and a unit not yet started when it passes is recorded unitNotRunTimeLimit
@@ -111,28 +171,38 @@ func CollectUnitEvidence(ctx context.Context, runner commandRunner, files map[st
 	}
 	listCmd, ok := lang.ListUnitsCmd(p, inv)
 	if !ok {
-		return UnitEvidence{Note: fmt.Sprintf("%s: `%s` has no one-unit form corral can list and run, so no unit evidence", p.Name(), command)}
+		return UnitEvidence{Note: fmt.Sprintf("%s: the unit pass could not list units: its command has no one-unit form corral can list and run", p.Name()),
+			TerminalDetail: fmt.Sprintf("%s: `%s` has no one-unit form corral can list and run, so no unit evidence", p.Name(), command)}
 	}
 
 	out, exit, stderr, err := runSelectionCmd(ctx, runner, files, listCmd)
 	switch {
 	case err != nil:
-		return UnitEvidence{Note: fmt.Sprintf("%s: listing the test units of `%s` failed: %v", p.Name(), command, err)}
+		return UnitEvidence{Note: fmt.Sprintf("%s: the unit pass could not list units: the jail could not start the listing", p.Name()),
+			TerminalDetail: fmt.Sprintf("%s: listing the test units of `%s` failed: %v", p.Name(), command, err)}
 	case exit > 0:
-		return UnitEvidence{Note: fmt.Sprintf("%s: listing the test units of `%s` exited %d%s", p.Name(), command, exit, failureTail(stderr, out))}
+		return UnitEvidence{Note: fmt.Sprintf("%s: the unit pass could not list units: the listing exited %d", p.Name(), exit),
+			TerminalDetail: fmt.Sprintf("%s: listing the test units of `%s` exited %d%s", p.Name(), command, exit, failureTail(stderr, out))}
 	case truncated(out):
-		return UnitEvidence{Note: fmt.Sprintf("%s: the unit listing of `%s` was truncated, so the units it names cannot be trusted to be all of them", p.Name(), command)}
+		return UnitEvidence{Note: fmt.Sprintf("%s: the unit pass could not list units: the listing was truncated, so the units it names cannot be trusted to be all of them", p.Name()),
+			TerminalDetail: fmt.Sprintf("%s: the unit listing of `%s` was truncated, so the units it names cannot be trusted to be all of them", p.Name(), command)}
 	}
 	units := lang.ParseUnitList(p, inv, out)
 	if units == nil {
-		return UnitEvidence{Note: fmt.Sprintf("%s: could not read the unit listing of `%s`%s", p.Name(), command, failureTail(stderr, out))}
+		return UnitEvidence{Note: fmt.Sprintf("%s: the unit pass could not list units: the listing could not be read", p.Name()),
+			TerminalDetail: fmt.Sprintf("%s: could not read the unit listing of `%s`%s", p.Name(), command, failureTail(stderr, out))}
 	}
 	if len(units) == 0 {
-		return UnitEvidence{Note: fmt.Sprintf("%s: `%s` collects no test units", p.Name(), command)}
+		return UnitEvidence{Note: fmt.Sprintf("%s: the test command collects no test units", p.Name()),
+			TerminalDetail: fmt.Sprintf("%s: `%s` collects no test units", p.Name(), command)}
 	}
 
 	results := make([]UnitResult, len(units))
 	cmds := make([][]string, len(units))
+	// asWritten is each unit's one-unit command as the operator's command
+	// runs it, for recheckAsWritten.
+	asWritten := make([][]string, len(units))
+	evidenceCmds := make([][]string, len(units))
 	var runnable []int
 	for i, u := range units {
 		name := lang.UnitName(u)
@@ -143,10 +213,15 @@ func CollectUnitEvidence(ctx context.Context, runner commandRunner, files map[st
 		}
 		unitCmd, ok := lang.UnitRunCmd(p, inv, u)
 		if !ok {
-			results[i].Err = fmt.Sprintf("not run: `%s` has no one-unit command for it", command)
+			results[i].Err = unitNoCommand
+			results[i].TerminalDetail = fmt.Sprintf("`%s` has no one-unit command for it", command)
 			continue
 		}
-		cov, ok := reporter.CoverageCmd(unitCmd)
+		// The evidence pass's own flags (vitest's threads pool) go on the
+		// unit command before coverage wraps it; grading never gets them.
+		asWritten[i] = unitCmd
+		evidenceCmds[i] = lang.EvidenceUnitCmd(p, inv, unitCmd)
+		cov, ok := reporter.CoverageCmd(evidenceCmds[i])
 		if !ok {
 			results[i].Err = "not run: its one-unit command has no coverage instrumentation"
 			continue
@@ -155,30 +230,279 @@ func CollectUnitEvidence(ctx context.Context, runner commandRunner, files map[st
 		runnable = append(runnable, i)
 	}
 	if len(runnable) == 0 {
-		return UnitEvidence{Units: results, Note: fmt.Sprintf("%s: no unit `%s` collects can run alone under coverage, so no unit evidence", p.Name(), command)}
+		return UnitEvidence{Units: results, Note: fmt.Sprintf("%s: no unit the test command collects can run alone under coverage, so no unit evidence", p.Name()),
+			TerminalDetail: fmt.Sprintf("%s: no unit `%s` collects can run alone under coverage, so no unit evidence", p.Name(), command)}
 	}
 
 	noCoverage := lang.UnitNoCoverageReason(p, inv)
+	note := lang.EvidenceNote(p, inv)
+	// said is every sentence the pass adds about how it ran its units,
+	// beyond what it changed in the command (note); Changed is note
+	// followed by them, built once at the end, so a later change to note
+	// (a shared cache's options) can never drop or repeat a sentence.
+	var said []string
+
+	// Every unit runs over the same tree, so a runner that can seed it
+	// (seedingRunner) writes it once, here, and each unit runs on a
+	// copy-on-write overlay of that seed instead of a fresh copy of its own.
+	// The seed also shares the runner's tool cache (lang.EvidenceCache),
+	// when its row has one and the seed can overlay it.
+	unitRunner := runner
+	var seeded sandbox.SeededRunner
+	cache := lang.EvidenceCacheFor(p, inv)
+	cacheTarget := ""
+	if sr, ok := runner.(seedingRunner); ok {
+		// A cache whose tool would not take its options (an installed
+		// version that predates them) is not asked for: the seed shares
+		// none, and the pass says why below.
+		asked, unsupported := askedCache(cache, inv.Argv, treeFileReader(runner, files))
+		s, err := sr.Seed(files, asked)
+		switch {
+		case err == nil:
+			seeded, unitRunner = s, s
+			switch {
+			case unsupported != "":
+				said = append(said, unitsUnsharedCache(cache, unsupported))
+			case cache != nil:
+				shared := s.Cache()
+				cacheTarget = shared.Target
+				if cacheTarget == "" {
+					said = append(said, unitsUnsharedCache(cache, shared.Unshared))
+				}
+			}
+		case errors.Is(err, sandbox.ErrNoOverlay):
+			said = append(said, unitsFreshCopy(err))
+			if cache != nil {
+				said = append(said, unitsUnsharedCache(cache, overlayRefuser(err)+" cannot overlay"))
+			}
+		default:
+			for _, i := range runnable {
+				results[i].Err = unitJailCouldNotStart
+				results[i].TerminalDetail = err.Error()
+			}
+			return UnitEvidence{Units: results, Note: fmt.Sprintf("%s: the unit pass did not run: the jail could not start it", p.Name()),
+				TerminalDetail: fmt.Sprintf("%s: the unit pass could not seed the tree its units run over: %v", p.Name(), err)}
+		}
+	}
+
+	if cacheTarget != "" && cache.Args != nil {
+		// The cache's own words go on each unit command after the
+		// evidence flags, before coverage wraps it, and only when the
+		// cache is shared: a unit told to use a cache that is not there
+		// would not be the run the operator's command describes. They
+		// are words the operator did not write, so the note names them
+		// — on the scan line and in a red unit's reason — as the
+		// evidence flags are named.
+		args := cache.Args(cacheTarget)
+		note = unitsCacheArgs(note, cache, args)
+		for _, i := range runnable {
+			cov, ok := reporter.CoverageCmd(append(slices.Clone(evidenceCmds[i]), args...))
+			if !ok {
+				results[i].Err = "not run: its one-unit command has no coverage instrumentation with the shared cache's arguments"
+				cmds[i] = nil
+				continue
+			}
+			cmds[i] = cov
+		}
+		runnable = slices.DeleteFunc(runnable, func(i int) bool { return cmds[i] == nil })
+	}
+
 	announce(len(runnable), len(units))
+	frozen := runnable
+	if cacheTarget != "" && len(runnable) > 0 {
+		// The first runnable unit warms the shared cache: run once, alone,
+		// before any worker starts, with the cache writable. Its build
+		// flags are every later unit's, so what it caches is what they
+		// build. Its result is that unit's evidence; it is not run again.
+		// Every later unit sees the cache frozen.
+		first := runnable[0]
+		r := runUnit(ctx, warmingRunner{seeded}, files, reporter, cmds[first], modulePath, noCoverage, note)
+		r = recheckAsWritten(ctx, unitRunner, files, r, asWritten[first], note)
+		r.Unit = results[first].Unit
+		results[first] = r
+		frozen = runnable[1:]
+	}
 	jobs := make(chan int)
 	var wg sync.WaitGroup
-	for range min(workers, len(runnable)) {
+	for range min(workers, len(frozen)) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for i := range jobs {
-				r := runUnit(ctx, runner, files, reporter, cmds[i], modulePath, noCoverage)
+				r := runUnit(ctx, unitRunner, files, reporter, cmds[i], modulePath, noCoverage, note)
+				r = recheckAsWritten(ctx, unitRunner, files, r, asWritten[i], note)
 				r.Unit = results[i].Unit
 				results[i] = r
 			}
 		}()
 	}
-	for _, i := range runnable {
+	for _, i := range frozen {
 		jobs <- i
 	}
 	close(jobs)
 	wg.Wait()
-	return UnitEvidence{Ran: true, Units: results}
+	if seeded != nil {
+		// The evidence is whole either way; a seed left behind is the
+		// host's to clean up, and the operator is told where it is.
+		if err := seeded.Close(); err != nil {
+			said = append(said, fmt.Sprintf("the pass's seed could not be removed: %v", err))
+		}
+	}
+	return UnitEvidence{Ran: true, Units: results, Changed: unitsChanged(note, said)}
+}
+
+// seedingRunner is a commandRunner that can write the tree once for many
+// runs (adequacy's bwrapJail.Seed): the SeededRunner it returns runs each
+// command on a copy-on-write overlay of that one seed, for the very files
+// map it was given and no other, until Close. Seed returns
+// sandbox.ErrNoOverlay when the backend cannot overlay, and the pass then
+// runs each unit on a fresh copy, as every run did before, and says so
+// (unitsFreshCopy). cache, when non-nil, is the tool cache the seed is to
+// share among the runs (SeededRunner.Cache says whether it does).
+type seedingRunner interface {
+	Seed(files map[string]string, cache *lang.EvidenceCache) (sandbox.SeededRunner, error)
+}
+
+// warmingRunner runs a seed's commands through its Warm: the one run that
+// fills the shared cache, read through runUnit like every other unit's.
+type warmingRunner struct{ s sandbox.SeededRunner }
+
+func (w warmingRunner) Enumerate(ctx context.Context, files map[string]string, cmd []string) (string, error) {
+	res, err := w.s.Warm(ctx, files, cmd)
+	return res.Output, err
+}
+
+func (w warmingRunner) EnumerateDetailed(ctx context.Context, files map[string]string, cmd []string) (sandbox.EnumerateResult, error) {
+	return w.s.Warm(ctx, files, cmd)
+}
+
+// askedCache is the cache the pass asks its seed to share, and why it asks
+// for none when the cache's tool would not take its options (an installed
+// version that predates them, or one that cannot be read): cache itself
+// when it has no Unsupported or Unsupported gives no reason, else nil and
+// that reason. read is the tree as the jail will see it (treeFileReader).
+func askedCache(cache *lang.EvidenceCache, argv []string, read func(rel string) ([]byte, error)) (*lang.EvidenceCache, string) {
+	if cache == nil || cache.Unsupported == nil {
+		return cache, ""
+	}
+	if why := cache.Unsupported(argv, read); why != "" {
+		return nil, why
+	}
+	return cache, ""
+}
+
+// unitsChanged is UnitEvidence.Changed: what the pass changed in the
+// command (note, "" for nothing), then every other sentence it said about
+// how it ran its units, in order.
+func unitsChanged(note string, said []string) string {
+	changed := note
+	for _, s := range said {
+		changed = joinChanged(changed, s)
+	}
+	return changed
+}
+
+// treeFileReader reads a file of the tree a unit runs over, as the jail
+// will see it: through the runner when it can (TreeReader: the seed's own
+// files, then the dependency directories it mounts into the jail, where
+// node_modules is on a real run), else from the seed's files alone. Both
+// name a file by lang.TreeRel's one rule. A file outside the seed, on a
+// runner that cannot read further, is fs.ErrNotExist.
+func treeFileReader(runner commandRunner, files map[string]string) func(rel string) ([]byte, error) {
+	return func(rel string) ([]byte, error) {
+		if tr, ok := runner.(TreeReader); ok {
+			return tr.ReadTreeFile(files, rel)
+		}
+		clean, ok := lang.TreeRel(rel)
+		if !ok {
+			return nil, fmt.Errorf("%q is not a path inside the tree", rel)
+		}
+		if s, ok := files[clean]; ok {
+			return []byte(s), nil
+		}
+		return nil, fs.ErrNotExist
+	}
+}
+
+// TreeReader is a commandRunner that reads one file of a run's tree as the
+// jail sees it (adequacy's bwrapJail.ReadTreeFile): from files, else from
+// the dependency directory mounted at that path.
+type TreeReader interface {
+	ReadTreeFile(files map[string]string, rel string) ([]byte, error)
+}
+
+// unitsCacheArgs is note (lang.EvidenceNote, "" for no change) extended
+// with the options a shared cache adds to every unit command.
+func unitsCacheArgs(note string, cache *lang.EvidenceCache, args []string) string {
+	what := strings.Join(args, " ") + " (a shared " + cacheName(cache) + ", filled by the first unit and frozen for every later one)"
+	if note == "" {
+		return "the evidence pass runs each unit with " + what
+	}
+	return note + ", and with " + what
+}
+
+// cacheName is what the pass calls a cache: its Name, else its Env, else
+// "tool cache".
+func cacheName(cache *lang.EvidenceCache) string {
+	switch {
+	case cache.Name != "":
+		return cache.Name
+	case cache.Env != "":
+		return cache.Env
+	}
+	return "tool cache"
+}
+
+// unitsUnsharedCache is said, once per pass, of a pass whose seed could not
+// share the runner's tool cache (why, from SeededRunner.Cache): each unit
+// started from an empty one, as every jailed run did before the cache was
+// shared. It costs time, never evidence.
+func unitsUnsharedCache(cache *lang.EvidenceCache, why string) string {
+	name := cacheName(cache)
+	if why == "" {
+		why = "the seed gave no reason"
+	}
+	return "each unit started from an empty " + name + " (no shared cache: " + why + ")"
+}
+
+// unitsFreshCopy is said, once per pass, of a pass whose runner could not
+// seed its units' tree (err, an ErrNoOverlay): each unit wrote a full copy
+// of the tree, which costs the tree's size in tmpfs per worker (at 12 or
+// more workers that exhausted REA's tmpfs, and every unit failed ENOSPC).
+// It names the backend that refused when the error does.
+func unitsFreshCopy(err error) string {
+	return "units ran on a fresh copy each (" + overlayRefuser(err) + " cannot overlay)"
+}
+
+// overlayRefuser names the backend an ErrNoOverlay came from, for the
+// pass's sentences about it.
+func overlayRefuser(err error) string {
+	who := "this backend"
+	var no *sandbox.NoOverlayError
+	if errors.As(err, &no) {
+		who = "the " + no.Backend + " backend"
+		if no.Backend == "bwrap" {
+			who = "this bwrap"
+		}
+	}
+	return who
+}
+
+// joinChanged appends one sentence to UnitEvidence.Changed.
+func joinChanged(changed, more string) string {
+	if changed == "" {
+		return more
+	}
+	return changed + "; " + more
+}
+
+// Said is why the pass did not run as the operator's terminal says it:
+// TerminalDetail when there is one, else Note. Never read it into a selection.
+func (ev UnitEvidence) Said() string {
+	if ev.TerminalDetail != "" {
+		return ev.TerminalDetail
+	}
+	return ev.Note
 }
 
 // Settled reports whether this pass may be kept for a later scan of the
@@ -202,11 +526,44 @@ func (ev UnitEvidence) Settled() bool {
 	return true
 }
 
+// GreenAsWritten is how many units were red only with the evidence pass's
+// change to their command and green as the operator's command runs them
+// (unitGreenAsWritten).
+func (ev UnitEvidence) GreenAsWritten() int {
+	prefix, _, _ := strings.Cut(unitGreenAsWritten, "(")
+	n := 0
+	for _, u := range ev.Units {
+		if strings.HasPrefix(u.Err, prefix) {
+			n++
+		}
+	}
+	return n
+}
+
+// CutShort is how many units the pass's own deadline cut: never started
+// before it passed (unitNotRunTimeLimit) or stopped by it mid-run
+// (unitTimedOut). It is the one number an operator can act on by giving the
+// pass more time, so the caller names its bound beside it; every other reason
+// a unit contributes nothing is the tree's or the environment's, and more
+// time would not change it.
+func (ev UnitEvidence) CutShort() int {
+	n := 0
+	for _, u := range ev.Units {
+		if u.Err == unitNotRunTimeLimit || u.Err == unitTimedOut {
+			n++
+		}
+	}
+	return n
+}
+
 // runUnit runs one unit's coverage command and reads its report. Every way
 // the run can fail to measure is an Err, never an empty Counts. noCoverage
 // is the runner's known cause for a report that names no project file at
-// all (lang.UnitNoCoverageReason), "" for none.
-func runUnit(ctx context.Context, runner commandRunner, files map[string]string, reporter lang.CoverageReporter, cmd []string, modulePath, noCoverage string) UnitResult {
+// all (lang.UnitNoCoverageReason), "" for none. note is what the evidence
+// pass changed in the operator's command (lang.EvidenceNote), "" for
+// nothing: a red unit's TerminalDetail names it, because the operator's own run of
+// the same unit may be green without it.
+func runUnit(ctx context.Context, runner commandRunner, files map[string]string, reporter lang.CoverageReporter, cmd []string, modulePath, noCoverage, note string) UnitResult {
 	if err := ctx.Err(); err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
 			return UnitResult{Err: unitNotRunTimeLimit}
@@ -221,15 +578,15 @@ func runUnit(ctx context.Context, runner commandRunner, files map[string]string,
 	case err != nil && ctx.Err() != nil:
 		return UnitResult{Err: unitInterrupted}
 	case err != nil:
-		return UnitResult{Err: unitCouldNotRun + err.Error()}
+		return UnitResult{Err: unitJailCouldNotStart, TerminalDetail: err.Error()}
 	case exit > 0:
 		// A unit whose own run failed — a red test, a build error, a
 		// toolchain the jail lacks — is not evidence, even when a report
 		// still parses: a failing unit can stop before the code it would
 		// have executed, so its zeros are not "never executed".
-		return UnitResult{Err: fmt.Sprintf("run failed: exited %d%s", exit, failureTail(stderr, lang.BeforeSuiteExit(out)))}
+		return UnitResult{Err: fmt.Sprintf(unitRunFailed+"exited %d", exit), TerminalDetail: runDetail(note, failureTail(stderr, lang.BeforeSuiteExit(out)))}
 	case detailed && exit < 0:
-		return UnitResult{Err: "run failed: the process did not exit normally" + failureTail(stderr, lang.BeforeSuiteExit(out))}
+		return UnitResult{Err: unitRunFailed + "the process did not exit normally", TerminalDetail: runDetail(note, failureTail(stderr, lang.BeforeSuiteExit(out)))}
 	case truncated(out):
 		// Checked before parsing, as Preflight does: a report cut on a
 		// clean boundary parses as a partial map that looks complete.
@@ -253,10 +610,11 @@ func runUnit(ctx context.Context, runner commandRunner, files map[string]string,
 		// What the suite printed before its trailer says why it failed
 		// (stderr when the runner kept it apart); the report after it
 		// does not.
-		return UnitResult{Err: fmt.Sprintf("run failed: exit %d%s", rc, failureTail(stderr, lang.BeforeSuiteExit(out)))}
+		return UnitResult{Err: fmt.Sprintf(unitRunFailed+"exit %d", rc), TerminalDetail: runDetail(note, failureTail(stderr, lang.BeforeSuiteExit(out)))}
 	}
 	if reason, unavailable := lang.CoverageUnavailable(out); unavailable {
-		return UnitResult{Err: unitCoverageUnavailable + reason}
+		// The instrument's notice is tool text: the operator's, in TerminalDetail.
+		return UnitResult{Err: unitCoverageUnavailableRecord, TerminalDetail: reason}
 	}
 	if !ok {
 		return UnitResult{Err: unitNoSuiteExit}
@@ -274,9 +632,45 @@ func runUnit(ctx context.Context, runner commandRunner, files map[string]string,
 			}
 			return UnitResult{Err: "unparseable: " + empty.Summary(), Uncounted: lang.UncountedCoverage(out)}
 		}
-		return UnitResult{Err: fmt.Sprintf("unparseable: %v", err)}
+		// The parser's message can quote the report: the operator's, in
+		// TerminalDetail; the record keeps the class.
+		return UnitResult{Err: unitUnparseable, TerminalDetail: err.Error()}
 	}
 	return UnitResult{Counts: counts, Uncounted: lang.UncountedCoverage(out), Loaded: lang.LoadedCoverage(out)}
+}
+
+// recheckAsWritten runs a unit that the evidence pass found red once more,
+// exactly as the operator's command runs it, when the pass had changed its
+// command (note, lang.EvidenceNote): red only with that change, it is not a
+// red unit, and is recorded unitGreenAsWritten. Red both ways, a run that
+// errs, or a pass that changed nothing keeps r as it is. The rerun takes no
+// coverage: the change exists because the operator's own form can lose it
+// (vitest's forks pool ends workers before they write any), so coverage from
+// it could not be shown complete, and a unit with incomplete edges would
+// under-select.
+func recheckAsWritten(ctx context.Context, runner commandRunner, files map[string]string, r UnitResult, cmd []string, note string) UnitResult {
+	if note == "" || cmd == nil || !strings.HasPrefix(r.Err, unitRunFailed) {
+		return r
+	}
+	_, exit, _, err := runSelectionCmd(ctx, runner, files, cmd)
+	if err != nil || exit != 0 {
+		return r
+	}
+	return UnitResult{Err: fmt.Sprintf(unitGreenAsWritten, note)}
+}
+
+// runDetail is a failed unit run's TerminalDetail: what the evidence pass changed in
+// its command (note), then the end of what it printed (a failureTail), for
+// the terminal only.
+func runDetail(note, tail string) string {
+	tail = strings.TrimPrefix(tail, ": ")
+	switch {
+	case note == "":
+		return tail
+	case tail == "":
+		return note
+	}
+	return note + ": " + tail
 }
 
 // truncated reports whether out ends with the runner's truncation marker.
@@ -299,7 +693,9 @@ func failureTail(stderr, out string) string {
 	return ": " + tail
 }
 
-// IndexFromUnits builds the EvidenceIndex a unit pass supports. ok is false
+// IndexFromUnits builds the EvidenceIndex a unit pass supports, as a view of
+// the pass's test map (MapFromUnits): the map holds what each unit measured
+// and which units have no evidence, this holds what candidacy makes of it. ok is false
 // when the pass never ran or no unit succeeded: there is nothing to widen
 // candidacy with.
 //
@@ -334,50 +730,37 @@ func IndexFromUnits(ev UnitEvidence, uf UnitFiles) (EvidenceIndex, bool) {
 	if !ev.Ran {
 		return EvidenceIndex{}, false
 	}
+	m := unitMap(ev, uf)
 	type tally struct {
-		executed, hasStatements, loaded bool
-		units                           int
-		perFile                         map[string]int
-		compiled                        map[string]bool
+		executed bool
+		units    int
+		perFile  map[string]int
+		compiled map[string]bool
 	}
 	tallies := map[string]*tally{}
-	succeeded, partial := 0, false
-	for _, u := range ev.Units {
-		if u.Err != "" {
-			partial = true
+	for src := range m.Sources {
+		tallies[src] = &tally{perFile: map[string]int{}, compiled: map[string]bool{}}
+	}
+	partial := len(m.Unreported()) > 0
+	if len(m.Unreported()) == len(m.Tests) {
+		return EvidenceIndex{}, false
+	}
+	for _, e := range m.Edges {
+		if e.Executed == 0 {
 			continue
 		}
-		succeeded++
-		loaded := make(map[string]bool, len(u.Loaded))
-		for _, f := range u.Loaded {
-			loaded[f] = true
+		t := tallies[e.Source]
+		t.executed = true
+		landing := uf.Landing(e.Test, e.Source)
+		if landing == "" {
+			continue
 		}
-		for src, lc := range u.Counts {
-			t := tallies[src]
-			if t == nil {
-				t = &tally{perFile: map[string]int{}, compiled: map[string]bool{}}
-				tallies[src] = t
-			}
-			t.hasStatements = t.hasStatements || lc.Executable > 0
-			t.loaded = t.loaded || loaded[src]
-			if lc.Executed == 0 {
-				continue
-			}
-			t.executed = true
-			landing := uf.Landing(u.Unit, src)
-			if landing == "" {
-				continue
-			}
-			t.units++
-			t.perFile[landing] += lc.Executed
-			t.compiled[landing] = true
-			for _, tf := range uf.TestFiles(u.Unit) {
-				t.compiled[tf] = true
-			}
+		t.units++
+		t.perFile[landing] += e.Executed
+		t.compiled[landing] = true
+		for _, tf := range m.Tests[e.Test].Files {
+			t.compiled[tf] = true
 		}
-	}
-	if succeeded == 0 {
-		return EvidenceIndex{}, false
 	}
 
 	files := make(map[string]evidenceFileEntry, len(tallies))
@@ -391,6 +774,7 @@ func IndexFromUnits(ev UnitEvidence, uf UnitFiles) (EvidenceIndex, bool) {
 				best, bestLines = testFile, lines
 			}
 		}
+		s := m.Sources[src]
 		files[src] = evidenceFileEntry{
 			coveringTests: t.units,
 			coveringUnits: t.units,
@@ -399,8 +783,8 @@ func IndexFromUnits(ev UnitEvidence, uf UnitFiles) (EvidenceIndex, bool) {
 			// A unit that loaded the file ran its module-level code: the
 			// unit-pass counterpart of a per-test index's static coverage,
 			// which is what makes an unexecuted file import-only.
-			hasStatic:     t.loaded,
-			hasStatements: t.hasStatements,
+			hasStatic:     s.HasStatic,
+			hasStatements: s.HasStatements,
 		}
 	}
 	return EvidenceIndex{files: files, unitKind: true}, true
@@ -640,25 +1024,12 @@ func goPackageClause(text string) string {
 	return ""
 }
 
-// goImportPathOf is the import path of the package in dir: the nearest
-// go.mod at or above it names the module, and dir's place below that go.mod
-// the rest. ok is false when no go.mod above dir declares a module.
+// goImportPathOf is lang.GoImportPathOf over the scan's files.
 func goImportPathOf(files map[string]string, dir string) (string, bool) {
-	for d := dir; ; d = path.Dir(d) {
-		if text, ok := files[under(d, "go.mod")]; ok {
-			mod, err := lang.GoModuleDirective(text)
-			if err != nil {
-				return "", false
-			}
-			if d == dir {
-				return mod, true
-			}
-			return mod + "/" + strings.TrimPrefix(dir, under(d, "")), true
-		}
-		if d == "." || d == "/" {
-			return "", false
-		}
-	}
+	return lang.GoImportPathOf(func(name string) (string, bool) {
+		text, ok := files[name]
+		return text, ok
+	}, dir)
 }
 
 func rustUnitLanding(files map[string]string) func(unit, source string) string {

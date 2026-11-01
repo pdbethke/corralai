@@ -1,25 +1,25 @@
 // SPDX-License-Identifier: Elastic-2.0
 
-package lang
+package testmap
 
 import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/pdbethke/corralai/internal/lang"
 )
 
 // ForSpan must select the SAME tests it always did — ordering them by how much
 // of the mutated span each one reaches changes the sequence and nothing else.
 // The set is the measurement; the order is only what it costs.
 func TestForSpanOrdersKillLikeliestFirstWithoutChangingTheSet(t *testing.T) {
-	p, _ := ByName("python")
-	ts := p.(TestSelector)
 
-	span := LineRange{Start: 10, End: 19} // ten lines
-	sel := Selection{
+	span := lang.LineRange{Start: 10, End: 19} // ten lines
+	sel := lang.Selection{
 		Base:  []string{"pytest"},
 		Tests: []string{"t/a.py::one", "t/b.py::two", "t/c.py::three", "t/d.py::four"},
-		Lines: map[string][]LineRange{
+		Lines: map[string][]lang.LineRange{
 			// one line of the span
 			"t/a.py::one": {{Start: 1, End: 10}},
 			// the whole span
@@ -33,9 +33,9 @@ func TestForSpanOrdersKillLikeliestFirstWithoutChangingTheSet(t *testing.T) {
 	}
 	sel.Cmd = append(append([]string{}, sel.Base...), sel.Tests...)
 
-	_, got, rule := ts.ForSpan(sel, span)
-	if rule != SpanRuleLines {
-		t.Fatalf("rule = %q, want %q", rule, SpanRuleLines)
+	_, got, rule := pyForSpan(t, sel, span)
+	if rule != lang.SpanRuleLines {
+		t.Fatalf("rule = %q, want %q", rule, lang.SpanRuleLines)
 	}
 
 	// THE SET: exactly the tests whose coverage reaches the span.
@@ -54,21 +54,19 @@ func TestForSpanOrdersKillLikeliestFirstWithoutChangingTheSet(t *testing.T) {
 // Two tests reaching the span equally must still order deterministically — a
 // signed record cannot have two runs of the same evidence disagree.
 func TestForSpanOrderIsTotalAndDeterministic(t *testing.T) {
-	p, _ := ByName("python")
-	ts := p.(TestSelector)
-	span := LineRange{Start: 5, End: 6}
-	sel := Selection{
+	span := lang.LineRange{Start: 5, End: 6}
+	sel := lang.Selection{
 		Base:  []string{"pytest"},
 		Tests: []string{"t/z.py::z", "t/a.py::a"},
-		Lines: map[string][]LineRange{
+		Lines: map[string][]lang.LineRange{
 			"t/z.py::z": {{Start: 5, End: 6}},
 			"t/a.py::a": {{Start: 5, End: 6}},
 		},
 		Method: "coverage-context",
 	}
 	sel.Cmd = append(append([]string{}, sel.Base...), sel.Tests...)
-	_, first, _ := ts.ForSpan(sel, span)
-	_, second, _ := ts.ForSpan(sel, span)
+	_, first, _ := pyForSpan(t, sel, span)
+	_, second, _ := pyForSpan(t, sel, span)
 	if strings.Join(first, ",") != strings.Join(second, ",") {
 		t.Fatalf("two calls disagreed: %v vs %v", first, second)
 	}

@@ -39,7 +39,17 @@ type ScanView struct {
 	Survived   int
 	Proven     int
 	Seats      []string // "role: model [tool version]", from the recorded model set
+	// LeftOut is the first files the jail's copy left out, each with its
+	// reason (ScanRow.SeedSkipped), LeftOutMore how many more there were, and
+	// LeftOutRaw the recorded text when it does not parse, shown as-is
+	// rather than dropped.
+	LeftOut     []string
+	LeftOutMore int
+	LeftOutRaw  string
 }
+
+// leftOutShown is how many left-out files the page names before counting.
+const leftOutShown = 10
 
 // ScanFileView is one audited file with the band its rate carries.
 type ScanFileView struct {
@@ -82,6 +92,17 @@ func buildScanView(e auditpush.LedgerEntry, c ChainView, retraction *auditpush.L
 		sv.Retracted, sv.RetractedReason = true, retraction.Reason
 	}
 	sv.Seats = seatsOf(b.Scan.ModelSet)
+	if raw := b.Scan.SeedSkipped; raw != "" {
+		var left []struct{ Path, Why string }
+		if json.Unmarshal([]byte(raw), &left) != nil {
+			sv.LeftOutRaw = raw
+		} else {
+			for _, l := range left[:min(len(left), leftOutShown)] {
+				sv.LeftOut = append(sv.LeftOut, l.Path+" ("+l.Why+")")
+			}
+			sv.LeftOutMore = len(left) - len(sv.LeftOut)
+		}
+	}
 
 	byPath := map[string][]auditpush.MutantRow{}
 	for _, m := range b.Mutants {

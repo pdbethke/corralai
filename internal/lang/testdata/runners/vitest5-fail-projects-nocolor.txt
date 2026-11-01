@@ -1,0 +1,75 @@
+
+ RUN  v5.0.3 $DIR
+
+ ❯ |unit| fail/broken.vitest.test.mjs (0 test)
+ ❯ |unit| fail/f.vitest.test.mjs (3 tests | 2 failed) Nms
+   ❯ Calc (2)
+     × adds (a+b) Nms
+     ✓ ok Nms
+   × top level Nms
+ ✓ |unit| fail/g.vitest.test.mjs (1 test) Nms
+
+⎯⎯⎯⎯⎯⎯ Failed Suites 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |unit| fail/broken.vitest.test.mjs [ fail/broken.vitest.test.mjs ]
+Error: Failed to parse source for import analysis because the content contains invalid JS syntax. If you are using JSX, make sure to name the file with the .jsx or .tsx extension.
+  Plugin: vite:import-analysis
+  File: $DIR/fail/broken.vitest.test.mjs:1:0
+  1  |  // A file that fails to load.
+     |  ^
+  2  |  import {describe,it} from 'vitest';
+  3  |  describe('Broken', () => {
+ ❯ TransformPluginContext._formatLog ../../../../../../home/pdbethke/PycharmProjects/corralai/.worktrees/test-selection/.superpowers/sdd/2026-10-27-evidence-speedups/realbox/rea-full/node_modules/vite/dist/node/chunks/node.js:8803:39
+ ❯ TransformPluginContext.error ../../../../../../home/pdbethke/PycharmProjects/corralai/.worktrees/test-selection/.superpowers/sdd/2026-10-27-evidence-speedups/realbox/rea-full/node_modules/vite/dist/node/chunks/node.js:8800:14
+ ❯ TransformPluginContext.transform ../../../../../../home/pdbethke/PycharmProjects/corralai/.worktrees/test-selection/.superpowers/sdd/2026-10-27-evidence-speedups/realbox/rea-full/node_modules/vite/dist/node/chunks/node.js:26558:10
+ ❯ EnvironmentPluginContainer.transform ../../../../../../home/pdbethke/PycharmProjects/corralai/.worktrees/test-selection/.superpowers/sdd/2026-10-27-evidence-speedups/realbox/rea-full/node_modules/vite/dist/node/chunks/node.js:8582:14
+ ❯ loadAndTransform ../../../../../../home/pdbethke/PycharmProjects/corralai/.worktrees/test-selection/.superpowers/sdd/2026-10-27-evidence-speedups/realbox/rea-full/node_modules/vite/dist/node/chunks/node.js:20155:26
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/3]⎯
+
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |unit| fail/f.vitest.test.mjs > Calc > adds (a+b)
+AssertionError: expected 2 to be 3 // Object.is equality
+
+- Expected
++ Received
+
+- 3
++ 2
+
+ ❯ fail/f.vitest.test.mjs:3:42
+      1| import {describe,it,test,expect} from "vitest";
+      2| describe('Calc', () => {
+      3|   it('adds (a+b)', () => { expect(1 + 1).toBe(3); });
+       |                                          ^
+      4|   it('ok', () => {});
+      5| });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/3]⎯
+
+ FAIL  |unit| fail/f.vitest.test.mjs > top level
+AssertionError: expected 1 to be 2 // Object.is equality
+
+- Expected
++ Received
+
+- 2
++ 1
+
+ ❯ fail/f.vitest.test.mjs:6:37
+      4|   it('ok', () => {});
+      5| });
+      6| test('top level', () => { expect(1).toBe(2); });
+       |                                     ^
+      7|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/3]⎯
+
+
+ Test Files  2 failed | 1 passed (3)
+      Tests  2 failed | 2 passed (4)
+   Start at  HH:MM:SS
+   Duration  N
+

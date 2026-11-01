@@ -1,0 +1,26 @@
+# argv: node --test --test-reporter=tap --test-concurrency 1 units/multi/node/*.node.test.js
+$ node --test --test-reporter=tap --test-concurrency 1 units/multi/node/a.node.test.js units/multi/node/b.node.test.js
+TAP version 13
+# Subtest: a one
+ok 1 - a one
+  ---
+  type: 'test'
+  ...
+# Subtest: b one
+ok 2 - b one
+  ---
+  type: 'test'
+  ...
+# Subtest: b two
+ok 3 - b two
+  ---
+  type: 'test'
+  ...
+1..3
+# tests 3
+# suites 0
+# pass 3
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0

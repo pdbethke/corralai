@@ -21,6 +21,24 @@ import (
 // Captured outputs: testdata/runners/*-fail.txt
 // (scripts/capture-runner-fixtures.sh).
 
+// sgr is an ANSI colour or style sequence (ESC [ params m), and the cursor
+// and erase sequences a reporter may print beside them.
+var sgr = regexp.MustCompile(`\x1b\[[0-9;?]*[A-Za-z]`)
+
+// plainText is out with its terminal escapes removed: what every parser here
+// reads, through the row accessors (FailureParserFor, DeselectorFor,
+// FailedUnitsFor). vitest 5 colours its report with no TTY and no colour
+// variable (measured on 5.0.3 under the jail's environment,
+// testdata/runners/vitest5-fail.txt), so its " FAIL " heading reached the
+// parser as ESC[41mESC[1m FAIL ESC[22mESC[49m and named nothing: no killed_by
+// label, no salvage, on every vitest 5 run.
+func plainText(out string) string {
+	if !strings.Contains(out, "\x1b") {
+		return out
+	}
+	return sgr.ReplaceAllString(out, "")
+}
+
 // firstOf is a FirstFailure from a failure parser: its first entry.
 func firstOf(failures func(string) []string) func([]byte) string {
 	return func(output []byte) string {
@@ -68,6 +86,66 @@ func vitestFailures(out string) []string {
 		ids = append(ids, strings.Join(parts[1:], "::"))
 	}
 	return ids
+}
+
+// vitestFailedUnits reads the same headings for the file each names, a file
+// that failed to load included (" FAIL  f.test.mjs [ f.test.mjs ]"), each
+// once. A heading under a vitest project carries the project's name before
+// the file: "|unit| f.test.mjs" with colour off, and " unit  f.test.mjs"
+// once the colour that framed it is removed (vitest 5.0.3,
+// testdata/runners/vitest5-fail-projects*.txt).
+func vitestFailedUnits(out string) []string {
+	var units []string
+	for _, line := range strings.Split(out, "\n") {
+		rest, ok := strings.CutPrefix(line, " FAIL  ")
+		if !ok {
+			continue
+		}
+		rest = withoutVitestProject(rest)
+		file, _, _ := strings.Cut(rest, " > ")
+		file, _, _ = strings.Cut(file, " [ ")
+		if file = strings.TrimSpace(file); file != "" && !slices.Contains(units, file) {
+			units = append(units, file)
+		}
+	}
+	return units
+}
+
+// withoutVitestProject is a FAIL heading's remainder without the project
+// name vitest prints before the file, in either of its two forms.
+func withoutVitestProject(rest string) string {
+	if strings.HasPrefix(rest, "|") {
+		if _, after, ok := strings.Cut(rest[1:], "| "); ok {
+			return after
+		}
+		return rest
+	}
+	if strings.HasPrefix(rest, " ") {
+		if _, after, ok := strings.Cut(strings.TrimPrefix(rest, " "), "  "); ok {
+			return after
+		}
+	}
+	return rest
+}
+
+// jestFailedUnits reads jest's "FAIL <file>" line, one per failing file, a
+// file that failed to load included. A line with more after the file (a
+// project's displayName, which no fixture here shows) names nothing rather
+// than a guess.
+func jestFailedUnits(out string) []string {
+	var units []string
+	for _, line := range strings.Split(out, "\n") {
+		rest, ok := strings.CutPrefix(strings.TrimLeft(line, " "), "FAIL ")
+		if !ok {
+			continue
+		}
+		f := strings.Fields(rest)
+		if len(f) != 1 || slices.Contains(units, f[0]) {
+			continue
+		}
+		units = append(units, f[0])
+	}
+	return units
 }
 
 var mochaEntry = regexp.MustCompile(`^  \d+\) (.*)$`)

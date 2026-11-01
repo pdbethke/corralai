@@ -5,11 +5,14 @@ package advpool
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/killrate"
+	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/queue"
+	"github.com/pdbethke/corralai/internal/testmap"
 )
 
 // MethodCoverageLines is TestSelection.Method for a run that graded each
@@ -37,6 +40,11 @@ const MethodCoverageLines = "coverage-lines"
 // guard is a test asserting the value survives Score -> aggregate -> report ->
 // ledger -> attestation, rather than a reader noticing the second site.
 func verdictFromSpec(rs RunSpec) Verdict {
+	devFallback, authoredFallback, alone := selectionDisclosure(rs)
+	fallback := rs.Selection.Fallback
+	if fallback == "" {
+		fallback = devFallback
+	}
 	return Verdict{
 		Repo:            rs.Repo,
 		Commit:          rs.Commit,
@@ -45,8 +53,18 @@ func verdictFromSpec(rs RunSpec) Verdict {
 		PriorsApplied:   rs.PriorsApplied, PriorDigest: rs.PriorDigest, PriorSource: rs.PriorSource,
 		TestSelection: TestSelection{
 			Method: rs.Selection.Method, Selected: len(rs.Selection.Tests),
-			Of: rs.Selection.Of, Fallback: rs.Selection.Fallback,
-			AuthoredAlone: AuthoredAlone(rs),
+			Of: rs.Selection.Of, Fallback: fallback,
+			AuthoredAlone: alone, AuthoredFallback: authoredFallback,
+			// Counted back out of the Selection rather than carried on it:
+			// the units that will run, not a number the selection claimed.
+			Unreported:       testmap.UnreportedIn(rs.SelectionMap, rs.Selection),
+			UnreportedReason: testmap.FirstUnreportedReason(rs.SelectionMap, rs.Selection),
+			Excluded:         len(rs.Selection.Excluded),
+			ExcludedReason:   excludedReason(rs),
+			// Named one per line, beside the count, so the units a red
+			// baseline cost the exam reach the record by name.
+			ExcludedRedInBaseline: excludedRedInBaseline(rs.Selection),
+			UnitNoun:              unitNounOf(rs),
 		},
 		// Concurrency rides straight through — including onto a timed-out
 		// verdict (timeoutVerdict builds off this same function), since the
@@ -81,6 +99,31 @@ func verdictFromSpec(rs RunSpec) Verdict {
 		// Verdict.AuthoredLanding.
 		AuthoredLanding: rs.Landing.AppendTo(),
 	}
+}
+
+// excludedReason is the first excluded unit's own reason from the map the
+// selection was made from, "" when nothing was excluded.
+func excludedReason(rs RunSpec) string {
+	if len(rs.Selection.Excluded) == 0 {
+		return ""
+	}
+	first := rs.Selection.Excluded[0]
+	if why, ok := rs.Selection.ExcludedWhy[first]; ok {
+		return why
+	}
+	return rs.SelectionMap.Tests[first].Err
+}
+
+// excludedRedInBaseline is sel's Excluded units that carry an ExcludedWhy,
+// as "unit: why" lines in Excluded's order; "" when none do.
+func excludedRedInBaseline(sel lang.Selection) string {
+	var lines []string
+	for _, u := range sel.Excluded {
+		if why, ok := sel.ExcludedWhy[u]; ok {
+			lines = append(lines, u+": "+why)
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // timingWith overlays the phases the DRIVER measured onto the ones the SPEC
@@ -295,4 +338,23 @@ func examSampleOf(rep adequacy.Report, mutants []adequacy.Mutant) examSample {
 		}
 	}
 	return s
+}
+
+// unitNounOf is the unit noun of the runner row a unit-grain selection was
+// made from, "" for any other selection. Read from the row, never defaulted:
+// a unit row without one is caught by a test in lang, and a scan line then
+// says so rather than inventing a word.
+func unitNounOf(rs RunSpec) string {
+	if rs.Selection.Method != testmap.MethodUnitEvidence || rs.SelectionMap.Runner == "" {
+		return ""
+	}
+	p, ok := lang.ByName(rs.Lang)
+	if !ok {
+		return ""
+	}
+	r, err := lang.RunnerByID(p, rs.SelectionMap.Runner)
+	if err != nil {
+		return ""
+	}
+	return r.UnitNoun
 }

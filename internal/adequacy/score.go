@@ -452,6 +452,13 @@ type Report struct {
 	// ordinary Python repos, which is why an estimate extrapolated from one
 	// repo is worthless. Recording it turns capacity planning into a query.
 	BaselineDuration time.Duration
+	// BaselineTimedOut reports that the compliant suite was killed at the
+	// run's bound rather than finishing red. Both leave CompliantPass false,
+	// and until this field the report could not tell them apart: REA's
+	// eleventh run (2026-10-31) printed "baseline does not pass unmutated"
+	// over a tail of passing tests, because the suite had run out of time,
+	// not failed.
+	BaselineTimedOut bool
 	// FailFast reports whether MUTANT runs actually stopped at their first
 	// failing test (see WithMutantFailFast). False both when no fail-fast was
 	// configured and when the probe below rejected it.
@@ -710,22 +717,31 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 		return vj.RunTestVerbose(rctx, files, cmd)
 	}
 
-	// The BASELINE run alone goes through the verbose path when the jail offers
-	// one: it is a single run either way, so keeping the output costs nothing,
-	// and it is the one run whose failure a human must be able to diagnose.
-	// Mutant runs deliberately stay on the plain path — there are ~42 of them
-	// and their output is not evidence of anything.
+	// The BASELINE run alone keeps its output when the jail can: it is a
+	// single run either way, so keeping the output costs nothing, and it is
+	// the one run whose failure a human must be able to diagnose. Mutant runs
+	// deliberately stay on the plain path — there are ~42 of them and their
+	// output is not evidence of anything.
+	//
+	// The TAIL when the jail can keep one (DetailedJail), the head only
+	// otherwise: a runner names what failed at the end of its output. REA's
+	// sixth run (2026-10-30) failed its baseline and printed 64 KiB of
+	// passing acceptance tests, cut off before vitest's failure summary.
 	baselineRun := func(rctx context.Context, code string) (bool, string, error) {
-		vj, ok := j.(VerboseJail)
-		if !ok {
-			p, err := run(rctx, code)
-			return p, "", err
-		}
 		files := make(map[string]string, len(base)+1)
 		for k, v := range base {
 			files[k] = v
 		}
 		files[codePath] = code
+		if dj, ok := j.(DetailedJail); ok {
+			p, out, err := dj.RunTestDetailed(rctx, files, testCmd)
+			return p, string(out), err
+		}
+		vj, ok := j.(VerboseJail)
+		if !ok {
+			p, err := run(rctx, code)
+			return p, "", err
+		}
 		return vj.RunTestVerbose(rctx, files, testCmd)
 	}
 
@@ -739,7 +755,7 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 			// score mutants against a baseline that can't even pass. The
 			// output rides along: "which test hung" is exactly the question a
 			// timed-out baseline leaves open.
-			return Report{CompliantPass: false, BaselineOutput: baseOut, BaselineDuration: baseDur}, nil
+			return Report{CompliantPass: false, BaselineOutput: baseOut, BaselineDuration: baseDur, BaselineTimedOut: true}, nil
 		}
 		return Report{}, err
 	}

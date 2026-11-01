@@ -290,7 +290,7 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 			strings.Join(unpinned, " and "), strings.SplitN(*model, ":", 2)[0])
 	}
 
-	r := review.Review{Repo: repoName, Commit: commit, Author: party.Author, Committer: party.Committer, CoAuthors: party.CoAuthors,
+	r := review.Review{Repo: repoName, Commit: commit, Author: party.Author, Committer: party.Committer, CoAuthors: party.CoAuthors, GeneratedWith: party.GeneratedWith,
 		Scope: *scope, ReviewerModel: *model, ReviewerTool: reviewerTool, Lang: langOfScope(allFiles),
 		ReviewerModelResolved: agentbackend.SeatNamesAModel(*model),
 		Substrate:             substrateOf(rep), StartedAt: time.Now().UTC(),
@@ -559,13 +559,15 @@ func newJailReproducer(iso sandbox.Isolator, root, commit, scope string, timeout
 		return nil, nil, err
 	}
 	langName := reviewLang(tree, scope)
-	seed, err := buildRepoSeed("corral review", tree, langName, iso, nil, false, progress)
+	// review takes no --seed-limit: its seed is a worktree at the reviewed
+	// commit, bounded as every jail was before the flag existed.
+	seed, err := buildRepoSeed("corral review", tree, langName, iso, nil, false, seedLimitBuiltin, progress)
 	if err != nil {
 		removeTree()
 		return nil, nil, err
 	}
 	cleanup := func() { seed.cleanup(); removeTree() }
-	_, deps, err := loadRepoFiles(root, loadOpts{BackendName: iso.Name(), NoFiles: true})
+	_, deps, _, err := loadRepoFiles(root, loadOpts{BackendName: iso.Name(), NoFiles: true})
 	if err != nil {
 		cleanup()
 		return nil, nil, fmt.Errorf("finding the dependency directories in %s: %w", root, err)
@@ -583,10 +585,10 @@ func newJailReproducer(iso sandbox.Isolator, root, commit, scope string, timeout
 	// (sandbox-exec; a dir the container's user cannot read) is neither
 	// bound nor copied: said on stderr and on the record, never implied.
 	var bound, unbound []string
-	_, every, _ := loadRepoFiles(root, loadOpts{BackendName: "bwrap", NoFiles: true}) // every dependency dir, bindable or not
+	_, every, _, _ := loadRepoFiles(root, loadOpts{BackendName: "bwrap", NoFiles: true}) // every dependency dir, bindable or not
 	for _, d := range every {
-		if slices.ContainsFunc(binds, func(b adequacy.DepBind) bool { return b.Rel == d.Rel }) {
-			bound = append(bound, d.Rel)
+		if i := slices.IndexFunc(binds, func(b adequacy.DepBind) bool { return b.Rel == d.Rel }); i >= 0 {
+			bound = append(bound, d.Rel+" ("+depMountWords(iso, binds[i].Host)+")")
 		} else {
 			unbound = append(unbound, d.Rel)
 		}
@@ -608,7 +610,7 @@ func newJailReproducer(iso sandbox.Isolator, root, commit, scope string, timeout
 	}
 	note := "jail (" + iso.Name() + ", offline: the tree at the commit"
 	if len(bound) > 0 {
-		note += "; " + strings.Join(bound, ", ") + " bound read-only"
+		note += "; bound, never changed on the host: " + strings.Join(bound, ", ")
 	}
 	if len(unbound) > 0 {
 		note += "; not mounted: " + strings.Join(unbound, ", ")

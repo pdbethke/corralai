@@ -1,0 +1,12 @@
+# argv: npx --no-install vitest run --reporter=verbose units/multi/vitest
+$ npx --no-install vitest run --reporter=verbose units/multi/vitest/a.vitest.test.mjs units/multi/vitest/b.vitest.test.mjs
+
+ RUN  v3.2.7 /fixture
+
+ ✓ units/multi/vitest/a.vitest.test.mjs > a one
+ ✓ units/multi/vitest/b.vitest.test.mjs > b one
+ ✓ units/multi/vitest/b.vitest.test.mjs > b two
+
+ Test Files  2 passed (2)
+      Tests  3 passed (3)
+

@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS corral_reviews (
   committer        VARCHAR,
   co_authors       VARCHAR,
   unmetered_calls  INTEGER,
+  generated_with   VARCHAR,
   reviewer_tool    VARCHAR,
   verifier_tool    VARCHAR
 );`
@@ -162,13 +163,13 @@ func insertReviewEntry(db sqlExecer, e LedgerEntry, withSource bool) (ReviewCoun
 	    review_uid, ts, repo, commit_sha, scope, lang, reviewer_model, verifier_model, substrate, started_at,
 	    files_shown, truncated, reproduced, code_read, hypothesis, sound_items, coverage,
 	    opinion_sha256, statement_sha256, input_tokens, output_tokens, source_pushed, schema_version,
-	    author, committer, co_authors, unmetered_calls, reviewer_tool, verifier_tool
-	  ) VALUES (`+placeholders(29)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count
+	    author, committer, co_authors, unmetered_calls, reviewer_tool, verifier_tool, generated_with
+	  ) VALUES (`+placeholders(30)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count
 		e.Hash, e.Pushed, r.Repo, r.Commit, nullIfEmpty(r.Scope), nullIfEmpty(r.Lang), nullIfEmpty(r.ReviewerModel), nullIfEmpty(r.VerifierModel),
 		nullIfEmpty(r.Substrate), nullTime(nilIfZero(r.StartedAt)), len(r.FilesShown), r.Truncated, rep, cr, hy, len(r.Sound), nullIfEmpty(r.Coverage),
 		nullIfEmpty(sha256HexOf(r.Opinion)), nullIfEmpty(r.StatementSHA256), reviewTokens(r, r.InputTokens), reviewTokens(r, r.OutputTokens), withSource, SchemaVersion,
 		nullIfEmpty(r.Author), nullIfEmpty(r.Committer), nullIfEmpty(r.CoAuthors), r.UnmeteredCalls,
-		nullIfEmpty(r.ReviewerTool), nullIfEmpty(r.VerifierTool),
+		nullIfEmpty(r.ReviewerTool), nullIfEmpty(r.VerifierTool), nullIfEmpty(r.GeneratedWith),
 	); err != nil {
 		return ReviewCounts{}, fmt.Errorf("auditpush: insert review row: %w", err)
 	}

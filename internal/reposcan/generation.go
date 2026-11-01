@@ -262,7 +262,93 @@ package reposcan
 // compile check, so a "34" TypeScript ProvenMissed can count tests that do
 // not type-check; and plain named imports of one module are unioned in the
 // merged file. Shape unchanged; behaviour bump.
-const VerdictGeneration = "35"
+//
+// "36" (2026-10-27): non-Python files are now graded by the test units their
+// evidence links (plus every unit that reported no evidence), not the whole
+// suite. Go, JavaScript, TypeScript, Ruby, PHP and Rust selections are made
+// by the one selection engine (internal/testmap) from the unit pass's map,
+// so a "35" verdict for one of those files ran every planted bug against the
+// whole suite where a "36" runs it against the linked units: a different
+// measurement of the same file, and the scan's method ("unit-evidence")
+// moves the cache key too. A selection the engine cannot run exactly (one
+// that would also collect a unit nobody named, a unit pass that reported no
+// unit) grades whole-suite, disclosed. Riding along: AuthoredAlone is no
+// longer claimed when the engine refuses the authored-alone command, so a
+// "35" Python verdict could say "alone" for a pass that ran beside the
+// selection. Verdict's own fields unchanged; TestSelection gained Unreported
+// AuthoredFallback, UnreportedReason and UnitNoun (nested, so outside the
+// shallow fingerprint below).
+// Behaviour bump.
+//
+// "37" (2026-10-27): the unit evidence pass runs vitest units with
+// --pool=threads (lang.EvidenceUnitCmd). Under the forks pool a unit's
+// worker wrote no coverage, so a "36" pass recorded a forks-project unit as
+// clean evidence holding only what the main process and subprocesses wrote
+// (measured on REA: 1, 4 and 13 source files where threads executes 40, 11
+// and 59), and a "36" verdict's selection could leave out a unit that runs
+// the file. "36" never left its branch; bumped anyway, because a dev box's
+// cache holds "36" verdicts graded on that evidence. Verdict unchanged;
+// behaviour bump.
+//
+// Riding along in "37", and not confined to the evidence pass: on a bwrap
+// that overlays (0.10 and later), EVERY jailed run, baseline and graded
+// mutant runs included, mounts a dependency directory (node_modules) as one
+// copy-on-write overlay instead of one read-only bind per top-level entry
+// (sandbox.Bind.PerEntry). The jail now sees the host's dependency tree as
+// it is: top-level dot-files and the .pnpm store are visible (the per-entry
+// binds skipped every dot-entry but .bin; top-level dot-directories that are
+// not symlinks, other than .bin and .pnpm, are still masked empty), a write to an existing dependency file succeeds
+// for the rest of that run where it was EROFS, and a top-level symlink that
+// leaves the directory (an npm-workspace link such as node_modules/pkg ->
+// ../packages/pkg, which the per-entry binds left out) is a symlink in the
+// jail, resolved there, so a relative one reaches the workspace's copy of
+// its target. Any of these can move a verdict. Measured: REA's
+// dependencyInstall.test.ts reads node_modules/.package-lock.json and was
+// red under the per-entry binds, green under the overlay. Kept on graded
+// runs deliberately, because the jail should see the dependency tree the
+// host has; a "36" or earlier verdict on such a project was graded without
+// it.
+//
+// "38" (2026-10-29): a red baseline is retried once without the units in
+// its selection whose own run FAILED on unmutated code in the unit pass
+// (reposcan.WithoutRedUnits). Every unit that reported no evidence joins
+// every selection, so one such unit made every file's baseline red: measured
+// on REA (545 of 2,186 units red in the jail) and on corral's own Go tree (18
+// of 99), where a "37" scan graded nothing. (This note first blamed REA's
+// gitignored build output; the jail's copy does not filter gitignored files.
+// Read from the code, not yet run: REA's acceptance tests import a dist/ file
+// over the seed's silent 1 MiB per-file limit. Since run: confirmed, and the
+// retry does not rescue REA, whose acceptance units never ran alone. The
+// per-file limit is gone in this generation too, so a file graded under
+// "37" may have been graded without a large file its tests read.) A retry with a stably green baseline is graded, and
+// its verdict says how many units it left out and the first one's reason
+// (TestSelection.Excluded, ExcludedReason; nested, so outside the shallow
+// fingerprint). A unit the time limit cut, never ran alone, or could not
+// start is not red and stays. "37" never left its branch; bumped because a
+// "37" result for such a file is an ungradable the retry can now grade.
+// Riding along in "38": Python's instrumented run keeps its evidence when
+// tests fail (pytest exit 1 only, with every failure named by node id),
+// where any failure used to discard all of it (spec-kit: 2 failures under
+// coverage, 13,445 passes, every file graded whole-suite). A failed test
+// has no edge and joins every selection and every mutant's command
+// (Selection.Always), so a "37" whole-suite Python verdict can now be a
+// narrowed one. And a TypeScript file of a repo where JavaScript and
+// TypeScript share one unit-pass run (one vitest command; the map is named
+// "javascript") is now graded by its units (SameEvidenceRun) where every
+// "37" verdict for one graded it by the whole suite: REA's 1,784 auditable
+// TypeScript files. Behaviour bump.
+//
+// Riding along in "38" too (2026-10-31): a baseline still red after the
+// retry above is retried once more without the units its own output names
+// failing that the evidence pass ran green (reposcan.WithoutBaselineRedUnits;
+// TestSelection.ExcludedRedInBaseline names them, nested, so outside the
+// fingerprint), so a file REA's tenth run could not grade can be graded;
+// and every runner's failure output is read with its terminal escapes
+// removed, so a vitest 5 kill now carries the killed_by label a "38" verdict
+// graded before this lacked. "38" has not left its branch, and no vitest 5
+// file was graded under it (REA's runs were all ungraded), so no cached
+// verdict differs; not bumped.
+const VerdictGeneration = "38"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

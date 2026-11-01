@@ -162,6 +162,17 @@ type ScanRow struct {
 	// row written before them.
 	SandboxBackend string `json:",omitempty"`
 	SandboxImage   string `json:",omitempty"`
+	// SeedSkipped is the files the jail's copy of the repository left out, as
+	// JSON TEXT: an array of {"path","why"} sorted by path, "why" a reason
+	// token ("not-text": not UTF-8 text, outside a test tree). Recorded
+	// because what a run could not see shapes what it measured: a file left
+	// out can turn tests red, and so steer what is graded. A test that reads one fails on
+	// unmutated code, so a COULD-NOT-GRADE can be traced to it from the
+	// record. Text rather than a list because a ScanRow is compared whole
+	// (a bundle with no scan is ScanRow{}), which a slice field would forbid.
+	// Empty when nothing was left out, under --substrate workspace, and on
+	// every row written before it.
+	SeedSkipped string `json:",omitempty"`
 }
 
 // PushedByCertify is the ScanRow.PushedBy of a run's own entry.

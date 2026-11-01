@@ -18,10 +18,23 @@ import "strings"
 // CoAuthors is one name per line (the warehouse column's form too:
 // `string_split(co_authors, chr(10))` in SQL) so a row stays a comparable
 // value.
+//
+// GeneratedWith is the tools the commit message names in a footer line of
+// the form "Generated with <tool>" ("🤖 Generated with [Claude Code](…)"),
+// one per line like CoAuthors. A tool can declare itself there and not in a
+// trailer, and the reverse, so the two are kept apart: each says only what
+// the commit declared, and a commit that declares nothing is no evidence a
+// person wrote it alone.
+//
+// Every field here is a DECLARATION, not evidence: git records whatever
+// author and committer name it is given, and anyone can write or delete a
+// trailer or a footer line. They describe the change as its commit presents
+// it, for metrics, and no verdict may rest on them.
 type Identity struct {
-	Author    string `json:"author,omitempty"`
-	Committer string `json:"committer,omitempty"`
-	CoAuthors string `json:"co_authors,omitempty"`
+	Author        string `json:"author,omitempty"`
+	Committer     string `json:"committer,omitempty"`
+	CoAuthors     string `json:"co_authors,omitempty"`
+	GeneratedWith string `json:"generated_with,omitempty"`
 }
 
 // IsZero reports whether nothing was recorded.

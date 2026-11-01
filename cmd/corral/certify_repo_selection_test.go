@@ -4,10 +4,14 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
+	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/reposcan"
 )
@@ -47,9 +51,10 @@ func TestAuditConfigKeyNamesTheSelectionMethod(t *testing.T) {
 // refactor cannot resolve the command in one place and forget the other.
 func TestAuditInputCarriesTheSelection(t *testing.T) {
 	ex := &localExecutor{repoDir: t.TempDir(), substrate: substrateWorkspace}
-	ex.selection = reposcan.SelectionEvidence{Ran: true, Raw: []byte(`{"format":"corral-selection-3","tests":1,"files":{` +
-		`"pkg/a.py":{"tests":["tests/test_a.py::test_x"],"lines":{},"static":[]},` +
-		`"tests/test_a.py":{"tests":["tests/test_a.py::test_x"],"lines":{},"static":[]}}}`)}
+	py, _ := lang.ByName("python")
+	ex.selection = reposcan.NewSelectionEvidence(py, py.TestCmd(), []byte(`{"format":"corral-selection-3","tests":1,"files":{`+
+		`"pkg/a.py":{"tests":["tests/test_a.py::test_x"],"lines":{},"static":[]},`+
+		`"tests/test_a.py":{"tests":["tests/test_a.py::test_x"],"lines":{},"static":[]}}}`))
 	in := ex.auditInputFor(reposcan.Job{Path: "pkg/a.py", TestPath: "tests/test_a.py", Lang: "python"})
 	if in.selection.Method != "coverage-context" || len(in.selection.Tests) != 1 {
 		t.Errorf("selection not carried: %+v", in.selection)
@@ -139,5 +144,63 @@ func TestResolveSelectionPluginMixedGoPythonReachesPython(t *testing.T) {
 	}
 	if _, ok := reposcan.InstrumentedCommand(plug, testCmd, sources); !ok {
 		t.Errorf("python refused to instrument `pytest -q` for selection; the selection run would not happen")
+	}
+}
+
+// The baseline retry for per-test evidence: a test that FAILED in the
+// instrumented run is in the job's selection (and its every mutant's
+// command), so a baseline that is red for its sake is retried without it,
+// graded green, and the left-out test is named — the same retry a red unit
+// gets.
+func TestARedPythonBaselineIsRetriedWithoutTheTestThatFailedInTheEvidenceRun(t *testing.T) {
+	ex := &localExecutor{repoDir: t.TempDir(), substrate: substrateWorkspace, baselineRuns: 2}
+	py, _ := lang.ByName("python")
+	ex.selection = reposcan.NewSelectionEvidence(py, py.TestCmd(), []byte(`{"format":"corral-selection-3","tests":2,`+
+		`"failed":["tests/test_a.py::test_red"],"files":{`+
+		`"pkg/a.py":{"tests":["tests/test_a.py::test_x","tests/test_a.py::test_red"],"lines":{"0":[[1,1]],"1":[[2,2]]},"static":[],"statements":2}}}`))
+	var out strings.Builder
+	ex.progress = &out
+	var cmds [][]string
+	ex.newBaseline = func(_ context.Context, in localAuditInput) (reposcan.BaselineRunner, func(), error) {
+		cmds = append(cmds, in.checkArgv)
+		green := !slices.Contains(in.checkArgv, "tests/test_a.py::test_red")
+		return &argvBaseline{green: green}, func() {}, nil
+	}
+	var audited localAuditInput
+	ex.audit = func(_ context.Context, in localAuditInput) (advpool.Verdict, error) {
+		audited = in
+		return advpool.Verdict{DevScored: true, DevKillRate: 1}, nil
+	}
+	res, err := ex.Execute(context.Background(), reposcan.Job{Path: "pkg/a.py", TestPath: "tests/test_a.py", Lang: "python"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Gradable || len(cmds) != 2 {
+		t.Fatalf("result %+v after baselines %v:\n%s", res, cmds, out.String())
+	}
+	if !reflect.DeepEqual(audited.selection.Excluded, []string{"tests/test_a.py::test_red"}) || audited.selection.Always != nil ||
+		!reflect.DeepEqual(audited.selection.Tests, []string{"tests/test_a.py::test_x"}) {
+		t.Errorf("audited selection %+v, want the green test alone with the red one named as left out", audited.selection)
+	}
+	if !strings.Contains(out.String(), "retried without it: green") {
+		t.Errorf("the run does not say what it did:\n%s", out.String())
+	}
+}
+
+// The scan says once that tests failed in the instrumented run and what
+// became of them; a green run says nothing.
+func TestFailedInEvidenceLine(t *testing.T) {
+	py, _ := lang.ByName("python")
+	ev := reposcan.NewSelectionEvidence(py, py.TestCmd(), []byte(`{"format":"corral-selection-3","tests":3,`+
+		`"failed":["tests/test_a.py::test_red","tests/test_b.py::test_red2"],"files":{`+
+		`"pkg/a.py":{"tests":["tests/test_a.py::test_x"],"lines":{"0":[[1,1]]},"static":[],"statements":2}}}`))
+	want := "2 tests failed in the instrumented run; their coverage is not used, and they run with every file's selection and every mutant (tests/test_a.py::test_red, tests/test_b.py::test_red2)"
+	if got := failedInEvidenceLine(ev.Map); got != want {
+		t.Errorf("line = %q, want %q", got, want)
+	}
+	green := reposcan.NewSelectionEvidence(py, py.TestCmd(), []byte(`{"format":"corral-selection-3","tests":1,"files":{`+
+		`"pkg/a.py":{"tests":["tests/test_a.py::test_x"],"lines":{"0":[[1,1]]},"static":[],"statements":2}}}`))
+	if got := failedInEvidenceLine(green.Map); got != "" {
+		t.Errorf("a green run printed %q", got)
 	}
 }

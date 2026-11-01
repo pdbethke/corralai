@@ -6,10 +6,17 @@ package sandbox
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path"
+	"path/filepath"
 	"strings"
+	"sync"
+	"syscall"
+	"time"
 )
 
 // rlimitPrelude is prepended to every bwrap command as a coarse fork-bomb and
@@ -20,9 +27,116 @@ const rlimitPrelude = "ulimit -u 1024 2>/dev/null; ulimit -f 4194304 2>/dev/null
 
 // --- bwrap: Linux unprivileged namespace jail (default) ---
 
-type bwrapIsolator struct{}
+type bwrapIsolator struct {
+	// overlay is whether this host's bwrap mounts a --tmp-overlay (bwrap
+	// 0.10 and later, on a kernel that allows overlayfs in an unprivileged
+	// user namespace), set once by probeOverlay when the isolator is built.
+	// It decides two things: a PerEntry dependency bind becomes ONE
+	// copy-on-write overlay instead of one --ro-bind per entry, and a
+	// seeded workspace (Options.SeedLower) can be run at all.
+	overlay bool
+	// lowers answers, per filesystem, whether a dependency directory there
+	// can be an overlay's lower layer. The probe above proves overlayfs on
+	// the temp dir's filesystem only, and a repository's node_modules can sit
+	// on one overlayfs refuses as a lower (NFS, FUSE, ecryptfs, another
+	// overlayfs); a dependency bind on such a filesystem keeps its per-entry
+	// binds. Required whenever overlay is true (Wrap refuses otherwise).
+	lowers *lowerCache
+}
 
 func (bwrapIsolator) Name() string { return "bwrap" }
+
+func (b bwrapIsolator) overlays() bool { return b.overlay }
+
+// overlaysDir reports whether a PerEntry bind of host is one overlay: the
+// bwrap overlays at all, host can be listed (the overlay's cache masks are
+// read from it), and host's filesystem can be a lower layer. It is
+// dirOverlay's answer, so OverlaysDir (which the deps line reads) and Wrap
+// (which mounts) decide alike.
+func (b bwrapIsolator) overlaysDir(host string) bool {
+	_, ok := b.dirOverlay(host, host)
+	return ok
+}
+
+// dirOverlay is the one decision behind overlaysDir and Wrap's dependency
+// mount: whether a PerEntry bind of host at target is one overlay, and if
+// so the cache masks laid over it. A host that cannot be listed is not
+// overlaid: its masks cannot be computed, and an overlay without them
+// would let a host cache steer the run. The listing is read again at each
+// call, so a directory whose permissions change between the deps line and
+// the run can still be disclosed one way and mounted the other; nothing in
+// a run changes a dependency directory's permissions.
+func (b bwrapIsolator) dirOverlay(host, target string) ([]string, bool) {
+	if !b.overlay || b.lowers == nil {
+		return nil, false
+	}
+	masks, err := cacheDirMasks(host, target)
+	if err != nil || !b.lowers.overlays(host) {
+		return nil, false
+	}
+	return masks, true
+}
+
+// lowerCache is the per-filesystem answer to "can a directory here be an
+// overlay's lower layer", keyed by st_dev so each filesystem is probed once
+// for the isolator's lifetime, however many runs and binds ask.
+type lowerCache struct {
+	mu    sync.Mutex
+	byDev map[uint64]bool
+	probe func(dir string) bool
+}
+
+func newLowerCache(probe func(dir string) bool) *lowerCache {
+	return &lowerCache{byDev: map[uint64]bool{}, probe: probe}
+}
+
+// overlays answers for dir's filesystem. A dir that cannot be stat'ed is
+// false and not cached: its bind expands as per-entry binds do, to what can
+// be read.
+func (c *lowerCache) overlays(dir string) bool {
+	fi, err := os.Stat(dir)
+	if err != nil {
+		return false
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return false
+	}
+	dev := uint64(st.Dev) // #nosec G115 -- a device number, compared for identity only
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if v, seen := c.byDev[dev]; seen {
+		return v
+	}
+	v := c.probe(dir)
+	c.byDev[dev] = v
+	return v
+}
+
+// cacheDirMasks is the --tmpfs masks laid over an overlaid dependency
+// directory: one per top-level dot-DIRECTORY of host, except .bin (the
+// executables the test command runs) and .pnpm (pnpm's store, which every
+// top-level entry links into). The per-entry binds never showed a
+// dot-entry, so a tool cache there (vitest's results under .vite, .cache)
+// started empty on every run; masked, it still does, and a graded result
+// never depends on what the host's cache holds. Dot-FILES stay visible (a
+// lockfile such as .package-lock.json is the tree's own record, not a
+// cache). A symlinked dot-entry is not masked: bwrap would follow it.
+func cacheDirMasks(host, target string) ([]string, error) {
+	ents, err := os.ReadDir(host)
+	if err != nil {
+		return nil, err
+	}
+	var argv []string
+	for _, e := range ents {
+		name := e.Name()
+		if !strings.HasPrefix(name, ".") || name == ".bin" || name == ".pnpm" || !e.IsDir() {
+			continue
+		}
+		argv = append(argv, "--tmpfs", path.Join(target, name))
+	}
+	return argv, nil
+}
 
 func (bwrapIsolator) Preflight() error {
 	if _, err := exec.LookPath("bwrap"); err != nil {
@@ -37,9 +151,30 @@ func (bwrapIsolator) Preflight() error {
 	return nil
 }
 
-func (bwrapIsolator) Wrap(command string, opts Options, env []string) ([]string, error) {
+func (b bwrapIsolator) Wrap(command string, opts Options, env []string) ([]string, error) {
 	if opts.Workspace == "" {
 		return nil, errors.New("bwrap: workspace required")
+	}
+	if b.overlay && b.lowers == nil {
+		return nil, errors.New("bwrap: an overlaying isolator built without its per-filesystem probe")
+	}
+	if c := opts.Cache; c != nil {
+		if c.Host == "" || c.Target == "" {
+			return nil, errors.New("bwrap: a shared cache needs its host directory and its target")
+		}
+		if c.Frozen && !b.overlaysDir(c.Host) {
+			// Never a writable bind in its place: a frozen cache that
+			// some run could write would not be frozen.
+			return nil, fmt.Errorf("bwrap: the shared cache %s cannot be overlaid frozen: %w", c.Host, ErrNoOverlay)
+		}
+	}
+	if opts.SeedLower != "" {
+		if !b.overlay {
+			return nil, fmt.Errorf("bwrap: %w", ErrNoOverlay)
+		}
+		if opts.SeedLower != opts.Workspace {
+			return nil, fmt.Errorf("bwrap: a seed is overlaid at its own path; seed %q is not the workspace %q", opts.SeedLower, opts.Workspace)
+		}
 	}
 	argv := []string{"bwrap",
 		"--unshare-all",     // user+pid+ipc+uts+cgroup+net namespaces; no privileged caps
@@ -55,12 +190,18 @@ func (bwrapIsolator) Wrap(command string, opts Options, env []string) ([]string,
 			if isPinned(kv[:i]) {
 				continue // pinned below, not inherited from the host
 			}
+			if opts.Cache != nil && opts.Cache.Env != "" && kv[:i] == opts.Cache.Env {
+				continue // set below, to the shared cache
+			}
 			argv = append(argv, "--setenv", kv[:i], kv[i+1:])
 		}
 	}
 	// The jail's own env pins (HOME, GOTOOLCHAIN, ...): see pinnedEnv.
 	for _, p := range pinsFor(opts.Network) {
 		argv = append(argv, "--setenv", p.Key, p.Value)
+	}
+	if opts.Cache != nil && opts.Cache.Env != "" {
+		argv = append(argv, "--setenv", opts.Cache.Env, opts.Cache.Target)
 	}
 	// Minimal read-only root (usrmerged Linux): the command can't read /home or
 	// host secrets, only the toolchain. The workspace is the ONLY writable path.
@@ -134,15 +275,36 @@ func (bwrapIsolator) Wrap(command string, opts Options, env []string) ([]string,
 		"--dev", "/dev",
 		"--tmpfs", "/tmp",
 		"--tmpfs", "/home/agent",
-		"--bind", opts.Workspace, opts.Workspace, // bind AFTER tmpfs so a /tmp workspace survives
-		"--chdir", opts.Workspace,
 	)
+	// The workspace mount comes AFTER the tmpfs above so a /tmp workspace
+	// survives. A seeded workspace is the seed overlaid at its own path: the
+	// run reads the seed and writes into a private tmpfs upper layer, so the
+	// seed stays what it was for every other run (Options.SeedLower).
+	if opts.SeedLower != "" {
+		argv = append(argv, "--overlay-src", opts.SeedLower, "--tmp-overlay", opts.Workspace)
+	} else {
+		argv = append(argv, "--bind", opts.Workspace, opts.Workspace)
+	}
+	argv = append(argv, "--chdir", opts.Workspace)
 	for _, bnd := range opts.ReadOnlyBinds {
-		// A PerEntry bind becomes one --ro-bind per top-level entry, so the
-		// parent stays a writable workspace directory a toolchain can create
-		// its cache in. Ordering is load-bearing: these come AFTER the
-		// workspace --bind above, because bwrap creates a mountpoint only when
-		// its parent already exists and is writable.
+		// A PerEntry bind leaves its target a writable directory a toolchain
+		// can create its cache in. With overlay support it is ONE
+		// copy-on-write overlay of the whole tree — 381 per-entry binds for
+		// REA's node_modules cost 2.4 s of jail start per run (median, n=7
+		// replays) against 0.04 s as one overlay — and without it, one
+		// --ro-bind per top-level entry. Ordering is load-bearing either
+		// way: these come AFTER the workspace mount above, because bwrap
+		// creates a mountpoint only when its parent already exists and is
+		// writable, and an overlay or bind made before the workspace mount
+		// would be hidden under it.
+		if bnd.PerEntry {
+			// The cache masks come after the overlay they cover.
+			if masks, ok := b.dirOverlay(bnd.Host, bnd.Target); ok {
+				argv = append(argv, "--overlay-src", bnd.Host, "--tmp-overlay", bnd.Target)
+				argv = append(argv, masks...)
+				continue
+			}
+		}
 		if bnd.PerEntry {
 			for _, e := range perEntryBinds(bnd) {
 				argv = append(argv, "--ro-bind", e.Host, e.Target)
@@ -150,6 +312,19 @@ func (bwrapIsolator) Wrap(command string, opts Options, env []string) ([]string,
 			continue
 		}
 		argv = append(argv, "--ro-bind", bnd.Host, bnd.Target)
+	}
+	// The shared cache (Options.Cache), at its own path outside the
+	// workspace, after the workspace and every dependency mount: the
+	// mount order this function keeps is workspace, then dependency
+	// overlays or binds with their masks, then the cache. Frozen, it is a
+	// copy-on-write overlay whose writes the run discards; warming, the
+	// host directory bound writable.
+	if c := opts.Cache; c != nil {
+		if c.Frozen {
+			argv = append(argv, "--overlay-src", c.Host, "--tmp-overlay", c.Target)
+		} else {
+			argv = append(argv, "--bind", c.Host, c.Target)
+		}
 	}
 	// Cover what of a toolchain root a whole-tree mount (/usr) would
 	// otherwise expose — a cargo home's credentials, config and checkouts
@@ -175,5 +350,56 @@ func newBwrapIsolator() (Isolator, error) {
 	if err := b.Preflight(); err != nil {
 		return nil, err
 	}
+	b.overlay = probeOverlay()
+	b.lowers = newLowerCache(probeLower)
 	return b, nil
+}
+
+// probeTimeout bounds each overlay probe: a bwrap that hangs must not hang
+// the isolator's construction or a run's argv. A probe that times out is
+// a no.
+var probeTimeout = 10 * time.Second
+
+// probeLower reports whether dir can be an overlay's lower layer on this
+// host: it is mounted read-only as one, at a path in the probe's own tmpfs,
+// and listed. Nothing is written to dir's filesystem.
+func probeLower(dir string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "bwrap", "--unshare-all", "--die-with-parent", "--new-session", // #nosec G204 -- fixed argv; dir is a dependency directory corral already binds
+		"--ro-bind", "/", "/", "--tmpfs", "/tmp",
+		"--overlay-src", dir, "--tmp-overlay", "/tmp/corral-lower-probe",
+		"--", "ls", "/tmp/corral-lower-probe")
+	cmd.Stdout = nil
+	return cmd.Run() == nil
+}
+
+// probeOverlay reports whether this host's bwrap can do what a seeded run
+// does: overlay a directory at its own path (after a /tmp tmpfs, as Wrap
+// orders it), read the lower through it, and keep a write out of it. Any
+// failure is false, and the caller keeps per-entry binds and a fresh copy
+// per run: a bwrap older than 0.10 refuses --overlay-src, and a kernel
+// can refuse overlayfs in an unprivileged user namespace. It is run once,
+// when the isolator is built, never per run.
+func probeOverlay() bool {
+	dir, err := os.MkdirTemp("", "corral-overlay-probe-*")
+	if err != nil {
+		return false
+	}
+	defer os.RemoveAll(dir) // #nosec G104 -- best-effort cleanup of our own probe dir
+	if err := os.WriteFile(filepath.Join(dir, "lower"), []byte("x"), 0o600); err != nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "bwrap", "--unshare-all", "--die-with-parent", "--new-session", // #nosec G204 -- fixed argv; dir is our own MkdirTemp
+		"--ro-bind", "/", "/", "--tmpfs", "/tmp",
+		"--overlay-src", dir, "--tmp-overlay", dir, "--chdir", dir,
+		"--", "sh", "-c", "test -f lower && echo y > upper")
+	if cmd.Run() != nil {
+		return false
+	}
+	// The write must have stayed in the run's upper layer.
+	_, err = os.Stat(filepath.Join(dir, "upper"))
+	return os.IsNotExist(err)
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/testmap"
 )
 
 // RunSpec is one adversarial-pool run: the code under review PLUS the
@@ -45,13 +46,38 @@ type RunSpec struct {
 	// nothing for a path one. It MUST equal the JailScorer's and the
 	// JailValidator's Landing.
 	Landing AuthoredLanding
+	// AuthoredTestPath is where the authored test is written, as the run's
+	// JailScorer resolved it (JailScorer.AuthoredTestPath): the scorer
+	// renames a path that collides with a file already in the workspace,
+	// and at unit grain a renamed file can be a different unit with
+	// different corun answers. The verdict judges the authored pass's
+	// command at this path (selectionDisclosure), so what it says is about
+	// the file the pass ran. Required for a repository run with a
+	// Selection; "" in single-file mode, where the scorer has no workspace
+	// to collide with and the path is the landing rule's alone.
+	AuthoredTestPath string
 
 	// Selection narrows TestCmd to the tests that EXECUTED CodePath, from
-	// evidence recorded once per scan (lang.TestSelector). The zero value
-	// is the whole suite. When Method is set and Tests is empty the file is
-	// UNCOVERED: no test executes it, the dev pass runs nothing, and the
-	// verdict says so instead of printing a 0.00 nobody measured.
+	// evidence recorded once per scan (the scan's test map, through the
+	// selection engine, internal/testmap). The zero value is the whole
+	// suite. When Method is set and Tests is empty the file is UNCOVERED: no
+	// test executes it, the dev pass runs nothing, and the verdict says so
+	// instead of printing a 0.00 nobody measured.
 	Selection lang.Selection
+	// SelectionMap is the test map Selection was made from. Every command
+	// built from Selection after it was made — the uncovered dev pass, each
+	// mutant's span (DevCommandFor), the authored pass — goes through the
+	// engine, which reads the runner row (Map.Runner) and the grain
+	// (Map.Method) from it; a Selection carries neither. Zero whenever
+	// Selection is: nothing is narrowed. It MUST be the JailScorer's
+	// SelectionMap.
+	SelectionMap testmap.Map
+	// RepoDir is the checkout the selection was made for, "" in single-file
+	// mode. Nothing here reads it: it is handed to the engine, which reads
+	// manifests under it only to name the unit a test file belongs to at
+	// unit grain (lang.Runner.UnitForFile). It MUST be the JailScorer's
+	// RepoDir.
+	RepoDir string
 	// Concurrency carries how many private trees the workspace substrate's
 	// probe granted this file (or why it granted only one), from
 	// cmd/corral/certify_local.go's buildJailWiring — see

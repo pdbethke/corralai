@@ -49,6 +49,23 @@ type Bind struct {
 	// exists on the host would otherwise be re-mounted read-only and reproduce
 	// the very failure this avoids, while .bin holds the executables the test
 	// command needs.
+	//
+	// On a bwrap that overlays, a PerEntry bind whose Host's filesystem can
+	// be an overlay's lower layer (OverlaysDir) is instead ONE copy-on-write
+	// overlay of Host at Target, with every top-level dot-DIRECTORY but .bin
+	// and .pnpm masked by an empty tmpfs: the same paths, writable, every
+	// write in a per-run upper layer, Host unchanged. Against the per-entry
+	// binds: a write to an existing dependency file succeeds for the rest of
+	// that run (it was EROFS); a cache directory (.vite, .cache) still starts
+	// empty on every run, so no graded result reads the host's cache; .pnpm
+	// (pnpm's store, which its entries link into) and dot-FILES such as
+	// .package-lock.json are visible, as they are on the host; and a symlink
+	// in Host is a symlink in the jail, resolved there, where a link leaving
+	// Host reaches only what the jail mounts (the per-entry binds refused
+	// such a link, because a bind follows its source). A Host on a
+	// filesystem overlayfs refuses as a lower keeps the per-entry binds, as
+	// does a Host that cannot be listed (its masks cannot be computed; its
+	// per-entry binds then expand to nothing).
 	PerEntry bool
 }
 
@@ -112,11 +129,116 @@ type Options struct {
 	KeepTail bool
 	Backend  Isolator // isolation backend; nil => execution is disabled (used from Task 2)
 
-	// ReadOnlyBinds are host directories mounted read-only into the jail at
-	// Target (an absolute path under Workspace), so large read-only trees
-	// (node_modules, vendor, .venv) are visible to the command without being
-	// copied into the workspace. The sandboxed process can never write them.
+	// ReadOnlyBinds are host directories mounted into the jail at Target (an
+	// absolute path under Workspace), so large trees (node_modules, vendor,
+	// .venv) are visible to the command without being copied into the
+	// workspace. The sandboxed process can never change them on the host:
+	// each is read-only in the jail, or (a PerEntry bind on a bwrap that
+	// overlays it, see Bind.PerEntry) writable copy-on-write, its writes
+	// discarded with the run.
 	ReadOnlyBinds []Bind
+
+	// SeedLower, when set, is a seed directory the run sees through a
+	// copy-on-write overlay in place of a writable bind: the run reads the
+	// seed, and everything it writes lands in a private tmpfs upper layer
+	// that is gone when the run ends, so one seed serves any number of runs,
+	// concurrently, and none of them sees another's writes. It must equal
+	// Workspace: the jail sees the seed at its own host path, so every path
+	// a run prints (coverage reports above all) is what a fresh copy at that
+	// path prints. Only a backend that Overlays may be given one; Run refuses
+	// any other, because there the run would write into the seed itself.
+	SeedLower string
+
+	// Cache, when set, is a tool cache shared by several runs (the unit
+	// evidence pass's GOCACHE), mounted at Cache.Target. Only a backend
+	// that Overlays may be given one; Run refuses any other.
+	Cache *CacheMount
+}
+
+// CacheTarget is the fixed path inside the jail a shared cache is mounted
+// at. Fixed, not the host path, so every run of a pass names the cache the
+// same way whatever temp directory holds it on the host.
+const CacheTarget = "/corral-cache"
+
+// CacheMount is a shared cache directory and how one run sees it. Frozen,
+// the run sees Host through a copy-on-write overlay at Target: it reads
+// what the cache holds and its writes land in a private tmpfs upper layer
+// gone when it ends, so no run changes what another reads. Not frozen (the
+// one run that warms the cache), Host is bound writable at Target. Host is
+// writable on the host either way: read-only comes from the overlay alone
+// (a go whose GOCACHE is a read-only directory fails with EACCES, measured,
+// rather than building without it). Env, when set, is the variable the jail
+// sets to Target, in place of any value the host env gave it.
+type CacheMount struct {
+	Host, Target, Env string
+	Frozen            bool
+}
+
+// SharedCache is what a seed made of the cache it was asked to share among
+// its runs (adequacy's Seed). Target is the in-jail path every run sees it
+// at, "" when none is shared; Unshared says why one that was asked for is
+// not ("" when it is, or none was asked for), so the caller can say so.
+type SharedCache struct {
+	Target   string
+	Unshared string
+}
+
+// ErrNoOverlay is returned when a seeded workspace (Options.SeedLower) is
+// asked of a backend that cannot overlay one: the container backend, darwin,
+// none, or a bwrap older than 0.10 (no --tmp-overlay). The caller runs on a
+// fresh copy per run instead, and says so.
+var ErrNoOverlay = errors.New("this backend cannot overlay a seeded workspace")
+
+// NoOverlayError is ErrNoOverlay naming the backend that refused, so the
+// caller's sentence names it too (errors.Is(err, ErrNoOverlay) holds).
+type NoOverlayError struct{ Backend string }
+
+func (e *NoOverlayError) Error() string { return e.Backend + " backend: " + ErrNoOverlay.Error() }
+
+// Is makes a NoOverlayError match ErrNoOverlay.
+func (e *NoOverlayError) Is(target error) bool { return target == ErrNoOverlay }
+
+// SeededRunner runs commands over one seeded tree (adequacy's Seed) until
+// Close removes the seed. Its Enumerate pair is the commandRunner seam
+// reposcan reads (Enumerate, and EnumerateDetailed for the exit status), and
+// accepts only the very map it was seeded with. Declared here, beside
+// EnumerateResult and for the same reason: adequacy implements it and
+// reposcan consumes it, and neither imports the other.
+//
+// When the seed shares a cache (Cache().Target non-empty), Enumerate and
+// EnumerateDetailed see it frozen, and Warm runs one command with it
+// writable: the one run that fills it, before any frozen run, never beside
+// one, and only once.
+type SeededRunner interface {
+	Enumerate(ctx context.Context, files map[string]string, cmd []string) (string, error)
+	EnumerateDetailed(ctx context.Context, files map[string]string, cmd []string) (EnumerateResult, error)
+	Warm(ctx context.Context, files map[string]string, cmd []string) (EnumerateResult, error)
+	Cache() SharedCache
+	Close() error
+}
+
+// overlayer is the optional Isolator capability Options.SeedLower needs.
+type overlayer interface{ overlays() bool }
+
+// Overlays reports whether iso can run a seeded workspace (Options.
+// SeedLower). Only bwrap can, and only when its construction-time probe
+// mounted a --tmp-overlay on this host.
+func Overlays(iso Isolator) bool {
+	o, ok := iso.(overlayer)
+	return ok && o.overlays()
+}
+
+// dirOverlayer is the optional capability OverlaysDir reads.
+type dirOverlayer interface{ overlaysDir(host string) bool }
+
+// OverlaysDir reports whether iso mounts a PerEntry bind of host as one
+// copy-on-write overlay (Bind.PerEntry): it overlays at all, host can be
+// listed, and host's filesystem can be an overlay's lower layer (probed once
+// per filesystem). It is the same decision Wrap mounts by. False means the
+// bind is read-only, one mount per entry.
+func OverlaysDir(iso Isolator, host string) bool {
+	o, ok := iso.(dirOverlayer)
+	return ok && o.overlaysDir(host)
 }
 
 // Result is the outcome of a Run.
@@ -331,6 +453,16 @@ func Run(ctx context.Context, command string, opts Options) Result {
 
 	if opts.Backend == nil {
 		return Result{ExitCode: -1, Err: "execution disabled: no isolation backend"}
+	}
+	if opts.SeedLower != "" && !Overlays(opts.Backend) {
+		// Here, and not only in each backend's Wrap: a backend that knows
+		// nothing of SeedLower would bind Workspace (the seed) writable.
+		return Result{ExitCode: -1, Err: (&NoOverlayError{Backend: opts.Backend.Name()}).Error()}
+	}
+	if opts.Cache != nil && !Overlays(opts.Backend) {
+		// As for SeedLower: a backend that knows nothing of Cache would
+		// run without it, and a frozen one has no overlay to freeze it.
+		return Result{ExitCode: -1, Err: opts.Backend.Name() + " backend: cannot mount a shared cache: " + ErrNoOverlay.Error()}
 	}
 	argv, werr := opts.Backend.Wrap(command, opts, env)
 	if werr != nil {

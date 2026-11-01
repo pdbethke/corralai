@@ -276,6 +276,20 @@ repositories built from the runner-table fixture suites
   project file, which is what vitest's forks pool gives (measured on vitest
   3.2.7); run with --pool=threads`. The vitest row of the language-support
   page states the condition.
+- **Correction, 2026-10-27: that line was not the whole of it.** A forks-pool
+  unit whose test spawned a subprocess, or whose configuration the main
+  process imported, did name project files: the ones those processes wrote,
+  never the worker's. Such a unit passed as clean evidence. On REA (vitest
+  5.0.3, a copy holding only these three test files, the jail, 3 workers),
+  `hopperClient.protocol.test.ts`, `ciQualification.test.ts` and
+  `ghidraEndpointLifetime.test.ts` executed 1, 4 and 13 source files under
+  the forks pool their projects configure, and 40, 11 and 59 under
+  `--pool=threads` (n=3 for threads, n=1 for forks). The unit evidence pass
+  now runs every vitest unit with `--pool=threads` itself (the row's
+  `EvidenceArgs`; grading is unchanged), and a unit that is red that way is
+  reported with no evidence, naming the flag, rather than graded on partial
+  evidence. The no-worker-coverage line above is what a unit reads when even
+  that names no project file.
 - After the review's fixes, jest (3 run, 0 failed, `lib/one.js` promoted, jail
   and workspace) and commander.js in the jail (109 run, 4 failed, 7 promoted)
   were re-run, with the same results.
@@ -502,3 +516,51 @@ two corral runs whose kill rates differ by 0.10 with overlapping intervals.
 Captures: the controller's scratchpad `evidence-proof/r27/` (`run-A.out`,
 `run-B.out`, `survivor-check.json`, `stryker/rea-config.out`,
 `stryker/wholefile.out` and their JSON reports).
+
+## How the pass runs units, and REA's full map (2026-10-28)
+
+Three changes to how the pass runs its units, each measured on a shared
+24-core workstation, n=1 per run, with each run's load given:
+
+- **vitest units run with `--pool=threads`,** replacing any `--pool` the
+  operator wrote (see the correction above). Grading still runs the
+  operator's command. The units line names the change once per pass. REA's
+  full map (2,186 units, the jail, 8 workers) went from 763 units with
+  evidence under forks to 1,640 under threads. A unit that is red under
+  threads has no evidence and is selected for every file. All 154 units of
+  REA's `cli-boundary` project are in that state, because its
+  `execArgv: --max-old-space-size=384` is refused by a worker thread.
+- **One seed per pass, and one overlay per dependency directory,** on a bwrap
+  with `--tmp-overlay`. Before this, every unit got its own copy of the tree
+  and 381 read-only binds for REA's `node_modules`. The same map took 36m54s
+  before (load mean 10.0), and 29m22s and 30m45s after (load means 10.4 and
+  11.2). One unit, `dependencyInstall.test.ts`, went from red to green,
+  because the overlay shows `node_modules/.package-lock.json`, which the
+  per-entry binds did not mount. Cache directories inside `node_modules`
+  (`.vite`, `.cache`: every dot-directory that is not a symlink, except
+  `.bin` and `.pnpm`) still start empty on every run. Where the bwrap or a
+  dependency directory's filesystem cannot overlay, the old mounts are used,
+  and the units line or the deps line says so. **The dependency overlay is
+  not specific to this pass:** the baseline and every graded mutant run on
+  such a bwrap mount `node_modules` the same way, so they too see its
+  top-level dot-files and `.pnpm` store (so, read from the code and not yet
+  run on a pnpm project, a package pnpm did not hoist now resolves), can write an existing dependency file for the rest
+  of the run (it was EROFS), and follow a top-level symlink that leaves
+  `node_modules` (an npm-workspace link such as
+  `node_modules/pkg -> ../packages/pkg`, which the per-entry binds left
+  out) to the workspace's copy of its target. That can move a verdict;
+  `dependencyInstall.test.ts` is the measured case (in this pass). It is
+  kept on purpose, because the jail should see the dependency tree the host
+  has. (This bullet first read as if the overlay were the evidence pass's
+  alone.)
+- **Go units share one `GOCACHE` per pass and run with `-count=1`,** so a
+  cached test result is never replayed as a run. Over corral's own map (99
+  units, 8 workers), two runs took 60 s and 90 s (load means 9.0 and
+  14.1) with edges identical to the build before the change. That build's
+  run on the same copy took 480 s, but at a load mean of 93.3, so it is not
+  a clean measure of the gain.
+
+Reasons and rejected alternatives are in
+[`docs/design/test-selection.md`](../design/test-selection.md#evidence-pass-mechanics),
+including vitest's transform cache, which was measured slower on REA and
+dropped.

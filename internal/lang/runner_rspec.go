@@ -5,7 +5,6 @@ package lang
 import (
 	"regexp"
 	"slices"
-	"strings"
 )
 
 var rspecFilters = []string{"-e", "--example", "-E", "--example-matches"}
@@ -79,20 +78,20 @@ func rspecParseUnits(stdout string) []string {
 	return files
 }
 
-// rspecUnitCmd runs one spec file: argv with the operator's files and
-// directories replaced by it. rspec runs every path it is given (measured on
+// rspecUnitsCmd runs the spec files: argv with the operator's files and
+// directories replaced by them. rspec runs every path it is given (measured on
 // rspec-core 3.13.6: `rspec units/rspec units/rspec/spec/a_spec.rb` ran all
 // three examples of the directory), so they cannot stay; a path in .rspec is
 // not added to one given on the command line (measured: `rspec spec/a_spec.rb`
 // beside a .rspec naming spec/b_spec.rb ran a's two). --pattern does not
 // filter a file named outright (measured), and -t applies inside the file as
 // it did to the listing, which listed no file whose examples it filtered out.
-func rspecUnitCmd(argv []string, unit string) ([]string, bool) {
+func rspecUnitsCmd(argv []string, units []string) ([]string, bool) {
 	head, kept, ok := rspecUnitArgs(argv)
-	if !ok || unit == "" || strings.HasPrefix(unit, "-") {
+	if !ok || !fileUnits(units) {
 		return nil, false
 	}
-	return append(append(slices.Clone(head), kept...), unit), true
+	return append(append(slices.Clone(head), kept...), units...), true
 }
 
 // rspecUnitArgs splits argv at its rspec word into the words up to it and

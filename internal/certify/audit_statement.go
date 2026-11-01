@@ -62,7 +62,19 @@ type AuditedFile struct {
 	SelectedTests     int    `json:"selectedTests,omitempty"`
 	SuiteTests        int    `json:"suiteTests,omitempty"`
 	SelectionFallback string `json:"selectionFallback,omitempty"`
-	Uncovered         bool   `json:"uncovered,omitempty"`
+	// SelectionUnreported: of SelectedTests, how many units are there only
+	// because they reported no evidence. AuthoredFallback: why the authored
+	// pass ran the run's whole command. A verifier reading a unit-graded
+	// rate needs both to know how much of the selection was evidence.
+	SelectionUnreported int `json:"selectionUnreported,omitempty"`
+	// SelectionExcluded: units that failed unmutated, left out after the
+	// baseline failed with them — the rate is not the exam the evidence chose.
+	SelectionExcluded int    `json:"selectionExcluded,omitempty"`
+	AuthoredFallback  string `json:"authoredFallback,omitempty"`
+	// SelectionExcludedRed: which of those the evidence pass ran green, by
+	// name, left out because a red baseline named them failing.
+	SelectionExcludedRed string `json:"selectionExcludedRed,omitempty"`
+	Uncovered            bool   `json:"uncovered,omitempty"`
 	// And at which GRAIN the rate was measured. PerMutant says each mutant
 	// was graded by the tests that reach its own lines, which makes
 	// SelectedTests the file's UNION rather than any mutant's denominator —
@@ -324,6 +336,18 @@ func BuildAuditAttestation(s AuditStatement) map[string]any {
 		}
 		if f.SelectionFallback != "" {
 			entry["selectionFallback"] = f.SelectionFallback
+		}
+		if f.SelectionUnreported > 0 {
+			entry["selectionUnreported"] = f.SelectionUnreported
+		}
+		if f.SelectionExcluded > 0 {
+			entry["selectionExcluded"] = f.SelectionExcluded
+		}
+		if f.SelectionExcludedRed != "" {
+			entry["selectionExcludedRed"] = f.SelectionExcludedRed
+		}
+		if f.AuthoredFallback != "" {
+			entry["authoredFallback"] = f.AuthoredFallback
 		}
 		// WHICH SHAPE earned the provenMissed above. Signed only when the run
 		// recorded one: a verdict from a caller that named no mode, or from

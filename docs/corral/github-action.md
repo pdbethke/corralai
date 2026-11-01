@@ -915,10 +915,13 @@ is an hours-long run.
 ## What one run costs
 
 An audit costs roughly **mutants × the runtime of the tests that execute the
-file**, per audited file, on Python — corral runs your suite once with
-coverage instrumentation and grades each file against only the tests that
-execute it. Everything else today costs **mutants × the whole suite** per
-audited file, because no selector exists yet for that language. Either way it
+file**, per audited file: corral runs your suite once with coverage
+instrumentation (Python), or each test unit alone under coverage (every other
+language; unreleased), and grades each file against only the tests that
+execute it. A unit that reported no evidence runs for every file, and a runner
+with no one-unit form (mocha, minitest) costs **mutants × the whole suite**.
+(Until this branch, only Python selected and everything else cost the whole
+suite.) Either way it
 is not proportional to the size of the diff; it is proportional to how long
 the graded tests take, multiplied by how many files the PR touched. The step
 summary's per-file line says which measurement produced its number.

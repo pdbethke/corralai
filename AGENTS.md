@@ -90,8 +90,11 @@ codebase whose comments carry most of its institutional memory.
 
 **By default corral never runs a mutant against your repository.** Both
 `certify --local` and `certify --repo` run on the `jail` substrate: the tree is
-copied into a disposable bwrap sandbox, dependency dirs are bound read-only, and
-every mutant is applied to the COPY. `certify --local` has no `--substrate` flag
+copied into a disposable bwrap sandbox, dependency dirs are read-only to the
+host (bound read-only, or, on a bwrap with `--tmp-overlay`, overlaid
+copy-on-write so a run's writes vanish with it), and every mutant is applied to
+the COPY. The unit evidence pass writes that copy once and overlays it for each
+unit the same way. `certify --local` has no `--substrate` flag
 at all, so it cannot select anything else. What corral does write is its record,
 and exactly where is below.
 

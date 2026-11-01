@@ -1,0 +1,12 @@
+# argv: npx --no-install jest --ci --verbose units/multi/jest
+$ npx --no-install jest --ci --verbose units/multi/jest --runTestsByPath units/multi/jest/a.jest.test.js units/multi/jest/b.jest.test.js --testPathIgnorePatterns=^(?!.*(?:\/units\/multi\/jest\/a\.jest\.test\.js|\/units\/multi\/jest\/b\.jest\.test\.js)$)
+PASS units/multi/jest/b.jest.test.js
+  ✓ b one
+  ✓ b two
+
+PASS units/multi/jest/a.jest.test.js
+  ✓ a one
+
+Test Suites: 2 passed, 2 total
+Tests:       3 passed, 3 total
+Snapshots:   0 total

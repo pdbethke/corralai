@@ -9,6 +9,7 @@ import (
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/reposcan"
+	"github.com/pdbethke/corralai/internal/testmap"
 )
 
 // pyEvidence is one instrumented run's answer for a repo where
@@ -38,7 +39,8 @@ const pyEvidence = `{"format":"corral-selection-3","tests":2,"files":{` +
 // every kill rate.
 func TestSelectionResolvesThePerJobCommand(t *testing.T) {
 	job := reposcan.Job{Path: "src/pkg/target.py", TestPath: "tests/test_target.py", Lang: "python"}
-	evidence := reposcan.SelectionEvidence{Ran: true, Raw: []byte(pyEvidence)}
+	py, _ := lang.ByName("python")
+	evidence := reposcan.NewSelectionEvidence(py, py.TestCmd(), []byte(pyEvidence))
 
 	t.Run("no evidence: the whole suite, disclosed", func(t *testing.T) {
 		ex := newLocalExecutor(t.TempDir(), nil, substrateWorkspace, 0, nil)
@@ -114,13 +116,16 @@ func TestSelectionResolvesThePerJobCommand(t *testing.T) {
 		}
 	})
 
-	t.Run("a language with no selector is unchanged", func(t *testing.T) {
+	// Python's selection evidence answers Python files only; a Go file is
+	// graded by the unit pass's map, and with no unit pass it grades
+	// whole-suite and says why.
+	t.Run("a language with no unit evidence grades whole-suite", func(t *testing.T) {
 		ex := newLocalExecutor(t.TempDir(), nil, substrateWorkspace, 0, nil)
 		ex.selection = evidence
 		goJob := reposcan.Job{Path: "a.go", TestPath: "a_test.go", Lang: "go"}
 		sel := ex.selectionFor(goJob)
 		if sel.Method != "" || sel.Fallback == "" {
-			t.Fatalf("selection = %+v — go implements no TestSelector, so it grades whole-suite and says so", sel)
+			t.Fatalf("selection = %+v — go has no per-test evidence and no unit pass ran, so it grades whole-suite and says so", sel)
 		}
 		got := ex.testCmd(goJob, sel)
 		if len(got) > 0 && got[len(got)-1] == goJob.TestPath {
@@ -153,8 +158,9 @@ func TestExecutorBaselineMatchesTheDevPassCommand(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ex := newLocalExecutor(t.TempDir(), []string{"pytest", "tests/"}, substrateWorkspace, 0, nil)
+			ex.selection.Map = testmap.Map{Method: testmap.MethodCoverageContext, Runner: "pytest"}
 			got := ex.testCmd(job, tc.sel)
-			want := advpool.DevCommandArgv(tc.sel, job.Lang, ex.baseCmd(job), job.TestPath)
+			want := advpool.DevCommandArgv(tc.sel, ex.selection.Map, job.Lang, ex.baseCmd(job), ex.repoDir, job.TestPath)
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("executor baseline = %v, dev pass = %v — they must be one command", got, want)
 			}

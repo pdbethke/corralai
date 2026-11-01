@@ -75,6 +75,9 @@ type bundleMeta struct {
 	RepoIdentity string
 	// Sandbox is which jail ran the scan (zero under --substrate workspace).
 	Sandbox sandbox.Identity
+	// SeedSkipped is what the jail's copy left out as not text, as
+	// ScanRow.SeedSkipped's JSON text (seedSkippedJSON).
+	SeedSkipped string
 }
 
 // buildBundle maps one recorded scan — its header and all four row grains —
@@ -134,9 +137,10 @@ func buildBundle(
 			Top: scan.Top, AllCandidates: scan.AllCandidates, TotalFiles: scan.TotalFiles,
 			PreflightRan: scan.PreflightRan, PreflightNote: scan.PreflightNote,
 			FinishedAt: nilIfZeroTime(scan.FinishedAt),
-			Identity:   auditpush.Identity{Author: scan.Author, Committer: scan.Committer, CoAuthors: scan.CoAuthors},
+			Identity:   auditpush.Identity{Author: scan.Author, Committer: scan.Committer, CoAuthors: scan.CoAuthors, GeneratedWith: scan.GeneratedWith},
 			TreeDirty:  meta.TreeDirty, RepoIdentity: meta.RepoIdentity,
 			SandboxBackend: meta.Sandbox.Backend, SandboxImage: meta.Sandbox.Image,
+			SeedSkipped: meta.SeedSkipped,
 		},
 		Files:        buildAuditRows(files, scanID, meta),
 		Mutants:      buildMutantRows(mutants, scanID, meta),
@@ -191,6 +195,7 @@ func buildAuditRows(files []scanstore.File, scanID int64, meta bundleMeta) []aud
 			// WHICH measurement the rate is, and at which grain.
 			TestSelection: f.TestSelection, SelectedTests: f.SelectedTests,
 			SuiteTests: f.SuiteTests, SelectionFallback: f.SelectionFallback,
+			SelectionUnreported: f.SelectionUnreported, SelectionExcluded: f.SelectionExcluded, SelectionExcludedRed: f.SelectionExcludedRed, AuthoredFallback: f.AuthoredFallback,
 			WriterMode:     f.WriterMode,
 			Uncovered:      f.Uncovered,
 			PerMutant:      f.PerMutant,

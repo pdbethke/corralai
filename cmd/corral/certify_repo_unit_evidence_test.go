@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/reposcan"
@@ -34,15 +35,19 @@ type fakeUnitCall struct {
 	argv       []string
 	modulePath string
 	workers    int
+	// deadline is the pass context's deadline when it had one: the bound
+	// the pass ran under (--evidence-timeout, else selectionTimeout).
+	deadline time.Time
 }
 
 func (f *fakeUnitPass) install(t *testing.T) {
 	t.Helper()
 	prev := collectUnitEvidence
-	collectUnitEvidence = func(_ context.Context, _ coverageRunner, _ map[string]string, p lang.Plugin, inv lang.Invocation, modulePath string, workers int, announce func(runnable, listed int)) reposcan.UnitEvidence {
+	collectUnitEvidence = func(ctx context.Context, _ coverageRunner, _ map[string]string, p lang.Plugin, inv lang.Invocation, modulePath string, workers int, announce func(runnable, listed int)) reposcan.UnitEvidence {
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		f.calls = append(f.calls, fakeUnitCall{lang: p.Name(), argv: inv.Argv, modulePath: modulePath, workers: workers})
+		deadline, _ := ctx.Deadline()
+		f.calls = append(f.calls, fakeUnitCall{lang: p.Name(), argv: inv.Argv, modulePath: modulePath, workers: workers, deadline: deadline})
 		if workers < 1 {
 			return reposcan.UnitEvidence{Note: "fake: no workers"}
 		}
@@ -212,27 +217,6 @@ func unitCandidacyLines(s string) string {
 	return strings.Join(out, "\n")
 }
 
-// The scan's audit config — and so every verdict's cache key — says how the
-// scan GRADES, and the unit pass changes no grading: the method stays what
-// selection evidence alone decides.
-func TestUnitEvidenceLeavesAuditConfigKeyAlone(t *testing.T) {
-	without := &localExecutor{}
-	with := &localExecutor{units: reposcan.UnitEvidence{Ran: true, Units: []reposcan.UnitResult{
-		unitRun("test/a.test.ts", map[string]lang.LineCounts{"src/a.ts": {Executed: 1, Executable: 1}}),
-	}}}
-	if got := with.selectionMethod(); got != "" {
-		t.Fatalf("selectionMethod with unit evidence = %q, want \"\"", got)
-	}
-	argv := []string{"vitest", "run"}
-	if a, b := auditConfigKey(false, without.selectionMethod(), argv, "", ""), auditConfigKey(false, with.selectionMethod(), argv, "", ""); a != b {
-		t.Errorf("auditConfigKey moved with unit evidence:\n without %s\n    with %s", a, b)
-	}
-	sel := &localExecutor{selection: reposcan.SelectionEvidence{Ran: true}}
-	if got := sel.selectionMethod(); got != "coverage-context" {
-		t.Errorf("negative control: selection evidence must still set the method, got %q", got)
-	}
-}
-
 // A command with no one-unit form (`npm test` with no script corral can
 // read) leaves the language name-paired for the run, and the scan says why
 // on the units line and on the summary line — never a silent zero (Review
@@ -253,8 +237,9 @@ func TestUnitPassDisclosesACommandWithNoUnitForm(t *testing.T) {
 	}
 }
 
-// --whole-suite is a GRADING choice; the unit pass is candidacy, so it still
-// runs and still promotes.
+// --whole-suite is a GRADING choice; the unit pass also decides candidacy,
+// so it still runs and still promotes (and grades nothing — see
+// TestUnitEvidenceNamesItsMethodInTheAuditConfigKey).
 func TestWholeSuiteStillRunsTheUnitPass(t *testing.T) {
 	root := unitEvidenceTSFixture(t)
 	fake := &fakeUnitPass{ev: reposcan.UnitEvidence{Ran: true, Units: []reposcan.UnitResult{
@@ -378,7 +363,7 @@ func TestUnitPassIsCachedUnderItsOwnKey(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return &localExecutor{repoDir: root, substrate: substrateWorkspace, checkArgv: []string{"vitest", "run"}, progress: io.Discard,
+		return &localExecutor{repoDir: root, substrate: substrateWorkspace, checkArgv: []string{"vitest", "run"}, progress: io.Discard, evidenceTimeout: selectionTimeout,
 			selectionCache: cache, treeDigest: "tree", treeDigestComputed: true, unitWorkers: 1,
 			unitInventory: checkoutInventory(cands, excl)}
 	}
@@ -462,7 +447,7 @@ func TestUnitPassCachesOnlyAFullyGreenPass(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return &localExecutor{repoDir: root, substrate: substrateWorkspace, checkArgv: []string{"vitest", "run"}, progress: io.Discard,
+		return &localExecutor{repoDir: root, substrate: substrateWorkspace, checkArgv: []string{"vitest", "run"}, progress: io.Discard, evidenceTimeout: selectionTimeout,
 			selectionCache: cache, treeDigest: "tree", treeDigestComputed: true, unitWorkers: 1,
 			unitInventory: checkoutInventory(cands, excl)}
 	}
@@ -716,5 +701,72 @@ func TestUnitPassCapsTheFailedUnitList(t *testing.T) {
 	}
 	if !strings.Contains(s, "    ... and 5 more unit(s) that failed or left files uncounted (every one is in --dry-run --json)") {
 		t.Errorf("the cap must say how many lines it withheld:\n%s", s)
+	}
+}
+
+// The unit pass's cache key digests the coverage command the pass RUNS,
+// evidence flags included (lang.EvidenceUnitCmd): a vitest pass made before
+// --pool=threads was added recorded forks-pool units as clean evidence
+// holding only the main process's and subprocesses' coverage, and a key over
+// the operator's bare command would serve that pass again on the same tree.
+func TestUnitsCacheKeyDigestsTheEvidenceFlags(t *testing.T) {
+	ts, _ := lang.ByName("typescript")
+	inv := lang.Cmd([]string{"node", "./node_modules/vitest/vitest.mjs", "run"})
+	l := &localExecutor{treeDigestComputed: true, treeDigest: "tree"}
+	_, got, ok := l.unitsCacheKey(ts, inv)
+	if !ok {
+		t.Fatal("no key for a vitest command")
+	}
+	list, _ := lang.ListUnitsCmd(ts, inv)
+	reporter := ts.(lang.CoverageReporter)
+	runs, _ := reporter.CoverageCmd(lang.EvidenceUnitCmd(ts, inv, inv.Argv))
+	bare, _ := reporter.CoverageCmd(inv.Argv)
+	if want := unitsCmdDigest(list, runs); got != want {
+		t.Errorf("key digest = %s, want the digest of the command the pass runs (%s)", got, want)
+	}
+	if got == unitsCmdDigest(list, bare) {
+		t.Error("the key is the forks-era key: a pass made without --pool=threads would be served")
+	}
+}
+
+// The scan's units line says once what the evidence pass changed in the
+// operator's command, even when every unit was green, and says nothing when
+// it changed nothing.
+func TestUnitPassLineSaysWhatTheEvidencePassChanged(t *testing.T) {
+	const changed = "the evidence pass runs each unit with --pool=threads in place of --pool=forks"
+	green := reposcan.UnitEvidence{Ran: true, Units: []reposcan.UnitResult{{Unit: "a.test.ts"}}, Changed: changed}
+	var b bytes.Buffer
+	printUnitPass(&b, &localExecutor{units: green, unitWorkers: 1})
+	if got := strings.Count(b.String(), changed); got != 1 {
+		t.Errorf("the units line names the change %d time(s), want once:\n%s", got, b.String())
+	}
+	green.Changed = ""
+	b.Reset()
+	printUnitPass(&b, &localExecutor{units: green, unitWorkers: 1})
+	if strings.Contains(b.String(), "evidence pass runs") {
+		t.Errorf("a pass that changed nothing says it did:\n%s", b.String())
+	}
+}
+
+// Units red only with the evidence pass's change, and green as the
+// operator's command runs them, are counted on their own line: they are
+// among the units with no evidence, but they are not red, and the scan says
+// they stay in every selection.
+func TestUnitPassLineCountsUnitsGreenAsWritten(t *testing.T) {
+	ev := reposcan.UnitEvidence{Ran: true, Units: []reposcan.UnitResult{
+		{Unit: "a.test.ts"},
+		{Unit: "b.test.ts", Err: "not measured: red with the evidence pass's change (x), green as the operator's command runs it, which took no coverage"},
+		{Unit: "c.test.ts", Err: "run failed: exit 1"},
+	}}
+	var b bytes.Buffer
+	printUnitPass(&b, &localExecutor{units: ev, unitWorkers: 1})
+	if want := "units: 1 unit(s) red only with the evidence pass's change are green as your command runs them: they stay in every file's selection and run with every mutant"; !strings.Contains(b.String(), want) {
+		t.Errorf("output lacks %q:\n%s", want, b.String())
+	}
+	ev.Units = ev.Units[:1]
+	b.Reset()
+	printUnitPass(&b, &localExecutor{units: ev, unitWorkers: 1})
+	if strings.Contains(b.String(), "green as your command") {
+		t.Errorf("a pass with none says it had some:\n%s", b.String())
 	}
 }

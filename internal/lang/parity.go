@@ -2,6 +2,8 @@
 
 package lang
 
+import "slices"
+
 // paritySample is one test file declaring one test, per language, so the
 // critic-list capability is judged by running TestNamesInSource rather than
 // by asserting it exists.
@@ -36,14 +38,24 @@ type Capability struct {
 // rowCapability is a Capability judged on the language's runner rows.
 func rowCapability(key, title string, row func(Runner) bool) Capability {
 	return Capability{Key: key, Title: title, Row: row,
-		Has: func(p Plugin) bool { return anyRow(p, row) },
-		Stock: func(p Plugin) bool {
-			stock := p.TestCmd()
-			r, named := namedRunner(p, stock)
-			return named && !cmdIsShellWrapped(stock) && row(r)
-		},
+		Has:   func(p Plugin) bool { return anyRow(p, row) },
+		Stock: stockHas(row),
 	}
 }
+
+// stockHas is a Capability's Stock for a row capability: the language's own
+// stock command names a row that has it, unwrapped by a shell.
+func stockHas(row func(Runner) bool) func(p Plugin) bool {
+	return func(p Plugin) bool {
+		stock := p.TestCmd()
+		r, named := namedRunner(p, stock)
+		return named && !cmdIsShellWrapped(stock) && row(r)
+	}
+}
+
+// runsASet is the row half of the selection capability: the row can run a
+// chosen set — of tests (TestsCmd) or of units (UnitsCmd).
+func runsASet(r Runner) bool { return r.TestsCmd != nil || r.UnitsCmd != nil }
 
 // anyRow reports whether some runner row for p's language has the capability.
 // A language has it when an operator can get it by naming that runner; which
@@ -73,7 +85,33 @@ var Capabilities = []Capability{
 	rowCapability("salvage", "Keep the passing part of an authored test", func(r Runner) bool { return r.FailedTests != nil && r.DeselectCmd != nil }),
 	rowCapability("units", "Run one test unit", func(r Runner) bool { return r.ListUnits != nil && r.UnitCmd != nil }),
 	{Key: "coverage", Title: "Coverage pre-flight", Has: func(p Plugin) bool { _, ok := p.(CoverageReporter); return ok }},
-	{Key: "selection", Title: "Grade only the tests that run the file", Has: func(p Plugin) bool { _, ok := p.(TestSelector); return ok }},
+	// Row and Stock as a row capability's, so the support page names the
+	// runners that select when the stock command's does not (Ruby's stock
+	// command is shell-wrapped; rspec selects, minitest has no UnitsCmd).
+	{Key: "selection", Title: "Grade only the tests that run the file", Row: runsASet, Stock: stockHas(runsASet),
+		Has: func(p Plugin) bool { return selectionCapable(p, runners) }},
+}
+
+// selectionCapable is the selection capability judged on what grades by
+// evidence: the language produces evidence the selection engine reads —
+// per-test (TestEvidence, Python's one instrumented run) or coverage the unit
+// pass runs one unit at a time (CoverageReporter) — and some row of rows can
+// run a chosen set (TestsCmd for tests, UnitsCmd for units). Either half
+// alone selects nothing: evidence with no command to run its answer, or a
+// command with no evidence to choose for it. rows is a parameter so the
+// negative control can hand it a row with neither command.
+func selectionCapable(p Plugin, rows []Runner) bool {
+	_, perTest := p.(TestEvidence)
+	_, perUnit := p.(CoverageReporter)
+	if !perTest && !perUnit {
+		return false
+	}
+	for _, r := range rows {
+		if slices.Contains(r.Languages, p.Name()) && runsASet(r) {
+			return true
+		}
+	}
+	return false
 }
 
 // Exemption is a capability a language lacks, with the reason. The parity
@@ -86,12 +124,5 @@ var ParityExemptions = []Exemption{
 
 	{"rust", "salvage", "libtest --skip and nextest filtersets are not yet verified for salvage (runner table Phase 5)"},
 
-	{"go", "selection", "per-test coverage needs a run per test; its own spec (runner table Phase 6)"},
-	{"javascript", "selection", "per-test coverage contexts per runner; its own spec (runner table Phase 6)"},
-	{"typescript", "selection", "per-test coverage contexts per runner; its own spec (runner table Phase 6)"},
-	{"ruby", "selection", "per-test coverage contexts per runner; its own spec (runner table Phase 6)"},
-	{"php", "selection", "per-test coverage contexts per runner; its own spec (runner table Phase 6)"},
-	{"rust", "selection", "per-test coverage contexts per runner; its own spec (runner table Phase 6)"},
-
-	{"python", "units", "evidence is per test through TestSelector"},
+	{"python", "units", "its evidence is per test, from one instrumented run (lang.TestEvidence), which the selection engine reads at test grain; a unit pass would be a second, coarser answer to the same question"},
 }

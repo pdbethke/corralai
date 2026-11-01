@@ -42,3 +42,35 @@ func TestEveryLanguageHasEveryCapabilityOrSaysWhy(t *testing.T) {
 		}
 	}
 }
+
+// The negative control for the selection capability, which is judged on
+// the code that grades by evidence rather than declared: a language has it
+// only when it produces evidence (per-test, or coverage the unit pass runs
+// per unit) AND some row can run a chosen set (TestsCmd or UnitsCmd). A row
+// with neither command gives it to nobody, whatever the plugin produces;
+// a plugin that produces no evidence gets it from no row.
+func TestSelectionCapabilityNeedsEvidenceAndARowThatRunsASet(t *testing.T) {
+	ruby, _ := ByName("ruby")
+	bare := Runner{ID: "parity-bare", Languages: []string{"ruby"}}
+	if selectionCapable(ruby, []Runner{bare}) {
+		t.Error("a row with no TestsCmd and no UnitsCmd must not give selection")
+	}
+	units := bare
+	units.UnitsCmd = func(argv, u []string) ([]string, bool) { return append(argv, u...), true }
+	if !selectionCapable(ruby, []Runner{bare, units}) {
+		t.Error("positive control: a coverage-reporting language with a UnitsCmd row selects")
+	}
+	tests := bare
+	tests.TestsCmd = func(argv, ids []string) ([]string, bool) { return append(argv, ids...), true }
+	if !selectionCapable(ruby, []Runner{tests}) {
+		t.Error("positive control: a TestsCmd row selects too")
+	}
+	other := units
+	other.Languages = []string{"php"}
+	if selectionCapable(ruby, []Runner{bare, other}) {
+		t.Error("another language's row gives ruby nothing")
+	}
+	if selectionCapable(struct{ Plugin }{ruby}, []Runner{units}) {
+		t.Error("a plugin with no evidence form (neither TestEvidence nor CoverageReporter) must not select")
+	}
+}

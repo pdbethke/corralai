@@ -51,8 +51,9 @@ type Scan struct {
 	StartedAt     time.Time
 	FinishedAt    time.Time
 	// The audited party: who made the commit, by name (author, committer,
-	// the Co-authored-by trailers one per line). See auditpush.Identity.
-	Author, Committer, CoAuthors string
+	// the Co-authored-by trailers one per line, the tools its footer lines
+	// declare one per line). See auditpush.Identity.
+	Author, Committer, CoAuthors, GeneratedWith string
 	// CorralVersion is the version string `corral version` prints for the
 	// binary that ran this scan. EngineVersion above is the same value today,
 	// but it is an INPUT to the verdict cache key (a job keyed under one
@@ -256,6 +257,20 @@ type File struct {
 	// (no selector for the language, --whole-suite, an evidence run that
 	// failed). Empty when TestSelection is set — never both.
 	SelectionFallback string
+	// SelectionUnreported and AuthoredFallback mirror advpool.TestSelection's
+	// Unreported and AuthoredFallback: units added to the selection only
+	// because they reported no evidence, and why the authored pass graded by
+	// the run's whole command. omitempty, so a row without either is
+	// byte-identical to what it was before they existed.
+	SelectionUnreported int `json:",omitempty"`
+	// SelectionExcluded mirrors advpool.TestSelection.Excluded: units that
+	// failed unmutated, left out after the baseline failed with them.
+	SelectionExcluded int    `json:",omitempty"`
+	AuthoredFallback  string `json:",omitempty"`
+	// SelectionExcludedRed mirrors advpool.TestSelection.
+	// ExcludedRedInBaseline: the units of SelectionExcluded left out because
+	// a red baseline named them failing, by name, with why.
+	SelectionExcludedRed string `json:",omitempty"`
 	// WriterMode mirrors advpool.Verdict.WriterMode: whether this file's
 	// survivors were attacked by one writer call each ("per-survivor") or by
 	// one call carrying them all ("batched"). NULL — never one of the two

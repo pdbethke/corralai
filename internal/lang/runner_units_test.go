@@ -1133,3 +1133,23 @@ func TestParseUnitListDropsARelativeUnitOutsideTheWorkingDirectory(t *testing.T)
 		t.Errorf("units = %q: want only the ones inside the working directory", got)
 	}
 }
+
+// TreeRel is the one rule every reader of the tree names a file by.
+func TestTreeRel(t *testing.T) {
+	for _, c := range []struct {
+		rel, want string
+		ok        bool
+	}{
+		{"node_modules/x/package.json", "node_modules/x/package.json", true},
+		{"./node_modules/x/package.json", "node_modules/x/package.json", true},
+		{"node_modules//x/../x/package.json", "node_modules/x/package.json", true},
+		{"..", "", false},
+		{"../x", "", false},
+		{"a/../../x", "", false},
+		{"/etc/passwd", "", false},
+	} {
+		if got, ok := TreeRel(c.rel); got != c.want || ok != c.ok {
+			t.Errorf("TreeRel(%q) = %q, %v; want %q, %v", c.rel, got, ok, c.want, c.ok)
+		}
+	}
+}

@@ -511,3 +511,16 @@ func TestScansListAndShowReadTheLedgerDirectory(t *testing.T) {
 		t.Errorf("--ledger and --db together must be a usage error, got exit %d", code)
 	}
 }
+
+// A file graded after the baseline retry says so in the scans column, on
+// every selection shape, and a file without one is unchanged.
+func TestScanFileSelectionSaysRedUnitsWereLeftOut(t *testing.T) {
+	f := scanstore.File{TestSelection: "unit-evidence", SelectedTests: 4, SuiteTests: 2186, SelectionUnreported: 2, SelectionExcluded: 545}
+	if got, want := scanFileSelectionWith(f, mutantSpread{}), "unit-evidence 4/2186 (2 unreported) (545 red left out)"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	f.SelectionExcluded = 0
+	if got, want := scanFileSelectionWith(f, mutantSpread{}), "unit-evidence 4/2186 (2 unreported)"; got != want {
+		t.Errorf("no exclusion: got %q, want %q", got, want)
+	}
+}

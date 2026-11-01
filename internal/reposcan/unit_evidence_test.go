@@ -5,6 +5,8 @@ package reposcan
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -14,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/sandbox"
 )
@@ -102,14 +105,16 @@ func newUnitFixture(t *testing.T, langName string, argv []string, listing string
 	return f
 }
 
-// unitCmd is the coverage command the pass runs for unit.
+// unitCmd is the coverage command the pass runs for unit: the one-unit
+// command with the runner's evidence-only flags (lang.EvidenceUnitCmd),
+// under coverage.
 func (f *unitFixture) unitCmd(unit string) []string {
 	f.t.Helper()
 	cmd, ok := lang.UnitRunCmd(f.p, f.inv, unit)
 	if !ok {
 		f.t.Fatalf("no one-unit command for %q", unit)
 	}
-	cov, ok := f.p.(lang.CoverageReporter).CoverageCmd(cmd)
+	cov, ok := f.p.(lang.CoverageReporter).CoverageCmd(lang.EvidenceUnitCmd(f.p, f.inv, cmd))
 	if !ok {
 		f.t.Fatalf("no coverage command for %v", cmd)
 	}
@@ -230,8 +235,10 @@ func TestUnitPassDropsAFailedUnitAndKeepsTheRest(t *testing.T) {
 		t.Fatalf("ev = %+v, want Ran", ev)
 	}
 	beta := unitByName(t, ev, "test/beta.test.ts")
-	if !strings.HasPrefix(beta.Err, "run failed") || !strings.Contains(beta.Err, "TS2304") {
-		t.Errorf("beta.Err = %q, want a run failure naming the build error", beta.Err)
+	// The record keeps the class and exit code; the build error is the
+	// operator's, on the terminal (TerminalDetail).
+	if beta.Err != "run failed: exited 1" || !strings.Contains(beta.TerminalDetail, "TS2304") {
+		t.Errorf("beta = (Err %q, TerminalDetail %q), want a run failure with the build error in its TerminalDetail", beta.Err, beta.TerminalDetail)
 	}
 	if beta.Counts != nil {
 		t.Errorf("a failed unit kept counts %+v", beta.Counts)
@@ -347,8 +354,10 @@ func TestUnitPassNoUnitFormIsNotEvidence(t *testing.T) {
 	if ev.Ran {
 		t.Fatalf("ev = %+v, want not Ran", ev)
 	}
-	if !strings.Contains(ev.Note, "make test") || !strings.Contains(ev.Note, "typescript") {
-		t.Errorf("Note = %q, want the language and the command named", ev.Note)
+	// The terminal names the command; the recorded Note (every file's
+	// published Fallback) names the language and never the command.
+	if !strings.Contains(ev.Said(), "make test") || !strings.Contains(ev.Note, "typescript") || strings.Contains(ev.Note, "make test") {
+		t.Errorf("Note = %q, Said = %q, want the language in both and the command only in Said", ev.Note, ev.Said())
 	}
 	if len(r.ran) != 0 {
 		t.Errorf("ran %q for a command with no unit form", r.ran)
@@ -392,9 +401,9 @@ func TestUnitPassListingFailuresAreNotEvidence(t *testing.T) {
 		err  error
 		want string
 	}{
-		{"run error", sandbox.EnumerateResult{}, errors.New("boom"), "boom"},
+		{"run error", sandbox.EnumerateResult{}, errors.New("boom"), "the jail could not start the listing"},
 		{"exit", sandbox.EnumerateResult{Output: "x", Stderr: "no config", ExitCode: 1}, nil, "exited 1"},
-		{"unreadable", sandbox.EnumerateResult{Output: "hello\n"}, nil, "could not read"},
+		{"unreadable", sandbox.EnumerateResult{Output: "hello\n"}, nil, "could not be read"},
 		{"truncated", sandbox.EnumerateResult{Output: vitestTwoUnits + sandbox.TruncationMarker}, nil, "truncated"},
 		{"no units", sandbox.EnumerateResult{Output: "corral-units-cwd /w\n[]\n"}, nil, "no test units"},
 	}
@@ -408,6 +417,13 @@ func TestUnitPassListingFailuresAreNotEvidence(t *testing.T) {
 			ev := f.collect(context.Background(), "/w", 1)
 			if ev.Ran || !strings.Contains(ev.Note, tc.want) {
 				t.Errorf("ev = %+v, want not Ran with a note containing %q", ev, tc.want)
+			}
+			// What the listing printed or the runner said is the
+			// terminal's (Said), never the recorded Note.
+			for _, leak := range []string{"boom", "no config", "hello", "vitest run"} {
+				if strings.Contains(ev.Note, leak) {
+					t.Errorf("Note %q quotes %q", ev.Note, leak)
+				}
 			}
 		})
 	}
@@ -655,10 +671,13 @@ func TestUnitPassTakesOnlyAGreenSuite(t *testing.T) {
 func TestUnitPassSaysWhyCoverageWasUnavailable(t *testing.T) {
 	listing := strings.Replace(unitListingFixture(t, "cargo-units.txt"), "/fixture/units/cargo", "/w", -1)
 	const notice = "corral-rust-coverage: unavailable llvm-profdata and llvm-cov are in neither the toolchain's llvm-tools nor PATH\n"
-	cases := []struct{ name, out, wantErr string }{
-		{"before the suite", notice, "coverage unavailable: llvm-profdata and llvm-cov are in neither the toolchain's llvm-tools nor PATH"},
-		{"after a green suite", "# suite-exit 0\n" + notice, "coverage unavailable: llvm-profdata and llvm-cov are in neither the toolchain's llvm-tools nor PATH"},
-		{"after a red suite", "# suite-exit 101\n" + notice, "run failed: exit 101"},
+	// The instrument's notice is the unit's TerminalDetail, for the terminal; the
+	// recorded Err keeps the class.
+	const why = "llvm-profdata and llvm-cov are in neither the toolchain's llvm-tools nor PATH"
+	cases := []struct{ name, out, wantErr, wantDetail string }{
+		{"before the suite", notice, "coverage unavailable: the coverage instrument reported it unavailable", why},
+		{"after a green suite", "# suite-exit 0\n" + notice, "coverage unavailable: the coverage instrument reported it unavailable", why},
+		{"after a red suite", "# suite-exit 101\n" + notice, "run failed: exit 101", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -670,8 +689,8 @@ func TestUnitPassSaysWhyCoverageWasUnavailable(t *testing.T) {
 			if !ev.Ran {
 				t.Fatalf("ev = %+v, want the pass to have run", ev)
 			}
-			if u := unitByName(t, ev, "units-a/lib"); u.Err != tc.wantErr || u.Counts != nil {
-				t.Errorf("units-a/lib = %+v, want Err %q and no counts", u, tc.wantErr)
+			if u := unitByName(t, ev, "units-a/lib"); u.Err != tc.wantErr || (tc.wantDetail != "" && u.TerminalDetail != tc.wantDetail) || u.Counts != nil {
+				t.Errorf("units-a/lib = %+v, want Err %q, TerminalDetail %q and no counts", u, tc.wantErr, tc.wantDetail)
 			}
 		})
 	}
@@ -723,19 +742,21 @@ func TestUnitEvidenceSettled(t *testing.T) {
 // tell a jail-only failure from a real red test (commander.js, Task 11a).
 // The tail is the output BEFORE the suite-exit trailer: in the jail the
 // streams are one, and what follows the trailer is the coverage report, not
-// the failure.
+// the failure. It is said in the unit's TerminalDetail, for the terminal, and never
+// in its Err, which the verdict carries into the published ledger: a tail
+// can quote a secret or a host path.
 func TestUnitPassShowsAFailedUnitsOutput(t *testing.T) {
 	cases := []struct {
-		name    string
-		res     sandbox.EnumerateResult
-		wantErr string
+		name                string
+		res                 sandbox.EnumerateResult
+		wantErr, wantDetail string
 	}{
 		{"red suite, one stream", sandbox.EnumerateResult{Output: "AssertionError: expected 1\n    at alpha.test.ts:3\n# suite-exit 1\ncorral-js-coverage: v2\n7 10 src/x.ts\n"},
-			"run failed: exit 1: AssertionError: expected 1\n    at alpha.test.ts:3"},
+			"run failed: exit 1", "the evidence pass runs each unit with --pool=threads: AssertionError: expected 1\n    at alpha.test.ts:3"},
 		{"red suite, stderr apart", sandbox.EnumerateResult{Output: "# suite-exit 1\ncorral-js-coverage: v2\n7 10 src/x.ts\n", Stderr: "TypeError: boom\n"},
-			"run failed: exit 1: TypeError: boom"},
+			"run failed: exit 1", "the evidence pass runs each unit with --pool=threads: TypeError: boom"},
 		{"command failed", sandbox.EnumerateResult{Output: "sh: 1: go: not found\n# suite-exit 127\n", ExitCode: 127},
-			"run failed: exited 127: sh: 1: go: not found"},
+			"run failed: exited 127", "the evidence pass runs each unit with --pool=threads: sh: 1: go: not found"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -743,8 +764,9 @@ func TestUnitPassShowsAFailedUnitsOutput(t *testing.T) {
 			f.answer("test/alpha.test.ts", tc.res)
 			f.answer("test/beta.test.ts", sandbox.EnumerateResult{Output: jsReport("2 10 src/y.ts")})
 			ev := f.collect(context.Background(), "/w", 1)
-			if got := unitByName(t, ev, "test/alpha.test.ts").Err; got != tc.wantErr {
-				t.Errorf("alpha.Err = %q, want %q", got, tc.wantErr)
+			alpha := unitByName(t, ev, "test/alpha.test.ts")
+			if alpha.Err != tc.wantErr || alpha.TerminalDetail != tc.wantDetail {
+				t.Errorf("alpha = (Err %q, TerminalDetail %q), want (%q, %q)", alpha.Err, alpha.TerminalDetail, tc.wantErr, tc.wantDetail)
 			}
 		})
 	}
@@ -853,4 +875,581 @@ func TestUnitTestFilesNamesWhatEachUnitCompiles(t *testing.T) {
 	if got := fileTests("test/missing.test.ts"); len(got) != 0 {
 		t.Errorf("a unit the repository lacks names %q, want none", got)
 	}
+}
+
+// CutShort counts the units the pass's own deadline cut: those never started
+// (unitNotRunTimeLimit) and those stopped mid-run by it (unitTimedOut). The
+// scan line and corral tests map name the bound and the flag that raises it
+// from this number, so every other way a unit contributes nothing — a red
+// run, an interrupt, a runner that could not start — must not count.
+func TestUnitEvidenceCutShortCountsOnlyTheDeadline(t *testing.T) {
+	ok := UnitResult{Unit: "a", Counts: map[string]lang.LineCounts{}}
+	ev := UnitEvidence{Ran: true, Units: []UnitResult{
+		ok,
+		{Unit: "b", Err: unitNotRunTimeLimit},
+		{Unit: "c", Err: unitNotRunTimeLimit},
+		{Unit: "d", Err: unitTimedOut},
+		{Unit: "e", Err: unitInterrupted},
+		{Unit: "f", Err: unitNotRunInterrupted},
+		{Unit: "g", Err: "run failed: exit 1"},
+		{Unit: "h", Err: unitCouldNotRun + "jail: boom"},
+	}}
+	if got := ev.CutShort(); got != 3 {
+		t.Errorf("CutShort() = %d, want 3 (two not started, one stopped by the deadline)", got)
+	}
+	if got := (UnitEvidence{Ran: true, Units: []UnitResult{ok}}).CutShort(); got != 0 {
+		t.Errorf("a pass the deadline never reached: CutShort() = %d, want 0", got)
+	}
+}
+
+// The evidence pass, and only the evidence pass, runs a vitest unit with
+// --pool=threads (lang.EvidenceUnitCmd): every unit command the jail
+// receives carries it, and the listing, which collects and runs nothing,
+// does not.
+func TestCollectUnitEvidenceUsesEvidenceArgs(t *testing.T) {
+	f := newUnitFixture(t, "typescript", []string{"vitest", "run"}, vitestTwoUnits)
+	f.answer("test/alpha.test.ts", sandbox.EnumerateResult{Output: jsReport("7 10 src/x.ts")})
+	f.answer("test/beta.test.ts", sandbox.EnumerateResult{Output: jsReport("2 10 src/x.ts")})
+
+	ev := f.collect(context.Background(), "/w", 2)
+	if !ev.Settled() {
+		t.Fatalf("ev = %+v, want both units green", ev)
+	}
+	units := 0
+	for _, k := range f.run.ran {
+		cmd := strings.Join(strings.Split(k, "\x00"), " ")
+		if k == argvKey(f.list) {
+			if strings.Contains(cmd, "--pool") {
+				t.Errorf("the listing ran with a pool flag: %q", cmd)
+			}
+			continue
+		}
+		units++
+		if !strings.Contains(cmd, "--pool=threads") {
+			t.Errorf("a unit ran without --pool=threads: %q", cmd)
+		}
+	}
+	if units != 2 {
+		t.Errorf("%d unit commands ran, want 2: %q", units, f.run.ran)
+	}
+	// Every unit green, and the pass still says, once, that it ran them in
+	// a pool the operator's command did not name.
+	if want := "the evidence pass runs each unit with --pool=threads"; ev.Changed != want {
+		t.Errorf("ev.Changed = %q, want %q", ev.Changed, want)
+	}
+	if ev.Note != "" {
+		t.Errorf("ev.Note = %q on a pass that ran: Note says why a pass did not", ev.Note)
+	}
+
+	// The operator's own threads pool: nothing changed, nothing said.
+	same := newUnitFixture(t, "typescript", []string{"vitest", "run", "--pool=threads"}, vitestTwoUnits)
+	same.answer("test/alpha.test.ts", sandbox.EnumerateResult{Output: jsReport("7 10 src/x.ts")})
+	same.answer("test/beta.test.ts", sandbox.EnumerateResult{Output: jsReport("2 10 src/x.ts")})
+	if got := same.collect(context.Background(), "/w", 1).Changed; got != "" {
+		t.Errorf("Changed for a threads command = %q, want \"\"", got)
+	}
+}
+
+// A unit that is red under --pool=threads contributes nothing, and its
+// TerminalDetail says the evidence pass ran it with that flag (the scan line says
+// so too, once, from Changed): the operator's own
+// run may be green in the forks pool, and a red unit is unreported (every
+// file then selects it) rather than graded on partial evidence.
+func TestThreadsRedUnitIsUnreportedNamingThePool(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		res  sandbox.EnumerateResult
+	}{
+		{"command exit", sandbox.EnumerateResult{Output: jsReport("9 10 src/w.ts"), Stderr: "Error: worker_threads unsupported", ExitCode: 1}},
+		{"suite exit", sandbox.EnumerateResult{Output: "FAIL tests\n# suite-exit 1\ncorral-js-coverage: v2\n9 10 src/w.ts\n"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newUnitFixture(t, "typescript", []string{"vitest", "run"}, vitestTwoUnits)
+			f.answer("test/alpha.test.ts", sandbox.EnumerateResult{Output: jsReport("7 10 src/x.ts")})
+			f.answer("test/beta.test.ts", c.res)
+			ev := f.collect(context.Background(), "/w", 1)
+			beta := unitByName(t, ev, "test/beta.test.ts")
+			if !strings.HasPrefix(beta.Err, "run failed:") || !strings.Contains(beta.TerminalDetail, "--pool=threads") {
+				t.Errorf("beta = (Err %q, TerminalDetail %q), want a run failure whose TerminalDetail names --pool=threads", beta.Err, beta.TerminalDetail)
+			}
+			if beta.Counts != nil {
+				t.Errorf("a red unit kept counts %+v", beta.Counts)
+			}
+			if ev.Settled() {
+				t.Error("a pass with a red unit is Settled")
+			}
+		})
+	}
+	// jest has no evidence flags, so its failure names none.
+	j := newUnitFixture(t, "typescript", []string{"jest"}, "corral-units-cwd /w\n[\"/w/test/alpha.test.ts\",\"/w/test/beta.test.ts\"]\n")
+	j.answer("test/alpha.test.ts", sandbox.EnumerateResult{Output: jsReport("7 10 src/x.ts")})
+	j.answer("test/beta.test.ts", sandbox.EnumerateResult{Output: jsReport(), ExitCode: 1})
+	if got := unitByName(t, j.collect(context.Background(), "/w", 1), "test/beta.test.ts").Err; strings.Contains(got, "evidence pass") {
+		t.Errorf("jest beta.Err = %q, want no evidence note", got)
+	}
+}
+
+// seedingFake is a runner that offers Seed: the units run through the
+// seeded runner it returns, and the counts say how often each was used.
+// With shareCache, the seed shares the cache it is asked for; unshared is
+// what it says when it does not.
+type seedingFake struct {
+	*unitFakeRunner
+	seedErr    error
+	seeds      int
+	closes     int
+	seededRuns int
+	// ranAtClose is how many commands had run when Close was called.
+	ranAtClose int
+	shareCache bool
+	unshared   string
+	// cacheAsked is the cache Seed was asked to share; calls is every
+	// seeded run in order, "warm " or "frozen " before its command key.
+	cacheAsked *lang.EvidenceCache
+	calls      []string
+}
+
+func (s *seedingFake) Seed(files map[string]string, cache *lang.EvidenceCache) (sandbox.SeededRunner, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.seeds++
+	s.cacheAsked = cache
+	if s.seedErr != nil {
+		return nil, s.seedErr
+	}
+	return seededFake{s}, nil
+}
+
+type seededFake struct{ p *seedingFake }
+
+func (f seededFake) Enumerate(ctx context.Context, files map[string]string, cmd []string) (string, error) {
+	r, err := f.EnumerateDetailed(ctx, files, cmd)
+	return r.Output, err
+}
+
+func (f seededFake) EnumerateDetailed(ctx context.Context, files map[string]string, cmd []string) (sandbox.EnumerateResult, error) {
+	f.p.mu.Lock()
+	f.p.seededRuns++
+	f.p.calls = append(f.p.calls, "frozen "+argvKey(cmd))
+	f.p.mu.Unlock()
+	return f.p.unitFakeRunner.EnumerateDetailed(ctx, files, cmd)
+}
+
+func (f seededFake) Warm(ctx context.Context, files map[string]string, cmd []string) (sandbox.EnumerateResult, error) {
+	f.p.mu.Lock()
+	f.p.seededRuns++
+	f.p.calls = append(f.p.calls, "warm "+argvKey(cmd))
+	f.p.mu.Unlock()
+	return f.p.unitFakeRunner.EnumerateDetailed(ctx, files, cmd)
+}
+
+func (f seededFake) Cache() sandbox.SharedCache {
+	switch {
+	case f.p.cacheAsked == nil:
+		return sandbox.SharedCache{}
+	case f.p.shareCache:
+		return sandbox.SharedCache{Target: sandbox.CacheTarget}
+	}
+	return sandbox.SharedCache{Unshared: f.p.unshared}
+}
+
+func (f seededFake) Close() error {
+	f.p.mu.Lock()
+	defer f.p.mu.Unlock()
+	f.p.closes++
+	f.p.ranAtClose = len(f.p.ran)
+	return nil
+}
+
+// A go pass shares one GOCACHE among its units: the first runnable unit
+// runs ONCE, alone, with the cache writable, and that run is its evidence;
+// every later unit runs with it frozen. Each unit command carries -count=1
+// (lang.EvidenceUnitCmd), so the frozen cache's test results are never
+// replayed as evidence, and the pass says so once. A seed that cannot
+// share the cache runs every unit as before, and the pass says that too.
+func TestCollectUnitEvidenceWarmsOnceThenFreezes(t *testing.T) {
+	collect := func(f *unitFixture, run *seedingFake) UnitEvidence {
+		return CollectUnitEvidence(context.Background(), run, map[string]string{}, f.p, f.inv, "m", 2, func(int, int) {})
+	}
+	answer := func(f *unitFixture) {
+		f.answer("m/other", sandbox.EnumerateResult{Output: "# suite-exit 0\nmode: set\nm/other/o.go:0,1 4 4\n"})
+		f.answer("m/pkg", sandbox.EnumerateResult{Output: "# suite-exit 0\nmode: set\nm/pkg/b.go:0,1 2 2\n"})
+	}
+	f := newUnitFixture(t, "go", []string{"go", "test", "./..."}, goTwoUnits)
+	answer(f)
+	run := &seedingFake{unitFakeRunner: f.run, shareCache: true}
+	ev := collect(f, run)
+	if !ev.Settled() {
+		t.Fatalf("ev = %+v, want both units green", ev)
+	}
+	if run.cacheAsked == nil || run.cacheAsked.Env != "GOCACHE" {
+		t.Errorf("Seed was asked to share %+v, want GOCACHE", run.cacheAsked)
+	}
+	for _, u := range []string{"m/other", "m/pkg"} {
+		if !strings.Contains(strings.Join(f.unitCmd(u), " "), "'-count=1'") {
+			t.Errorf("unit %s runs %q, with no -count=1", u, f.unitCmd(u))
+		}
+	}
+	want := []string{"warm " + argvKey(f.unitCmd("m/other")), "frozen " + argvKey(f.unitCmd("m/pkg"))}
+	if !slices.Equal(run.calls, want) {
+		t.Errorf("seeded runs = %q, want the first unit warm and the rest frozen: %q", run.calls, want)
+	}
+	if n := slices.Index(f.run.ran, argvKey(f.unitCmd("m/other"))); n < 0 || slices.Index(f.run.ran[n+1:], argvKey(f.unitCmd("m/other"))) >= 0 {
+		t.Errorf("the first unit ran %v, want exactly once", f.run.ran)
+	}
+	if other := unitByName(t, ev, "m/other"); other.Err != "" || other.Counts["other/o.go"].Executed == 0 {
+		t.Errorf("m/other = %+v, want its warm run's counts as its evidence", other)
+	}
+	if ev.Changed != "the evidence pass runs each unit with -count=1" {
+		t.Errorf("Changed = %q, want only the -count=1 note", ev.Changed)
+	}
+
+	// The seed could not share the cache: no warm run, every unit as
+	// before, and the pass says so once.
+	nf := newUnitFixture(t, "go", []string{"go", "test", "./..."}, goTwoUnits)
+	answer(nf)
+	norun := &seedingFake{unitFakeRunner: nf.run, unshared: "this bwrap cannot overlay a directory on the filesystem of /tmp"}
+	ev = collect(nf, norun)
+	if !ev.Settled() {
+		t.Fatalf("unshared: ev = %+v, want both units green", ev)
+	}
+	for _, c := range norun.calls {
+		if strings.HasPrefix(c, "warm ") {
+			t.Errorf("unshared: a warm run: %q", norun.calls)
+		}
+	}
+	if len(norun.calls) != 2 {
+		t.Errorf("unshared: seeded runs = %q, want the 2 units", norun.calls)
+	}
+	wantChanged := "the evidence pass runs each unit with -count=1; each unit started from an empty GOCACHE (no shared cache: this bwrap cannot overlay a directory on the filesystem of /tmp)"
+	if ev.Changed != wantChanged {
+		t.Errorf("unshared: Changed = %q, want %q", ev.Changed, wantChanged)
+	}
+
+	// A seed refused outright (no overlay at all) shares no cache either,
+	// and the pass says that too, beside the fresh-copy sentence.
+	rf := newUnitFixture(t, "go", []string{"go", "test", "./..."}, goTwoUnits)
+	answer(rf)
+	refused := &seedingFake{unitFakeRunner: rf.run, seedErr: &sandbox.NoOverlayError{Backend: "bwrap"}}
+	ev = collect(rf, refused)
+	wantChanged = "the evidence pass runs each unit with -count=1; units ran on a fresh copy each (this bwrap cannot overlay); each unit started from an empty GOCACHE (no shared cache: this bwrap cannot overlay)"
+	if !ev.Settled() || ev.Changed != wantChanged {
+		t.Errorf("seed refused: ev.Changed = %q, want %q", ev.Changed, wantChanged)
+	}
+
+	// A runner with no shared cache asks for none and never warms.
+	vf := newUnitFixture(t, "typescript", []string{"jest"}, "corral-units-cwd /w\n[\"/w/test/alpha.test.ts\",\"/w/test/beta.test.ts\"]\n")
+	vf.answer("test/alpha.test.ts", sandbox.EnumerateResult{Output: jsReport("7 10 src/x.ts")})
+	vf.answer("test/beta.test.ts", sandbox.EnumerateResult{Output: jsReport("2 10 src/x.ts")})
+	jrun := &seedingFake{unitFakeRunner: vf.run, shareCache: true}
+	if ev := collect(vf, jrun); !ev.Settled() || jrun.cacheAsked != nil || slices.ContainsFunc(jrun.calls, func(c string) bool { return strings.HasPrefix(c, "warm ") }) {
+		t.Errorf("jest: ev = %+v, cache asked %+v, runs %q; want no cache and no warm run", ev, jrun.cacheAsked, jrun.calls)
+	}
+}
+
+// A runner that can seed is seeded once per pass, after the listing: every
+// unit runs through the one seed, which is closed once, after the last
+// unit. A runner whose bwrap cannot overlay still runs every unit, on a
+// fresh copy each, and the pass says so where it says what else it
+// changed (Changed), never in Note, which marks a pass that did not run.
+func TestCollectUnitEvidenceSeedsOnce(t *testing.T) {
+	collect := func(f *unitFixture, run *seedingFake) UnitEvidence {
+		return CollectUnitEvidence(context.Background(), run, map[string]string{}, f.p, f.inv, "/w", 2, func(int, int) {})
+	}
+	f := newUnitFixture(t, "typescript", []string{"vitest", "run"}, vitestTwoUnits)
+	f.answer("test/alpha.test.ts", sandbox.EnumerateResult{Output: jsReport("7 10 src/x.ts")})
+	f.answer("test/beta.test.ts", sandbox.EnumerateResult{Output: jsReport("2 10 src/x.ts")})
+
+	run := &seedingFake{unitFakeRunner: f.run}
+	ev := collect(f, run)
+	if !ev.Settled() {
+		t.Fatalf("ev = %+v, want both units green", ev)
+	}
+	if run.seeds != 1 || run.closes != 1 {
+		t.Errorf("Seed called %d times and Close %d, want 1 and 1", run.seeds, run.closes)
+	}
+	if run.seededRuns != 2 {
+		t.Errorf("%d commands ran through the seed, want the 2 units", run.seededRuns)
+	}
+	if len(run.ran) != 3 || run.ranAtClose != 3 {
+		t.Errorf("%d commands ran, %d before Close, want the listing and 2 units, all before Close", len(run.ran), run.ranAtClose)
+	}
+	if strings.Contains(ev.Changed, "fresh copy") {
+		t.Errorf("Changed = %q on a pass that ran on a seed", ev.Changed)
+	}
+
+	nf := newUnitFixture(t, "typescript", []string{"vitest", "run"}, vitestTwoUnits)
+	nf.answer("test/alpha.test.ts", sandbox.EnumerateResult{Output: jsReport("7 10 src/x.ts")})
+	nf.answer("test/beta.test.ts", sandbox.EnumerateResult{Output: jsReport("2 10 src/x.ts")})
+	norun := &seedingFake{unitFakeRunner: nf.run, seedErr: fmt.Errorf("wrapped: %w", &sandbox.NoOverlayError{Backend: "bwrap"})}
+	ev = collect(nf, norun)
+	if !ev.Settled() || ev.Note != "" {
+		t.Fatalf("without overlay: ev = %+v, want both units green and no Note", ev)
+	}
+	if norun.seededRuns != 0 || len(norun.ran) != 3 {
+		t.Errorf("without overlay: %d seeded runs and %d runs, want 0 and 3", norun.seededRuns, len(norun.ran))
+	}
+	want := "the evidence pass runs each unit with --pool=threads; units ran on a fresh copy each (this bwrap cannot overlay)"
+	if ev.Changed != want {
+		t.Errorf("without overlay: Changed = %q, want %q", ev.Changed, want)
+	}
+
+	// The sentence names the backend that could not overlay.
+	cf := newUnitFixture(t, "typescript", []string{"vitest", "run"}, vitestTwoUnits)
+	cf.answer("test/alpha.test.ts", sandbox.EnumerateResult{Output: jsReport("7 10 src/x.ts")})
+	cf.answer("test/beta.test.ts", sandbox.EnumerateResult{Output: jsReport("2 10 src/x.ts")})
+	ev = collect(cf, &seedingFake{unitFakeRunner: cf.run, seedErr: &sandbox.NoOverlayError{Backend: "container"}})
+	if !strings.HasSuffix(ev.Changed, "units ran on a fresh copy each (the container backend cannot overlay)") {
+		t.Errorf("container: Changed = %q", ev.Changed)
+	}
+
+	// Any other seeding failure stops the pass, and says why; no unit is
+	// left looking like it ran.
+	bf := newUnitFixture(t, "typescript", []string{"vitest", "run"}, vitestTwoUnits)
+	broken := &seedingFake{unitFakeRunner: bf.run, seedErr: errors.New("no space left on device")}
+	ev = collect(bf, broken)
+	if ev.Ran || ev.Note != "typescript: the unit pass did not run: the jail could not start it" || !strings.Contains(ev.Said(), "no space left on device") {
+		t.Errorf("a failed seed: ev = %+v, want a pass that did not run, saying why on the terminal and recording the class", ev)
+	}
+	for _, u := range ev.Units {
+		if u.Err == "" {
+			t.Errorf("unit %s has no Err in a pass that never ran it", u.Unit)
+		}
+	}
+	if len(broken.ran) != 1 {
+		t.Errorf("a failed seed ran %d commands, want only the listing", len(broken.ran))
+	}
+}
+
+// The jail the pass runs on seeds and reads its tree: CollectUnitEvidence
+// finds both by type assertion, so a signature drift would silently turn
+// off the seed or the version gate's read of node_modules instead of
+// failing to build.
+func TestTheJailSeedsAndReadsItsTree(t *testing.T) {
+	j := adequacy.NewEnumerator(nil, time.Second)
+	if _, ok := j.(seedingRunner); !ok {
+		t.Error("adequacy's jail is not a seedingRunner")
+	}
+	if _, ok := j.(TreeReader); !ok {
+		t.Error("adequacy's jail is not a TreeReader")
+	}
+}
+
+// The pass's cache helpers, over hand-built caches: no row shares a cache
+// with options or a version gate today, so these are the only tests of
+// those branches until one does.
+func TestUnitPassCacheHelpers(t *testing.T) {
+	args := []string{"--cache", "--cache-dir", sandbox.CacheTarget}
+	named := &lang.EvidenceCache{Name: "transform cache", Env: "TC"}
+	if got, want := unitsCacheArgs("", named, args), "the evidence pass runs each unit with --cache --cache-dir /corral-cache (a shared transform cache, filled by the first unit and frozen for every later one)"; got != want {
+		t.Errorf("unitsCacheArgs with no note = %q, want %q", got, want)
+	}
+	if got, want := unitsCacheArgs("the evidence pass runs each unit with --pool=threads", named, args), "the evidence pass runs each unit with --pool=threads, and with --cache --cache-dir /corral-cache (a shared transform cache, filled by the first unit and frozen for every later one)"; got != want {
+		t.Errorf("unitsCacheArgs with a note = %q, want %q", got, want)
+	}
+
+	for _, c := range []struct {
+		cache *lang.EvidenceCache
+		want  string
+	}{
+		{named, "transform cache"},
+		{&lang.EvidenceCache{Env: "GOCACHE"}, "GOCACHE"},
+		{&lang.EvidenceCache{}, "tool cache"},
+	} {
+		if got := cacheName(c.cache); got != c.want {
+			t.Errorf("cacheName(%+v) = %q, want %q", c.cache, got, c.want)
+		}
+	}
+
+	argv := []string{"tool", "run"}
+	read := func(string) ([]byte, error) { return []byte("1.0.0"), nil }
+	var gotArgv []string
+	reads := 0
+	gate := func(why string) func([]string, func(string) ([]byte, error)) string {
+		return func(a []string, r func(string) ([]byte, error)) string {
+			gotArgv = a
+			if b, err := r("x"); err == nil && string(b) == "1.0.0" {
+				reads++
+			}
+			return why
+		}
+	}
+	noGate := &lang.EvidenceCache{Env: "TC"}
+	takes := &lang.EvidenceCache{Name: "c", Unsupported: gate("")}
+	refuses := &lang.EvidenceCache{Name: "c", Unsupported: gate("tool 0.9 is older than 1.0")}
+	if asked, why := askedCache(nil, argv, read); asked != nil || why != "" {
+		t.Errorf("askedCache(nil) = %+v, %q; want nil, \"\"", asked, why)
+	}
+	if asked, why := askedCache(noGate, argv, read); asked != noGate || why != "" {
+		t.Errorf("no Unsupported: askedCache = %+v, %q; want the cache, \"\"", asked, why)
+	}
+	if asked, why := askedCache(takes, argv, read); asked != takes || why != "" {
+		t.Errorf("Unsupported gives \"\": askedCache = %+v, %q; want the cache, \"\"", asked, why)
+	}
+	if asked, why := askedCache(refuses, argv, read); asked != nil || why != "tool 0.9 is older than 1.0" {
+		t.Errorf("Unsupported gives a reason: askedCache = %+v, %q; want nil and the reason", asked, why)
+	}
+	if !slices.Equal(gotArgv, argv) || reads != 2 {
+		t.Errorf("Unsupported saw argv %q and read %d times, want %q and 2", gotArgv, reads, argv)
+	}
+}
+
+// Changed is the note first, then every other sentence in order, however
+// the note was extended after a sentence was said: a shared cache's options
+// extend the note, and must neither drop nor repeat what was already said.
+func TestUnitsChangedKeepsEverySentence(t *testing.T) {
+	for _, c := range []struct {
+		note string
+		said []string
+		want string
+	}{
+		{"", nil, ""},
+		{"n", nil, "n"},
+		{"", []string{"a", "b"}, "a; b"},
+		{"n, and with x", []string{"a", "b"}, "n, and with x; a; b"},
+	} {
+		if got := unitsChanged(c.note, c.said); got != c.want {
+			t.Errorf("unitsChanged(%q, %q) = %q, want %q", c.note, c.said, got, c.want)
+		}
+	}
+}
+
+// treeFileReader names a file by lang.TreeRel's one rule whether or not
+// the runner can read further: "./x" is "x", and a path out of the tree is
+// refused rather than looked up.
+func TestTreeFileReaderOneRule(t *testing.T) {
+	files := map[string]string{"node_modules/t/package.json": "seeded"}
+	for name, runner := range map[string]commandRunner{
+		"seed only":   &unitFakeRunner{},
+		"tree reader": readingSeedFake{&seedingFake{unitFakeRunner: &unitFakeRunner{}}, map[string]string{"node_modules/u/package.json": "bound"}},
+	} {
+		read := treeFileReader(runner, files)
+		for _, rel := range []string{"node_modules/t/package.json", "./node_modules/t/package.json", "node_modules//t/package.json"} {
+			if b, err := read(rel); err != nil || string(b) != "seeded" {
+				t.Errorf("%s: read(%q) = %q, %v; want the seed's file", name, rel, b, err)
+			}
+		}
+		for _, rel := range []string{"../x", "/etc/passwd"} {
+			if b, err := read(rel); err == nil {
+				t.Errorf("%s: read(%q) = %q, want a refusal", name, rel, b)
+			}
+		}
+		if _, err := read("absent"); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("%s: read(absent) err = %v, want fs.ErrNotExist", name, err)
+		}
+	}
+}
+
+// readingSeedFake is a seedingFake that also reads the tree as its jail
+// sees it (lang.TreeRel's rule, the seed, then the dependency directories
+// mounted into it), as adequacy's jail does: tree is what those
+// directories hold.
+type readingSeedFake struct {
+	*seedingFake
+	tree map[string]string
+}
+
+func (r readingSeedFake) ReadTreeFile(files map[string]string, rel string) ([]byte, error) {
+	clean, ok := lang.TreeRel(rel)
+	if !ok {
+		return nil, fmt.Errorf("%q is not in the tree", rel)
+	}
+	if s, ok := files[clean]; ok {
+		return []byte(s), nil
+	}
+	if s, ok := r.tree[clean]; ok {
+		return []byte(s), nil
+	}
+	return nil, fs.ErrNotExist
+}
+
+// answerAsWritten answers unit's one-unit command exactly as the operator's
+// command runs it: no evidence-pass flags, no coverage.
+func (f *unitFixture) answerAsWritten(unit string, res sandbox.EnumerateResult) {
+	f.t.Helper()
+	cmd, ok := lang.UnitRunCmd(f.p, f.inv, unit)
+	if !ok {
+		f.t.Fatalf("no one-unit command for %q", unit)
+	}
+	f.run.res[argvKey(cmd)] = res
+}
+
+// REA's cliJsonPaths.test.ts calls process.chdir(), which vitest's threads
+// pool forbids: red in the evidence pass only because the pass ran it with
+// --pool=threads (2026-10-30). Run again as the operator's command runs it,
+// it passes, so it is not a red unit: the red-baseline retry must not leave
+// it out, and its run there measured no coverage, so it reports no evidence
+// and runs with every file. A unit red both ways stays red.
+func TestUnitPassRechecksARedUnitAsTheOperatorRunsIt(t *testing.T) {
+	f := newUnitFixture(t, "typescript", []string{"vitest", "run"}, vitestTwoUnits)
+	f.answer("test/alpha.test.ts", sandbox.EnumerateResult{Output: "# suite-exit 1\ncorral-js-coverage: v2\n", ExitCode: 0})
+	f.answerAsWritten("test/alpha.test.ts", sandbox.EnumerateResult{ExitCode: 0})
+	f.answer("test/beta.test.ts", sandbox.EnumerateResult{Output: "# suite-exit 1\ncorral-js-coverage: v2\n", ExitCode: 0})
+	f.answerAsWritten("test/beta.test.ts", sandbox.EnumerateResult{ExitCode: 1})
+
+	ev := f.collect(context.Background(), "/w", 1)
+	alpha := unitByName(t, ev, "test/alpha.test.ts")
+	if strings.HasPrefix(alpha.Err, unitRunFailed) || !strings.Contains(alpha.Err, "green as the operator's command runs it") || !strings.Contains(alpha.Err, "--pool=threads") || alpha.Counts != nil {
+		t.Errorf("alpha = %+v, want a non-red reason naming the evidence pass's change, and no evidence", alpha)
+	}
+	if beta := unitByName(t, ev, "test/beta.test.ts"); !strings.HasPrefix(beta.Err, unitRunFailed) {
+		t.Errorf("beta, red both ways, Err = %q, want it still red", beta.Err)
+	}
+}
+
+// A runner whose evidence pass changes nothing in the command has nothing to
+// recheck: a red unit there is red as written, and is not run twice.
+func TestUnitPassDoesNotRecheckWhenThePassChangedNothing(t *testing.T) {
+	f := newUnitFixture(t, "typescript", []string{"jest"}, "corral-units-cwd /w\n[\"/w/test/alpha.test.ts\",\"/w/test/beta.test.ts\"]\n")
+	if lang.EvidenceNote(f.p, f.inv) != "" {
+		t.Fatalf("jest's evidence pass changes its command (%q); this control needs a runner whose pass changes nothing", lang.EvidenceNote(f.p, f.inv))
+	}
+	f.answer("test/alpha.test.ts", sandbox.EnumerateResult{Output: "# suite-exit 1\n", ExitCode: 0})
+	f.answer("test/beta.test.ts", sandbox.EnumerateResult{Output: "# suite-exit 1\n", ExitCode: 0})
+	f.collect(context.Background(), "/w", 1)
+	cmd, _ := lang.UnitRunCmd(f.p, f.inv, "test/alpha.test.ts")
+	if f.run.didRun(cmd) {
+		t.Error("a red unit was rerun although the evidence pass changed nothing in its command")
+	}
+}
+
+// A unit's recorded reason quotes no command and no parser text (review of
+// R-F2): the secret rides in the operator's command, the host path in what
+// the report printed. Each case shows the plant reached the unit's
+// TerminalDetail, so the absence from Err is the fix and not a quiet
+// fixture.
+func TestAUnitsRecordedReasonQuotesNoCommandAndNoParserText(t *testing.T) {
+	const (
+		secret = "API_KEY=sk-live-PLANTED"
+		host   = "/home/operator/private-checkout"
+	)
+	argv := []string{"vitest", "run", "--reporter=" + secret}
+	clean := func(t *testing.T, err string) {
+		t.Helper()
+		for _, leak := range []string{secret, "sk-live", host, "/home/operator"} {
+			if strings.Contains(err, leak) {
+				t.Errorf("the recorded Err carries %q: %q", leak, err)
+			}
+		}
+	}
+	t.Run("no one-unit command", func(t *testing.T) {
+		// A file named like a flag has no one-unit command (fileUnits).
+		f := newUnitFixture(t, "typescript", argv, "corral-units-cwd /w\n[{\"file\":\"/w/test/alpha.test.ts\"},{\"file\":\"/w/-x.test.ts\"}]\n")
+		f.answer("test/alpha.test.ts", sandbox.EnumerateResult{Output: jsReport("7 10 src/x.ts")})
+		u := unitByName(t, f.collect(context.Background(), "/w", 1), "-x.test.ts")
+		if u.Err != unitNoCommand || !strings.Contains(u.TerminalDetail, secret) {
+			t.Fatalf("u = %+v: want %q with the command in TerminalDetail", u, unitNoCommand)
+		}
+		clean(t, u.Err)
+	})
+	t.Run("unparseable report", func(t *testing.T) {
+		f := newUnitFixture(t, "typescript", argv, vitestTwoUnits)
+		f.answer("test/alpha.test.ts", sandbox.EnumerateResult{Output: jsReport("x y " + host + "/" + secret + ".ts")})
+		f.answer("test/beta.test.ts", sandbox.EnumerateResult{Output: jsReport("2 10 src/x.ts")})
+		u := unitByName(t, f.collect(context.Background(), "/w", 1), "test/alpha.test.ts")
+		if !strings.HasPrefix(u.Err, "unparseable: ") || !strings.Contains(u.TerminalDetail, host) {
+			t.Fatalf("u = %+v: want an unparseable reason with the parser's text in TerminalDetail", u)
+		}
+		clean(t, u.Err)
+	})
 }

@@ -76,6 +76,7 @@ corral certify --local --record-mutants	executed	test:cmd/corral/certify_mutants
 corral certify --local --record-stream	unexecuted	
 corral certify --local --repo	executed	test:cmd/corral/certify_repo_writer_mode_test.go
 corral certify --local --repo-dir	executed	test:cmd/corral/certify_local_test.go
+corral certify --local --seed-limit	executed	test:cmd/corral/run_bounds_test.go (TestCertifyLocalSeedLimitFlagBoundsTheJailSeed: the flag reaches the --repo-dir jail seed and its refusal names it; refused without --repo-dir)
 corral certify --local --shadow-model	executed	test:cmd/corral/action_test.go
 corral certify --local --shadow-pool	executed	test:cmd/corral/shadow_draw_test.go (TestEveryDoorDrawsFromItsPoolFlags: the flag reaches the draw and the draw is printed)
 corral certify --local --shadow-seed	executed	test:cmd/corral/shadow_draw_test.go (TestEveryDoorDrawsFromItsPoolFlags: the printed seed is the one passed)
@@ -113,6 +114,7 @@ corral certify --repo --preflight	executed	test:cmd/corral/certify_repo_test.go
 corral certify --repo --push	executed	run:2026-09-02 md:corral_public scans 22-26
 corral certify --repo --push-source	executed	test:cmd/corral/certify_repo_custody_test.go
 corral certify --repo --cache-db	executed	test:cmd/corral/certify_repo_selcache_test.go
+corral certify --repo --evidence-timeout	executed	test:cmd/corral/run_bounds_test.go (TestEvidenceTimeoutFlagBoundsTheUnitPass: the unit pass runs under the flag's deadline; TestEvidenceBoundCutIsDisclosedWithTheFlag: the scan line names it when units are cut)
 corral certify --repo --record-mutants	executed	test:cmd/corral/certify_mutants_test.go
 corral certify --repo --repo	executed	test:cmd/corral/certify_repo_writer_mode_test.go
 corral certify --repo --scope-tests	executed	test:cmd/corral/certify_repo_selection_test.go
@@ -130,6 +132,7 @@ corral certify --repo --prior	executed	test:cmd/corral/certify_repo_evidence_can
 corral certify --repo --ledger	executed	test:cmd/corral/ledger_test.go
 corral certify --repo --jail	attested	run:2026-10-21 20261021T160348Z-1a3a401c0d33-7b286eff1936 and 20261021T163025Z-1a3a401c0d33-bc9901e0ab28 (the second records SandboxBackend container and SandboxImage pinned to the image id; --jail container, Kludex/starlette@1a3a401c, CORRALAI_EXEC_IMAGE with the suite's deps; 1396-test baseline passed offline, 7 proven gaps; scratch ledger; refusals in test:cmd/corral/certify_repo_jail_test.go)
 corral certify --repo --no-ledger	executed	test:cmd/corral/ledger_test.go
+corral certify --repo --seed-limit	executed	test:cmd/corral/run_bounds_test.go (TestCertifyRepoSeedLimitFlagBoundsTheJailSeed: a --dry-run --evidence jail seed over the limit is refused naming it; refused on --substrate workspace)
 corral certify --repo --top	executed	run:2026-09-02 md:corral_public scans 22-26
 corral certify --repo --transparency	executed	test:cmd/corral/certify_repo_transparency_test.go
 corral certify --repo --whole-suite	executed	test:cmd/corral/certify_repo_report_selection_test.go
@@ -166,6 +169,16 @@ corral seal --db	executed	test:cmd/corral/models_rank_test.go
 corral seal --json	executed	test:cmd/corral/models_rank_test.go
 corral seal --repo	executed	test:cmd/corral/certify_repo_writer_mode_test.go
 corral seal --top	executed	test:cmd/corral/certify_repo_test.go
+corral tests map --cache-db	unexecuted	
+corral tests map --evidence-timeout	executed	test:cmd/corral/run_bounds_test.go (TestEvidenceTimeoutFlagBoundsTheUnitPass + TestEvidenceTimeoutBoundsPythonsInstrumentedRun: the unit pass deadline and Python's run bound are the flag's)
+corral tests map --jail	unexecuted	
+corral tests map --no-selection-cache	executed	test:cmd/corral/tests_cmd_test.go (TestTestsMapPrintsTheSummary)
+corral tests map --out	executed	test:cmd/corral/tests_cmd_test.go (TestTestsMapWritesTheMapFile)
+corral tests map --repo-dir	executed	test:cmd/corral/tests_cmd_test.go (TestTestsMapPrintsTheSummary)
+corral tests map --runner	unexecuted	
+corral tests map --seed-limit	executed	test:cmd/corral/run_bounds_test.go (TestTestsMapSeedLimitFlagBoundsTheJailSeed: refused under the limit naming the flag and total, the pass runs over it)
+corral tests map --substrate	executed	test:cmd/corral/tests_cmd_test.go (TestTestsMapPrintsTheSummary)
+corral tests map --workers	unexecuted	
 corral verify --attest	executed	test:cmd/corral/certify_repo_transparency_test.go
 corral verify --db	executed	test:cmd/corral/models_rank_test.go
 corral verify --ledger-repo	executed	test:cmd/corral/verify_ledger_repo_test.go (keyless entry fails without it with the Problem, passes with it, wrong repo fails, malformed refused)

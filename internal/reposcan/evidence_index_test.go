@@ -7,12 +7,14 @@ import (
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/testmap"
 )
 
-// fakeSelector is a minimal lang.TestSelector the reposcan tests drive
-// directly, rather than going through a real corral-selection-3 document —
-// this package's contract with lang.TestSelector.Index is the interface,
-// not python's own evidence format.
+// fakeSelector is a minimal lang.TestEvidence plugin the reposcan tests
+// drive directly, rather than going through a real corral-selection-3
+// document — this package's contract is the test map's per-file readout
+// (testmap.Map.Coverage), not python's own evidence format. index is that
+// readout; evidence() is Ran evidence carrying the map that yields it.
 type fakeSelector struct {
 	lang.Plugin
 	index    map[string]lang.FileCoverage
@@ -20,19 +22,25 @@ type fakeSelector struct {
 }
 
 func (f fakeSelector) Instrument(cmd []string) ([]string, bool) { return nil, false }
-func (f fakeSelector) Select(evidence []byte, repoRoot, codePath, testPath string, testCmd []string) (lang.Selection, error) {
-	return lang.Selection{}, nil
-}
-func (f fakeSelector) WithAuthoredTest(sel lang.Selection, testCmd []string, authoredTestPath string) []string {
-	return nil
-}
-func (f fakeSelector) ForSpan(sel lang.Selection, span lang.LineRange) ([]string, []string, string) {
-	return nil, nil, ""
-}
-func (f fakeSelector) Index(evidence []byte) (map[string]lang.FileCoverage, error) {
-	return f.index, f.indexErr
+func (f fakeSelector) Evidence(raw []byte) (lang.EvidenceDoc, error) {
+	return lang.EvidenceDoc{}, f.indexErr
 }
 func (f fakeSelector) Name() string { return "fake" }
+
+// evidence is what CollectSelectionEvidence would hold after a run that
+// measured exactly f.index: a map with one source per file and one edge per
+// (test, file), Executed being the readout's line count.
+func (f fakeSelector) evidence() SelectionEvidence {
+	m := testmap.Map{Method: testmap.MethodCoverageContext, Sources: map[string]testmap.Source{}, Tests: map[string]testmap.Node{}}
+	for path, fc := range f.index {
+		m.Sources[path] = testmap.Source{HasStatic: fc.HasStatic, HasStatements: fc.HasStatements}
+		for id, n := range fc.Tests {
+			m.Tests[id] = testmap.Node{ID: id, Grain: testmap.GrainTest}
+			m.Edges = append(m.Edges, testmap.Edge{Test: id, Source: path, Executed: n})
+		}
+	}
+	return SelectionEvidence{Ran: true, Raw: []byte("x"), Map: m}
+}
 
 func TestParseEvidenceIndexFalseWhenEvidenceDidNotRun(t *testing.T) {
 	_, ok := ParseEvidenceIndex(SelectionEvidence{Ran: false}, fakeSelector{})
@@ -42,7 +50,7 @@ func TestParseEvidenceIndexFalseWhenEvidenceDidNotRun(t *testing.T) {
 }
 
 func TestParseEvidenceIndexFalseForASelectorLessPlugin(t *testing.T) {
-	// A plugin that does not implement lang.TestSelector at all.
+	// A plugin that does not implement lang.TestEvidence at all.
 	_, ok := ParseEvidenceIndex(SelectionEvidence{Ran: true, Raw: []byte("x")}, plainPlugin{})
 	if ok {
 		t.Fatal("ParseEvidenceIndex must return false for a plugin with no selector")
@@ -53,10 +61,12 @@ type plainPlugin struct{ lang.Plugin }
 
 func (plainPlugin) Name() string { return "plain" }
 
-func TestParseEvidenceIndexFalseWhenIndexErrors(t *testing.T) {
+// Evidence whose document did not parse never gets a map (CollectSelectionEvidence
+// records the parse error as its Note); evidence carrying no map has no index.
+func TestParseEvidenceIndexFalseWhenNoMapWasBuilt(t *testing.T) {
 	_, ok := ParseEvidenceIndex(SelectionEvidence{Ran: true, Raw: []byte("x")}, fakeSelector{indexErr: errBoom})
 	if ok {
-		t.Fatal("ParseEvidenceIndex must return false when the plugin's Index call fails to parse")
+		t.Fatal("ParseEvidenceIndex must return false when no map was built from the evidence")
 	}
 }
 
@@ -71,7 +81,7 @@ func TestParseEvidenceIndexCoverageForAndMostCovering(t *testing.T) {
 		}},
 		"pkg/dead.py": {Tests: map[string]int{}},
 	}}
-	idx, ok := ParseEvidenceIndex(SelectionEvidence{Ran: true, Raw: []byte("x")}, sel)
+	idx, ok := ParseEvidenceIndex(sel.evidence(), sel)
 	if !ok {
 		t.Fatal("ParseEvidenceIndex: ok=false, want true")
 	}
@@ -107,7 +117,7 @@ func TestParseEvidenceIndexCarriesHasStatic(t *testing.T) {
 	sel := fakeSelector{index: map[string]lang.FileCoverage{
 		"pkg/__init__.py": {Tests: map[string]int{}, HasStatic: true},
 	}}
-	idx, ok := ParseEvidenceIndex(SelectionEvidence{Ran: true, Raw: []byte("x")}, sel)
+	idx, ok := ParseEvidenceIndex(sel.evidence(), sel)
 	if !ok {
 		t.Fatal("ParseEvidenceIndex: ok=false")
 	}
@@ -126,7 +136,7 @@ func TestParseEvidenceIndexCarriesHasStatements(t *testing.T) {
 		"pkg/dead.py":  {Tests: map[string]int{}, HasStatements: true},
 		"pkg/empty.py": {Tests: map[string]int{}, HasStatements: false},
 	}}
-	idx, ok := ParseEvidenceIndex(SelectionEvidence{Ran: true, Raw: []byte("x")}, sel)
+	idx, ok := ParseEvidenceIndex(sel.evidence(), sel)
 	if !ok {
 		t.Fatal("ParseEvidenceIndex: ok=false")
 	}
@@ -145,7 +155,7 @@ func TestMoreSpecificTestPathTieBreak(t *testing.T) {
 			"tests/unit/test_utils.py::test_b": 2,
 		}},
 	}}
-	idx, ok := ParseEvidenceIndex(SelectionEvidence{Ran: true, Raw: []byte("x")}, sel)
+	idx, ok := ParseEvidenceIndex(sel.evidence(), sel)
 	if !ok {
 		t.Fatal("ParseEvidenceIndex: ok=false")
 	}

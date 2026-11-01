@@ -37,7 +37,26 @@ type commandRunner interface {
 type CoverageMap struct {
 	Executed map[string]bool // nil unless Ran
 	Ran      bool
-	Note     string // why it did not run; printed verbatim
+	// Note is why the run did not happen, as the record keeps it: it is
+	// the scan row's PreflightNote, published on every ledger entry, so it
+	// is one fixed phrase per reason (a language name aside) and never
+	// quotes the operator's command, an error or what the run printed.
+	Note string
+	// TerminalDetail is Note as the operator's terminal says it, with the command
+	// or error that explains it; never marshalled, never recorded. "" when
+	// Note says everything (Said).
+	// Named TerminalDetail, never Detail: a ledger row's Detail is recorded,
+	// and a field of that name is one assignment from leaking into it.
+	TerminalDetail string `json:"-"`
+}
+
+// Said is why the run did not happen as the terminal says it: TerminalDetail when
+// there is one, else Note. Never record it.
+func (c CoverageMap) Said() string {
+	if c.TerminalDetail != "" {
+		return c.TerminalDetail
+	}
+	return c.Note
 }
 
 // Preflight runs ONE instrumented suite invocation for p's language (if it
@@ -59,14 +78,15 @@ type CoverageMap struct {
 func Preflight(ctx context.Context, runner commandRunner, files map[string]string, p lang.Plugin, testCmd []string, repoRoot string) CoverageMap {
 	cmd, note := PreflightCommand(p, testCmd)
 	if note != "" {
-		return CoverageMap{Note: note}
+		return PreflightRefused(note, testCmd)
 	}
 	reporter := p.(lang.CoverageReporter) // PreflightCommand returned a command, so p is one
 
 	stdout, err := runner.Enumerate(ctx, files, cmd)
 	if err != nil {
 		return CoverageMap{
-			Note: fmt.Sprintf("%s: coverage pre-flight run failed: %v", p.Name(), err),
+			Note:           fmt.Sprintf("%s: coverage pre-flight run failed: the jail could not start it", p.Name()),
+			TerminalDetail: fmt.Sprintf("%s: coverage pre-flight run failed: %v", p.Name(), err),
 		}
 	}
 
@@ -97,11 +117,19 @@ func Preflight(ctx context.Context, runner commandRunner, files map[string]strin
 	executed, err := reporter.ParseCoverage(stdout, repoRoot)
 	if err != nil {
 		return CoverageMap{
-			Note: fmt.Sprintf("%s: coverage report unparseable: %v", p.Name(), err),
+			Note:           fmt.Sprintf("%s: coverage report unparseable: the coverage report could not be read", p.Name()),
+			TerminalDetail: fmt.Sprintf("%s: coverage report unparseable: %v", p.Name(), err),
 		}
 	}
 
 	return CoverageMap{Executed: executed, Ran: true}
+}
+
+// PreflightRefused is the CoverageMap for a PreflightCommand refusal: note,
+// which names no command, as the record keeps it, and the command it
+// refused said beside it on the terminal only.
+func PreflightRefused(note string, testCmd []string) CoverageMap {
+	return CoverageMap{Note: note, TerminalDetail: fmt.Sprintf("%s (test command: %s)", note, strings.Join(testCmd, " "))}
 }
 
 // PreflightCommand is the coverage command Preflight would run for
@@ -117,7 +145,8 @@ func PreflightCommand(p lang.Plugin, testCmd []string) (cmd []string, note strin
 	}
 	cmd, ok = reporter.CoverageCmd(testCmd)
 	if !ok {
-		return nil, fmt.Sprintf("%s: no coverage instrumentation for test command %v", p.Name(), testCmd)
+		// Not quoted: the note is the scan row's published PreflightNote.
+		return nil, fmt.Sprintf("%s: no coverage instrumentation for the test command", p.Name())
 	}
 	return cmd, ""
 }

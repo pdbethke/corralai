@@ -53,6 +53,26 @@ func (c *seedCache) get(lang string) (repoSeed, error) {
 	return e.seed, e.err
 }
 
+// skipped is what every seed built without error left out as not text,
+// for the scan's ledger entry. Read once the scan's jobs are done; a build
+// still in flight is waited for, never raced.
+func (c *seedCache) skipped() []seedSkip {
+	c.mu.Lock()
+	entries := make([]*seedEntry, 0, len(c.entries))
+	for _, e := range c.entries {
+		entries = append(entries, e)
+	}
+	c.mu.Unlock()
+	var out []seedSkip
+	for _, e := range entries {
+		e.once.Do(func() {}) // waits for a build in flight; one never started stays unbuilt
+		if e.err == nil {
+			out = append(out, e.seed.skipped...)
+		}
+	}
+	return out
+}
+
 // close releases every staging dir the cache created. Idempotent: safe to
 // defer and to call again. It waits for any in-flight builds to complete
 // before running cleanup functions.

@@ -38,7 +38,7 @@ func TestSeedCarriesBinaryTestdataFixtures(t *testing.T) {
 	mustWrite("zipfs/testdata/small.zip", zipBytes)
 	mustWrite("assets/logo.png", zipBytes) // binary NOT under testdata
 
-	files, _, err := loadRepoFiles(root, buildLoadOpts("", nil, false))
+	files, _, _, err := loadRepoFiles(root, buildLoadOpts("", nil, false, seedLimitBuiltin))
 	if err != nil {
 		t.Fatalf("loadRepoFiles: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestSeedCarriesNonUTF8FixturesInATestTree(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	files, _, err := loadRepoFiles(root, buildLoadOpts("", nil, false))
+	files, _, _, err := loadRepoFiles(root, buildLoadOpts("", nil, false, seedLimitBuiltin))
 	if err != nil {
 		t.Fatalf("loadRepoFiles: %v", err)
 	}

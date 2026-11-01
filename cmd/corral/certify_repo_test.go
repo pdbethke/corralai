@@ -3596,9 +3596,9 @@ func TestSplitPreflightFindingsThreeBuckets(t *testing.T) {
 // of what sourceFiles contains.
 func TestPrintPreflightReportRanFalsePrintsNoteOnlyNoFileList(t *testing.T) {
 	var buf bytes.Buffer
-	printPreflightReport(&buf, reposcan.CoverageMap{Ran: false, Note: "go: no coverage instrumentation for test command []"}, []string{"a.go", "b.go"})
+	printPreflightReport(&buf, reposcan.CoverageMap{Ran: false, Note: "go: no coverage instrumentation for the test command"}, []string{"a.go", "b.go"})
 	s := buf.String()
-	if !strings.Contains(s, "go: no coverage instrumentation for test command []") {
+	if !strings.Contains(s, "go: no coverage instrumentation for the test command") {
 		t.Errorf("want the Note printed verbatim:\n%s", s)
 	}
 	if strings.Contains(s, "a.go") || strings.Contains(s, "b.go") {
@@ -4896,7 +4896,7 @@ func TestScanPassesPrepareNoJailForALanguageThatCannotBeInstrumented(t *testing.
 	})
 	defer ex.Close()
 
-	sources := []string{"src/lib.rs"} // rust: no TestSelector, and a CoverageCmd that refuses nextest
+	sources := []string{"src/lib.rs"} // rust: no per-test evidence (lang.TestEvidence), and a CoverageCmd that refuses nextest
 	sel := ex.collectSelection(context.Background(), sources)
 	if sel.Ran || sel.Note == "" {
 		t.Errorf("selection = %+v, want a not-run note", sel)

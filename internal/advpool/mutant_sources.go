@@ -22,6 +22,12 @@ func checkMutantSources(rs RunSpec) error {
 	}
 	given := map[string]bool{}
 	for _, m := range rs.ToolMutants {
+		// An ID is a mutant's identity on the record: two tool mutants under
+		// one would be indistinguishable there, and one source would
+		// describe both.
+		if given[m.ID] {
+			return fmt.Errorf("two tool mutants share the ID %q", m.ID)
+		}
 		src, ok := rs.MutantSources[m.ID]
 		if !ok {
 			return fmt.Errorf("tool mutant %q has no MutantSources entry", m.ID)
@@ -83,4 +89,49 @@ func sortedSourceIDs(srcs map[string]mutantsources.MutantSource) []string {
 	}
 	sort.Strings(ids)
 	return ids
+}
+
+// generatorYield is what the mutant-generator seat itself contributed to a
+// graded exam: how many of ITS mutants were graded (killed or survived) and
+// how many of those survived. The leaderboard and the scorecard credit the
+// generator model with these, so a tool's mutants graded in the same exam —
+// not planted by the model — never count as its work.
+//
+// sat is false only when the run had a tool source and seated no generator
+// at all (a tool-only PresetMutants run: RegionsTotal 0). Such a run says
+// nothing about any generator model, and its callers record no row for one.
+//
+// A run with no tool source answers exactly as before sources existed —
+// v.MutantsTotal and v.Survivors — so a model-only run's leaderboard feed
+// and observations do not move. With one, both are counted from the graded
+// refs whose source is Kind model.
+func generatorYield(v Verdict) (planted, survived int, sat bool) {
+	if !hasToolSource(v.MutantSources) {
+		return v.MutantsTotal, v.Survivors, true
+	}
+	if v.RegionsTotal == 0 {
+		return 0, 0, false
+	}
+	isModel := func(id string) bool { return v.MutantSources[id].Kind == mutantsources.KindModel }
+	for _, r := range v.DevKilledMutants {
+		if isModel(r.ID) {
+			planted++
+		}
+	}
+	for _, r := range v.DevSurvivedMutants {
+		if isModel(r.ID) {
+			planted++
+			survived++
+		}
+	}
+	return planted, survived, true
+}
+
+func hasToolSource(srcs map[string]mutantsources.MutantSource) bool {
+	for _, s := range srcs {
+		if s.Kind == mutantsources.KindTool {
+			return true
+		}
+	}
+	return false
 }

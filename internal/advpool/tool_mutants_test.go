@@ -344,3 +344,178 @@ func TestGeneratedIDCollidingWithAToolIDIsRefused(t *testing.T) {
 		t.Fatalf("Tick err = %v, want a refusal naming the colliding ID", err)
 	}
 }
+
+// bothSourcesVerdict is a graded both-sources verdict: model mutants m1
+// (killed) and m2 (survived), tool mutants t/stryker/7 (killed) and
+// t/stryker/9 (survived). MutantsTotal and Survivors count both sources, as
+// the dev pass does.
+func bothSourcesVerdict() Verdict {
+	_, srcs := toolFixture()
+	all := map[string]mutantsources.MutantSource{
+		"m1": {Kind: mutantsources.KindModel, Model: "g"},
+		"m2": {Kind: mutantsources.KindModel, Model: "g"},
+	}
+	for k, s := range srcs {
+		all[k] = s
+	}
+	return Verdict{
+		ModelsByRole:       map[string]string{RoleTestWriter: "w", RoleMutantGenerator: "g"},
+		MutantsTotal:       4,
+		Survivors:          2,
+		RegionsTotal:       1,
+		MutantSources:      all,
+		DevKilledMutants:   []MutantRef{{ID: "m1"}, {ID: "t/stryker/7"}},
+		DevSurvivedMutants: []MutantRef{{ID: "m2"}, {ID: "t/stryker/9"}},
+	}
+}
+
+func generatorRows(obs []BugCatchObservation) []BugCatchObservation {
+	var out []BugCatchObservation
+	for _, o := range obs {
+		if o.Role == RoleMutantGenerator {
+			out = append(out, o)
+		}
+	}
+	return out
+}
+
+// TestGeneratorObservationCountsOnlyModelMutants: the generator's scorecard
+// row is the generator's work. A tool's mutants graded in the same exam are
+// not planted by the model, and their survivors are not its potency.
+func TestGeneratorObservationCountsOnlyModelMutants(t *testing.T) {
+	v := bothSourcesVerdict()
+	run := obsRun()
+	run.devSurvivors = []adequacy.Mutant{{ID: "m2"}, {ID: "t/stryker/9"}}
+	t.Run("unsharded", func(t *testing.T) {
+		rows := generatorRows(bugCatchObservations(run, v))
+		if len(rows) != 1 || rows[0].MutantsPlanted != 2 || rows[0].MutantsSurvived != 1 {
+			t.Fatalf("generator rows %+v, want one row planted 2 survived 1 (m1, m2 only)", rows)
+		}
+	})
+	t.Run("sharded", func(t *testing.T) {
+		sr := obsRun()
+		sr.devSurvivors = run.devSurvivors
+		sr.shardStats = map[int]shardStat{0: {mutants: 1}, 1: {mutants: 1}}
+		rows := generatorRows(bugCatchObservations(sr, v))
+		planted, survived := 0, 0
+		for _, r := range rows {
+			planted += r.MutantsPlanted
+			survived += r.MutantsSurvived
+		}
+		if len(rows) != 2 || planted != 2 || survived != 1 {
+			t.Fatalf("generator rows %+v, want 2 rows summing planted 2 survived 1", rows)
+		}
+	})
+}
+
+// TestGeneratorRowWhenEveryShardDroppedAndToolMutantsGraded: with a tool
+// source a run whose every generator shard dropped still reaches a verdict.
+// Its generator rows say what the generator did — every shard dropped,
+// nothing planted, nothing survived — and the tool's survivors land nowhere.
+func TestGeneratorRowWhenEveryShardDroppedAndToolMutantsGraded(t *testing.T) {
+	v := bothSourcesVerdict()
+	v.MutantsTotal, v.Survivors = 2, 1
+	for _, id := range []string{"m1", "m2"} {
+		delete(v.MutantSources, id)
+	}
+	v.DevKilledMutants = []MutantRef{{ID: "t/stryker/7"}}
+	v.DevSurvivedMutants = []MutantRef{{ID: "t/stryker/9"}}
+	run := obsRun()
+	run.devSurvivors = []adequacy.Mutant{{ID: "t/stryker/9"}}
+	run.shardStats = map[int]shardStat{0: {dropped: true}, 1: {dropped: true}}
+	rows := generatorRows(bugCatchObservations(run, v))
+	if len(rows) != 2 {
+		t.Fatalf("generator rows %+v, want one per shard", rows)
+	}
+	for _, r := range rows {
+		if !r.Dropped || r.MutantsPlanted != 0 || r.MutantsSurvived != 0 {
+			t.Fatalf("generator row %+v, want dropped with nothing planted or survived", r)
+		}
+	}
+}
+
+// TestModelOnlyObservationsUnchangedBySources: a model-only run now carries
+// a model source for every mutant; its observations must be exactly what
+// they were before sources existed.
+func TestModelOnlyObservationsUnchangedBySources(t *testing.T) {
+	for _, sharded := range []bool{false, true} {
+		run := obsRun()
+		if sharded {
+			run.shardStats = map[int]shardStat{0: {mutants: 2}, 1: {mutants: 1}}
+		}
+		v := obsVerdict()
+		v.MutantsTotal = 3
+		v.RegionsTotal = 1
+		before := bugCatchObservations(run, v)
+		v.MutantSources = map[string]mutantsources.MutantSource{
+			"m0": {Kind: mutantsources.KindModel, Model: "g"},
+			"m1": {Kind: mutantsources.KindModel, Model: "g"},
+			"m2": {Kind: mutantsources.KindModel, Model: "g"},
+		}
+		v.DevKilledMutants = []MutantRef{{ID: "m0"}}
+		after := bugCatchObservations(run, v)
+		if !reflect.DeepEqual(before, after) {
+			t.Fatalf("sharded=%v: observations moved\nbefore %+v\nafter  %+v", sharded, before, after)
+		}
+	}
+}
+
+// TestGeneratorEarnsNoPassFromToolMutants: the leaderboard's generator
+// outcome is "did it plant usable mutants". A generator that planted none in
+// a both-sources run fails, however many tool mutants graded; a tool-only run
+// seated no generator, so it records nothing for one.
+func TestGeneratorEarnsNoPassFromToolMutants(t *testing.T) {
+	generatorCalls := func(v Verdict) []leaderboardCall {
+		lb := &fakeLeaderboard{}
+		(&Driver{Leaderboard: lb}).feedLeaderboard(v, true, nil)
+		var out []leaderboardCall
+		for _, c := range lb.calls {
+			if c.role == RoleMutantGenerator {
+				out = append(out, c)
+			}
+		}
+		return out
+	}
+	v := bothSourcesVerdict()
+	if got := generatorCalls(v); len(got) != 1 || got[0].outcome != OutcomePass {
+		t.Fatalf("generator that planted graded mutants: %+v, want one pass", got)
+	}
+
+	zero := bothSourcesVerdict()
+	delete(zero.MutantSources, "m1")
+	delete(zero.MutantSources, "m2")
+	zero.DevKilledMutants = []MutantRef{{ID: "t/stryker/7"}}
+	zero.DevSurvivedMutants = []MutantRef{{ID: "t/stryker/9"}}
+	zero.MutantsTotal, zero.Survivors = 2, 1
+	if got := generatorCalls(zero); len(got) != 1 || got[0].outcome != OutcomeFail {
+		t.Fatalf("generator that planted nothing beside tool mutants: %+v, want one fail", got)
+	}
+
+	toolOnly := zero
+	toolOnly.RegionsTotal = 0
+	if got := generatorCalls(toolOnly); len(got) != 0 {
+		t.Fatalf("tool-only run: %+v, want no generator row for a seat that never sat", got)
+	}
+	if rows := generatorRows(bugCatchObservations(obsRun(), toolOnly)); len(rows) != 0 {
+		t.Fatalf("tool-only run: generator observations %+v, want none", rows)
+	}
+}
+
+// TestStartRunRefusesTwoToolMutantsUnderOneID: an ID is a mutant's identity
+// on the record, so two tool mutants under one would be indistinguishable
+// there, and one source would describe both.
+func TestStartRunRefusesTwoToolMutantsUnderOneID(t *testing.T) {
+	tool, srcs := toolFixture()
+	twin := tool[1]
+	twin.ID = tool[0].ID
+	rs := testRunSpec()
+	rs.ToolMutants = []adequacy.Mutant{tool[0], twin}
+	rs.MutantSources = map[string]mutantsources.MutantSource{tool[0].ID: srcs[tool[0].ID]}
+	d, err := NewDriver(newTestQueue(t), &fakeScorer{}, &fakeValidator{}, decorrelatedAssign(), 0.1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.StartRun(1, rs, nil); err == nil || !strings.Contains(err.Error(), tool[0].ID) {
+		t.Fatalf("StartRun err = %v, want a refusal naming the repeated ID", err)
+	}
+}

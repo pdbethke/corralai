@@ -2458,8 +2458,9 @@ func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runS
 		// A tool's mutants join HERE, where the generator's become the exam:
 		// after the shard prefixing (their t/<tool>/ IDs are already unique)
 		// and before the duplicate count, so a tool mutant identical to a
-		// model one is counted like any other repeat and graded once by the
-		// scorer — the model's first, as it comes first. Appended after the
+		// model one is counted like any other repeat. Neither copy leaves the
+		// exam: adequacy.Score grades the edit once and attributes the outcome
+		// to both, so each keeps its own ID and source. Appended after the
 		// drop bookkeeping above too, so a generator that planted nothing or
 		// lost every region still leaves the tool's mutants to grade.
 		//
@@ -3770,7 +3771,14 @@ func (d *Driver) feedLeaderboard(v Verdict, testWriterMoot bool, criticObs []Cri
 	// at all — whether those mutants then SURVIVE is the dev suite's business,
 	// not the generator's, so a perfect suite killing them is not a generator
 	// failure.
-	d.Leaderboard.Record(v.ModelsByRole[RoleMutantGenerator], RoleMutantGenerator, outcome(v.MutantsTotal > 0))
+	//
+	// "Its" mutants: with a tool source in the exam, only the ones it
+	// planted count (generatorYield), so a generator that planted nothing
+	// fails however many tool mutants graded; and a tool-only run, which
+	// seated no generator, records nothing for one.
+	if planted, _, sat := generatorYield(v); sat {
+		d.Leaderboard.Record(v.ModelsByRole[RoleMutantGenerator], RoleMutantGenerator, outcome(planted > 0))
+	}
 	// test-critic: were its findings RIGHT? This used to be "did it flag
 	// anything", which rewarded noise — a critic whose two findings were
 	// both refuted by execution scored a pass, and one that correctly

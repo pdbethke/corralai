@@ -763,12 +763,79 @@ What this puts on the record, in public, permanently:
   Sigstore's public Rekor log.** Every keyless entry is one Rekor entry, and
   Rekor cannot be edited or deleted. That is the point (it is the external
   witness a self-signed chain lacks) and the cost.
-- **The identity is the repository, not a workflow.** Any workflow in the
+- **The identity is the repository, not a workflow, until you pin one.** Any workflow in the
   repository that is granted an OIDC token, including a `pull_request_target`
   run, can sign entries that verify as this repository's. The signature
   proves "a workflow in this repository wrote this", not "the audit workflow
   wrote this". Do not grant `id-token: write` to workflows that run code you
   do not trust.
+- **How strong a keyless entry is, said on the entry.** Every verified entry
+  carries one of five levels, in the same words in `corral verify`,
+  `corral ui`, the public site and the derived JSON the site reads:
+  - `unsigned`: nothing shows who wrote it
+  - `keyless-unpinned`: signed keylessly by a GitHub Actions workflow of this
+    repository, on the ref it names; any branch could have signed, because no
+    workflow is pinned
+  - `keyless-pinned`: signed keylessly by the workflow and ref this ledger's
+    root pinned
+  - `keyless-pinned-unchecked`: signed keylessly by the workflow and ref this
+    ledger's pin names; the pin was not checked against a root key you named
+  - `key`: signed by a key this ledger's root holds or registered
+
+  A keyless entry also records, from its certificate, the workflow, ref and
+  trigger that signed it, so even an unpinned entry says which workflow on
+  which branch wrote it. Every keyless entry now reads `keyless-unpinned` until
+  its ledger pins a workflow; nothing that verified before stops verifying.
+- **Opt in to a pin with one command.** The ledger's owner names the workflow
+  and the full ref it runs on, once:
+
+  ```bash
+  corral ledger signer pin .corral-ledger --ledger-repo owner/name \
+      --workflow .github/workflows/corral.yml --ref refs/heads/main \
+      --new-root --root-key-out ~/corral-ledger-root.seed
+  ```
+
+  Name the branch your ledger is written from; corral does not choose it.
+  `--new-root` is for a ledger no key has signed yet (it makes the root and
+  writes `LEDGER_PUBKEY`; store the seed offline); for a ledger that already
+  has a root, put its seed in `CORRALAI_LEDGER_ROOT_KEY` and drop `--new-root`. The command writes one
+  root-signed entry and prints the git commands that publish it; it runs none.
+  While the pin is on the chain, an entry signed from any other workflow or
+  ref fails verification, and entries written before the pin keep the level
+  they were signed at. `corral setup` prints this command, filled in with the workflow it
+  finds, when the checkout's workflow uses the Action with a ledger; it writes
+  nothing. `corral ledger signer unpin` withdraws a pin.
+- **`keyless-pinned-unchecked` means the pin was read but not verified against
+  a root key you named.** Pass the root public key with `--pub` (or
+  `CORRALAI_LEDGER_PUBKEY`) to get `keyless-pinned`.
+- **The pin holds only while the ledger branch cannot be force-pushed or
+  deleted.** The pin is an entry on that branch. Whoever can rewrite it can
+  cut the chain before the pin and append a keyless entry past it; the shorter
+  chain verifies, and its entries read `keyless-unpinned` with no problem
+  reported, even under the right `--pub`. corral does not detect that from
+  inside the directory. Protect the ledger branch with a branch ruleset that
+  blocks force pushes and deletion, and hold an anchor outside it: a removed
+  pin is detected only by `corral ledger verify --ledger-repo <owner/name> --pub <root-key-hex> --expect-head <hash> <dir>`
+  with a head hash you kept elsewhere.
+- **The pin's root key is trust on first use.** `LEDGER_PUBKEY` is published on
+  the ledger branch, so anyone who can push that branch could root it first or
+  rewrite it, installing their own root and pin. Verifiers should take the
+  root public key from outside the ledger branch: publish it somewhere else as
+  well (for example at your repository root on the default branch) and pass it
+  with `--pub` or `CORRALAI_LEDGER_PUBKEY`. The public results page reads
+  `LEDGER_PUBKEY` from the ledger branch itself, so it is only as strong as
+  that branch's protection.
+- **A pin narrows who could forge; it does not remove the workspace exposure.**
+  It limits signing to code that ran in the pinned workflow on the pinned ref.
+  That is not the same as code that was merged: the trigger is recorded, not
+  pinned, so a pinned workflow that also runs on `pull_request_target` or
+  `workflow_dispatch` runs on the pinned ref and can run unmerged code (a
+  `pull_request_target` job that checks out the PR's head, or an input a
+  dispatcher chose). Give such a workflow no such trigger, or do not pin it.
+  The `/proc` exposure below still applies to that workflow.
+- **The pin has been tested, not run in a real Action.** It is exercised only
+  against an in-process test Sigstore; no real GitHub Actions keyless run has
+  been pinned yet. That run is owed.
 - **Private repositories are not signed keylessly.** The public log would name
   the repository and workflow, so the Action writes the entry unsigned and
   prints a notice. It also writes unsigned, with a notice, when the event does
@@ -777,6 +844,13 @@ What this puts on the record, in public, permanently:
   certify key (`CORRALAI_CERTIFY_KEY` in the step's `env:`) to sign its
   entries; a key configured in the step's environment is never overridden by
   keyless signing.
+- **A pinned ledger refuses those unsigned fallbacks.** Once a root has signed
+  a pin into the ledger, the ledger accepts keyless entries (the
+  `id-token: write` path above) or entries signed by its root key (or a key
+  the root registered), and an unsigned append is refused, so a run that
+  would have fallen back to unsigned (no OIDC token, a private or unknown
+  visibility) fails to write its entry instead. Keep `id-token: write` on the
+  pinned workflow.
 - **The token request credentials are removed from the environment of
   everything the audit runs, and that is not isolation.**
   `ACTIONS_ID_TOKEN_REQUEST_URL`, `ACTIONS_ID_TOKEN_REQUEST_TOKEN` and

@@ -6,12 +6,14 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"html"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/pdbethke/corralai/internal/auditpush"
+	"github.com/pdbethke/corralai/internal/ledger"
 )
 
 func manyScans(n int) []auditpush.LedgerEntry {
@@ -219,5 +221,128 @@ func TestAKeylessEntryCheckedWithoutARootKeyReadsVerified(t *testing.T) {
 	idx = render(s, "index.html")
 	if !strings.Contains(idx, "no root key given: 1 ed25519 signature not checked") || !strings.Contains(idx, "1/2 verified") {
 		t.Errorf("a mixed page must name the unchecked ed25519 signature and count the verified keyless one:\n%s", idx)
+	}
+}
+
+// A keyless entry whose workflow is not pinned says so in the level's own
+// sentence, as a warn and never an ok, and names the workflow and trigger
+// the certificate carries, so a reader sees which branch signed it.
+func TestKeylessUnpinnedRendersAsWarnWithItsWorkflow(t *testing.T) {
+	k := reviewEntry("aaaaaaaaaaaa", 0)
+	k.File = k.Hash + ".json.gz"
+	kc := okCheck(k)
+	kc.Keyless, kc.KeyID, kc.Signer = true, "sigstore", "https://github.com/acme/widgets"
+	kc.Level = ledger.LevelKeylessUnpinned
+	kc.Cert = &ledger.CertIdentity{
+		Workflow: "https://github.com/acme/widgets/.github/workflows/x.yml@refs/heads/attacker",
+		Trigger:  "push",
+	}
+	s := Build([]auditpush.LedgerEntry{k}, []auditpush.ChainCheck{kc})
+	p, _ := NewPages()
+	for _, path := range []string{"chain-1.html", "entry/" + shortHash(k.Hash) + ".html"} {
+		var b bytes.Buffer
+		if err := p.Render(&b, s, path); err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		page := b.String()
+		sentence := html.EscapeString(ledger.LevelSentence(ledger.LevelKeylessUnpinned))
+		for _, want := range []string{`chip warn">` + sentence, "no workflow is pinned", "refs/heads/attacker", "trigger push"} {
+			if !strings.Contains(page, want) {
+				t.Errorf("%s lacks %q:\n%s", path, want, page)
+			}
+		}
+		if strings.Contains(page, `chip ok">`+sentence) {
+			t.Errorf("%s shows an unpinned keyless entry as ok", path)
+		}
+	}
+}
+
+// A pin that no root key checked is a warn, not an ok, on both pages; only a
+// checked pin and a key read as ok.
+func TestEveryLevelChipHasItsColour(t *testing.T) {
+	want := map[ledger.SigLevel]string{
+		ledger.LevelKeylessUnpinned:        "warn",
+		ledger.LevelKeylessPinnedUnchecked: "warn",
+		ledger.LevelKeylessPinned:          "ok",
+		ledger.LevelKey:                    "ok",
+	}
+	p, _ := NewPages()
+	for lvl, class := range want {
+		k := reviewEntry("aaaaaaaaaaaa", 0)
+		k.File = k.Hash + ".json.gz"
+		kc := okCheck(k)
+		kc.Level = lvl
+		s := Build([]auditpush.LedgerEntry{k}, []auditpush.ChainCheck{kc})
+		for _, path := range []string{"chain-1.html", "entry/" + shortHash(k.Hash) + ".html"} {
+			var b bytes.Buffer
+			if err := p.Render(&b, s, path); err != nil {
+				t.Fatalf("%s: %v", path, err)
+			}
+			chip := `chip ` + class + `">` + html.EscapeString(ledger.LevelSentence(lvl))
+			if !strings.Contains(b.String(), chip) {
+				t.Errorf("%s: level %s is not drawn as %q", path, lvl, chip)
+			}
+		}
+	}
+}
+
+// The banner's signature chip is a summary of the levels below it, so it may
+// not read ok while any verified signature is a weak keyless one: an
+// unpinned keyless entry, or one under a pin no root key checked, is a warn
+// in its own row and a warn in the banner, which names how many. A checked
+// pin and a key read ok.
+func TestBannerWarnsWhenAVerifiedSignatureIsWeakKeyless(t *testing.T) {
+	render := func(s Site) string {
+		p, _ := NewPages()
+		var b bytes.Buffer
+		if err := p.Render(&b, s, "index.html"); err != nil {
+			t.Fatal(err)
+		}
+		return b.String()
+	}
+	build := func(levels ...ledger.SigLevel) Site {
+		var es []auditpush.LedgerEntry
+		var cs []auditpush.ChainCheck
+		for i, lv := range levels {
+			e := reviewEntry(strings.Repeat(string(rune('a'+i)), 12), i)
+			e.File = e.Hash + ".json.gz"
+			c := okCheck(e)
+			c.Level = lv
+			if lv != ledger.LevelKey {
+				c.Keyless, c.KeyID, c.Signer = true, "sigstore", "https://github.com/acme/widgets"
+			}
+			es, cs = append(es, e), append(cs, c)
+		}
+		return Build(es, cs)
+	}
+	for _, tc := range []struct {
+		name   string
+		levels []ledger.SigLevel
+		weak   int
+	}{
+		{"all unpinned", []ledger.SigLevel{ledger.LevelKeylessUnpinned, ledger.LevelKeylessUnpinned}, 2},
+		{"pinned unchecked", []ledger.SigLevel{ledger.LevelKeylessPinnedUnchecked}, 1},
+		{"mixed with a key", []ledger.SigLevel{ledger.LevelKey, ledger.LevelKeylessUnpinned}, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			idx := render(build(tc.levels...))
+			n := len(tc.levels)
+			if strings.Contains(idx, fmt.Sprintf(`chip ok">%d/%d verified`, n, n)) {
+				t.Errorf("the banner shows %d/%d verified as ok with %d weak keyless signature(s):\n%s", n, n, tc.weak, idx)
+			}
+			if !strings.Contains(idx, fmt.Sprintf(`chip warn">%d/%d verified`, n, n)) || !strings.Contains(idx, fmt.Sprintf("%d keyless", tc.weak)) {
+				t.Errorf("the banner must warn and count the %d weak keyless signature(s):\n%s", tc.weak, idx)
+			}
+			if !strings.Contains(idx, `<div class="banner warn">`) {
+				t.Errorf("the banner itself is not a warn:\n%s", idx)
+			}
+		})
+	}
+	for _, levels := range [][]ledger.SigLevel{{ledger.LevelKeylessPinned}, {ledger.LevelKey, ledger.LevelKeylessPinned}} {
+		idx := render(build(levels...))
+		n := len(levels)
+		if !strings.Contains(idx, fmt.Sprintf(`chip ok">%d/%d verified`, n, n)) {
+			t.Errorf("levels %v: strong signatures must read ok:\n%s", levels, idx)
+		}
 	}
 }

@@ -77,8 +77,13 @@ func (l *ledgerScans) EntryKind(scanID int64) string {
 		return "a checkpoint"
 	case auditpush.KindSigner:
 		if c := e.Signer; c != nil {
-			if c.Action == auditpush.SignerRevoke {
+			switch c.Action {
+			case auditpush.SignerRevoke:
 				return fmt.Sprintf("signer revoke %s: %s", c.KeyID, c.Reason)
+			case auditpush.SignerPinKeyless, auditpush.SignerUnpinKeyless:
+				// A pin names no key, so the register wording below would
+				// print an empty keyid as though one were registered.
+				return "signer " + c.Action
 			}
 			return fmt.Sprintf("signer register %s (%s)", c.Name, c.KeyID)
 		}

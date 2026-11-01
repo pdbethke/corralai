@@ -138,6 +138,29 @@ function verifiedCounts(d: Derived) {
   return { v: t.entries_verified, u: t.entries_unsigned, n: d.entries.length };
 }
 
+const keylessCount = (d: Derived) => {
+  const t = d.summary.totals;
+  return t.entries_keyless_pinned + t.entries_keyless_pinned_unchecked + t.entries_keyless_unpinned;
+};
+
+// verifiedCaption words the verified tile from Derive's level counts
+// (Totals.entries_key / entries_keyless_*). A keyless entry was signed by a
+// GitHub Actions workflow of the repository, not by the root key, so once
+// any is in the count the caption says how many of each kind there are and
+// never that every verified entry was signed by the root key.
+export function verifiedCaption(d: Derived): string {
+  const t = d.summary.totals;
+  const u = t.entries_unsigned;
+  if (keylessCount(d) === 0) return u > 0 ? `${count(u)} unsigned, counted in no figure` : 'intact and signed by the root key named above, checked in this browser';
+  const parts: string[] = [];
+  if (t.entries_key > 0) parts.push(`${count(t.entries_key)} signed by a key this ledger's root holds or registered`);
+  if (t.entries_keyless_pinned > 0) parts.push(`${count(t.entries_keyless_pinned)} signed keylessly by the workflow and ref the root pinned`);
+  if (t.entries_keyless_pinned_unchecked > 0) parts.push(`${count(t.entries_keyless_pinned_unchecked)} signed keylessly under a pin no root key checked`);
+  if (t.entries_keyless_unpinned > 0) parts.push(`${count(t.entries_keyless_unpinned)} signed keylessly by a workflow of this repository, with no workflow pinned`);
+  if (u > 0) parts.push(`${count(u)} unsigned, counted in no figure`);
+  return `intact, checked in this browser: ${parts.join('; ')}`;
+}
+
 function aTiles(d: Derived): HTMLElement {
   const s = d.summary;
   const t = s.totals;
@@ -153,7 +176,7 @@ function aTiles(d: Derived): HTMLElement {
           ? 'no audited file was graded'
           : `of ${count(t.mutants_graded)} graded planted bugs; ${count(t.mutants_planted)} were planted, and any that did not compile are in no share`,
     },
-    { key: 'verified', label: 'Entries verified', value: `${v}/${n}`, caption: u > 0 ? `${count(u)} unsigned, counted in no figure` : 'intact and signed by the root key named above, checked in this browser' },
+    { key: 'verified', label: 'Entries verified', value: `${v}/${n}`, caption: verifiedCaption(d) },
     { key: 'planted', label: 'Mutants planted', value: count(t.mutants_planted), caption: `${count(t.survivors)} survived the suite` },
     {
       key: 'files',
@@ -358,7 +381,7 @@ function modelsBlock(lines: { ledger: string; m: ModelLine }[], showLedger: bool
   });
 }
 
-function entriesTable(d: Derived): HTMLElement {
+export function entriesTable(d: Derived): HTMLElement {
   const det = el('details', 'entries');
   const { v, n } = verifiedCounts(d);
   det.appendChild(el('summary', undefined, `Every entry and the key that signed it (${v} of ${n} verified)`));
@@ -373,6 +396,11 @@ function entriesTable(d: Derived): HTMLElement {
     const status = el('td');
     status.appendChild(el('span', `status status-${e.status}`, e.status));
     if (e.problem) status.appendChild(el('div', 'entry-problem', e.problem));
+    // The level's sentence, as Derive worded it. keyless-unpinned is a warn:
+    // any branch of the repository could have signed it. keyless-pinned-unchecked
+    // is a warn too: a pin no root key checked must not read as strong.
+    if (e.level_sentence) status.appendChild(el('div', `entry-level level-${e.level}`, e.level_sentence));
+    if (e.workflow) status.appendChild(el('div', 'entry-workflow', `workflow ${e.workflow}${e.trigger ? `, trigger ${e.trigger}` : ''}`));
     if (e.note) status.appendChild(el('div', 'entry-note', e.note));
     tr.append(el('td', 'mono', e.file), el('td', undefined, e.kind === '' ? 'scan' : e.kind), el('td', 'mono', e.keyid || '(none)'), status);
     body.appendChild(tr);
@@ -388,17 +416,26 @@ function entriesTable(d: Derived): HTMLElement {
 // key is read from the same branch as the entries, so "verified" means intact
 // and signed by that key, not that the key is the project's. A listing does
 // not pin a key yet (phase 5), so the listed note claims no more than that.
-function listedNote(repo: string, listings: Listings, r: Extract<LedgerResult, { kind: 'derived' }>): HTMLElement {
+export function listedNote(repo: string, listings: Listings, r: Extract<LedgerResult, { kind: 'derived' }>): HTMLElement {
   let listed: string;
   let l: Listing | undefined;
   if (!listings.ok) listed = `Whether ${repo} is listed could not be read (${listings.message}).`;
   else if ((l = listings.listings.find((x) => x.repo === repo))) listed = `Listed by corral on ${l.listed_at}.`;
   else listed = `${repo} is not listed.`;
   const at = r.commit.slice(0, 12);
+  // A keyless entry is checked against the repository, not the root key, so
+  // with any in the count "verified" is worded per kind (Derive's counts).
+  const keyless = keylessCount(r.derived);
+  const means =
+    keyless === 0
+      ? 'So “verified” means the entries are intact and signed by that key'
+      : `So “verified” means the entries are intact, those signed by a key were signed by that key, and the ${plural(keyless, 'keyless entry was', 'keyless entries were')} signed by a GitHub Actions workflow of this repository at the level each entry shows`;
   const key =
     r.rootPubSource === 'LEDGER_PUBKEY' && r.derived.root_keyid !== ''
-      ? `Entries were checked against root key ${r.derived.root_keyid}, read from LEDGER_PUBKEY on the same corral/ledger branch as the entries, at commit ${at}. So “verified” means the entries are intact and signed by that key; it does not show that the key is the project's.${l ? ' A listing does not pin the key yet.' : ''}`
-      : `This ledger publishes no root key (no LEDGER_PUBKEY on its corral/ledger branch), so no signed entry could be checked. Entries were read at commit ${at}.`;
+      ? `Entries were checked against root key ${r.derived.root_keyid}, read from LEDGER_PUBKEY on the same corral/ledger branch as the entries, at commit ${at}. ${means}; it does not show that the key is the project's.${l ? ' A listing does not pin the key yet.' : ''}`
+      : keyless === 0
+        ? `This ledger publishes no root key (no LEDGER_PUBKEY on its corral/ledger branch), so no signed entry could be checked. Entries were read at commit ${at}.`
+        : `This ledger publishes no root key (no LEDGER_PUBKEY on its corral/ledger branch), so no entry signed by a key could be checked; the ${plural(keyless, 'keyless entry was', 'keyless entries were')} checked against the repository, at the level each entry shows. Entries were read at commit ${at}.`;
   return para('listed-note', `${listed} ${key}`);
 }
 
@@ -549,7 +586,7 @@ function bTotals(rows: Loaded[]): HTMLElement {
   const tel = good.map((r) => r.derived.summary.totals.telemetry).filter((t) => t !== null);
   const list: Tile[] = [
     { key: 'proven', label: 'Proven missing tests', value: count(sum((s) => s.totals.proven_missed)), caption: `added across the listed ledgers below, ${runs(sum((s) => s.totals.scans))} in all; a file audited more than once counts each run`, hero: true },
-    { key: 'repos', label: 'Ledgers verified', value: count(good.length), caption: `of ${count(rows.length)} listed: intact, signed by the root key each publishes, with a verified run` },
+    { key: 'repos', label: 'Ledgers verified', value: count(good.length), caption: `of ${count(rows.length)} listed: intact, each signature checked (a key against the root key each publishes, a keyless one against its repository, at the level its report shows), with a verified run` },
     {
       key: 'planted',
       label: 'Mutants planted',

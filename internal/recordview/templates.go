@@ -68,7 +68,7 @@ const verifyBanner = `
 {{define "noledger"}}<div class="banner warn"><p><strong>Not a ledger directory.</strong> This target is a warehouse, so there is no chain, no reviews and no verdicts to show here. Point <code>corral ui --db</code> at a ledger directory (<code>.corral/ledger</code>) to see them.</p></div>{{end}}
 {{define "chainclaim"}}{{if not .HasLedger}}{{template "noledger"}}{{else if .LedgerEntries}}{{template "verify" .}}{{else}}{{template "emptyrecord"}}{{end}}{{end}}
 {{define "verify"}}
-<div class="banner{{if .ChainProblems}} bad{{else if or .Unverified .SigsUnchecked}} warn{{end}}">
+<div class="banner{{if .ChainProblems}} bad{{else if or .Unverified .SigsUnchecked .SigsWeak}} warn{{end}}">
   <p><strong>Chain:</strong>
   {{if .ChainProblems}}<span class="chip bad">{{.ChainProblems}} problem(s)</span>
   {{else if .Unverified}}<span class="chip ok">intact</span> across the {{.VerifiedEntries}} entries that were checked — every one's hash matches its bytes and every link names its predecessor.
@@ -76,8 +76,9 @@ const verifyBanner = `
   {{if .Unverified}}<p><span class="chip warn">not verified</span> {{.Unverified}} {{if eq .Unverified 1}}entry{{else}}entries{{end}} changed while being read — not verified; reload.</p>{{end}}
   <p><strong>Signatures:</strong>
   {{if not .SigsTotal}}<span class="chip warn">unsigned</span> — none of the {{.VerifiedEntries}} checked entries carries a signature.
-  {{else if not .SigsUnchecked}}<span class="chip ok">{{.SigsOK}}/{{.SigsTotal}} verified</span>
-  {{else}}<span class="chip warn">{{.SigsOK}}/{{.SigsTotal}} verified</span>{{if .SigsUncheckedKey}} — no root key given: {{.SigsUncheckedKey}} ed25519 signature{{if ne .SigsUncheckedKey 1}}s{{end}} not checked{{end}}. An unchecked signature's validity is <em>unknown</em>: that is not a pass and not a failure. Verify them yourself with the command below.{{end}}</p>
+  {{else if and (not .SigsUnchecked) (not .SigsWeak)}}<span class="chip ok">{{.SigsOK}}/{{.SigsTotal}} verified</span>
+  {{else if not .SigsUnchecked}}<span class="chip warn">{{.SigsOK}}/{{.SigsTotal}} verified</span> — {{.SigsWeak}} keyless signature{{if ne .SigsWeak 1}}s{{end}} verified only as a workflow of this repository: no pin a root key checked limits {{if eq .SigsWeak 1}}it{{else}}them{{end}} to one workflow and ref (each entry says its level).
+  {{else}}<span class="chip warn">{{.SigsOK}}/{{.SigsTotal}} verified</span>{{if .SigsUncheckedKey}} — no root key given: {{.SigsUncheckedKey}} ed25519 signature{{if ne .SigsUncheckedKey 1}}s{{end}} not checked{{end}}. An unchecked signature's validity is <em>unknown</em>: that is not a pass and not a failure. Verify them yourself with the command below.{{if .SigsWeak}} {{.SigsWeak}} keyless signature{{if ne .SigsWeak 1}}s{{end}} verified only as a workflow of this repository, with no pin a root key checked.{{end}}{{end}}</p>
 </div>
 {{end}}
 `
@@ -213,8 +214,17 @@ and the verdicts are all read through <code>internal/auditpush</code>, the same 
 </div></body></html>
 ` + verifyBanner + entryBanner + rowTmpls
 
+// levelChip is a verified signature as its level's one sentence, never a
+// wording of the page's own. keyless-unpinned is a warn: any branch of the
+// repository could have signed it. An entry whose check ranked nothing keeps
+// the bare verified chip. A keyless entry names the workflow and trigger its
+// certificate carries.
+const levelChip = `
+{{define "levelchip"}}{{if .LevelSentence}}<span class="chip{{if or (eq (printf "%s" .Level) "keyless-unpinned") (eq (printf "%s" .Level) "keyless-pinned-unchecked")}} warn{{else}} ok{{end}}">{{.LevelSentence}}</span>{{else}}<span class="chip ok">verified</span>{{end}}{{if .Workflow}} <span class="small">workflow {{.Workflow}}{{if .Trigger}}, trigger {{.Trigger}}{{end}}</span>{{end}}{{end}}
+`
+
 // entryBanner is one entry's chain line, shared by review and scan pages.
-const entryBanner = `
+const entryBanner = levelChip + `
 {{define "entrybanner"}}
 <div class="banner{{if not .Verified}} warn{{else if or (not .ChainHashOK) .ChainProblem}} bad{{else if not .Signed}} warn{{end}}">
   <p><strong>This entry:</strong>
@@ -222,7 +232,7 @@ const entryBanner = `
   {{else}}<span class="chip{{if .ChainHashOK}} ok{{else}} bad{{end}}">hash {{if .ChainHashOK}}matches its bytes{{else}}MISMATCH{{end}}</span>
   <span class="chip{{if .ChainLinkOK}} ok{{else}} bad{{end}}">link {{if .ChainLinkOK}}{{if .Genesis}}genesis{{else}}names its predecessor{{end}}{{else}}BROKEN{{end}}</span>
   {{if .Signed}}{{if not .SigChecked}}<span class="chip warn">signed, not checked ({{if .Keyless}}no repository given{{else}}no key given{{end}})</span>
-  {{else if .SigOK}}<span class="chip ok">signature verified</span>
+  {{else if .SigOK}}{{template "levelchip" .}}
   {{else}}<span class="chip bad">signature does NOT verify</span>{{end}}{{if .Signer}} <span class="small">signed by {{.Signer}}</span>{{end}}
   {{else}}<span class="chip warn">unsigned</span>{{end}}{{end}}
   {{if .ChainProblem}}<br><span class="chip bad">{{.ChainProblem}}</span>{{end}}
@@ -468,14 +478,14 @@ const chainTmpl = `<!doctype html>
 <td>{{if not .Verified}}<span class="chip warn">not verified</span>
 {{else if not .Signed}}<span class="chip warn">unsigned</span>
 {{else if not .SigChecked}}<span class="chip warn">signed, not checked</span>
-{{else if .SigOK}}<span class="chip ok">verified</span>
+{{else if .SigOK}}{{template "levelchip" .}}
 {{else}}<span class="chip bad">does NOT verify</span>{{end}}</td>
 </tr>{{end}}
 </tbody></table></div>
 <p>{{if .Prev}}<a href="{{.Prev}}">← newer</a>{{end}} {{if .Next}}<a href="{{.Next}}">older →</a>{{end}}</p>
 {{if .Write}}` + writeJS + `{{end}}
 </div></body></html>
-` + verifyBanner
+` + verifyBanner + levelChip
 
 // controlsTmpl is the adjudication block, rendered only when Site.Write is
 // set. The buttons call the existing api/ routes through writeJS.

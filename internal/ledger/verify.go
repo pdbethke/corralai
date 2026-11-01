@@ -57,7 +57,13 @@ type ChainCheck struct {
 	// chain does not hold here). Filled with or without a key; only SigOK
 	// says the signature was checked. For a keyless entry it is the
 	// repository URI its certificate names, and only once that verified.
-	Signer  string
+	Signer string
+	// Cert is what the signing certificate says about the run that signed:
+	// set only for a keyless entry whose bundle verified, nil otherwise.
+	Cert *CertIdentity
+	// Level is how much this entry's signature shows (see SigLevel). "" when
+	// the entry has a Problem or its signature was not checked.
+	Level   SigLevel
 	Problem string // "" when nothing is wrong
 	Genesis bool
 	// Kind is the entry's kind; Note says what a retraction or checkpoint
@@ -147,13 +153,14 @@ func walk(entries []Entry, t Trust, integrityOnly bool) ([]ChainCheck, *SignerSe
 		// never resolved against the signer set: it holds no key the set
 		// could name. keylessProblem also enforces, for EVERY entry, that
 		// format 6 and keyid "sigstore" go together.
-		keyless, signedBy, keylessChecked := keylessProblem(e, t, integrityOnly)
+		keyless, signedBy, keylessChecked, cert := keylessProblem(e, t, integrityOnly)
 		var name, keyProblem string
 		var key ed25519.PublicKey
 		if c.Keyless {
 			c.SigOK = keyless == "" && signedBy != ""
 			c.SigChecked = keylessChecked
 			c.Signer = signedBy
+			c.Cert = cert
 		} else {
 			// The key is resolved BEFORE the signature is checked, from the
 			// set as it stands at this entry — never from the entry's own
@@ -166,6 +173,16 @@ func walk(entries []Entry, t Trust, integrityOnly bool) ([]ChainCheck, *SignerSe
 				c.SigOK = ed25519.Verify(key, raw, sig)
 				c.SigChecked = true
 			}
+		}
+		// The pin judges only a keyless entry whose bundle verified (cert is
+		// set exactly then): a failed bundle keeps its own Problem, and the
+		// pin never words a signature that did not verify. pinned is the
+		// pin in force at THIS position, read before any signer entry moves
+		// the set, so the entry is judged by the rule where it stands.
+		pinProblem, pinned, pinChecked := "", false, false
+		if c.Keyless && keyless == "" && cert != nil && set.pin != nil {
+			pinProblem = PinProblem(set.pin, set.pinFile, *cert, t.Repo)
+			pinned, pinChecked = pinProblem == "", set.pinChecked
 		}
 		shapeProblem := EntryShapeProblem(e)
 		changeProblem := ""
@@ -189,6 +206,8 @@ func walk(entries []Entry, t Trust, integrityOnly bool) ([]ChainCheck, *SignerSe
 			c.Problem = fmt.Sprintf("prev %.12s does not name the previous entry (%.12s) — an entry was removed, reordered or inserted", e.Prev, prevHash)
 		case keyless != "":
 			c.Problem = keyless
+		case pinProblem != "":
+			c.Problem = pinProblem
 		case seedProblem != "" && seedProblem == errCheckpointNotRoot:
 			// Before keyProblem: a checkpoint by a non-root key is not "an
 			// unregistered key" — the set is empty at a genesis — it is a
@@ -262,11 +281,12 @@ func walk(entries []Entry, t Trust, integrityOnly bool) ([]ChainCheck, *SignerSe
 		// after its own check: the change cannot vouch for itself, and a
 		// tampered or forged one leaves the set as it was.
 		if e.Kind == KindSigner && c.Problem == "" {
-			set.apply(e.Signer)
+			set.apply(e.Signer, e.File)
 		}
 		if e.Kind == KindCheckpoint && i == 0 && c.Problem == "" {
 			set.seed(e.Checkpoint.Signers)
 		}
+		c.Level = levelOf(c, pinned, pinChecked)
 		out = append(out, c)
 		prevHash = e.Hash
 		seen[e.Hash] = true

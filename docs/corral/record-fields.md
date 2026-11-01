@@ -116,6 +116,12 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `Committer` | declared | declared by the commit: freely written or removed by its author, so a metric about the change and not evidence of who or what wrote it |
 | `GeneratedWith` | declared | declared by the commit: freely written or removed by its author, so a metric about the change and not evidence of who or what wrote it |
 
+## KeylessPin
+
+| Field | Tier | Note |
+|---|---|---|
+| `RepoID` | key |  |
+
 ## Link
 
 | Field | Tier | Note |
@@ -183,6 +189,13 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `SpanStart` | measured |  |
 | `StatementSHA256` | key |  |
 | `TestsRun` | measured |  |
+
+## PinnedWorkflow
+
+| Field | Tier | Note |
+|---|---|---|
+| `Ref` | declared | declared by the person who wrote it: their words, not verified as true |
+| `Workflow` | declared | declared by the person who wrote it: their words, not verified as true |
 
 ## Refutation
 

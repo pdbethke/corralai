@@ -286,6 +286,12 @@ func TestDeriveSummaryEmptyOnProblem(t *testing.T) {
 	}
 	empty := ledger.Summarize(nil)
 	empty.Totals.EntriesVerified, empty.Totals.EntriesUnsigned, empty.Totals.EntriesFailed = v, u, f
+	// The by-level counts describe the entry list as well, so they stay too.
+	if tot.EntriesKey == 0 {
+		t.Fatalf("the verified key-signed entries are not counted by level: %+v", tot)
+	}
+	empty.Totals.EntriesKey, empty.Totals.EntriesKeylessPinned = tot.EntriesKey, tot.EntriesKeylessPinned
+	empty.Totals.EntriesKeylessPinnedUnchecked, empty.Totals.EntriesKeylessUnpinned = tot.EntriesKeylessPinnedUnchecked, tot.EntriesKeylessUnpinned
 	if !reflect.DeepEqual(d.Summary, empty) || d.Summary.Totals.Scans != 0 {
 		t.Fatalf("summary served from a broken ledger: %+v", d.Summary)
 	}

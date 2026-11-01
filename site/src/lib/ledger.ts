@@ -27,6 +27,14 @@ export type EntryStatus = {
   problem?: string;
   signer?: string;
   note?: string;
+  // Derive's own ranking of the signature and its one sentence; the page
+  // prints the sentence and words nothing of its own. Absent when nothing
+  // was ranked (a problem, or a signature that was not checked).
+  level?: 'unsigned' | 'key' | 'keyless-unpinned' | 'keyless-pinned' | 'keyless-pinned-unchecked';
+  level_sentence?: string;
+  // The signing certificate's workflow URI and trigger, on a keyless entry only.
+  workflow?: string;
+  trigger?: string;
 };
 
 export type Telemetry = {
@@ -53,6 +61,12 @@ export type Totals = {
   entries_verified: number;
   entries_unsigned: number;
   entries_failed: number;
+  // The verified entries by signature level, as Derive counted them, so a
+  // summary says how strong "verified" is without tallying the list.
+  entries_key: number;
+  entries_keyless_pinned: number;
+  entries_keyless_pinned_unchecked: number;
+  entries_keyless_unpinned: number;
 };
 
 export type RunPoint = {

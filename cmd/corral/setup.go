@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -38,6 +39,9 @@ type setupEnv struct {
 	// is not on the shell's PATH.
 	Exe, OnPath, TmpDir string
 	Version             string
+	// Checkout is the directory setup runs in; its .github/workflows are read
+	// for the keyless pin hint. Read-only: setup never writes there.
+	Checkout string
 	// StatePath returns the setup state file; write=true also creates its
 	// directory, so a dry run (write=false) leaves nothing behind.
 	StatePath func(write bool) (string, error)
@@ -88,7 +92,12 @@ func realSetupEnv() (setupEnv, error) {
 	if err != nil {
 		return setupEnv{}, err
 	}
+	checkout, err := os.Getwd()
+	if err != nil {
+		return setupEnv{}, fmt.Errorf("cannot find the directory setup runs in: %w", err)
+	}
 	return setupEnv{
+		Checkout: checkout,
 		Home:     home,
 		Runner:   agentsetup.ExecRunner{Timeout: agentsetup.Timeout, Dir: home}, // agent CLIs run in home, never the cwd (see ExecRunner.Dir)
 		LookPath: exec.LookPath,
@@ -340,6 +349,11 @@ func runSetupWith(args []string, stdin io.Reader, stdout, stderr io.Writer, envF
 	}
 	if statePath != "" {
 		fmt.Fprintf(stdout, "setup's record of what it added: %s\n", statePath)
+	}
+	if !f.uninstall {
+		if wf := keylessWorkflowIn(env.Checkout); wf != "" {
+			fmt.Fprint(stdout, keylessPinHint(wf))
+		}
 	}
 	if !ok {
 		return 1
@@ -604,4 +618,62 @@ func resultLine(id string, f setupFlags, bin string, plan agentsetup.Plan, mutat
 		return fmt.Sprintf("%s: verified: %s%s", a.Name, strings.Join(parts, ", "), suffix), true
 	}
 	return fmt.Sprintf("%s: NOT verified: %s%s", a.Name, strings.Join(parts, ", "), suffix), false
+}
+
+// keylessWorkflowIn returns the path, relative to the checkout, of the first
+// workflow under .github/workflows that runs corral's Action with a ledger
+// (a `ledger:` input, or CORRALAI_LEDGER_SIGNER set), or "" when there is
+// none. It only reads: setup never writes to the checkout.
+func keylessWorkflowIn(checkout string) string {
+	if checkout == "" {
+		return ""
+	}
+	wfDir := filepath.Join(checkout, ".github", "workflows")
+	root, err := os.OpenRoot(wfDir)
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = root.Close() }()
+	var found []string
+	for _, pat := range []string{"*.yml", "*.yaml"} {
+		m, err := filepath.Glob(filepath.Join(wfDir, pat))
+		if err != nil {
+			continue
+		}
+		found = append(found, m...)
+	}
+	sort.Strings(found)
+	for _, path := range found {
+		name := filepath.Base(path)
+		b, err := root.ReadFile(name)
+		if err != nil {
+			continue
+		}
+		txt := string(b)
+		if !strings.Contains(txt, "uses: pdbethke/corralai@") {
+			continue
+		}
+		if strings.Contains(txt, "CORRALAI_LEDGER_SIGNER") || strings.Contains(txt, "ledger:") {
+			return ".github/workflows/" + name
+		}
+	}
+	return ""
+}
+
+// keylessPinHint is the paragraph setup prints for a checkout whose workflow
+// writes a ledger with the Action. The command is filled in with the workflow
+// found; --ref is left for the operator because corral does not choose the
+// branch a ledger is written from, and the ledger directory and repository
+// are left for the same reason (setup does not know which ledger is meant, and
+// does not look to see whether a pin already exists).
+func keylessPinHint(workflow string) string {
+	return "\nThis checkout's " + workflow + " writes a ledger with the Action. If that workflow signs its ledger keylessly\n" +
+		"(a public repository, id-token: write), then until the ledger pins a workflow an entry signed by ANY workflow\n" +
+		"or branch of the repository reads \"keyless-unpinned\". A workflow that does not sign keylessly writes unsigned entries.\n" +
+		"To make only this workflow on one branch able to sign, the ledger's owner runs, once:\n\n" +
+		"  corral ledger signer pin <ledger-dir> --ledger-repo <owner/name> \\\n" +
+		"      --workflow " + workflow + " --ref <full-ref> \\\n" +
+		"      [--new-root --root-key-out <path>]\n\n" +
+		"Name the branch your ledger is written from; corral does not choose it. --new-root is for a ledger\n" +
+		"no key has signed yet. Setup wrote nothing for this and did not check whether a pin already exists.\n"
 }

@@ -511,3 +511,55 @@ func lines(in string) func() (string, error) {
 	r := bufio.NewReader(strings.NewReader(in))
 	return func() (string, error) { return r.ReadString('\n') }
 }
+
+func writeWorkflow(t *testing.T, dir, name, body string) {
+	t.Helper()
+	wd := filepath.Join(dir, ".github", "workflows")
+	if err := os.MkdirAll(wd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wd, name), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSetupPrintsThePinCommandForAnActionCheckout(t *testing.T) {
+	ts := newTestSetup(t, false)
+	ts.env.Checkout = t.TempDir()
+	writeWorkflow(t, ts.env.Checkout, "corral.yml", "jobs:\n  a:\n    steps:\n      - uses: pdbethke/corralai@v1.0.0\n        with:\n          ledger: .corral-ledger\n")
+	code, out, errb := ts.run_([]string{"--client", "codex", "--yes"}, "")
+	if code != 0 {
+		t.Fatalf("code %d, stderr %q", code, errb)
+	}
+	for _, want := range []string{
+		"corral ledger signer pin <ledger-dir> --ledger-repo <owner/name>",
+		"--workflow .github/workflows/corral.yml --ref <full-ref>",
+		"name the branch your ledger is written from; corral does not choose it",
+		"if that workflow signs its ledger keylessly",
+	} {
+		if !strings.Contains(strings.ToLower(out), strings.ToLower(want)) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "--ref refs/") {
+		t.Errorf("setup chose a ref:\n%s", out)
+	}
+	entries, _ := os.ReadDir(ts.env.Checkout)
+	if len(entries) != 1 {
+		t.Errorf("setup wrote into the checkout: %v", entries)
+	}
+}
+
+func TestSetupSaysNothingWithoutTheAction(t *testing.T) {
+	ts := newTestSetup(t, false)
+	ts.env.Checkout = t.TempDir()
+	writeWorkflow(t, ts.env.Checkout, "ci.yml", "jobs:\n  a:\n    steps:\n      - uses: actions/checkout@v4\n")
+	writeWorkflow(t, ts.env.Checkout, "other.yaml", "steps:\n  - uses: pdbethke/corralai@v1\n")
+	code, out, _ := ts.run_([]string{"--client", "codex", "--yes"}, "")
+	if code != 0 {
+		t.Fatalf("code %d", code)
+	}
+	if strings.Contains(out, "signer pin") {
+		t.Errorf("hint printed for a checkout with no ledger workflow:\n%s", out)
+	}
+}

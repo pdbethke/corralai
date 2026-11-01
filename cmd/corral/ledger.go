@@ -84,6 +84,14 @@ const ledgerUsage = `corral ledger — the hash-linked record (signed when a key
                                                ROOT key, read from $CORRALAI_LEDGER_ROOT_KEY and nowhere else (the
                                                machine key is never a fallback); the entry is part of the chain, so
                                                verify checks each signature against the key the chain registered
+  corral ledger signer pin <dir> --ledger-repo <owner/name> --workflow <path> --ref <ref>
+                         [--repo-id <digits>] [--new-root --root-key-out <path>]
+  corral ledger signer unpin <dir> --ledger-repo <owner/name> --reason "…"
+                                               which GitHub Actions workflow@ref pairs may sign this ledger keylessly
+                                               (repeat --workflow/--ref in pairs), signed by the ROOT key. --repo-id is
+                                               the repository's numeric id, looked up on api.github.com when absent.
+                                               --new-root, only on a chain no key has signed, makes the root and writes
+                                               its seed to --root-key-out alone (0600; store it offline). Pushes nothing
   corral ledger push <dir> <dsn> [--push-source] [--dry-run]
                                                append the directory's record to a warehouse you own (a DuckDB path, or
                                                md:<db>): every scan, review and adjudication entry the target does not
@@ -338,7 +346,7 @@ func runLedgerCheckpoint(args []string, stdout, stderr io.Writer) int {
 		// root signs, and the chain must be the one the operator expects.
 		// The anchor is checked FIRST and against the head the root key
 		// verifies, so a refusal precedes every write and delete.
-		root, rpub, ok := rootGate("checkpoint", dir, stderr)
+		root, rpub, ok := rootGate("checkpoint", dir, "", stderr)
 		if !ok {
 			return 2
 		}

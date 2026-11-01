@@ -10,15 +10,19 @@ import (
 
 // The signer payloads and the pure rules over them live in internal/ledger.
 const (
-	KindSigner      = ledger.KindSigner
-	SignerRegister  = ledger.SignerRegister
-	SignerRevoke    = ledger.SignerRevoke
-	LegacyRootKeyID = ledger.LegacyRootKeyID
+	KindSigner         = ledger.KindSigner
+	SignerRegister     = ledger.SignerRegister
+	SignerRevoke       = ledger.SignerRevoke
+	SignerPinKeyless   = ledger.SignerPinKeyless
+	SignerUnpinKeyless = ledger.SignerUnpinKeyless
+	LegacyRootKeyID    = ledger.LegacyRootKeyID
 )
 
 type (
-	SignerChange = ledger.SignerChange
-	SignerKey    = ledger.SignerKey
+	SignerChange   = ledger.SignerChange
+	SignerKey      = ledger.SignerKey
+	KeylessPin     = ledger.KeylessPin
+	PinnedWorkflow = ledger.PinnedWorkflow
 )
 
 // KeyFingerprint names a public key; see ledger.KeyFingerprint.
@@ -46,4 +50,14 @@ func WriteSignerChange(dir string, c SignerChange, root LedgerSigner) (string, e
 func ActiveSigners(entries []LedgerEntry) (rootKeyID string, active []SignerKey) {
 	_, set := verifyEntries(entries, nil)
 	return set.RootID(), set.List()
+}
+
+// KeylessPinInForce is the keyless pin at the chain's head, read the way
+// ActiveSigners reads the set: a keyless walk that checks the root-only
+// authority rule by name but NO SIGNATURE, so it is a writer's convenience
+// ("is this ledger pinned?"), never an authorization. nil when no pin is in
+// force.
+func KeylessPinInForce(entries []LedgerEntry) *KeylessPin {
+	_, set := verifyEntries(entries, nil)
+	return set.Pin()
 }

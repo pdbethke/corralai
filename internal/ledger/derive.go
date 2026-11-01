@@ -41,6 +41,15 @@ type EntryStatus struct {
 	// unsigned entry among signed ones, a self-reported signer name), in
 	// words. Carried so a page never re-derives it.
 	Note string `json:"note,omitempty"`
+	// Level is Verify's ChainCheck.Level and LevelSentence its words, carried
+	// so a page never ranks or words a signature for itself.
+	Level         SigLevel `json:"level,omitempty"`
+	LevelSentence string   `json:"level_sentence,omitempty"`
+	// Workflow and Trigger are the signing certificate's workflow URI and
+	// trigger (ChainCheck.Cert), set only for a keyless entry whose
+	// certificate was read, so a page can show which workflow and ref signed.
+	Workflow string `json:"workflow,omitempty"`
+	Trigger  string `json:"trigger,omitempty"`
 }
 
 // Derived is a ledger's verified, live rows as one document. Every slice is
@@ -200,7 +209,10 @@ func ledgerProblem(entries []EntryStatus, off int) string {
 // pass by default, and no page-wide guess from whether a root key was given
 // — a keyless entry is checked by its repository, not the root key.
 func statusOf(c ChainCheck) EntryStatus {
-	st := EntryStatus{File: c.File, Hash: c.Hash, Kind: c.Kind, KeyID: c.KeyID, Signer: c.Signer, Note: c.Note}
+	st := EntryStatus{File: c.File, Hash: c.Hash, Kind: c.Kind, KeyID: c.KeyID, Signer: c.Signer, Note: c.Note, Level: c.Level, LevelSentence: LevelSentence(c.Level)}
+	if c.Cert != nil {
+		st.Workflow, st.Trigger = c.Cert.Workflow, c.Cert.Trigger
+	}
 	switch {
 	case c.Problem != "":
 		st.Status, st.Problem = StatusFailed, c.Problem

@@ -43,11 +43,24 @@ const LegacyKeyIDProblem = `a corral-ledger-5 entry names its key by fingerprint
 // string equals the root's passes, whatever its signature bytes, so a keyless
 // read of a checkpoint-led chain describes what the chain CLAIMS. For such a
 // chain the root is the checkpoint's own keyid.
+//
+// The keyless pin is part of the same state: pin is the one in force at
+// this point (nil when none), pinFile the entry that put it there, and
+// pinChecked whether that entry's root signature was checked (a root key was
+// given) or only its keyid matched by name. A later pin replaces it and an
+// unpin clears it, each from its own position on, so an entry is judged by
+// the pin in force where it stands and history is never relabelled. With no
+// key a pin, like a register, is a CLAIM: anyone who can write the
+// directory can place one, which is why its level says it was not checked.
 type SignerSet struct {
 	rootID  string
 	rootPub ed25519.PublicKey // nil when no key was given: nothing is signature-checked
 	active  map[string]SignerKey
 	order   []string // registration order, so ActiveSigners is deterministic
+
+	pin        *KeylessPin
+	pinFile    string
+	pinChecked bool
 }
 
 func newSignerSet(entries []Entry, pub ed25519.PublicKey) *SignerSet {
@@ -133,14 +146,17 @@ func (s *SignerSet) changeProblem(e Entry) string {
 		return "the root cannot be revoked — a new root is a new ledger"
 	case c.Action == SignerRevoke && !active:
 		return fmt.Sprintf("revokes %s, which is not a registered signer at this point in the chain", c.KeyID)
+	case c.Action == SignerUnpinKeyless && s.pin == nil:
+		return "unpins, but no keyless pin is in force at this point in the chain"
 	}
 	return ""
 }
 
 // apply changes the set. The caller applies a signer entry only once the
 // entry checked clean — hash, link, signature, shape, authority — so a
-// tampered or forged change never moves the set.
-func (s *SignerSet) apply(c *SignerChange) {
+// tampered or forged change never moves the set. file is the entry's file,
+// which a pin's refusals name.
+func (s *SignerSet) apply(c *SignerChange, file string) {
 	switch c.Action {
 	case SignerRegister:
 		s.active[c.KeyID] = SignerKey{KeyID: c.KeyID, PubKey: c.PubKey, Name: c.Name}
@@ -153,13 +169,26 @@ func (s *SignerSet) apply(c *SignerChange) {
 				break
 			}
 		}
+	case SignerPinKeyless:
+		s.pin, s.pinFile, s.pinChecked = c.KeylessPin, file, s.rootPub != nil
+	case SignerUnpinKeyless:
+		s.pin, s.pinFile, s.pinChecked = nil, "", false
 	}
 }
 
 // changeNote says what a clean signer entry did, in words.
 func changeNote(c *SignerChange) string {
-	if c.Action == SignerRevoke {
+	switch c.Action {
+	case SignerRevoke:
 		return fmt.Sprintf("revokes %s: %s", c.KeyID, c.Reason)
+	case SignerPinKeyless:
+		pairs := make([]string, len(c.KeylessPin.Allow))
+		for i, a := range c.KeylessPin.Allow {
+			pairs[i] = a.Workflow + "@" + a.Ref
+		}
+		return fmt.Sprintf("pins keyless signing to repository id %s, %s", c.KeylessPin.RepoID, strings.Join(pairs, ", "))
+	case SignerUnpinKeyless:
+		return "unpins keyless signing: " + c.Reason
 	}
 	return fmt.Sprintf("registers %s as %s", c.KeyID, c.Name)
 }
@@ -215,3 +244,7 @@ func (s *SignerSet) seed(keys []SignerKey) {
 // with none, the chain's first signer entry or leading checkpoint. "" when
 // the chain has neither.
 func (s *SignerSet) RootID() string { return s.rootID }
+
+// Pin is the keyless pin in force at the point the walk reached (the head,
+// after a whole-chain walk), nil when none is.
+func (s *SignerSet) Pin() *KeylessPin { return s.pin }

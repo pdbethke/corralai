@@ -743,3 +743,31 @@ func TestWriteCheckpointRefusesSignerThatOnlyClaimsTheRootKeyID(t *testing.T) {
 		t.Fatalf("a refused checkpoint changed the directory: %v -> %v", before, after)
 	}
 }
+
+// A checkpoint carries the registered keys, not the keyless pin, so pruning
+// a pinned chain would silently drop the pin. Refused while a pin is in
+// force, before anything is pruned or written, naming `unpin` as the way on;
+// after an unpin the same checkpoint goes ahead.
+func TestCheckpointRefusedWhileAPinIsInForce(t *testing.T) {
+	dir, root, _ := chainWithMember(t, 0x24, 0x25)
+	pin := SignerChange{Action: SignerPinKeyless, Name: "ci", Reason: "only main signs",
+		KeylessPin: &KeylessPin{RepoID: "42", Allow: []PinnedWorkflow{{Workflow: ".github/workflows/corral.yml", Ref: "refs/heads/main"}}}}
+	mustSignerChange(t, dir, pin, signerOf(root))
+	before := scanFileCount(t, dir)
+	_, _, err := WriteCheckpoint(dir, signerOf(root), pubOf(root))
+	if err == nil {
+		t.Fatal("a checkpoint pruned a chain with a keyless pin in force")
+	}
+	for _, want := range []string{"keyless pin", "corral ledger signer unpin", "Nothing written"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q lacks %q", err, want)
+		}
+	}
+	if got := scanFileCount(t, dir); got != before {
+		t.Fatalf("%d files, want %d: the refused checkpoint changed the directory", got, before)
+	}
+	mustSignerChange(t, dir, SignerChange{Action: SignerUnpinKeyless, Name: "ci", Reason: "checkpointing"}, signerOf(root))
+	if _, _, err := WriteCheckpoint(dir, signerOf(root), pubOf(root)); err != nil {
+		t.Fatalf("a checkpoint after the unpin: %v", err)
+	}
+}

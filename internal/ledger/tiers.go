@@ -87,6 +87,12 @@ func buildFieldTiers() map[[2]string]FieldTier {
 	add("Checkpoint", TierKey, "", "Entries Head Through")
 	add("SignerChange", TierKey, "", "Action KeyID Name PubKey")
 	add("SignerChange", TierDeclared, notePerson, "Reason")
+	// A keyless pin is the owner's statement of which runs may sign: the
+	// repository id names, the pairs are what the owner declares. The
+	// certificate facts a pin is judged against are not recorded fields:
+	// they are read from the bundle (Entry.Sigstore) on every read.
+	add("KeylessPin", TierKey, "", "RepoID")
+	add("PinnedWorkflow", TierDeclared, notePerson, "Workflow Ref")
 	add("SignerKey", TierKey, "", "KeyID Name PubKey")
 	add("Adjudication", TierKey, "", "Adjudicates")
 	add("Adjudication", TierDeclared, noteAdjudicator, "By Verdict Reason")

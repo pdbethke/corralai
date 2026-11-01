@@ -40,6 +40,41 @@ history of any release, `git log v0.3.4..v0.3.5`.
   the checkout's workflow uses the Action with a ledger, and writes nothing.
   Tested against an in-process test Sigstore only; a real Action run with a pin
   is owed. See [`docs/corral/github-action.md`](docs/corral/github-action.md).
+
+- **`--mutants-from` grades an established mutation tool's mutants beside or
+  instead of the model's.** `certify --repo` and `certify --local` take
+  `--mutants-from stryker:<report.json>` (repeatable, one per tool; refused with
+  `--mutants`), and `--mutant-model off` is now legal, but only together with
+  `--mutants-from` (an omitted `--mutant-model` is still refused).
+  `--tool-sample-seed` replays the over-budget sample (a seed is drawn and
+  printed when absent). Only StrykerJS reports are accepted. The report's
+  `source` must be byte-identical (sha256) to the audited file or that file's tool
+  mutants are refused; only Survived and NoCoverage are taken, the rest counted;
+  the taken set is capped by the file's mutant budget (seeded sample, distinct
+  lines first). A line that occurs more than once in the file cannot be
+  anchored and is dropped and counted (29 of 234 survivors on REA's report), and
+  a file with a lone CR, U+2028 or U+2029 is refused. Corral grades every tool
+  mutant itself: the tool's status is recorded as its own claim (`SourceStatus`,
+  declared) and `Outcome` is corral's measurement. `MutantRow` gains `Source`,
+  `SourceTool`, `SourceOperator` and `SourceStatus`; the scan row gains
+  `ToolMutants` (per-file counts, seed, refusal), naming the report by tool and
+  sha256 and never by its path. The verdict cache key includes the tool, the
+  report's sha256 and the seed. Executed: unit tests, and `certify --repo` on the
+  workspace substrate with a Go fixture and a hand-made Stryker-schema report
+  (tool-only and both sources); `certify --local` only on its refusals. Not yet
+  executed: a real run on REA with `--mutants-from`. See
+  [`docs/corral/mutant-sources.md`](docs/corral/mutant-sources.md), which also
+  quotes the one measured comparison (REA, one file, one commit; line overlap is
+  not the same fault; 150 Stryker survivors untriaged). Other tools are planned
+  and unverified.
+  `reposcan.VerdictGeneration` is now 39 (the verdict gained a field), so every
+  cached verdict is measured once more.
+- **Changed with it.** A model mutant hunk whose SEARCH and REPLACE both start
+  with a newline now records a Span one line later, so it no longer dedupes or
+  matches as one prior with the same hunk recorded before. A `--mutants` replay
+  with no recorded sources now records no `GeneratorModel`, since no generator
+  ran. The mutant-generator's leaderboard credit counts only model-sourced mutants.
+
 - **The signed record now holds every number a certify run prints, or a
   written reason why not, and every field says what it can be trusted
   for.** Each recorded field carries one of four

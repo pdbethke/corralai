@@ -535,6 +535,7 @@ func TestSetupPrintsThePinCommandForAnActionCheckout(t *testing.T) {
 		"corral ledger signer pin <ledger-dir> --ledger-repo <owner/name>",
 		"--workflow .github/workflows/corral.yml --ref <full-ref>",
 		"name the branch your ledger is written from; corral does not choose it",
+		"if that workflow signs its ledger keylessly",
 	} {
 		if !strings.Contains(strings.ToLower(out), strings.ToLower(want)) {
 			t.Errorf("output lacks %q:\n%s", want, out)

@@ -667,8 +667,9 @@ func keylessWorkflowIn(checkout string) string {
 // are left for the same reason (setup does not know which ledger is meant, and
 // does not look to see whether a pin already exists).
 func keylessPinHint(workflow string) string {
-	return "\nThis checkout's " + workflow + " writes a ledger with the Action. Until the ledger pins a workflow,\n" +
-		"an entry signed keylessly by ANY workflow or branch of the repository reads \"keyless-unpinned\".\n" +
+	return "\nThis checkout's " + workflow + " writes a ledger with the Action. If that workflow signs its ledger keylessly\n" +
+		"(a public repository, id-token: write), then until the ledger pins a workflow an entry signed by ANY workflow\n" +
+		"or branch of the repository reads \"keyless-unpinned\". A workflow that does not sign keylessly writes unsigned entries.\n" +
 		"To make only this workflow on one branch able to sign, the ledger's owner runs, once:\n\n" +
 		"  corral ledger signer pin <ledger-dir> --ledger-repo <owner/name> \\\n" +
 		"      --workflow " + workflow + " --ref <full-ref> \\\n" +

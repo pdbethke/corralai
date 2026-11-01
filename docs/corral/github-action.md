@@ -771,7 +771,7 @@ What this puts on the record, in public, permanently:
   do not trust.
 - **How strong a keyless entry is, said on the entry.** Every verified entry
   carries one of five levels, in the same words in `corral verify`,
-  `corral ui`, the public site and `--json`:
+  `corral ui`, the public site and the derived JSON the site reads:
   - `unsigned`: nothing shows who wrote it
   - `keyless-unpinned`: signed keylessly by a GitHub Actions workflow of this
     repository, on the ref it names; any branch could have signed, because no

@@ -16,7 +16,7 @@ history of any release, `git log v0.3.4..v0.3.5`.
 - **Signature levels, and an opt-in keyless workflow pin.** Every verified
   ledger entry now reads at one of five levels (`unsigned`, `keyless-unpinned`,
   `keyless-pinned`, `keyless-pinned-unchecked`, `key`) in `corral verify`,
-  `corral ui`, the public site and `--json`, and a keyless entry records the
+  `corral ui`, the public site and the derived JSON the site reads, and a keyless entry records the
   workflow, ref and trigger its certificate names. **Existing keyless entries
   now read "unpinned"**: that is what they always were (any branch of the
   repository could have signed), now said. Nothing that verified before stops

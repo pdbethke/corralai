@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
+	"github.com/pdbethke/corralai/internal/mutantsources"
 )
 
 // drivePresetToConvergence is drivePoolToConvergence's counterpart for a run
@@ -195,5 +196,26 @@ func TestPresetMutantsSayTheChallengerSeatIsSkipped(t *testing.T) {
 	BuildDAG(rs, assign, nil)
 	if strings.Contains(buf.String(), "challenger") {
 		t.Errorf("no challenger was configured, so there is nothing to report: %q", buf.String())
+	}
+}
+
+// A tool-only run (--mutants-from with --mutant-model off) is a preset run
+// too, and skips the challenger for the same reason, but it replays
+// nothing: the line says what actually ran, never "--mutants replays".
+func TestToolOnlyRunSaysWhatSkippedTheChallenger(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	rs := testRunSpec()
+	rs.PresetMutants = []adequacy.Mutant{{ID: "t/stryker/1", Replace: "x", ParentSHA256: "abc"}}
+	rs.MutantSources = map[string]mutantsources.MutantSource{"t/stryker/1": {Kind: mutantsources.KindTool, Tool: "stryker@10.0.0"}}
+	BuildDAG(rs, RoleAssignment{RoleTestWriter: "model-b", RoleMutantGeneratorShadow: "model-shadow"}, nil)
+	got := buf.String()
+	if strings.Contains(got, "--mutants replays") {
+		t.Errorf("a tool-only run claims a --mutants replay: %q", got)
+	}
+	if !strings.Contains(got, "--mutants-from") || !strings.Contains(got, "challenger") || !strings.Contains(got, "SKIPPED") {
+		t.Errorf("a tool-only run must say the tool's mutants are the exam and the challenger is skipped: %q", got)
 	}
 }

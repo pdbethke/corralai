@@ -790,7 +790,14 @@ func BuildDAG(rs RunSpec, assign RoleAssignment, sigs []repoindex.Signature) []q
 			// getting one, and an UNMEASURED challenger must never be left
 			// looking like a challenger that found nothing.
 			if m := strings.TrimSpace(assign[RoleMutantGeneratorShadow]); m != "" {
-				log.Printf("advpool: --mutants replays a recorded set, so nothing is generated: the challenger generator seat (%s) is SKIPPED — its yield this run is unmeasured, not zero", m)
+				// The two preset doors say what actually fixed the exam: a
+				// tool-only run (--mutants-from, --mutant-model off) replays
+				// nothing, it grades the tool's mutants.
+				what := "--mutants replays a recorded set"
+				if hasToolSource(rs.MutantSources) {
+					what = "the exam is a mutation tool's mutants only (--mutants-from with --mutant-model off)"
+				}
+				log.Printf("advpool: %s, so nothing is generated: the challenger generator seat (%s) is SKIPPED — its yield this run is unmeasured, not zero", what, m)
 			}
 			continue
 		}

@@ -208,7 +208,17 @@ func localChatterFor(assign advpool.RoleAssignment, meters map[string]*agentback
 		if c, ok := perRole[role]; ok {
 			return c
 		}
-		if model := assign[role]; canSwitch && model != "" {
+		// A role with NO model assigned gets no chatter, so its task fails
+		// loudly ("no model backend for role") rather than being answered by
+		// the base backend, whose own unpinned answer is FromEnv's ollama
+		// default: a model nobody named, whose output would be graded and
+		// signed under a seat the header calls empty. No caller asks for a
+		// role it did not assign; this makes sure none ever can.
+		model := strings.TrimSpace(assign[role])
+		if model == "" {
+			return nil
+		}
+		if canSwitch {
 			return agentbackend.AsChatterBudgeted(sw.WithModel(model), meters[role], budget)
 		}
 		return agentbackend.AsChatterBudgeted(base, meters[role], budget)

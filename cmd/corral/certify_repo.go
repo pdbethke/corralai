@@ -5739,7 +5739,11 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 	// nothing to grade has no exam: reported with the reason, before a
 	// baseline is paid for, never graded on an empty exam.
 	if l.toolSource != nil && l.toolSource.toolOnly {
-		if why := l.toolNoSource(j.Path); why != "" {
+		why, err := l.toolNoSource(j.Path)
+		if err != nil {
+			return reposcan.FileResult{}, l.fail(j, err)
+		}
+		if why != "" {
 			l.note("%s: tool mutants (%s): none to grade — %s — not graded\n", j.Path, l.toolSource.tool, why)
 			return reposcan.FileResult{Gradable: false, Reason: reposcan.ReasonNoMutantSource, Detail: why}, nil
 		}
@@ -5998,16 +6002,18 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 
 // toolNoSource is why the tool-only scan's report gives the file at p
 // nothing to grade, "" when it does. The bytes are read through the
-// checkout's root, as every other read of the scan is.
-func (l *localExecutor) toolNoSource(p string) string {
+// checkout's root, as every other read of the scan is. A file or report
+// that cannot be read is an error (an executor error on the report), never
+// a no-mutant-source reason.
+func (l *localExecutor) toolNoSource(p string) (string, error) {
 	root, err := os.OpenRoot(l.repoDir)
 	if err != nil {
-		return fmt.Sprintf("reading %s to check it against the report: %v", p, err)
+		return "", fmt.Errorf("reading %s to check it against the --mutants-from report: %w", p, err)
 	}
 	defer func() { _ = root.Close() }()
 	code, err := root.ReadFile(p)
 	if err != nil {
-		return fmt.Sprintf("reading %s to check it against the report: %v", p, err)
+		return "", fmt.Errorf("reading %s to check it against the --mutants-from report: %w", p, err)
 	}
 	return l.toolSource.noSourceReason(p, code)
 }

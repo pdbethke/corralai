@@ -233,7 +233,7 @@ func (s *toolMutantSource) forFile(p string, code []byte, budget int) (toolFileM
 }
 
 // toolMutantsLine is the scan line for a covered file: "tool mutants
-// (stryker@10.0.0): taken T of S survivors (+N no-coverage), K killed by the
+// (stryker@10.0.0): taken T of S survivors + N no-coverage, K killed by the
 // tool and not re-graded, C compile errors, D dropped: <reasons>", with any
 // other status the tool reported counted after it rather than left out.
 // tool names the tool when no taken mutant's source carries its version.
@@ -260,7 +260,7 @@ func toolMutantsLine(fm mutantsources.FileMutants, tool string) string {
 	}
 	sort.Strings(dropped)
 	sort.Strings(other)
-	s := fmt.Sprintf("tool mutants (%s): taken %d of %d survivors (+%d no-coverage), %d killed by the tool and not re-graded, %d compile errors, %d dropped",
+	s := fmt.Sprintf("tool mutants (%s): taken %d of %d survivors + %d no-coverage, %d killed by the tool and not re-graded, %d compile errors, %d dropped",
 		tool, len(fm.Taken), c["Survived"], c["NoCoverage"], c["Killed"], c["CompileError"], droppedN)
 	if len(dropped) > 0 {
 		s += ": " + strings.Join(dropped, ", ")
@@ -277,12 +277,17 @@ func toolMutantsLine(fm mutantsources.FileMutants, tool string) string {
 // because emptiness does not depend on the budget (any budget of at least
 // one takes something from a non-empty candidate set); the sample a real
 // run takes is drawn by forFile under the real budget.
-func (s *toolMutantSource) noSourceReason(p string, code []byte) string {
+//
+// The reason is "" when there is something to grade. A report corral could
+// not READ for the file comes back as err, never as a reason: a reason is
+// recorded as no-mutant-source, which says the tool had nothing to offer,
+// and that is not what an unreadable report measured.
+func (s *toolMutantSource) noSourceReason(p string, code []byte) (string, error) {
 	r, err := s.forFile(p, code, math.MaxInt32)
 	if err != nil {
-		return err.Error()
+		return "", err
 	}
-	return r.none
+	return r.none, nil
 }
 
 // apply puts the file's tool mutants on its RunSpec through the door TM-R1

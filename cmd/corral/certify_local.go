@@ -436,7 +436,12 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 				fmt.Fprintf(stderr, "corral certify --local: --mutants-from: reading %s: %v\n", *codePath, rerr)
 				return 2
 			}
-			if why := toolSource.noSourceReason(toolKey, src); why != "" {
+			why, nerr := toolSource.noSourceReason(toolKey, src)
+			if nerr != nil {
+				fmt.Fprintf(stderr, "corral certify --local: %v\n", nerr)
+				return 2
+			}
+			if why != "" {
 				fmt.Fprintf(stderr, "corral certify --local: COULD-NOT-GRADE: --mutant-model off makes the tool the only mutant source, and %s — nothing was spent\n", why)
 				return 2
 			}
@@ -1488,16 +1493,18 @@ type auditRoles struct {
 // one seat the no-defaults rule forgot. Off is a legitimate choice; it has
 // to be typed.
 //
-// toolSourced is whether --mutants-from supplies the run's mutants: then an
-// empty mutant-generator seat (--mutant-model off) is a run with a mutant
-// source and is legal (TM-R2). It never excuses the writer, because proving
-// a survivor is the point, nor the critic's explicit choice.
-func herdNotConfiguredErr(cmdName, writer, mutant, criticRaw string, toolSourced bool) error {
+// toolOnly is whether the operator TYPED --mutant-model off with
+// --mutants-from, so the tool's mutants are the whole exam: then the empty
+// mutant-generator seat is a choice, and legal (TM-R2). A seat left UNNAMED
+// is never excused by a tool source — that would be a default by omission,
+// and the router would answer the empty seat with its own base backend. It
+// never excuses the writer either, because proving a survivor is the point.
+func herdNotConfiguredErr(cmdName, writer, mutant, criticRaw string, toolOnly bool) error {
 	var empty []string
 	if writer == "" {
 		empty = append(empty, "--writer-model (test-writer)")
 	}
-	mutantEmpty := mutant == "" && !toolSourced
+	mutantEmpty := mutant == "" && !toolOnly
 	if mutantEmpty {
 		empty = append(empty, "--mutant-model (mutant-generator)")
 	}
@@ -1644,7 +1651,7 @@ func resolveAuditRoles(in localAuditInput, stderr io.Writer) (auditRoles, error)
 	// operator override that collapses critic==writer must fail fast, not after
 	// opening stores and a jail.
 	writer, mutant, critic, shadow, shadowWriter := resolveRoleModels(in)
-	if err := herdNotConfiguredErr(in.cmdName, writer, mutant, in.criticModel, in.toolSource != nil); err != nil {
+	if err := herdNotConfiguredErr(in.cmdName, writer, mutant, in.criticModel, in.toolSource != nil && in.toolSource.toolOnly); err != nil {
 		return r, err
 	}
 	assign := advpool.RoleAssignment{
@@ -2194,9 +2201,15 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 		return zero, auditErr("starting run: %v", err)
 	}
 
+	// Exactly what sits in the seat: the model, or off when the tool is the
+	// only source (the herd check refuses an empty seat in every other case),
+	// and the tool beside a model when both grade.
 	generatorSeat := mutant
-	if generatorSeat == "" && in.toolSource != nil {
-		generatorSeat = "off (tool mutants only)"
+	switch {
+	case in.toolSource != nil && in.toolSource.toolOnly:
+		generatorSeat = "off (" + in.toolSource.tool + " mutants only)"
+	case in.toolSource != nil:
+		generatorSeat = mutant + " + " + in.toolSource.tool + " mutants"
 	}
 	fmt.Fprintf(stdout, "auditing %s against its own tests — mutant-generator=%s test-writer=%s test-critic=%s\n",
 		in.codePath, generatorSeat, writer, critic)

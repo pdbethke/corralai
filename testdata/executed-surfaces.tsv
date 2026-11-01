@@ -63,8 +63,8 @@ corral certify --local --max-tokens	executed	test:cmd/corral/local_endpoint_test
 corral certify --local --prior	executed	test:cmd/corral/certify_repo_evidence_candidacy_test.go
 corral certify --local --mutant-model	executed	test:cmd/corral/certify_repo_writer_mode_test.go
 corral certify --local --mutants	executed	test:cmd/corral/certify_repo_evidence_candidacy_test.go
-corral certify --local --mutants-from	executed	test:cmd/corral/mutants_from_test.go
-corral certify --local --tool-sample-seed	executed	test:cmd/corral/mutants_from_test.go
+corral certify --local --mutants-from	executed	test:cmd/corral/mutants_from_test.go — the real --local CLI only on its refusals; tool-mutant GRADING on the --local path is exercised through auditOneFile on the workspace substrate, never through the --local jail
+corral certify --local --tool-sample-seed	executed	test:cmd/corral/mutants_from_test.go — the real --local CLI only on its refusals; tool-mutant GRADING on the --local path is exercised through auditOneFile on the workspace substrate, never through the --local jail
 corral certify --local --n-mutants	executed	run:2026-09-02 record 89
 corral certify --local --no-ledger	executed	test:cmd/corral/certify_local_entry_test.go (TestLocalNoLedgerFlag)
 corral certify --local --no-bind-deps	executed	test:cmd/corral/certify_local_test.go

@@ -331,7 +331,7 @@ func TestToolMutantsForAFileWithNoSource(t *testing.T) {
 			if rs.PresetMutants != nil {
 				t.Errorf("%s tool-only: an empty exam was set", name)
 			}
-			if pre := s.noSourceReason(c.path, []byte(toolFixtureSrc)); !strings.Contains(pre, c.want) {
+			if pre, perr := s.noSourceReason(c.path, []byte(toolFixtureSrc)); perr != nil || !strings.Contains(pre, c.want) {
 				t.Errorf("%s: the pre-check %q does not say %q", name, pre, c.want)
 			}
 		}
@@ -344,8 +344,8 @@ func TestToolMutantsForAFileWithNoSource(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if why := s.noSourceReason("pkg/a.go", []byte(toolFixtureSrc)); why != "" {
-			t.Fatalf("pre-check refused a usable file: %s", why)
+		if why, perr := s.noSourceReason("pkg/a.go", []byte(toolFixtureSrc)); why != "" || perr != nil {
+			t.Fatalf("pre-check refused a usable file: %s %v", why, perr)
 		}
 		r, err := s.forFile("pkg/a.go", []byte(toolFixtureSrc), 5)
 		if err != nil {
@@ -367,7 +367,7 @@ func TestToolMutantsForAFileWithNoSource(t *testing.T) {
 		if len(exam) != 1 || exam[0].ID != "t/stryker/2" || rs.MutantSources["t/stryker/2"].Kind != mutantsources.KindTool {
 			t.Errorf("model %q: exam %+v sources %+v", model, exam, rs.MutantSources)
 		}
-		const line = "tool mutants (stryker@10.0.0): taken 1 of 0 survivors (+1 no-coverage), 1 killed by the tool and not re-graded, 0 compile errors, 0 dropped"
+		const line = "tool mutants (stryker@10.0.0): taken 1 of 0 survivors + 1 no-coverage, 1 killed by the tool and not re-graded, 0 compile errors, 0 dropped"
 		if r.line != line {
 			t.Errorf("scan line =\n%q\nwant\n%q", r.line, line)
 		}
@@ -396,7 +396,7 @@ func TestMutantsFromPrintsTheSourceLine(t *testing.T) {
 	}
 	for _, want := range []string{
 		"tool sample seed: 7",
-		"pkg/a.go: tool mutants (stryker@10.0.0): taken 1 of 0 survivors (+1 no-coverage), 1 killed by the tool and not re-graded, 0 compile errors, 0 dropped",
+		"pkg/a.go: tool mutants (stryker@10.0.0): taken 1 of 0 survivors + 1 no-coverage, 1 killed by the tool and not re-graded, 0 compile errors, 0 dropped",
 		"pkg/a.go: kill rate 0.00 (1 survivor(s), 1 proven missed)",
 	} {
 		if !strings.Contains(s, want) {
@@ -469,5 +469,89 @@ func TestCertifyLocalAuditGradesToolMutants(t *testing.T) {
 	}
 	if got := v.MutantSources["t/stryker/2"]; got.Kind != mutantsources.KindTool || got.Status != "NoCoverage" || got.Tool != "stryker@10.0.0" {
 		t.Errorf("verdict source = %+v", got)
+	}
+}
+
+// Fix round 1, finding 1: a tool source never fills a mutant seat the
+// operator left UNNAMED. Only "off" says the seat is empty on purpose; with
+// --mutant-model omitted the no-default-models refusal stands, on both
+// commands, and still names the way out.
+func TestMutantsFromDoesNotExcuseAnOmittedMutantModel(t *testing.T) {
+	noKeys(t)
+	root, report := toolFixtureRepo(t, toolFixtureSrc)
+	for name, run := range map[string]func() (int, string){
+		"local": func() (int, string) {
+			var out, errb bytes.Buffer
+			code := runCertifyLocal([]string{"--repo-dir", root, "--code", "pkg/a.go", "--goal", "g",
+				"--writer-model", "w", "--critic-model", "off", "--no-ledger",
+				"--mutants-from", "stryker:" + report, "--", "go", "test", "./..."}, &out, &errb)
+			return code, errb.String()
+		},
+		"repo": func() (int, string) {
+			var out, errb bytes.Buffer
+			code := runCertifyRepo([]string{"--repo", root, "--goals", writeGoals(t, t.TempDir(), `{"pkg/a.go": "g"}`),
+				"--writer-model", "w", "--critic-model", "off", "--no-ledger", "--substrate", substrateWorkspace,
+				"--mutants-from", "stryker:" + report, "--", "go", "test", "./..."}, &out, &errb)
+			return code, errb.String()
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			code, stderr := run()
+			if code != 2 {
+				t.Fatalf("exit %d, want 2 — an unnamed mutant seat with a tool source must still be refused: %s", code, stderr)
+			}
+			for _, w := range []string{"--mutant-model (mutant-generator)", "--mutant-model off", "--mutants-from"} {
+				if !strings.Contains(stderr, w) {
+					t.Errorf("refusal lacks %q: %s", w, stderr)
+				}
+			}
+		})
+	}
+}
+
+// The guard under it: no role whose assignment is empty is ever served by
+// the run's base backend, whatever path reaches it. An unassigned seat gets
+// no chatter, so its task fails loudly instead of being answered by a model
+// nobody named.
+func TestAnUnassignedRoleIsNeverServedByTheBaseBackend(t *testing.T) {
+	noKeys(t)
+	wiredAgent(t, "fakew", "", "x")
+	chatterFor, err := localChatterFor(advpool.RoleAssignment{
+		advpool.RoleMutantGenerator: "", advpool.RoleTestWriter: "fakew",
+	}, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, role := range []string{advpool.RoleMutantGenerator, advpool.RoleTestCritic, advpool.RoleMutantGeneratorShadow, advpool.RoleTestWriterShadow} {
+		if c := chatterFor(role); c != nil {
+			t.Errorf("role %s has no model assigned and was handed a chatter (%T)", role, c)
+		}
+	}
+	if chatterFor(advpool.RoleTestWriter) == nil {
+		t.Error("the assigned writer seat lost its chatter")
+	}
+}
+
+// Finding 2: a report that cannot be read for a file is an error, never a
+// no-mutant-source disposition, which would say the tool had nothing to
+// offer when corral could not tell.
+func TestNoSourceReasonKeepsReaderErrorsApart(t *testing.T) {
+	report := writeTemp(t, string(toolFixtureReport(t, toolFixtureSrc)))
+	s, err := resolveMutantsFrom(mutantsFromFlags{values: []string{"stryker:" + report}, seed: "1", mutantModel: "off"}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Swap in a report ReadStryker refuses after the flag check passed it.
+	s.report = []byte(`{"framework":{"name":"StrykerJS","version":"10.0.0"},"files":{"pkg/a.go":{"source":7}}}`)
+	why, err := s.noSourceReason("pkg/a.go", []byte(toolFixtureSrc))
+	if err == nil || why != "" {
+		t.Fatalf("noSourceReason = %q, %v; want no reason and the reader's error", why, err)
+	}
+	// And the scan reports it as an executor error, not no-mutant-source.
+	root, _ := toolFixtureRepo(t, toolFixtureSrc)
+	l := &localExecutor{repoDir: root, toolSource: s}
+	res, err := l.Execute(context.Background(), reposcan.Job{Path: "pkg/a.go", Lang: "go"})
+	if err == nil || res.Reason == reposcan.ReasonNoMutantSource {
+		t.Fatalf("Execute = %+v, %v; want an error, not a no-mutant-source disposition", res, err)
 	}
 }

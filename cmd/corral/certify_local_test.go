@@ -1722,17 +1722,17 @@ func TestLocalCertifyThresholdIsAboveZero(t *testing.T) {
 // rule forgot (seventh review, claim #9). Off is a legitimate choice; it
 // has to be typed.
 func TestUnnamedCriticIsRefusedNotSilentlyOff(t *testing.T) {
-	err := herdNotConfiguredErr("corral certify --local", "w", "m", "")
+	err := herdNotConfiguredErr("corral certify --local", "w", "m", "", false)
 	if err == nil {
 		t.Fatal("an unnamed critic was accepted")
 	}
 	if !strings.Contains(err.Error(), "--critic-model") || !strings.Contains(err.Error(), "off") {
 		t.Errorf("refusal does not name the seat and the off spelling: %v", err)
 	}
-	if err := herdNotConfiguredErr("corral certify --local", "w", "m", "off"); err != nil {
+	if err := herdNotConfiguredErr("corral certify --local", "w", "m", "off", false); err != nil {
 		t.Errorf("an explicit off was refused: %v", err)
 	}
-	if err := herdNotConfiguredErr("corral certify --local", "w", "m", "claude-haiku-4-5"); err != nil {
+	if err := herdNotConfiguredErr("corral certify --local", "w", "m", "claude-haiku-4-5", false); err != nil {
 		t.Errorf("a named critic was refused: %v", err)
 	}
 }
@@ -1758,7 +1758,7 @@ func TestMissingModelMessageSeesKeysSavedWithCorralSecret(t *testing.T) {
 	if err := st.Set("ANTHROPIC_API_KEY", fake); err != nil {
 		t.Fatal(err)
 	}
-	err = herdNotConfiguredErr("corral certify --local", "", "", "off")
+	err = herdNotConfiguredErr("corral certify --local", "", "", "off", false)
 	if err == nil {
 		t.Fatal("empty seats accepted")
 	}

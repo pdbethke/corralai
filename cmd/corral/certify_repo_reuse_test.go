@@ -199,7 +199,7 @@ func reuseFixtureScanOpt(t *testing.T, root, dsn string, deriver reposcan.Derive
 	if ex.selection.Ran {
 		selectionMethod = "coverage-context"
 	}
-	auditConfig := auditConfigKey(false, selectionMethod, nil, "", "")
+	auditConfig := auditConfigKey(false, selectionMethod, nil, "", "", "")
 
 	cfg := reposcan.EmitConfig{
 		Owner: "test-owner", Repo: "test-repo", Commit: "deadbeef", Root: root,

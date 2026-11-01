@@ -562,3 +562,32 @@ func TestStrykerDuplicateIDAfterAFailedFirstIsDropped(t *testing.T) {
 		t.Errorf("Counts = %v", fm.Counts)
 	}
 }
+
+// TestStrykerPathsNamesTheReportedFiles: a caller auditing many files asks
+// which of them the report covers BEFORE it reads any of them, so a file the
+// report never mentions gets no tool source rather than an error. The paths
+// are the report's, cleaned the way ReadStryker matches them, sorted; and a
+// report ReadStryker would refuse is refused here for the same reason.
+func TestStrykerPathsNamesTheReportedFiles(t *testing.T) {
+	report, _, _ := loadREA(t)
+	got, err := StrykerPaths(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{reaPath}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("StrykerPaths = %v, want %v", got, want)
+	}
+	two := `{"framework":{"name":"StrykerJS","version":"10.0.0"},"files":{"./src/b.ts":{"source":""},"src/a.ts":{"source":""}}}`
+	if got, err := StrykerPaths([]byte(two)); err != nil || !reflect.DeepEqual(got, []string{"src/a.ts", "src/b.ts"}) {
+		t.Fatalf("StrykerPaths = %v, %v; want the cleaned, sorted paths", got, err)
+	}
+	for name, bad := range map[string]string{
+		"not JSON":        `{`,
+		"other framework": `{"framework":{"name":"Stryker.NET","version":"4"},"files":{}}`,
+		"no version":      `{"framework":{"name":"StrykerJS"},"files":{}}`,
+	} {
+		if _, err := StrykerPaths([]byte(bad)); err == nil {
+			t.Errorf("%s: StrykerPaths accepted a report ReadStryker refuses", name)
+		}
+	}
+}

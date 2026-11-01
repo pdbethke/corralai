@@ -150,19 +150,9 @@ func ReadStryker(reportJSON []byte, files map[string][]byte, budget func(path st
 	if budget == nil {
 		return nil, errors.New("mutantsources: no mutant budget given; pass the run's per-file budget")
 	}
-	var rep strykerReport
-	if err := json.Unmarshal(reportJSON, &rep); err != nil {
-		return nil, fmt.Errorf("mutantsources: the Stryker report is not readable JSON: %w", err)
-	}
-	if rep.Framework == nil || rep.Framework.Name != strykerJS {
-		name := "none"
-		if rep.Framework != nil {
-			name = strconv.Quote(rep.Framework.Name)
-		}
-		return nil, fmt.Errorf("mutantsources: the report's framework is %s; only %s reports are read, because only their column semantics have been verified", name, strykerJS)
-	}
-	if rep.Framework.Version == "" {
-		return nil, errors.New("mutantsources: the report's framework names no version, and every tool mutant records the version that produced it")
+	rep, err := parseStryker(reportJSON)
+	if err != nil {
+		return nil, err
 	}
 	tool := "stryker@" + rep.Framework.Version
 
@@ -240,6 +230,47 @@ func ReadStryker(reportJSON []byte, files map[string][]byte, budget func(path st
 		return nil, fmt.Errorf("mutantsources: the Stryker report covers none of the audited files; it reports on %s", strings.Join(paths, ", "))
 	}
 	return out, nil
+}
+
+// StrykerPaths returns the files a StrykerJS report covers, cleaned the way
+// ReadStryker matches them against audited paths, sorted. It refuses exactly
+// the reports ReadStryker refuses for their shape (unreadable JSON, another
+// framework, no version), so a caller auditing many files can check the
+// report once and learn which files have a tool source before reading any of
+// them: ReadStryker itself treats a report covering none of the files it is
+// handed as an error, which is right for one call and wrong for a scan that
+// asks file by file.
+func StrykerPaths(reportJSON []byte) ([]string, error) {
+	rep, err := parseStryker(reportJSON)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(rep.Files))
+	for p := range rep.Files {
+		out = append(out, path.Clean(p))
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// parseStryker reads a report and refuses one whose framework or version
+// this package cannot vouch for.
+func parseStryker(reportJSON []byte) (strykerReport, error) {
+	var rep strykerReport
+	if err := json.Unmarshal(reportJSON, &rep); err != nil {
+		return rep, fmt.Errorf("mutantsources: the Stryker report is not readable JSON: %w", err)
+	}
+	if rep.Framework == nil || rep.Framework.Name != strykerJS {
+		name := "none"
+		if rep.Framework != nil {
+			name = strconv.Quote(rep.Framework.Name)
+		}
+		return rep, fmt.Errorf("mutantsources: the report's framework is %s; only %s reports are read, because only their column semantics have been verified", name, strykerJS)
+	}
+	if rep.Framework.Version == "" {
+		return rep, errors.New("mutantsources: the report's framework names no version, and every tool mutant records the version that produced it")
+	}
+	return rep, nil
 }
 
 // refuseSource returns why a file's tool mutants cannot be used, or "".

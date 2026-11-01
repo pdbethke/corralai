@@ -291,8 +291,8 @@ func TestUnitEvidenceNamesItsMethodInTheAuditConfigKey(t *testing.T) {
 	if got := with.selectionMethod(); got != testmap.MethodUnitEvidence {
 		t.Fatalf("selectionMethod with unit evidence = %q, want %q", got, testmap.MethodUnitEvidence)
 	}
-	a := auditConfigKey(false, without.selectionMethod(), unitGradingArgv, "", "")
-	b := auditConfigKey(false, with.selectionMethod(), unitGradingArgv, "", "")
+	a := auditConfigKey(false, without.selectionMethod(), unitGradingArgv, "", "", "")
+	b := auditConfigKey(false, with.selectionMethod(), unitGradingArgv, "", "", "")
 	if a == b || !strings.Contains(b, testmap.MethodUnitEvidence) {
 		t.Errorf("auditConfigKey must name unit-evidence:\n without %s\n    with %s", a, b)
 	}

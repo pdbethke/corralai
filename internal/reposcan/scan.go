@@ -40,6 +40,11 @@ const (
 	// compiles or imports it — the canary survived. Distinct from
 	// ReasonBaselineFailed: the suite is fine, it is pointed elsewhere.
 	ReasonSuiteIgnoresFile = "suite-ignores-file"
+	// ReasonNoMutantSource marks a file a tool-only run (--mutant-model off
+	// with --mutants-from) has no exam for: the report has no entry for it,
+	// was made from other bytes, or leaves nothing alive to grade. Never
+	// graded on an empty exam, which would sign a kill rate nothing measured.
+	ReasonNoMutantSource = "no-mutant-source"
 )
 
 // FileResult is one file's audit outcome plus the provenance the report needs.

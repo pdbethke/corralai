@@ -114,7 +114,7 @@ func TestRegistryNeverFillsAnUnnamedSeat(t *testing.T) {
 		t.Fatalf("seats = %+v, want every one still empty — a registry is not a default", *s)
 	}
 	// And the run still refuses, naming the seats, exactly as before.
-	if err := herdNotConfiguredErr("corral certify --repo", s.writer, s.mutant, "off"); err == nil {
+	if err := herdNotConfiguredErr("corral certify --repo", s.writer, s.mutant, "off", false); err == nil {
 		t.Fatal("unnamed seats = nil error, want the no-default-models refusal")
 	}
 }
@@ -383,7 +383,7 @@ func TestStrictRegistryAllowsAliasesAndOff(t *testing.T) {
 	if (*empty != seatPtrs{}) {
 		t.Fatalf("seats = %+v, want them still empty — strict is not a default", *empty)
 	}
-	if err := herdNotConfiguredErr("corral certify --repo", empty.writer, empty.mutant, "off"); err == nil {
+	if err := herdNotConfiguredErr("corral certify --repo", empty.writer, empty.mutant, "off", false); err == nil {
 		t.Fatal("unnamed seats under a strict registry = nil error, want the no-default-models refusal")
 	}
 }

@@ -63,6 +63,8 @@ corral certify --local --max-tokens	executed	test:cmd/corral/local_endpoint_test
 corral certify --local --prior	executed	test:cmd/corral/certify_repo_evidence_candidacy_test.go
 corral certify --local --mutant-model	executed	test:cmd/corral/certify_repo_writer_mode_test.go
 corral certify --local --mutants	executed	test:cmd/corral/certify_repo_evidence_candidacy_test.go
+corral certify --local --mutants-from	executed	test:cmd/corral/mutants_from_test.go
+corral certify --local --tool-sample-seed	executed	test:cmd/corral/mutants_from_test.go
 corral certify --local --n-mutants	executed	run:2026-09-02 record 89
 corral certify --local --no-ledger	executed	test:cmd/corral/certify_local_entry_test.go (TestLocalNoLedgerFlag)
 corral certify --local --no-bind-deps	executed	test:cmd/corral/certify_local_test.go
@@ -104,6 +106,8 @@ corral certify --repo --max-proven-missed	executed	test:cmd/corral/certify_repo_
 corral certify --repo --min-kill-rate	executed	test:cmd/corral/certify_repo_test.go
 corral certify --repo --mutant-model	executed	test:cmd/corral/certify_repo_writer_mode_test.go
 corral certify --repo --mutants	executed	test:cmd/corral/certify_repo_evidence_candidacy_test.go
+corral certify --repo --mutants-from	executed	test:cmd/corral/mutants_from_test.go
+corral certify --repo --tool-sample-seed	executed	test:cmd/corral/mutants_from_test.go
 corral certify --repo --no-fail-fast	executed	test:cmd/corral/certify_failfast_flag_test.go (reaches every job's audit input); semantics in internal/adequacy/verdict_identity_test.go
 corral certify --repo --runner	unexecuted	
 corral certify --repo --no-goal-cache	executed	test:cmd/corral/certify_repo_goalcache_test.go (TestNoGoalCacheFlagDerivesEveryTime)

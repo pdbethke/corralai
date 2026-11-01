@@ -347,9 +347,10 @@ func gap(what string, task string) string { return "GAP: " + what + "; fixed in 
 // printedMetrics is keyed "<package dir>/<file>:<func>". Later tasks that
 // record a number add or change the row of every function that prints it.
 var printedMetrics = map[string]printedRow{
-	"cmd/corral/brief.go:buildBrief":  {Exempt: exTruncation + " (--max-items): the entries hold the items"},
-	"cmd/corral/brief.go:spanText":    {Fields: []string{"MutantRow.SpanStart", "MutantRow.SpanEnd"}},
-	"cmd/corral/brief.go:renderBrief": {Fields: []string{"Row.KillRate", "Row.Survivors", "Row.ProvenMissed"}},
+	"cmd/corral/certify_repo.go:toolNoSource": {Exempt: "error message: a read failure's own text inside the no-mutant-source reason"},
+	"cmd/corral/brief.go:buildBrief":          {Exempt: exTruncation + " (--max-items): the entries hold the items"},
+	"cmd/corral/brief.go:spanText":            {Fields: []string{"MutantRow.SpanStart", "MutantRow.SpanEnd"}},
+	"cmd/corral/brief.go:renderBrief":         {Fields: []string{"Row.KillRate", "Row.Survivors", "Row.ProvenMissed"}},
 
 	"cmd/corral/certify.go:runCertify":                        {Exempt: "key: the id and head hash of a certified build on the brain, not a measurement"},
 	"cmd/corral/certify_adversarial.go:runCertifyAdversarial": {Exempt: "key and error message: a brain run id and the poll timeout, not a measurement"},
@@ -429,6 +430,11 @@ var printedMetrics = map[string]printedRow{
 	"cmd/corral/models_rank.go:bugcatchRankEvidence":  {Exempt: "formats a record id into an evidence key, not a measurement"},
 	"cmd/corral/models_rank.go:warehouseRankEvidence": {Exempt: "formats a scan id into an evidence key, not a measurement"},
 	"cmd/corral/mutantset.go:report":                  {Exempt: "count of files written to the --record-mutants file, an output artifact; the mutants themselves are MutantRow"},
+	"cmd/corral/mutants_from.go:toolMutantsLine":      {Exempt: gap("the per-file tool-mutant counts on the scan line (taken, survivors, no-coverage, killed, compile errors, dropped by reason)", "Task 4 of the tool-mutant-sources plan (ScanRow.ToolMutants)")},
+	"cmd/corral/mutants_from.go:resolveMutantsFrom":   {Exempt: gap("the tool sample seed printed for replay", "Task 4 of the tool-mutant-sources plan (FileMutants.Seed on the scan row)")},
+	"cmd/corral/mutants_from.go:formatToolSeed":       {Exempt: gap("the tool sample seed's one spelling", "Task 4 of the tool-mutant-sources plan (FileMutants.Seed on the scan row)")},
+	"cmd/corral/mutants_from.go:forFile":              {Exempt: "error message: wraps the reader's refusal, whose numbers are the report's own"},
+	"cmd/corral/mutants_from.go:checkCoversSome":      {Exempt: "error message: the count of files the run audits, inside a refusal"},
 
 	"cmd/corral/review.go:printReview":              {Exempt: exReview},
 	"cmd/corral/review.go:runReviewRun":             {Exempt: exReview},

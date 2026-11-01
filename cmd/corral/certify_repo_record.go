@@ -481,18 +481,25 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 // grading query treats it as "corral actually executed something against
 // this file", and that claim must be TRUE, not merely "corral meant to".
 //
-// Two of the six ungradable reasons never reach that bar:
+// Three of the seven ungradable reasons never reach that bar:
+//
 //   - reposcan.ReasonCancelled is written by reposcan.Scan itself, BEFORE
 //     ex.Execute is ever called (see internal/reposcan/scan.go) — the
 //     check command never ran, full stop. This function's own earlier
 //     comment used to concede this and stamp "proven" anyway; that was
 //     the overclaim, not a defensible choice.
+//
 //   - reposcan.ReasonPrepFailed is returned at the very top of
 //     localExecutor.Execute (cmd/corral/certify_repo.go), when the
 //     language-wide jail seed fails to build — BEFORE l.newBaseline is
 //     ever reached, so the check command never ran for this file either.
 //
-// Both get "" (no evidence claim), the same value an excluded file that
+//   - reposcan.ReasonNoMutantSource is returned by localExecutor.Execute
+//     BEFORE the baseline, when a tool-only run's report gives the file
+//     nothing to grade (toolMutantSource.noSourceReason), so the check
+//     command never ran for it.
+//
+// All three get "" (no evidence claim), the same value an excluded file that
 // was never even a candidate gets — deliberately not a fifth enum value:
 // "no evidence" and "" already mean the same thing everywhere else in
 // this table (see exclusionEvidence), and reusing it means one fewer
@@ -510,7 +517,7 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 // — see Execute's own ordering). All four keep "proven".
 func ungradableEvidence(reason string) string {
 	switch reason {
-	case reposcan.ReasonCancelled, reposcan.ReasonPrepFailed:
+	case reposcan.ReasonCancelled, reposcan.ReasonPrepFailed, reposcan.ReasonNoMutantSource:
 		return ""
 	default:
 		return "proven"

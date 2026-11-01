@@ -437,13 +437,13 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 				fmt.Fprintf(stderr, "corral certify --local: --mutants-from: reading %s: %v\n", *codePath, rerr)
 				return 2
 			}
-			why, nerr := toolSource.noSourceReason(toolKey, src)
+			pre, nerr := toolSource.preCheck(toolKey, src)
 			if nerr != nil {
 				fmt.Fprintf(stderr, "corral certify --local: %v\n", nerr)
 				return 2
 			}
-			if why != "" {
-				fmt.Fprintf(stderr, "corral certify --local: COULD-NOT-GRADE: --mutant-model off makes the tool the only mutant source, and %s — nothing was spent\n", why)
+			if pre.none != "" {
+				fmt.Fprintf(stderr, "corral certify --local: COULD-NOT-GRADE: --mutant-model off makes the tool the only mutant source, and %s — nothing was spent\n", pre.noneSaid)
 				return 2
 			}
 		}

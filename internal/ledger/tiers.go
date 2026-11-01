@@ -105,9 +105,12 @@ func buildFieldTiers() map[[2]string]FieldTier {
 	add("ScanRow", TierMeasured, "", `Audited Candidates TotalFiles Passed TreeDirty PreflightRan AllCandidates Top TreesRequested
 		Scope Substrate SandboxBackend SandboxImage ModelSet CorralVersion EngineVersion Cores SeedSkipped UnitPass TestCommand Runner Settings Toolchains HostNotMeasured SelectionReused
 		LoadStart LoadEnd LoadPeak MemAvailableStartBytes PeakRSSBytes CPUMillis
-		Inventory ShadowDraw MaxTokensReached ToolMutants
+		Inventory ShadowDraw MaxTokensReached
 		PushedBy Host SourcePushed StartedAt FinishedAt TotalMillis SelectionMillis ModelCalls InputTokens OutputTokens`)
 	add("ScanRow", TierMeta, noteRunAccount, "PreflightNote")
+	// Measured as a whole (corral read the report and counted it), with what
+	// it counts said: the per-status counts are the tool's claims.
+	add("ScanRow", TierMeasured, "per-status counts are the tool's own claims about its mutants; Taken and Dropped are corral's", "ToolMutants")
 
 	// Row: one per audited file.
 	add("Row", TierKey, "", "Repo Commit Path ScanID RunURL StatementSHA256 ParentSHA256 CacheKey PriorDigest ReusedFromScanID")

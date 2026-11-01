@@ -4,9 +4,11 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -373,5 +375,209 @@ func TestScansReaderShowsToolMutantSource(t *testing.T) {
 	runScansShow([]string{"1"}, openFake(r), &out, &errb)
 	if strings.Contains(out.String(), "mutant sources:") {
 		t.Errorf("a scan with no recorded sources printed a sources section:\n%s", out.String())
+	}
+}
+
+// --- fix round 1 ---------------------------------------------------------
+
+// pathMarker is a directory name no recorded sentence can contain by chance:
+// the report sits under it, so any fragment of the operator's path on the
+// record is found by looking for it.
+const pathMarker = "zz-operator-home-marker-q7"
+
+// twoFileToolRepo is the tool fixture plus pkg/b.go, which the report does
+// not mention, with the report under pathMarker. It returns the repo, the
+// report path and the goals file.
+func twoFileToolRepo(t *testing.T) (root, report, goals string) {
+	t.Helper()
+	root = t.TempDir()
+	mustWrite(t, filepath.Join(root, "go.mod"), "module example.com/x\n\ngo 1.22\n")
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), toolFixtureSrc)
+	mustWrite(t, filepath.Join(root, "pkg", "a_test.go"), toolFixtureTest)
+	mustWrite(t, filepath.Join(root, "pkg", "b.go"), "package pkg\n\n// Min returns the smaller of a and b.\nfunc Min(a, b int) int {\n\tif a < b {\n\t\treturn a\n\t}\n\treturn b\n}\n")
+	mustWrite(t, filepath.Join(root, "pkg", "b_test.go"), "package pkg\n\nimport \"testing\"\n\nfunc TestMin(t *testing.T) {\n\tif Min(1, 2) != 1 {\n\t\tt.Fatal(\"Min\")\n\t}\n}\n")
+	gitRun := gitCmd(t, root)
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+	report = filepath.Join(t.TempDir(), pathMarker, "reports", "mutation.json")
+	mustWrite(t, report, string(toolFixtureReport(t, toolFixtureSrc)))
+	goals = writeGoals(t, t.TempDir(), `{"pkg/a.go": "Max must return the larger argument", "pkg/b.go": "Min must return the smaller argument"}`)
+	return root, report, goals
+}
+
+// rawLedgerBytes is every entry file of a ledger directory, decompressed:
+// what is published, byte for byte.
+func rawLedgerBytes(t *testing.T, dir string) string {
+	t.Helper()
+	files, err := filepath.Glob(filepath.Join(dir, auditpush.ScansSubdir, "*.json.gz"))
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no entry files in %s (%v)", dir, err)
+	}
+	var all strings.Builder
+	for _, f := range files {
+		fh, err := os.Open(f) // #nosec G304 -- test temp path
+		if err != nil {
+			t.Fatal(err)
+		}
+		zr, err := gzip.NewReader(fh)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := io.ReadAll(zr)
+		_ = fh.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		all.Write(b)
+	}
+	return all.String()
+}
+
+// pathFragments are the pieces of a report path that must never reach the
+// record: the marker directory, the temp parent, the whole path.
+func pathFragments(report string) []string {
+	return []string{pathMarker, filepath.Dir(filepath.Dir(report)), report}
+}
+
+func repoEntryCounts(t *testing.T, root string) (ledger.Row, []ledger.ToolMutantCounts, auditpush.LedgerEntry) {
+	t.Helper()
+	entries, err := auditpush.ReadLedgerDir(filepath.Join(root, ".corral", "ledger"))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("want one entry, got %d (%v)", len(entries), err)
+	}
+	e := entries[0]
+	var b ledger.Row
+	for _, r := range e.Bundle.Files {
+		if r.Path == "pkg/b.go" {
+			b = r
+		}
+	}
+	var counts []ledger.ToolMutantCounts
+	if err := json.Unmarshal([]byte(e.Bundle.Scan.ToolMutants), &counts); err != nil {
+		t.Fatalf("scan row tool_mutants = %q: %v", e.Bundle.Scan.ToolMutants, err)
+	}
+	return b, counts, e
+}
+
+func accountFor(counts []ledger.ToolMutantCounts, p string) (ledger.ToolMutantCounts, bool) {
+	for _, c := range counts {
+		if c.Path == p {
+			return c, true
+		}
+	}
+	return ledger.ToolMutantCounts{}, false
+}
+
+// Fix round 1, findings 1, 2 and 5. A file the report does not mention is
+// accounted for on the scan row in both shapes of run (beside a model, and
+// tool-only, where the pre-check refuses it before any baseline), and no
+// recorded sentence names the report by the path the operator typed: the
+// record names it by tool and sha256. The terminal still says the path, and
+// the pre-check's line names the versioned tool.
+func TestRecordedToolReasonsNeverNameTheReportPath(t *testing.T) {
+	for _, mode := range []string{"both", "tool-only"} {
+		t.Run(mode, func(t *testing.T) {
+			noKeys(t)
+			withMachineLedger(t)
+			wiredAgent(t, "fakew", "", toolFixtureWriterTest)
+			wiredAgent(t, "fakem", "", "NONE")
+			root, report, goals := twoFileToolRepo(t)
+			mutant := "fakem"
+			if mode == "tool-only" {
+				mutant = "off"
+			}
+			var out, errb bytes.Buffer
+			runCertifyRepo([]string{
+				"--repo", root, "--goals", goals, "--all",
+				"--writer-model", "fakew", "--mutant-model", mutant, "--critic-model", "off",
+				"--mutants-from", "stryker:" + report, "--tool-sample-seed", "7",
+				"--substrate", substrateWorkspace, "--whole-suite", "--no-verdict-cache",
+				"--", "go", "test", "./...",
+			}, &out, &errb)
+			said := out.String() + errb.String()
+			if !strings.Contains(said, report) {
+				t.Errorf("the terminal no longer names the report path %s:\n%s", report, said)
+			}
+			raw := rawLedgerBytes(t, filepath.Join(root, ".corral", "ledger"))
+			for _, frag := range pathFragments(report) {
+				if strings.Contains(raw, frag) {
+					t.Errorf("the signed entry carries %q, a fragment of the operator's report path", frag)
+				}
+			}
+			bRow, counts, _ := repoEntryCounts(t, root)
+			if strings.Contains(bRow.Detail, pathMarker) {
+				t.Errorf("Row.Detail names the report path: %q", bRow.Detail)
+			}
+			acc, ok := accountFor(counts, "pkg/b.go")
+			if !ok {
+				t.Fatalf("pkg/b.go has no account on the scan row: %+v\n%s", counts, said)
+			}
+			if acc.Tool != "stryker@10.0.0" || !strings.Contains(acc.Refused, "no entry for pkg/b.go") || acc.Taken != nil {
+				t.Errorf("pkg/b.go account = %+v", acc)
+			}
+			src, _ := os.ReadFile(report) // #nosec G304 -- test temp path
+			if !strings.Contains(acc.Refused, reportSHA256(src)) {
+				t.Errorf("the recorded reason %q does not name the report by its sha256", acc.Refused)
+			}
+			if mode == "tool-only" {
+				if bRow.Reason != reposcan.ReasonNoMutantSource || !strings.Contains(bRow.Detail, reportSHA256(src)) {
+					t.Errorf("pkg/b.go row reason %q detail %q", bRow.Reason, bRow.Detail)
+				}
+				if !strings.Contains(out.String(), "pkg/b.go: tool mutants (stryker@10.0.0): none to grade") {
+					t.Errorf("the pre-check line does not name the versioned tool:\n%s", out.String())
+				}
+			}
+		})
+	}
+}
+
+// Fix round 1, finding 3: a file served from the verdict cache ran no audit,
+// so no account was handed to the sink, yet its tool-sourced mutant rows are
+// written. The account comes from the entry that earned the verdict, so the
+// second run's scan row equals the first's.
+func TestAVerdictCacheHitKeepsTheToolAccount(t *testing.T) {
+	noKeys(t)
+	withMachineLedger(t)
+	wiredAgent(t, "fakew", "", toolFixtureWriterTest)
+	root, report := toolFixtureRepo(t, toolFixtureSrc)
+	goals := writeGoals(t, t.TempDir(), `{"pkg/a.go": "Max must return the larger argument"}`)
+	// One prior, the same (empty) one both times: unset, the second run is
+	// primed by the first run's entry, which is a different exam and so a
+	// different cache key.
+	noPrior := t.TempDir()
+	run := func() (string, string) {
+		var out, errb bytes.Buffer
+		code := runCertifyRepo([]string{
+			"--repo", root, "--goals", goals,
+			"--writer-model", "fakew", "--mutant-model", "off", "--critic-model", "off",
+			"--mutants-from", "stryker:" + report, "--tool-sample-seed", "7",
+			"--substrate", substrateWorkspace, "--whole-suite", "--prior", noPrior,
+			"--", "go", "test", "./...",
+		}, &out, &errb)
+		if code != 0 {
+			t.Fatalf("exit %d\n%s%s", code, out.String(), errb.String())
+		}
+		return out.String(), errb.String()
+	}
+	run()
+	second, _ := run()
+	entries, err := auditpush.ReadLedgerDir(filepath.Join(root, ".corral", "ledger"))
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("want two entries, got %d (%v)", len(entries), err)
+	}
+	first, again := entries[0].Bundle, entries[1].Bundle
+	hit := false
+	for _, f := range again.Files {
+		hit = hit || f.CacheHit
+	}
+	if !hit {
+		t.Fatalf("the second run was not a cache hit:\n%s", second)
+	}
+	if first.Scan.ToolMutants == "" || again.Scan.ToolMutants != first.Scan.ToolMutants {
+		t.Errorf("cache-hit tool_mutants = %q, want the first run's %q", again.Scan.ToolMutants, first.Scan.ToolMutants)
+	}
+	if len(again.Mutants) != 1 || again.Mutants[0].Source != "tool" {
+		t.Errorf("cache-hit mutant rows = %+v", again.Mutants)
 	}
 }

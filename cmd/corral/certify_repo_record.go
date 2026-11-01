@@ -497,7 +497,7 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 //
 //   - reposcan.ReasonNoMutantSource is returned by localExecutor.Execute
 //     BEFORE the baseline, when a tool-only run's report gives the file
-//     nothing to grade (toolMutantSource.noSourceReason), so the check
+//     nothing to grade (toolMutantSource.preCheck), so the check
 //     command never ran for it.
 //
 // All three get "" (no evidence claim), the same value an excluded file that

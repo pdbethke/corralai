@@ -212,8 +212,13 @@ type toolFileMutants struct {
 	// line is rendered from it when the file was counted.
 	counts ledger.ToolMutantCounts
 	// none is why the tool gives this file nothing to grade, "" when it
-	// does.
+	// does, as the RECORD says it (ScanRow.ToolMutants, Row.Detail): the
+	// report is named by its tool and sha256, never by the path the
+	// operator typed, which is theirs and may name their home directory.
 	none string
+	// noneSaid is none as the terminal says it, naming the report by its
+	// path so the operator can find it. Never recorded.
+	noneSaid string
 }
 
 // forFile reads the file's tool mutants under its budget (the per-file
@@ -221,8 +226,9 @@ type toolFileMutants struct {
 func (s *toolMutantSource) forFile(p string, code []byte, budget int) (toolFileMutants, error) {
 	r := toolFileMutants{src: s}
 	if !s.covers[path.Clean(p)] {
-		r.none = fmt.Sprintf("the %s report %s has no entry for %s", s.tool, s.path, p)
-		r.line = fmt.Sprintf("tool mutants (%s): none — %s", s.label, r.none)
+		r.none = fmt.Sprintf("the %s report with sha256 %s has no entry for %s", s.label, s.sha256, p)
+		r.noneSaid = fmt.Sprintf("the %s report %s has no entry for %s", s.label, s.path, p)
+		r.line = fmt.Sprintf("tool mutants (%s): none — %s", s.label, r.noneSaid)
 		r.counts = ledger.ToolMutantCounts{Path: path.Clean(p), Tool: s.label, Refused: r.none}
 		return r, nil
 	}
@@ -235,14 +241,16 @@ func (s *toolMutantSource) forFile(p string, code []byte, budget int) (toolFileM
 	switch {
 	case r.fm.Refused != "":
 		r.none = r.fm.Refused
-		r.line = fmt.Sprintf("tool mutants (%s): refused — %s", r.fm.Tool, r.none)
+		r.noneSaid = r.none
+		r.line = fmt.Sprintf("tool mutants (%s): refused — %s", r.fm.Tool, r.noneSaid)
 		return r, nil
 	case len(r.fm.Taken) == 0:
-		r.none = fmt.Sprintf("the %s report leaves nothing to grade in %s: no Survived or NoCoverage mutant corral could apply", s.tool, p)
+		r.none = fmt.Sprintf("the %s report leaves nothing to grade in %s: no Survived or NoCoverage mutant corral could apply", s.label, p)
+		r.noneSaid = r.none
 	}
 	r.line = toolMutantsLine(r.counts)
-	if r.none != "" {
-		r.line += " — " + r.none
+	if r.noneSaid != "" {
+		r.line += " — " + r.noneSaid
 	}
 	return r, nil
 }
@@ -349,23 +357,22 @@ func toolMutantsJSON(counts []ledger.ToolMutantCounts) string {
 	return string(b)
 }
 
-// noSourceReason is forFile's verdict on whether the tool gives this file
+// preCheck is forFile's verdict on whether the tool gives this file
 // anything to grade, asked before any baseline runs so a tool-only scan
 // spends nothing on a file it cannot grade. It reads the report UNCAPPED,
 // because emptiness does not depend on the budget (any budget of at least
 // one takes something from a non-empty candidate set); the sample a real
 // run takes is drawn by forFile under the real budget.
 //
-// The reason is "" when there is something to grade. A report corral could
-// not READ for the file comes back as err, never as a reason: a reason is
-// recorded as no-mutant-source, which says the tool had nothing to offer,
-// and that is not what an unreadable report measured.
-func (s *toolMutantSource) noSourceReason(p string, code []byte) (string, error) {
-	r, err := s.forFile(p, code, math.MaxInt32)
-	if err != nil {
-		return "", err
-	}
-	return r.none, nil
+// The result's none is "" when there is something to grade. When it is set,
+// the result's counts are the file's whole account for the record: nothing
+// was taken, so no over-budget drop exists and the uncapped read counts
+// exactly what a capped one would. A report corral could not READ for the
+// file comes back as err, never as a reason: a reason is recorded as
+// no-mutant-source, which says the tool had nothing to offer, and that is
+// not what an unreadable report measured.
+func (s *toolMutantSource) preCheck(p string, code []byte) (toolFileMutants, error) {
+	return s.forFile(p, code, math.MaxInt32)
 }
 
 // apply puts the file's tool mutants on its RunSpec through the door TM-R1
@@ -379,7 +386,7 @@ func (r toolFileMutants) apply(rs *advpool.RunSpec) error {
 	if r.none != "" {
 		if r.src.toolOnly {
 			return localAuditError{usage: true, scanReason: reposcan.ReasonNoMutantSource,
-				msg: "COULD-NOT-GRADE: --mutant-model off makes the tool the only mutant source, and " + r.none}
+				msg: "COULD-NOT-GRADE: --mutant-model off makes the tool the only mutant source, and " + r.noneSaid}
 		}
 		return nil
 	}

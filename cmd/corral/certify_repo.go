@@ -1660,7 +1660,18 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	if *noVerdictCacheFlag || *noLedgerFlag {
 		verdictCacheDir = ""
 	}
-	results = reposcan.Scan(auditCtx, jobs, ex, newLedgerCache(verdictCacheDir, stderr), workers)
+	verdictCache := newLedgerCache(verdictCacheDir, stderr)
+	results = reposcan.Scan(auditCtx, jobs, ex, verdictCache, workers)
+	// A served file ran no audit, so its tool account comes from the entry
+	// that earned its verdict (ledgerCache.toolAccount).
+	for _, r := range results {
+		if !r.CacheHit || ex == nil {
+			continue
+		}
+		if acc, ok := verdictCache.toolAccount(r.Job.CacheKey); ok {
+			ex.toolCounts.add(acc)
+		}
+	}
 	// An operator's interrupt records nothing, for every seat type: no
 	// report of files that were stopped, no attestation, no ledger entry,
 	// no push. Checked again right before those writes, for a signal that
@@ -5754,13 +5765,16 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 	// nothing to grade has no exam: reported with the reason, before a
 	// baseline is paid for, never graded on an empty exam.
 	if l.toolSource != nil && l.toolSource.toolOnly {
-		why, err := l.toolNoSource(j.Path)
+		pre, err := l.toolNoSource(j.Path)
 		if err != nil {
 			return reposcan.FileResult{}, l.fail(j, err)
 		}
-		if why != "" {
-			l.note("%s: tool mutants (%s): none to grade — %s — not graded\n", j.Path, l.toolSource.tool, why)
-			return reposcan.FileResult{Gradable: false, Reason: reposcan.ReasonNoMutantSource, Detail: why}, nil
+		if pre.none != "" {
+			// The file's account goes on the scan row like every audited
+			// file's: a refused file is the waste statistic's whole point.
+			l.toolCounts.add(pre.counts)
+			l.note("%s: tool mutants (%s): none to grade — %s — not graded\n", j.Path, l.toolSource.label, pre.noneSaid)
+			return reposcan.FileResult{Gradable: false, Reason: reposcan.ReasonNoMutantSource, Detail: pre.none}, nil
 		}
 	}
 
@@ -6015,22 +6029,23 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 	return res, nil
 }
 
-// toolNoSource is why the tool-only scan's report gives the file at p
+// toolNoSource is the tool-only scan's pre-check of the file at p
+// (toolMutantSource.preCheck): its none says why the report gives it
 // nothing to grade, "" when it does. The bytes are read through the
 // checkout's root, as every other read of the scan is. A file or report
 // that cannot be read is an error (an executor error on the report), never
 // a no-mutant-source reason.
-func (l *localExecutor) toolNoSource(p string) (string, error) {
+func (l *localExecutor) toolNoSource(p string) (toolFileMutants, error) {
 	root, err := os.OpenRoot(l.repoDir)
 	if err != nil {
-		return "", fmt.Errorf("reading %s to check it against the --mutants-from report: %w", p, err)
+		return toolFileMutants{}, fmt.Errorf("reading %s to check it against the --mutants-from report: %w", p, err)
 	}
 	defer func() { _ = root.Close() }()
 	code, err := root.ReadFile(p)
 	if err != nil {
-		return "", fmt.Errorf("reading %s to check it against the --mutants-from report: %w", p, err)
+		return toolFileMutants{}, fmt.Errorf("reading %s to check it against the --mutants-from report: %w", p, err)
 	}
-	return l.toolSource.noSourceReason(p, code)
+	return l.toolSource.preCheck(p, code)
 }
 
 // redUnitRetry is the job's selection again without the units (or, for

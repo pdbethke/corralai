@@ -11,6 +11,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/auditpush"
+	"github.com/pdbethke/corralai/internal/ledger"
 	"github.com/pdbethke/corralai/internal/reposcan"
 )
 
@@ -42,6 +43,10 @@ type ledgerCache struct {
 type cachedVerdict struct {
 	verdict    advpool.Verdict
 	computedAt time.Time
+	// toolAccount is the file's account of the --mutants-from report, read
+	// from the SAME entry the verdict is served from (its ScanRow.
+	// ToolMutants, by path); nil when that entry recorded none.
+	toolAccount *ledger.ToolMutantCounts
 }
 
 func newLedgerCache(dir string, stderr io.Writer) *ledgerCache {
@@ -57,6 +62,7 @@ func newLedgerCache(dir string, stderr io.Writer) *ledgerCache {
 	}
 	// A retracted entry's verdicts are never served (auditpush.ScanEntries).
 	for _, e := range auditpush.ScanEntries(all) {
+		accounts := toolAccountsByPath(e.Bundle.Scan.ToolMutants)
 		for _, r := range e.Bundle.Files {
 			if r.CacheKey == "" || r.VerdictJSON == "" {
 				continue
@@ -72,7 +78,7 @@ func newLedgerCache(dir string, stderr io.Writer) *ledgerCache {
 			if r.ComputedAt != nil && !r.ComputedAt.IsZero() {
 				at = *r.ComputedAt
 			}
-			c.byKey[r.CacheKey] = cachedVerdict{verdict: v, computedAt: at}
+			c.byKey[r.CacheKey] = cachedVerdict{verdict: v, computedAt: at, toolAccount: accounts[r.Path]}
 		}
 	}
 	return c
@@ -130,6 +136,43 @@ func oldestReuse(results []reposcan.FileResult) (time.Time, bool) {
 }
 
 func (c *ledgerCache) Put(string, reposcan.FileResult) {}
+
+// toolAccount is the tool account recorded beside the verdict served under
+// cacheKey. A served file ran no audit, so nothing handed its account to the
+// scan's sink, yet its tool-sourced mutant rows are written from the served
+// verdict; the account comes from the entry that earned that verdict, so the
+// rows and the account on one entry always describe the same exam. It is
+// carried, not recomputed: recomputing would re-derive the file's budget
+// outside the audit, a second derivation of a recorded number that could
+// drift from the first.
+func (c *ledgerCache) toolAccount(cacheKey string) (ledger.ToolMutantCounts, bool) {
+	if c == nil {
+		return ledger.ToolMutantCounts{}, false
+	}
+	hit, ok := c.byKey[cacheKey]
+	if !ok || hit.toolAccount == nil {
+		return ledger.ToolMutantCounts{}, false
+	}
+	return *hit.toolAccount, true
+}
+
+// toolAccountsByPath reads a scan row's ToolMutants text by path. A text
+// that does not parse yields none: the cache fails closed on what it cannot
+// read, and the served file's account is then absent, never guessed.
+func toolAccountsByPath(text string) map[string]*ledger.ToolMutantCounts {
+	if text == "" {
+		return nil
+	}
+	var counts []ledger.ToolMutantCounts
+	if err := json.Unmarshal([]byte(text), &counts); err != nil {
+		return nil
+	}
+	out := make(map[string]*ledger.ToolMutantCounts, len(counts))
+	for i := range counts {
+		out[counts[i].Path] = &counts[i]
+	}
+	return out
+}
 
 // marshalVerdict is the one encoding of a verdict the record carries and
 // the cache reads back; the two must agree, so there is one function.

@@ -331,8 +331,8 @@ func TestToolMutantsForAFileWithNoSource(t *testing.T) {
 			if rs.PresetMutants != nil {
 				t.Errorf("%s tool-only: an empty exam was set", name)
 			}
-			if pre, perr := s.noSourceReason(c.path, []byte(toolFixtureSrc)); perr != nil || !strings.Contains(pre, c.want) {
-				t.Errorf("%s: the pre-check %q does not say %q", name, pre, c.want)
+			if pre, perr := s.preCheck(c.path, []byte(toolFixtureSrc)); perr != nil || !strings.Contains(pre.noneSaid, c.want) {
+				t.Errorf("%s: the pre-check %q does not say %q", name, pre.noneSaid, c.want)
 			}
 		}
 	}
@@ -344,8 +344,8 @@ func TestToolMutantsForAFileWithNoSource(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if why, perr := s.noSourceReason("pkg/a.go", []byte(toolFixtureSrc)); why != "" || perr != nil {
-			t.Fatalf("pre-check refused a usable file: %s %v", why, perr)
+		if pre, perr := s.preCheck("pkg/a.go", []byte(toolFixtureSrc)); pre.none != "" || perr != nil {
+			t.Fatalf("pre-check refused a usable file: %s %v", pre.none, perr)
 		}
 		r, err := s.forFile("pkg/a.go", []byte(toolFixtureSrc), 5)
 		if err != nil {
@@ -543,9 +543,9 @@ func TestNoSourceReasonKeepsReaderErrorsApart(t *testing.T) {
 	}
 	// Swap in a report ReadStryker refuses after the flag check passed it.
 	s.report = []byte(`{"framework":{"name":"StrykerJS","version":"10.0.0"},"files":{"pkg/a.go":{"source":7}}}`)
-	why, err := s.noSourceReason("pkg/a.go", []byte(toolFixtureSrc))
-	if err == nil || why != "" {
-		t.Fatalf("noSourceReason = %q, %v; want no reason and the reader's error", why, err)
+	pre, err := s.preCheck("pkg/a.go", []byte(toolFixtureSrc))
+	if err == nil || pre.none != "" {
+		t.Fatalf("preCheck = %q, %v; want no reason and the reader's error", pre.none, err)
 	}
 	// And the scan reports it as an executor error, not no-mutant-source.
 	root, _ := toolFixtureRepo(t, toolFixtureSrc)

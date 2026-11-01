@@ -4,12 +4,14 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -17,9 +19,11 @@ import (
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/scanstore"
+	"github.com/pdbethke/corralai/internal/shadowpool"
 )
 
 const localEntryOrigin = "https://example.test/acme/widget.git"
@@ -128,6 +132,17 @@ func TestLocalRunWritesMachineLedgerEntry(t *testing.T) {
 	}
 	if b.Scan.TreeDirty == nil || *b.Scan.TreeDirty {
 		t.Errorf("tree_dirty = %v, want a measured false for a clean checkout", b.Scan.TreeDirty)
+	}
+	if want := localToolchainsNotRead("go"); b.Scan.Toolchains != want {
+		t.Errorf("Toolchains = %q, want %q: --local must say it reads none, not omit the field", b.Scan.Toolchains, want)
+	}
+	// The host's conditions, measured on a Linux box, else named as not.
+	if runtime.GOOS == "linux" {
+		if b.Scan.LoadStart == nil || b.Scan.LoadEnd == nil || b.Scan.LoadPeak == nil || b.Scan.CPUMillis == nil || b.Scan.MemAvailableStartBytes == nil {
+			t.Errorf("--local recorded no host conditions on Linux: %+v", b.Scan)
+		}
+	} else if b.Scan.HostNotMeasured == "" {
+		t.Errorf("--local recorded no host conditions and no reason on %s", runtime.GOOS)
 	}
 	if len(b.Files) != 1 || b.Files[0].Path != "pkg/a.go" {
 		t.Fatalf("file rows = %+v, want the one audited file", b.Files)
@@ -516,5 +531,61 @@ func TestUnattributedLocalRunRecordsNoSubjectEvenInsideAGitCheckout(t *testing.T
 	}
 	if sc.TreeDirty != nil {
 		t.Errorf("tree_dirty = %v, want nil: an unattributed run asks git nothing", *sc.TreeDirty)
+	}
+}
+
+// The --local entry carries the challenger draw and the cap's outcome from the
+// run's own input, and none where there was no draw or no cap. Deleting the
+// two assignments in localEntryBundle fails here.
+func TestLocalEntryRecordsTheDrawAndTheCap(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "a.go"), "package p\n\nfunc F() int { return 1 }\n")
+	v := richAuditedVerdict()
+	v.Lang = "go"
+	sel := shadowpool.Draw(advpool.RoleMutantGeneratorShadow, "go",
+		[]shadowpool.Candidate{{Typed: "m-a", Concrete: "m-a"}, {Typed: "m-b", Concrete: "m-b"}}, nil, false, 0, 42)
+	bundle := func(in localAuditInput) auditpush.Bundle {
+		in.repoDir, in.codePath, in.writerModel, in.mutantModel, in.criticModel = dir, "a.go", "w", "m", "off"
+		b, err := localEntryBundle(in, v, advpool.RunTelemetry{}, time.Now().Add(-time.Minute), localRunFacts{repoIdentity: "none"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+
+	none := bundle(localAuditInput{})
+	if none.Scan.ShadowDraw != "" || none.Scan.MaxTokensReached != nil {
+		t.Errorf("no draw and no cap recorded %q and %v", none.Scan.ShadowDraw, none.Scan.MaxTokensReached)
+	}
+	budget := agentbackend.NewTokenBudget(100)
+	got := bundle(localAuditInput{shadowSelection: []shadowpool.Selection{sel}, tokenBudget: budget})
+	var drawn []shadowpool.Selection
+	if err := json.Unmarshal([]byte(got.Scan.ShadowDraw), &drawn); err != nil || len(drawn) != 1 || drawn[0].Seed != shadowpool.FormatSeed(42) || drawn[0].Chosen != sel.Chosen {
+		t.Errorf("ShadowDraw %q: %v", got.Scan.ShadowDraw, err)
+	}
+	if got.Scan.MaxTokensReached == nil || *got.Scan.MaxTokensReached {
+		t.Errorf("MaxTokensReached = %v under an unreached cap, want a recorded false", got.Scan.MaxTokensReached)
+	}
+	budget.Allow()
+	budget.Charge(agentbackend.Usage{InputTokens: 500})
+	budget.Allow()
+	if hit := bundle(localAuditInput{tokenBudget: budget}).Scan.MaxTokensReached; hit == nil || !*hit {
+		t.Errorf("MaxTokensReached = %v after the cap refused a call, want true", hit)
+	}
+}
+
+// A real --local run under --max-tokens writes the outcome to the machine
+// ledger entry.
+func TestLocalRunRecordsTheCapOutcome(t *testing.T) {
+	root, setPath, _ := localEntryFixture(t)
+	ml := withMachineLedger(t)
+	code, out, errs := runLocalEntryFixture(t, root, setPath, "--max-tokens", "1000000")
+	localRunFinished(t, code, out, errs)
+	entries := scanEntriesIn(t, ml)
+	if len(entries) != 1 {
+		t.Fatalf("machine ledger holds %d entries, want 1", len(entries))
+	}
+	if m := entries[0].Bundle.Scan.MaxTokensReached; m == nil || *m {
+		t.Errorf("MaxTokensReached = %v, want a recorded false", m)
 	}
 }

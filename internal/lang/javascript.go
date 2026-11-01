@@ -28,6 +28,9 @@ func (jsPlugin) Scaffold() map[string]string { return map[string]string{} }
 // TestCmd uses Node's builtin test runner (zero external deps, offline).
 func (jsPlugin) TestCmd() []string { return []string{"node", "--test"} }
 
+// VersionCmd: see Plugin.VersionCmd.
+func (jsPlugin) VersionCmd() []string { return []string{"node", "--version"} }
+
 // CompileCheck syntax-checks both files (`node --check`). `node --check`
 // only ever checks a SINGLE file per invocation, so this returns a
 // TWO-command sequence — codePath then testPath, run in order, stopping at

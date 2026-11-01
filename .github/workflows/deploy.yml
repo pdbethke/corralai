@@ -237,6 +237,11 @@ jobs:
         # rendered from internal/lang/runner.go and parity.go by
         # scripts/gen-language-support.sh, never hand-edited.
         run: bash scripts/gen-language-support.sh --check
+      - name: Check the record-fields page hasn't drifted from the tier table
+        # Unconditional, like the language-support check above: the page is
+        # Markdown, so a Markdown-only change could hand-edit it. It is rendered
+        # from internal/ledger/tiers.go by scripts/gen-record-fields.sh.
+        run: bash scripts/gen-record-fields.sh --check
       - name: Check the cost-model page's table hasn't drifted from its ledger fixture
         # NOT gated on code changes. A Markdown-only pull request is the one
         # change class that can hand-edit a generated page, so gating this on

@@ -159,6 +159,7 @@ func (l *ledgerScans) ModelCallsForScan(_ context.Context, scanID int64) ([]scan
 			CachedInputTokens: c.CachedInputTokens, CacheWriteInputTokens: c.CacheWriteInputTokens,
 			UnmeteredCalls: c.UnmeteredCalls,
 			WallMillis:     c.WallMillis,
+			CostMicroUSD:   c.CostMicroUSD, CostBasis: c.CostBasis,
 		})
 	}
 	return out, nil
@@ -181,7 +182,11 @@ func scanRowFromEntry(e auditpush.LedgerEntry, id int64) scanstore.ScanRow {
 		PreflightRan: sc.PreflightRan, PreflightNote: sc.PreflightNote,
 		Author: sc.Identity.Author, Committer: sc.Identity.Committer, CoAuthors: sc.Identity.CoAuthors, GeneratedWith: sc.Identity.GeneratedWith,
 		CorralVersion: sc.CorralVersion, Host: sc.Host, Cores: sc.Cores, TreesRequested: sc.TreesRequested,
-		SelectionMillis: sc.SelectionMillis, SelectionReused: sc.SelectionReused,
+		SelectionMillis: sc.SelectionMillis, SelectionReused: sc.SelectionReused, UnitPass: sc.UnitPass,
+		TestCommand: sc.TestCommand, Runner: sc.Runner, Settings: sc.Settings, Toolchains: sc.Toolchains,
+		LoadStart: sc.LoadStart, LoadEnd: sc.LoadEnd, LoadPeak: sc.LoadPeak,
+		MemAvailableStartBytes: sc.MemAvailableStartBytes, PeakRSSBytes: sc.PeakRSSBytes, CPUMillis: sc.CPUMillis, HostNotMeasured: sc.HostNotMeasured,
+		Inventory: sc.Inventory, ShadowDraw: sc.ShadowDraw, MaxTokensReached: sc.MaxTokensReached,
 		InputTokens: sc.InputTokens, OutputTokens: sc.OutputTokens, ModelCalls: sc.ModelCalls,
 		SourcePushed: sc.SourcePushed, StatementSHA256: sc.StatementSHA256,
 		RekorLogIndex: sc.RekorLogIndex, RekorUUID: sc.RekorUUID,
@@ -239,6 +244,7 @@ func fileFromRow(r auditpush.Row) scanstore.File {
 		VacuousFindings: r.VacuousFindings, CriticIncomplete: r.CriticIncomplete, Status: r.Status, PromptShape: r.PromptShape,
 		MutantBudget: r.MutantBudget, MutantBudgetRule: r.MutantBudgetRule, Complexity: r.Complexity,
 		Symbols: r.Symbols, SymbolsProbed: r.SymbolsProbed, Decisions: r.Decisions, DecisionsProbed: r.DecisionsProbed,
+		MutantsUnplaced: r.MutantsUnplaced, MutantsUnmeasured: r.MutantsUnmeasured, MutantsDuplicate: r.MutantsDuplicate, WriterAttempts: r.WriterAttempts,
 		AuthoredTestNotCollected: r.AuthoredTestNotCollected, BaselineFailed: r.BaselineFailed,
 		CacheHit: r.CacheHit, ReusedFromScanID: r.ReusedFromScanID, ParentSHA256: r.ParentSHA256,
 		MutantsGraded: r.MutantsGraded, MutantsInvalid: r.MutantsInvalid, MutantsTimedOut: r.MutantsTimedOut,

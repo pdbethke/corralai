@@ -6,12 +6,14 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/reposcan"
 )
@@ -319,5 +321,89 @@ func TestSelectionCacheKeyDigestsTheCommandThatActuallyRuns(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(ranA, " "), "pkg_a") {
 		t.Fatalf("fixture: the instrumented python command carries no source root: %q", ranA)
+	}
+}
+
+// The wiring end to end: a real `certify --repo` on the workspace substrate
+// (no bwrap needed) writes a ledger entry whose Toolchains names the run's
+// language and carries the interpreter version the host really prints, read
+// back from the ledger directory.
+func TestCertifyRepoRecordsToolchainsOnTheLedgerEntry(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+	root, base, goals := selCacheFixture(t)
+	dsn := filepath.Join(t.TempDir(), "scans.duckdb")
+
+	orig := collectSelectionEvidence
+	t.Cleanup(func() { collectSelectionEvidence = orig })
+	collectSelectionEvidence = func(ctx context.Context, runner coverageRunner, files map[string]string, p lang.Plugin, testCmd []string, sourcePaths []string) reposcan.SelectionEvidence {
+		return reposcan.SelectionEvidence{Ran: true, Raw: []byte("evidence")}
+	}
+	var out, errs bytes.Buffer
+	runCertifyRepo(selCacheArgs(root, base, goals, dsn), &out, &errs)
+
+	entries := scanEntriesIn(t, selCacheLedger(dsn))
+	if len(entries) != 1 {
+		t.Fatalf("ledger holds %d scan entries, want 1\nstdout:\n%s\nstderr:\n%s", len(entries), out.String(), errs.String())
+	}
+	raw := entries[0].Bundle.Scan.Toolchains
+	if raw == "" {
+		t.Fatalf("the entry records no Toolchains\nstdout:\n%s", out.String())
+	}
+	var rec map[string]map[string]string
+	if err := json.Unmarshal([]byte(raw), &rec); err != nil {
+		t.Fatalf("Toolchains %q is not the documented JSON: %v", raw, err)
+	}
+	py, ok := rec["python"]
+	if !ok {
+		t.Fatalf("Toolchains %q does not name the run's language (python)", raw)
+	}
+	if !strings.HasPrefix(py["python3"], "Python 3.") {
+		t.Errorf("python3 = %q, want the version the host prints", py["python3"])
+	}
+	sc := entries[0].Bundle.Scan
+	if sc.LoadStart == nil || sc.LoadEnd == nil || sc.LoadPeak == nil || sc.CPUMillis == nil || sc.MemAvailableStartBytes == nil {
+		if sc.HostNotMeasured == "" {
+			t.Errorf("--repo recorded no host conditions and no reason: %+v", sc)
+		}
+	}
+}
+
+// The scan-level wiring end to end: a real `certify --repo` writes an entry
+// whose Inventory is the walk's, read back from the ledger directory, and
+// whose MaxTokensReached is nil without --max-tokens and a recorded outcome
+// with it. Deleting the lines in runCertifyRepo that copy these onto the
+// scan header fails here, which a hand-built scanstore.Scan cannot.
+func TestCertifyRepoRecordsInventoryAndTheCapOnTheLedgerEntry(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+	orig := collectSelectionEvidence
+	t.Cleanup(func() { collectSelectionEvidence = orig })
+	collectSelectionEvidence = func(ctx context.Context, runner coverageRunner, files map[string]string, p lang.Plugin, testCmd []string, sourcePaths []string) reposcan.SelectionEvidence {
+		return reposcan.SelectionEvidence{Ran: true, Raw: []byte("evidence")}
+	}
+	scan := func(extra ...string) auditpush.ScanRow {
+		root, base, goals := selCacheFixture(t)
+		dsn := filepath.Join(t.TempDir(), "scans.duckdb")
+		var out, errs bytes.Buffer
+		runCertifyRepo(selCacheArgs(root, base, goals, dsn, extra...), &out, &errs)
+		entries := scanEntriesIn(t, selCacheLedger(dsn))
+		if len(entries) != 1 {
+			t.Fatalf("ledger holds %d scan entries, want 1\nstdout:\n%s\nstderr:\n%s", len(entries), out.String(), errs.String())
+		}
+		return entries[0].Bundle.Scan
+	}
+
+	uncapped := scan()
+	if uncapped.Inventory == "" {
+		t.Fatal("the entry records no Inventory")
+	}
+	inv := decodeInventory(t, uncapped.Inventory)
+	if inv.Excluded <= 0 || len(inv.Languages) == 0 {
+		t.Errorf("Inventory %s holds no walk", uncapped.Inventory)
+	}
+	if uncapped.MaxTokensReached != nil {
+		t.Errorf("MaxTokensReached = %v with no --max-tokens, want nil", *uncapped.MaxTokensReached)
+	}
+	if capped := scan("--max-tokens", "1000000"); capped.MaxTokensReached == nil || *capped.MaxTokensReached {
+		t.Errorf("MaxTokensReached = %v under a cap nothing reached, want a recorded false", capped.MaxTokensReached)
 	}
 }

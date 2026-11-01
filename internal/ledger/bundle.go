@@ -173,6 +173,78 @@ type ScanRow struct {
 	// Empty when nothing was left out, under --substrate workspace, and on
 	// every row written before it.
 	SeedSkipped string `json:",omitempty"`
+	// UnitPass is the whole unit evidence pass of a language with no per-test
+	// evidence, as JSON TEXT (a ScanRow is compared whole, so no map): the
+	// keys listed, runnable, run, failed, cut, green_as_written, unreported,
+	// millis and reused. They are the numbers the scan's "units:" lines
+	// print, taken from the same values, so the screen and the record cannot
+	// disagree. Empty when no unit pass ran (Python, --dry-run, a language
+	// the pass does not serve) and on every row written before it.
+	UnitPass string `json:",omitempty"`
+	// TestCommand is the test command the run graded with, shell-joined and
+	// REDACTED by an ALLOWLIST (cmd/corral redactCommand): a token is kept
+	// only when provably safe (the executable, a launcher or runner word, a
+	// value-less flag, a path that exists in the repository) and every other
+	// one is "<redacted>" in its own position, so the public record cannot
+	// carry a credential typed after `--`. The record compares runs by this
+	// text plus Runner plus Settings; no digest of the unredacted command is
+	// kept, since one published beside its redacted shape could be
+	// brute-forced offline. The operator's own command, else the language plugin's
+	// stock one. Empty when the scan resolved no single language to name a
+	// command for (a mixed repository, a dry run) and on every earlier row.
+	TestCommand string `json:",omitempty"`
+	// Runner is the runner-table row (lang.Runner.ID) that command was read
+	// as: the operator's --runner, else the row the command names, else the
+	// language's default. Empty when none resolved and on every earlier row.
+	Runner string `json:",omitempty"`
+	// Settings is the conditions the run executed under, as JSON TEXT (a
+	// ScanRow is compared whole, so no map): timeout, evidence_timeout,
+	// seed_limit_mib, swarm, scan_workers, unit_workers, mutant_concurrency,
+	// per_file_swarm, baseline_runs, max_tokens, whole_suite, no_fail_fast,
+	// no_goal_cache, no_verdict_cache, no_selection_cache, writer_mode, jail,
+	// runner_flag. A setting the run did not use is ABSENT, never a zero.
+	// Empty on every row written before it.
+	Settings string `json:",omitempty"`
+	// Toolchains is the interpreter and test-runner versions the run graded
+	// under, as JSON TEXT: {"<language>":{"<tool>":"<first line of its
+	// version output>"}}, each read inside the jail the run used. A tool that
+	// could not be read is recorded as "not read: <reason>", never omitted.
+	// Empty on every row written before it and when no language resolved.
+	Toolchains string `json:",omitempty"`
+	// LoadStart, LoadEnd and LoadPeak are the host's 1-minute load average
+	// when the run started, when it finished and the largest sample between
+	// (internal/hoststat). MemAvailableStartBytes is /proc/meminfo's
+	// MemAvailable at the start; PeakRSSBytes the children's largest resident
+	// set (getrusage RUSAGE_CHILDREN, a process-lifetime maximum); CPUMillis
+	// the user plus system CPU of the process and its children over the run.
+	// A load average decides how much of the evidence bound a run can spend,
+	// so two runs at load 38 and load 13 are not the same run. nil, never 0,
+	// where a figure could not be read; HostNotMeasured says why. All absent
+	// on every row written before them.
+	LoadStart, LoadEnd, LoadPeak *float64 `json:",omitempty"`
+	MemAvailableStartBytes       *int64   `json:",omitempty"`
+	PeakRSSBytes                 *int64   `json:",omitempty"`
+	CPUMillis                    *int64   `json:",omitempty"`
+	HostNotMeasured              string   `json:",omitempty"`
+	// Inventory is what the walk found before any audit ran, as JSON text (a
+	// ScanRow is compared whole, so no map): the files excluded and the count
+	// per reason, the source files per language that are auditable, have no
+	// paired test, are ambiguous or wait on a test landing that is not built,
+	// each language's test files, the coverage pre-flight's executed and
+	// not-measured files (only when --preflight ran) and the candidates that
+	// could not be sized and were ranked last (only when a ranking ran). Each
+	// number is the one the scan printed. Empty on every row written before it
+	// and on a run that walked nothing (--local).
+	Inventory string `json:",omitempty"`
+	// ShadowDraw is the challenger draw, as JSON text: for each drawn seat the
+	// seed, the pool with each member's Beta(alpha, beta) parameters and its
+	// sample, the member chosen, and the scorecard rows the draw read. The
+	// seed is spelled exactly as --shadow-seed accepts it, so a run is replayed
+	// from this record. Empty unless a draw happened.
+	ShadowDraw string `json:",omitempty"`
+	// MaxTokensReached is whether the --max-tokens cap was reached. nil when no
+	// cap was set (the cap itself is in Settings), never false for "no cap".
+	MaxTokensReached *bool `json:",omitempty"`
 }
 
 // PushedByCertify is the ScanRow.PushedBy of a run's own entry.
@@ -261,6 +333,17 @@ type ModelCallRow struct {
 	// TokensUnmetered.
 	UnmeteredCalls int `json:",omitempty"`
 	WallMillis     int64
+	// CostMicroUSD is what the row's tokens cost, in millionths of a dollar,
+	// from the dated price table named in CostBasis (internal/pricing). It is
+	// nil, never 0, whenever there is no honest figure: an unpriced model, an
+	// unmetered seat, an agent seat billed outside corral's sight. The basis
+	// then says which. Declared tier: the tokens are measured, the price is a
+	// vendor's list price on a date. omitempty keeps an entry written before
+	// this field byte-identical to what it was.
+	CostMicroUSD *int64 `json:",omitempty"`
+	// CostBasis is the table (source and date) the figure came from, or the
+	// reason there is none. Always set on a row built by this version.
+	CostBasis string `json:",omitempty"`
 
 	StatementSHA256 string
 }

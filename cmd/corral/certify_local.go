@@ -27,6 +27,7 @@ import (
 	"github.com/pdbethke/corralai/internal/agentworker"
 	"github.com/pdbethke/corralai/internal/buildstore"
 	"github.com/pdbethke/corralai/internal/creds"
+	"github.com/pdbethke/corralai/internal/hoststat"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/pairing"
 	"github.com/pdbethke/corralai/internal/queue"
@@ -100,6 +101,10 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Writer) int {
 	// The run's start, for the ledger entry's started_at and total_millis.
 	startedAt := time.Now()
+	// Host load and the run's own consumption, from here to the entry. The
+	// deferred Stop ends the sampler on every return; Stop is idempotent.
+	hostSampler := hoststat.Start(hostSampleInterval)
+	defer hostSampler.Stop()
 	flagArgs, checkArgv := splitCertifyArgs(args)
 
 	fs := flag.NewFlagSet("certify --local", flag.ContinueOnError)
@@ -539,6 +544,7 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 		mutantsFrom: mutantsFromSHA, recorder: rc,
 		sandbox:     localSandboxIdentity(*jailFlag, stderr),
 		seedSkipped: seedSkippedJSON(seedSkipped),
+		host:        hostSampler.Stop(),
 	}); berr != nil {
 		fmt.Fprintf(stderr, "corral certify --local: no ledger entry written: %v\n", berr)
 	} else {

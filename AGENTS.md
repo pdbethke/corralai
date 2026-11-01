@@ -42,7 +42,7 @@ findings, and **govulncheck** (non-fatal if not installed locally).
 `gofmt` has failed a PR here for a one-line import ordering slip. Run it before
 you push; it costs nothing and the CI round trip costs minutes.
 
-Three drift gates bite agents specifically, because their files look
+Four drift gates bite agents specifically, because their files look
 hand-written and are not, plus the licensing gate:
 
 - `bash scripts/gen-cli-docs.sh --check` — the CLI reference is **generated
@@ -51,10 +51,18 @@ hand-written and are not, plus the licensing gate:
   player must not drift from source.
 - `bash scripts/gen-language-support.sh --check` — the language-support page
   is rendered from the runner table; regenerate, never hand-edit.
+- `cmd/corral/printed_metrics_test.go` walks every function in the packages a
+  corral run links: a function that prints a number needs a row naming the
+  ledger field that holds it, or a written exemption. Add the row when you add
+  a printing function.
+- `bash scripts/gen-record-fields.sh --check` — the record-fields page is
+  rendered from the tier table (`internal/ledger/tiers.go`); a new field on any
+  recorded type needs a tier row there (`TestEveryRecordedFieldHasATier`),
+  then regenerate, never hand-edit.
 - `bash scripts/check-licensing.sh` — every tracked `.go` file carries the
   Elastic-2.0 SPDX header, and LICENSE/NOTICE/README still say what they must.
   `scripts/add-spdx.sh` fixes the header half. **This one and the
-  language-support check run on EVERY change, docs-only included**, as do the
+  language-support and record-fields checks run on EVERY change, docs-only included**, as do the
   `^TestDocs` tests, because all of them grade Markdown as well as Go.
 
 ### CI workflows
@@ -347,6 +355,11 @@ appeared as: a failing baseline's output computed and never printed; that same
 string dropped again at a struct-to-struct copy that simply omitted the field; a
 kill rate fabricated as `0.00` when nothing had been graded; and a per-role model
 scorecard the router could act on for one role in three.
+
+The standing answer is two gates, not vigilance: the reflection gate in
+`internal/ledger/tiers.go` (`TestEveryRecordedFieldHasATier`) fails a recorded
+field with no trust tier, and `cmd/corral/printed_metrics_test.go` fails a
+printed number that reaches no ledger field and has no written exemption.
 
 When touching anything that computes a number or a diagnostic, ask what reads it
 and follow the value all the way to the surface. **A field-by-field converter

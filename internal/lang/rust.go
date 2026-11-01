@@ -32,6 +32,9 @@ func (rustPlugin) Scaffold() map[string]string { return map[string]string{} }
 
 func (rustPlugin) TestCmd() []string { return []string{"cargo", "test"} }
 
+// VersionCmd: see Plugin.VersionCmd.
+func (rustPlugin) VersionCmd() []string { return []string{"rustc", "--version"} }
+
 // HarnessFiles names what cargo-nextest reads before any test: its profiles
 // (retries, timeouts, test groups) change what the whole suite measures, so
 // a change to the file moves the verdict cache key. Matched by basename (see

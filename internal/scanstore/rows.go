@@ -103,6 +103,26 @@ type Scan struct {
 	// SelectionMillis nil, and this is the ONLY column that tells them
 	// apart.
 	SelectionReused bool
+	// UnitPass is the unit evidence pass as JSON text (ledger.ScanRow.UnitPass):
+	// "" when no pass ran.
+	UnitPass string
+	// TestCommand, Runner and Settings are the ledger's (ledger.ScanRow):
+	// the redacted test command, the runner row it was read as, and the
+	// run's settings as JSON text. "" when not recorded.
+	TestCommand, Runner, Settings string
+	// Toolchains is the ledger's (ledger.ScanRow.Toolchains), JSON text.
+	Toolchains string
+	// The host's conditions (ledger.ScanRow's LoadStart ... HostNotMeasured).
+	LoadStart, LoadEnd, LoadPeak *float64
+	MemAvailableStartBytes       *int64
+	PeakRSSBytes                 *int64
+	CPUMillis                    *int64
+	HostNotMeasured              string
+	// Inventory, ShadowDraw and MaxTokensReached are the ledger's
+	// (ledger.ScanRow's), the first two JSON text.
+	Inventory        string
+	ShadowDraw       string
+	MaxTokensReached *bool
 	// InputTokens, OutputTokens and ModelCalls are what the scan consumed
 	// from the providers, scan-wide. The per-role breakdown lives in
 	// scan_model_calls; these are the totals the run already printed to
@@ -411,6 +431,18 @@ type File struct {
 	SymbolsProbed   *int
 	Decisions       *int
 	DecisionsProbed *int
+	// MutantsUnplaced, MutantsUnmeasured and MutantsDuplicate mirror
+	// advpool.Verdict.ExamCoverage.Unplaced, MutantsUnmeasured and
+	// DuplicateMutants: graded mutants with no span, mutants whose grading
+	// command failed on the unmutated code, and byte-identical mutants
+	// collapsed before scoring. nil when the exam was not scored.
+	MutantsUnplaced   *int
+	MutantsUnmeasured *int
+	MutantsDuplicate  *int
+	// WriterAttempts is advpool.Verdict.WriterAttempts and WriterSeatsUngraded
+	// as JSON text ({"min","median","max","seats_ungraded"}); empty unless a
+	// per-survivor writer ran.
+	WriterAttempts string
 	// AuthoredTestNotCollected mirrors advpool.Verdict.AuthoredTestNotCollected:
 	// the run proved a killing test compiled and ran, but the dev suite's own
 	// collection never picked it up, so ProvenMissed on this row is earned
@@ -664,6 +696,14 @@ type ModelCall struct {
 	// advpool.ModelCall.UnmeteredCalls.
 	UnmeteredCalls int
 	WallMillis     int64
+	// CostMicroUSD and CostBasis are the ledger row's (ledger.ModelCallRow):
+	// what the row's tokens cost in millionths of a dollar, nil when there is
+	// no honest figure, and the dated price table it came from or the reason
+	// there is none. Only the ledger reader sets them: a run prices its rows
+	// when it builds the entry (buildModelCallRows), so a row a run builds
+	// carries neither and its cost is computed there, once.
+	CostMicroUSD *int64
+	CostBasis    string
 }
 
 // Event is one entry on the tape: an ordered log of what the pool did, at

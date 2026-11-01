@@ -11,6 +11,7 @@ import (
 	"github.com/pdbethke/corralai/internal/adequacy"
 	golang "github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/queue"
+	"github.com/pdbethke/corralai/internal/repoindex"
 )
 
 // authoredCall is one ScoreAuthoredReport invocation: which test was run, and
@@ -574,6 +575,41 @@ func TestTimeoutVerdictCarriesTheWriterDisclosure(t *testing.T) {
 	}
 	if v.WriterSeatsUngraded != 1 {
 		t.Errorf("WriterSeatsUngraded = %d, want 1 (m3 never graded)", v.WriterSeatsUngraded)
+	}
+}
+
+// TestTimeoutVerdictCarriesTheCountsTheRecordLiftsToRow pins, on the second
+// Verdict construction site, every per-file count the ledger Row records:
+// duplicate and unmeasured mutants, the exam's unplaced mutants, and the
+// writer's attempts spread and ungraded seats. A run that scored the exam and
+// only THEN stalled must sign what it measured, or the record holds a Row that
+// reads "none were unmeasured" for a verdict that simply forgot the field.
+func TestTimeoutVerdictCarriesTheCountsTheRecordLiftsToRow(t *testing.T) {
+	d := &Driver{}
+	run := &runState{
+		rs:                RunSpec{Repo: "r", Commit: "c", Lang: "go", WriterMode: WriterModePerSurvivor},
+		writerMode:        WriterModePerSurvivor,
+		devScored:         true,
+		dupMutants:        4,
+		mutantsUnmeasured: 3,
+		exam:              newExamSurface([]repoindex.Signature{{Name: "F", Line: 1, Lines: 5}}),
+		devKilled:         []MutantRef{{ID: "k1"}, {ID: "k2", Span: golang.LineRange{Start: 2, End: 2}}},
+		devSurvivors:      []adequacy.Mutant{{ID: "m1"}, {ID: "m2"}},
+		writerOrder:       []string{"m1", "m2"},
+		writerAttempts: map[string]*writerAttempt{
+			"m1": {mutant: adequacy.Mutant{ID: "m1"}, done: true, measured: true, attempts: 2},
+			"m2": {mutant: adequacy.Mutant{ID: "m2"}, done: true, attempts: 3},
+		},
+	}
+	v := d.timeoutVerdict(run)
+	if v.DuplicateMutants != 4 || v.MutantsUnmeasured != 3 {
+		t.Errorf("DuplicateMutants=%d MutantsUnmeasured=%d, want 4 and 3", v.DuplicateMutants, v.MutantsUnmeasured)
+	}
+	if !v.ExamCoverage.Measured || v.ExamCoverage.Unplaced != 3 {
+		t.Errorf("ExamCoverage = %+v, want measured with 3 unplaced (k1, m1, m2 carry no span; k2 does)", v.ExamCoverage)
+	}
+	if v.WriterAttempts == nil || v.WriterAttempts.Min != 2 || v.WriterAttempts.Max != 3 || v.WriterSeatsUngraded != 1 {
+		t.Errorf("WriterAttempts=%+v WriterSeatsUngraded=%d, want 2..3 and 1", v.WriterAttempts, v.WriterSeatsUngraded)
 	}
 }
 

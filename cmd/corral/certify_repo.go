@@ -28,6 +28,7 @@ import (
 	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/certify"
+	"github.com/pdbethke/corralai/internal/hoststat"
 	"github.com/pdbethke/corralai/internal/killrate"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/modelcorr"
@@ -392,6 +393,11 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// portion of it. Read only if --record is given (see the fail-open call
 	// site near the bottom of this function).
 	startedAt := time.Now()
+	// The host's load and the run's own consumption, sampled until the scan
+	// header is built. The deferred Stop ends the sampler on every early
+	// return; Stop is idempotent, so the one before the header is the read.
+	hostSampler := hoststat.Start(hostSampleInterval)
+	defer hostSampler.Stop()
 
 	var testMap *reposcan.TestMap
 	if *testsPath != "" {
@@ -533,6 +539,11 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// with it. The diff-bound path never ranks at all, so it stays empty
 	// rather than claiming an ordering that was not applied.
 	rankSignal := ""
+	// rankRan and rankedInfo are the ranking's own answer, kept for the
+	// inventory the record holds: a scan that ranked nothing (every candidate
+	// kept, or a --diff-base with no --top) has no count of unsized candidates.
+	rankRan := false
+	var rankedInfo reposcan.RankInfo
 	// diffChanged is the --diff-base bound, kept for the evidence pass below:
 	// a changed TEST file is in the diff but is neither a candidate nor an
 	// unpairable source, and it is the one change a suite-weakening pull
@@ -591,6 +602,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// as clean.
 		if flagWasSet(fs, "top") && !*allFlag && *topFlag > 0 && len(selected) > *topFlag {
 			ranked, rankInfo := reposcan.Rank(*repoDir, selected)
+			rankRan, rankedInfo = true, rankInfo
 			var cut []reposcan.Exclusion
 			selected, cut = reposcan.Select(ranked, *topFlag)
 			excl = append(excl, cut...)
@@ -649,6 +661,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// Selection precedes derivation, deliberately: bounding afterwards would
 		// pay for a goal on every candidate in order to audit 25 of them.
 		ranked, rankInfo := reposcan.Rank(*repoDir, cands)
+		rankRan, rankedInfo = true, rankInfo
 
 		limit := *topFlag
 		if *allFlag {
@@ -1033,6 +1046,22 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	skipEvidence := *diffBase != "" && len(selected) == 0 && len(unpairableInDiff) == 0 && !diffTouchedATest
+	// The test command and runner the entry records (ScanRow.TestCommand,
+	// Runner): the operator's command, else the resolved language's stock
+	// one, and the runner row it is read as. Resolved once, from the same
+	// plugin resolution the evidence passes use, so a mixed repository with
+	// no single language records the operator's command (or none) and no
+	// runner, rather than a guess.
+	var recordedCmd []string
+	recordedRunnerID := ""
+	if ex != nil {
+		recPlug, _, recCmd, _ := ex.resolveSelectionPlugin(enumeratedSourcePaths(cands, excl))
+		recordedCmd = recCmd
+		if len(recordedCmd) == 0 {
+			recordedCmd = checkArgv
+		}
+		recordedRunnerID = recordedRunner(recPlug, *repoDir, recordedCmd, *runnerFlag)
+	}
 	evidenceCandidacyOK := false
 	selectionMethod := ""
 	// evidenceIdx is the index candidacy was widened by, kept for the
@@ -1454,6 +1483,10 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		summary += fmt.Sprintf(" — unit evidence is partial: %d of %d unit(s) contributed none", unitPassFailed(ex.units), len(ex.units.Units))
 	}
 	fmt.Fprintln(stdout, summary)
+	// The record's inventory is taken from the SAME cands and excl the lines
+	// below print from.
+	inventory := newRecordedInventory(cands, excl)
+	inventory.withUnsized(rankRan, rankedInfo)
 	printLanguageProfile(stdout, reposcan.BuildLanguageProfile(cands, excl))
 	printSearchPairings(stdout, cands)
 	printEvidencePairings(stdout, cands, evidenceIdx)
@@ -1525,6 +1558,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		preflightSources = enumeratedSourcePaths(cands, excl[:enumExcl])
 		fmt.Fprintln(stdout, "  preflight: running the suite once with coverage instrumentation…")
 		preflightResult = ex.runPreflight(context.Background(), preflightSources)
+		inventory.withPreflight(preflightResult, preflightSources)
 	}
 
 	// The audit cannot proceed, but the pre-flight above already answered
@@ -1700,6 +1734,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	inTokens, outTokens, modelCallCount := modelCallRowTotals(modelCallRows)
 	host, _ := os.Hostname()
 	finishedAt := time.Now()
+	hostConditions := hostSampler.Stop()
 	// The audited party, from the checkout: nemo iudex names two parties,
 	// and the record names both.
 	party := auditpush.CommitIdentity(*repoDir, *commit)
@@ -1734,6 +1769,29 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// nil unless collectSelection served a cache HIT this scan — see
 		// localExecutor.selectionReused's own doc.
 		SelectionReused: ex != nil && ex.selectionReused,
+		// The whole unit pass, from the values its "units:" lines print.
+		UnitPass: ex.unitPassJSON(),
+		// What the walk found, the challenger draw and whether the token cap
+		// bit: each from the value its printed line is made from.
+		Inventory:        inventory.text(),
+		ShadowDraw:       shadowDrawJSON(shadowSels),
+		MaxTokensReached: tokenCapReached(scanTokenBudget(ex)),
+		// The toolchains the run graded under, read in the jail it used.
+		Toolchains: ex.toolchainsJSON(auditCtx, enumeratedSourcePaths(cands, excl)),
+		// What the run executed under: the test command (redacted), the
+		// runner row it was read as, and the settings the run used.
+		TestCommand: testCommandText(recordedCmd, *repoDir), Runner: recordedRunnerID,
+		Settings: runSettingsJSON(runSettings{
+			Timeout: *timeoutFlag, EvidenceTimeout: evidenceTimeout,
+			SeedLimitBytes: seedLimitUsed(*substrateFlag, seedLimit),
+			Swarm:          resolveSwarm(*swarmFlag), ScanWorkers: workers, UnitWorkers: ex.unitWorkers,
+			MutantConcurrency: mutantConc, PerFileSwarm: ex.perFileSwarm, BaselineRuns: ex.baselineRuns,
+			MaxTokens:  *maxTokensFlag,
+			WholeSuite: boolPtrOf(*wholeSuiteFlag), NoFailFast: boolPtrOf(*noFailFastFlag),
+			NoGoalCache: boolPtrOf(*noGoalCacheFlag), NoVerdictCache: boolPtrOf(*noVerdictCacheFlag),
+			NoSelectionCache: boolPtrOf(*noSelectionCacheFlag),
+			WriterMode:       writerMode, Jail: ex.sandboxIdentity().Backend, RunnerFlag: *runnerFlag,
+		}),
 		// What the scan consumed. The run already printed these to stdout and
 		// then discarded them, which is how "what did that cost me" had no
 		// answer from the tool whose central caveat is that audits are
@@ -1749,6 +1807,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// row swearing the source had left the box when nothing had.
 		SourcePushed: false,
 	}
+	recordHostConditions(&scan, hostConditions)
 	// The custody switch the PUSH honours, distinct from the ledger's
 	// record of what happened: --push-source with no --push sends nothing.
 	pushSource := *pushSourceFlag && strings.TrimSpace(*pushFlag) != ""
@@ -3455,17 +3514,7 @@ func enumeratedSourcePaths(cands []reposcan.Candidate, enumOnlyExcl []reposcan.E
 // ran prints no line of its own and "no selection evidence" alone is a zero
 // nobody explained (semver, Task 11a).
 func noEvidenceSourcesNote(excl []reposcan.Exclusion) string {
-	refused := map[string]int{}
-	for _, e := range excl {
-		if !reposcan.IsLandingRefusal(e.Reason) {
-			continue
-		}
-		name := "unknown-language"
-		if p, ok := lang.Detect(e.Path); ok {
-			name = p.Name()
-		}
-		refused[name]++
-	}
+	refused := landingRefusalsByLang(excl)
 	if len(refused) == 0 {
 		return "no source file in a language corral audits, so no evidence pass ran"
 	}
@@ -4041,10 +4090,7 @@ func printExclusions(w io.Writer, excl []reposcan.Exclusion) {
 	if len(excl) == 0 {
 		return
 	}
-	byReason := map[string]int{}
-	for _, e := range excl {
-		byReason[e.Reason]++
-	}
+	byReason := exclusionsByReason(excl)
 	reasons := make([]string, 0, len(byReason))
 	for r := range byReason {
 		reasons = append(reasons, r)
@@ -5166,6 +5212,9 @@ type localExecutor struct {
 	unitsDuration time.Duration
 	// unitsReused is set when collectUnits served a cache HIT.
 	unitsReused bool
+	// unitsRunnable is how many listed units the pass ran alone: the
+	// "running N of M listed" line's N, set where that line is printed.
+	unitsRunnable *int
 	// seedLimit is the jail seed limit in bytes (--seed-limit,
 	// resolveSeedLimit), read when the first seed is built, not at
 	// construction, so the flag boundary sets it after newLocalExecutor.
@@ -5177,6 +5226,13 @@ type localExecutor struct {
 	// pass and each unit's run within it. The constructor sets
 	// selectionTimeout, the bound before the flag existed.
 	evidenceTimeout time.Duration
+	// toolchainBound bounds each version command of toolchainVersions; the
+	// constructor sets toolchainReadBound. toolchainRunner replaces the
+	// scan's jail for those reads, for a test.
+	toolchainBound time.Duration
+	// toolchainBudget bounds the whole read (toolchainReadBudget).
+	toolchainBudget time.Duration
+	toolchainRunner coverageRunner
 	// evidenceTimeoutGiven is whether the operator named --evidence-timeout,
 	// so a run that never reads the bound (a cache hit, Python under
 	// --whole-suite) can say the flag went unused rather than drop it
@@ -5298,6 +5354,8 @@ func newLocalExecutorWithJail(repoDir string, checkArgv []string, substrate, jai
 		// them with the operator's when given (run_bounds.go).
 		seedLimit:       seedLimitBuiltin,
 		evidenceTimeout: selectionTimeout,
+		toolchainBound:  toolchainReadBound,
+		toolchainBudget: toolchainReadBudget,
 		// Concurrent jobs write progress; serialize so two files' notices
 		// cannot interleave mid-line.
 		progress:    &syncWriter{w: progress},

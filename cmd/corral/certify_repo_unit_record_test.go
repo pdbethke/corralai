@@ -5,192 +5,115 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"io"
-	"os"
-	"path/filepath"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/auditpush"
+	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/scanstore"
 )
 
-// TestUnitEvidenceReportLine pins the two wordings of a unit-graded file's
-// line, with the noun the runner row names and the plural of "unit" right
-// for one unit and for several. The reason is the first unreported unit's.
-func TestUnitEvidenceReportLine(t *testing.T) {
-	line := func(f reposcan.WeakFile) string {
-		f.Path = "src/a.ts"
-		f.SelectionMethod = "unit-evidence"
-		var b bytes.Buffer
-		printWeakFile(&b, f)
-		return b.String()
+// TestTheUnitPassReachesTheLedgerWhole: five units, one of each kind the
+// pass can end in, and the bundle's UnitPass says the same numbers the
+// scan's "units:" lines print. The two are asserted against each other, so
+// neither can be recounted without this failing.
+func TestTheUnitPassReachesTheLedgerWhole(t *testing.T) {
+	root := unitGradingFixture(t)
+	cov := map[string]lang.LineCounts{"src/a.ts": {Executed: 1, Executable: 1}}
+	ev := reposcan.UnitEvidence{Ran: true, Units: []reposcan.UnitResult{
+		unitRun("tests/one.test.ts", cov),
+		{Unit: "tests/two.test.ts", Err: "run failed: exit 1"},
+		{Unit: "tests/three.test.ts", Err: "not run (time limit)"},
+		{Unit: "tests/four.test.ts", Err: fmt.Sprintf("not measured: red with the evidence pass's change (%s), green as the operator's command runs it, which took no coverage", "threads pool")},
+		{Unit: "tests/five.test.ts", Err: "could not run: jail refused"},
+	}}
+	ex := unitGradedExecutor(t, root, ev)
+	ex.evidenceTimeout = 2 * time.Minute
+	ex.unitsDuration = 1500 * time.Millisecond
+
+	var screen bytes.Buffer
+	printUnitPass(&screen, ex)
+	printUnitGrading(&screen, ex, "typescript")
+
+	b := buildBundle(scanstore.Scan{Repo: "o/r", Commit: "c", Substrate: substrateWorkspace, UnitPass: ex.unitPassJSON()},
+		1, nil, nil, nil, nil, auditpush.Link{}, false, "o/r", "c", "", bundleMeta{})
+	var got struct {
+		Listed, Runnable, Run, Failed, Cut, Unreported int
+		GreenAsWritten                                 int   `json:"green_as_written"`
+		Millis                                         int64 `json:"millis"`
+		Reused                                         bool  `json:"reused"`
 	}
-	cases := []struct {
-		name string
-		f    reposcan.WeakFile
-		want string
-	}{
-		{"none unreported", reposcan.WeakFile{SelectedTests: 4, SuiteTests: 1339, UnitNoun: "test files"},
-			"graded by 4 of 1,339 test files (unit evidence)"},
-		{"two unreported", reposcan.WeakFile{SelectedTests: 4, SuiteTests: 1339, UnitNoun: "test files", Unreported: 2, UnreportedReason: "timed out"},
-			"graded by 4 of 1,339 test files (unit evidence; 2 units with no evidence added: timed out)"},
-		{"one unreported", reposcan.WeakFile{SelectedTests: 3, SuiteTests: 12, UnitNoun: "packages", Unreported: 1, UnreportedReason: "could not run"},
-			"graded by 3 of 12 packages (unit evidence; 1 unit with no evidence added: could not run)"},
-		{"red units left out", reposcan.WeakFile{SelectedTests: 4, SuiteTests: 2186, UnitNoun: "test files", Excluded: 545, ExcludedReason: "run failed: exit 1"},
-			"graded by 4 of 2,186 test files (unit evidence; 545 units that failed unmutated left out after the baseline failed with them: run failed: exit 1)"},
-		{"one red unit left out", reposcan.WeakFile{SelectedTests: 3, SuiteTests: 12, UnitNoun: "packages", Excluded: 1, ExcludedReason: "run failed: exit 1"},
-			"graded by 3 of 12 packages (unit evidence; 1 unit that failed unmutated left out after the baseline failed with it: run failed: exit 1)"},
-		// A compiler's reason runs to many lines; the file's line keeps the
-		// first (the verdict and the ledger keep it whole).
-		{"multi-line reason", reposcan.WeakFile{SelectedTests: 1, SuiteTests: 99, UnitNoun: "packages", Excluded: 18,
-			ExcludedReason: "run failed: exit 1: # github.com/smacker/go-tree-sitter/php\nparser.c:1:10: fatal error\nFAIL"},
-			"graded by 1 of 99 packages (unit evidence; 18 units that failed unmutated left out after the baseline failed with them: run failed: exit 1: # github.com/smacker/go-tree-sitter/php …)\n"},
-		// The second retry's units are named, with why, after the count.
-		{"red in the baseline", reposcan.WeakFile{SelectedTests: 3, SuiteTests: 12, UnitNoun: "test files", Excluded: 2, ExcludedReason: "run failed: exit 1",
-			ExcludedRedInBaseline: "tests/a.test.ts: flaky\ntests/b.test.ts: red alone"},
-			"2 units that failed unmutated left out after the baseline failed with them: run failed: exit 1; red in the baseline though green in the evidence pass: tests/a.test.ts: flaky; tests/b.test.ts: red alone)"},
-		{"rust", reposcan.WeakFile{SelectedTests: 1, SuiteTests: 7, UnitNoun: "test targets"},
-			"graded by 1 of 7 test targets (unit evidence)"},
+	if b.Scan.UnitPass == "" {
+		t.Fatal("the bundle carries no UnitPass")
 	}
-	for _, c := range cases {
-		if got := line(c.f); !strings.Contains(got, c.want) {
-			t.Errorf("%s: line = %q, want it to contain %q", c.name, got, c.want)
+	dec := json.NewDecoder(strings.NewReader(b.Scan.UnitPass))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&got); err != nil {
+		t.Fatalf("UnitPass %q: %v", b.Scan.UnitPass, err)
+	}
+	if got.Listed != 5 || got.Runnable != 5 || got.Run != 5 || got.Failed != 4 || got.Cut != 1 ||
+		got.GreenAsWritten != 1 || got.Unreported != 4 || got.Millis != 1500 || got.Reused {
+		t.Errorf("UnitPass = %s", b.Scan.UnitPass)
+	}
+	// The screen says the same numbers.
+	s := screen.String()
+	for _, want := range []string{
+		fmt.Sprintf("units: %d run, %d failed", got.Run, got.Failed),
+		fmt.Sprintf("%d unit(s) cut short", got.Cut),
+		fmt.Sprintf("%d unit(s) red only with", got.GreenAsWritten),
+		fmt.Sprintf("the %d that did not are added", got.Unreported),
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("the screen lacks %q, so it and the record disagree:\n%s", want, s)
 		}
 	}
-	// No fallback noun: a unit verdict whose row named none says so.
-	if got := line(reposcan.WeakFile{SelectedTests: 4, SuiteTests: 9}); !strings.Contains(got, "no unit noun") || strings.Contains(got, " tests") {
-		t.Errorf("a unit line with no noun must say so, not invent one: %q", got)
+}
+
+// A scan that ran no unit pass records none, not a zeroed one.
+func TestNoUnitPassRecordsNoUnitPass(t *testing.T) {
+	if got := (*localExecutor)(nil).unitPassJSON(); got != "" {
+		t.Errorf("nil executor: %q", got)
+	}
+	if got := (&localExecutor{}).unitPassJSON(); got != "" {
+		t.Errorf("no pass: %q", got)
 	}
 }
 
-// Python's coverage-context line is byte for byte what it was before units
-// had a noun: "tests", the method in parentheses, nothing else.
-func TestCoverageContextReportLineIsUnchanged(t *testing.T) {
-	var b bytes.Buffer
-	printWeakFile(&b, reposcan.WeakFile{Path: "a.py", KillRate: 0.5, Survivors: 1,
-		SelectionMethod: "coverage-context", SelectedTests: 14, SuiteTests: 1431})
-	want := "    0.50  a.py survivors=1   graded by 14 of 1431 tests (coverage-context)\n"
-	if !strings.Contains(b.String(), "   graded by 14 of 1431 tests (coverage-context)") {
-		t.Errorf("coverage-context line moved:\n got %q\nwant …%q", b.String(), want)
+// A key nothing measured is ABSENT from the record, never a zero standing
+// in for it: runnable on a pass that failed to seed (it announced nothing),
+// millis on a reused pass (no unit ran), unreported where the whole suite
+// grades (the screen prints no such text).
+func TestUnitPassOmitsWhatNothingMeasured(t *testing.T) {
+	keys := func(ex *localExecutor) map[string]any {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(ex.unitPassJSON()), &m); err != nil {
+			t.Fatalf("%q: %v", ex.unitPassJSON(), err)
+		}
+		return m
 	}
-}
-
-// A coverage-context file graded with tests that failed in the evidence run,
-// or after a retry that left them out, says so in tests, not units; a file
-// with neither is the line it always was (TestCoverageContextReportLineIsUnchanged).
-func TestCoverageContextLineSaysWhatTheSelectionAddedAndLeftOut(t *testing.T) {
-	var b bytes.Buffer
-	printWeakFile(&b, reposcan.WeakFile{Path: "a.py", KillRate: 0.5, Survivors: 1, SelectionMethod: "coverage-context",
-		SelectedTests: 14, SuiteTests: 13447, Excluded: 2, ExcludedReason: "run failed: failed in the instrumented evidence run"})
-	if want := "graded by 14 of 13447 tests (coverage-context; 2 tests that failed unmutated left out after the baseline failed with them: run failed: failed in the instrumented evidence run)"; !strings.Contains(b.String(), want) {
-		t.Errorf("line %q lacks %q", b.String(), want)
-	}
-	b.Reset()
-	printWeakFile(&b, reposcan.WeakFile{Path: "a.py", KillRate: 0.5, Survivors: 1, SelectionMethod: "coverage-context",
-		SelectedTests: 16, SuiteTests: 13447, Unreported: 1, UnreportedReason: "run failed: failed in the instrumented evidence run"})
-	if want := "(coverage-context; 1 test with no evidence added: run failed: failed in the instrumented evidence run)"; !strings.Contains(b.String(), want) {
-		t.Errorf("line %q lacks %q", b.String(), want)
-	}
-}
-
-// An authored refusal prints on its own line, beginning with the words the
-// reader greps for, and only when there is one.
-func TestAuthoredFallbackPrintsOnItsOwnLine(t *testing.T) {
-	var b bytes.Buffer
-	printWeakFile(&b, reposcan.WeakFile{Path: "a.ts", SelectionMethod: "unit-evidence", SelectedTests: 1, SuiteTests: 2, UnitNoun: "test files",
-		AuthoredFallback: "its filter would also run tests/two.test.ts"})
-	if !strings.Contains(b.String(), "\n   authored test graded by the whole suite: its filter would also run tests/two.test.ts") {
-		t.Errorf("authored fallback line missing:\n%s", b.String())
-	}
-	b.Reset()
-	printWeakFile(&b, reposcan.WeakFile{Path: "a.ts", SelectionMethod: "unit-evidence", SelectedTests: 1, SuiteTests: 2, UnitNoun: "test files"})
-	if strings.Contains(b.String(), "authored test graded") {
-		t.Errorf("no refusal, yet a fallback line printed:\n%s", b.String())
-	}
-}
-
-// The value survives the boundary (AGENTS.md, "the bug shape that keeps
-// recurring"): a verdict whose selection added two unreported units and whose
-// authored pass fell back reaches the report, the scan's file row, the
-// ledger row's JSON and the signed attestation. The verdicts of BOTH
-// construction sites carry these fields (advpool's
-// TestUnitNounAndFirstReasonReachTheVerdict and
-// TestAnAuthoredRefusalIsDisclosedOnTheVerdict); this test starts from such
-// a verdict and follows it out.
-func TestUnreportedCountSurvivesToTheLedgerAndAttestation(t *testing.T) {
-	root := t.TempDir()
-	const why = "its filter would also run tests/two.test.ts"
-	const red = "tests/five.test.ts: red in the baseline, green run alone"
-	mustWrite(t, filepath.Join(root, "src", "a.ts"), "export const a = 1;\n")
-	v := advpool.Verdict{
-		DevKillRate: 0.5, MutantsTotal: 4, Survivors: 2,
-		TestSelection: advpool.TestSelection{Method: "unit-evidence", Selected: 4, Of: 10, Unreported: 2,
-			UnreportedReason: "timed out", UnitNoun: "test files", AuthoredFallback: why,
-			Excluded: 3, ExcludedReason: "run failed: exit 1", ExcludedRedInBaseline: red},
-	}
-	res := reposcan.FileResult{Job: reposcan.Job{Path: "src/a.ts", Lang: "typescript"}, Verdict: v, Gradable: true}
-
-	rep := reposcan.Aggregate("o", "r", "c", 1, 1, []reposcan.FileResult{res}, nil)
-	if len(rep.Weakest) != 1 {
-		t.Fatalf("report has %d files", len(rep.Weakest))
-	}
-	w := rep.Weakest[0]
-	if w.Unreported != 2 || w.UnreportedReason != "timed out" || w.UnitNoun != "test files" || w.AuthoredFallback != why ||
-		w.Excluded != 3 || w.ExcludedReason != "run failed: exit 1" || w.ExcludedRedInBaseline != red {
-		t.Fatalf("report dropped a field: %+v", w)
-	}
-
-	files := buildScanFileRows([]reposcan.FileResult{res}, nil, reposcan.CoverageMap{}, "", root, io.Discard)
-	if len(files) != 1 || files[0].SelectionUnreported != 2 || files[0].AuthoredFallback != why || files[0].SelectionExcluded != 3 || files[0].SelectionExcludedRed != red {
-		t.Fatalf("scan row dropped a field: %+v", files)
-	}
-
-	b := buildBundle(scanstore.Scan{Owner: "o", Repo: "r", Commit: "c"}, 1, files, nil, nil, nil, auditpush.Link{}, false, "o/r", "c", "", bundleMeta{})
-	if len(b.Files) != 1 || b.Files[0].SelectionUnreported != 2 || b.Files[0].AuthoredFallback != why || b.Files[0].SelectionExcluded != 3 || b.Files[0].SelectionExcludedRed != red {
-		t.Fatalf("ledger row dropped a field: %+v", b.Files)
-	}
-	raw, err := json.Marshal(b.Files[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []string{`"selection_unreported":2`, `"selection_excluded":3`, `"authored_fallback":"` + why + `"`, `"selection_excluded_red":"` + red + `"`} {
-		if !strings.Contains(string(raw), want) {
-			t.Errorf("ledger row JSON lacks %s: %s", want, raw)
+	// Ran:false with units: the seed-failure early return.
+	failed := &localExecutor{units: reposcan.UnitEvidence{Units: []reposcan.UnitResult{
+		{Unit: "a", Err: "could not run: seed"}, {Unit: "b", Err: "could not run: seed"}}}}
+	m := keys(failed)
+	for _, k := range []string{"runnable", "unreported"} {
+		if _, ok := m[k]; ok {
+			t.Errorf("a pass that never announced records %s: %v", k, m)
 		}
 	}
-	// And back out of the ledger into the scan's file, the way `corral scans`
-	// reads it.
-	if back := fileFromRow(b.Files[0]); back.SelectionUnreported != 2 || back.AuthoredFallback != why || back.SelectionExcluded != 3 || back.SelectionExcludedRed != red {
-		t.Errorf("fileFromRow dropped a field: %+v", back)
+	if m["run"] != float64(2) || m["failed"] != float64(2) {
+		t.Errorf("counts lost: %v", m)
 	}
-
-	dir := t.TempDir()
-	out := filepath.Join(dir, "statement.json")
-	if _, _, err := writeAuditStatement(out, dir, rep, map[string]string{"test-writer": "w"}, nil, nil, true, 0, auditpush.Bundle{}); err != nil {
-		t.Fatalf("writeAuditStatement: %v", err)
+	// Reused: no duration, but runnable is known.
+	n := 2
+	reused := &localExecutor{unitsReused: true, unitsRunnable: &n, units: reposcan.UnitEvidence{Ran: true, Units: []reposcan.UnitResult{{Unit: "a"}, {Unit: "b"}}}}
+	m = keys(reused)
+	if _, ok := m["millis"]; ok {
+		t.Errorf("a reused pass records a duration: %v", m)
 	}
-	stmt, err := os.ReadFile(out) //nolint:gosec // test-owned temp path
-	if err != nil {
-		t.Fatal(err)
-	}
-	var doc struct {
-		Predicate struct {
-			Files []struct {
-				SelectionUnreported  int    `json:"selectionUnreported"`
-				SelectionExcluded    int    `json:"selectionExcluded"`
-				SelectionExcludedRed string `json:"selectionExcludedRed"`
-				AuthoredFallback     string `json:"authoredFallback"`
-			} `json:"files"`
-		} `json:"predicate"`
-	}
-	if err := json.Unmarshal(stmt, &doc); err != nil {
-		t.Fatal(err)
-	}
-	if len(doc.Predicate.Files) != 1 || doc.Predicate.Files[0].SelectionUnreported != 2 || doc.Predicate.Files[0].AuthoredFallback != why ||
-		doc.Predicate.Files[0].SelectionExcluded != 3 || doc.Predicate.Files[0].SelectionExcludedRed != red {
-		t.Errorf("attestation dropped a field: %s", stmt)
+	if m["runnable"] != float64(2) || m["reused"] != true {
+		t.Errorf("reused pass: %v", m)
 	}
 }

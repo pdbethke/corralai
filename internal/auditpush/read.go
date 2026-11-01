@@ -204,7 +204,9 @@ var scanRowColumns = []string{
 	"engine_version", "model_set", "top", "all_candidates", "total_files",
 	"preflight_ran", "preflight_note", "finished_at", "entry_hash",
 	"author", "committer", "co_authors", "scope", "tree_dirty", "repo_identity",
-	"sandbox_backend", "sandbox_image", "seed_skipped", "generated_with",
+	"sandbox_backend", "sandbox_image", "seed_skipped", "generated_with", "unit_pass", "test_command", "runner", "settings", "toolchains",
+	"load_start", "load_end", "load_peak", "mem_available_start_bytes", "peak_rss_bytes", "cpu_millis", "host_not_measured",
+	"inventory", "shadow_draw", "max_tokens_reached",
 }
 
 // scanRowSelectList is scanRowColumns as a SELECT list for the corral_scans
@@ -253,8 +255,12 @@ func readScanRow(db *sql.DB, where string, args ...any) (ScanRow, bool, error) {
 	var scanPassed, allCandidates, preflightRan sql.NullBool
 	var scanStarted, scanFinished sql.NullTime
 	var engineVersion, modelSet, preflightNote, entryHash sql.NullString
-	var author, committer, coAuthors, scope, repoIdentity, sandboxBackend, sandboxImage, seedSkipped, generatedWith sql.NullString
+	var author, committer, coAuthors, scope, repoIdentity, sandboxBackend, sandboxImage, seedSkipped, generatedWith, unitPass, testCommand, runner, settings, toolchains sql.NullString
 	var treeDirty sql.NullBool
+	var loadStart, loadEnd, loadPeak sql.NullFloat64
+	var memAvail, peakRSS, cpuMillis sql.NullInt64
+	var hostNotMeasured, inventory, shadowDraw sql.NullString
+	var maxTokensReached sql.NullBool
 	var top, totalFiles sql.NullInt64
 	// NULL header tokens: a scan none of whose calls was metered
 	// (ScanTokensUnmetered). They read back as the 0 the bundle carried; the
@@ -268,7 +274,9 @@ func readScanRow(db *sql.DB, where string, args ...any) (ScanRow, bool, error) {
 		&rekorLogIndex, &rekorUUID, &scanStarted, &pushedBy, &scanUID,
 		&engineVersion, &modelSet, &top, &allCandidates, &totalFiles,
 		&preflightRan, &preflightNote, &scanFinished, &entryHash,
-		&author, &committer, &coAuthors, &scope, &treeDirty, &repoIdentity, &sandboxBackend, &sandboxImage, &seedSkipped, &generatedWith,
+		&author, &committer, &coAuthors, &scope, &treeDirty, &repoIdentity, &sandboxBackend, &sandboxImage, &seedSkipped, &generatedWith, &unitPass, &testCommand, &runner, &settings, &toolchains,
+		&loadStart, &loadEnd, &loadPeak, &memAvail, &peakRSS, &cpuMillis, &hostNotMeasured,
+		&inventory, &shadowDraw, &maxTokensReached,
 	); err != nil {
 		if err == sql.ErrNoRows {
 			return ScanRow{}, false, nil
@@ -301,6 +309,14 @@ func readScanRow(db *sql.DB, where string, args ...any) (ScanRow, bool, error) {
 	s.RepoIdentity = repoIdentity.String
 	s.SandboxBackend, s.SandboxImage = sandboxBackend.String, sandboxImage.String
 	s.SeedSkipped = seedSkipped.String
+	s.UnitPass = unitPass.String
+	s.TestCommand, s.Runner, s.Settings = testCommand.String, runner.String, settings.String
+	s.Toolchains = toolchains.String
+	s.LoadStart, s.LoadEnd, s.LoadPeak = nullFloat64(loadStart), nullFloat64(loadEnd), nullFloat64(loadPeak)
+	s.MemAvailableStartBytes, s.PeakRSSBytes, s.CPUMillis = nullInt64(memAvail), nullInt64(peakRSS), nullInt64(cpuMillis)
+	s.HostNotMeasured = hostNotMeasured.String
+	s.Inventory, s.ShadowDraw = inventory.String, shadowDraw.String
+	s.MaxTokensReached = nullBoolPtr(maxTokensReached)
 	if treeDirty.Valid {
 		v := treeDirty.Bool
 		s.TreeDirty = &v
@@ -339,6 +355,7 @@ func readFileRows(db *sql.DB, where string, args ...any) ([]Row, error) {
 		authored_test, verdict_json, prompt_shape, covering_tests, import_only, started_at,
 		mutant_budget, mutant_budget_rule, complexity,
 		symbols, symbols_probed, decisions, decisions_probed,
+		mutants_unplaced, mutants_unmeasured, mutants_duplicate, writer_attempts,
 		challenger_mutants, challenger_survived_writer, challenger_survived_shadow, challenger_union, challenger_shared,
 		priors_applied, prior_digest, computed_at, mutants_from, authored_landing, baseline_flaky, seat_tools, covering_units
 	   FROM corral_audits WHERE `+where, args...) // #nosec G202 -- where is a constant clause from readGrains; every value is a bound parameter
@@ -369,6 +386,8 @@ func readFileRows(db *sql.DB, where string, args ...any) ([]Row, error) {
 		var mutantBudget, complexity sql.NullInt64
 		var mutantBudgetRule sql.NullString
 		var symbols, symbolsProbed, decisions, decisionsProbed sql.NullInt64
+		var mutantsUnplaced, mutantsUnmeasured, mutantsDuplicate sql.NullInt64
+		var writerAttempts sql.NullString
 		var chMutants, chSurvW, chSurvS, chUnion, chShared sql.NullInt64
 		var priorsApplied sql.NullInt64
 		var priorDigest sql.NullString
@@ -401,6 +420,7 @@ func readFileRows(db *sql.DB, where string, args ...any) ([]Row, error) {
 			&authoredTest, &verdictJSON, &promptShape, &coveringTests, &importOnly, &rowStarted,
 			&mutantBudget, &mutantBudgetRule, &complexity,
 			&symbols, &symbolsProbed, &decisions, &decisionsProbed,
+			&mutantsUnplaced, &mutantsUnmeasured, &mutantsDuplicate, &writerAttempts,
 			&chMutants, &chSurvW, &chSurvS, &chUnion, &chShared,
 			&priorsApplied, &priorDigest, &computedAt, &mutantsFrom, &authoredLanding, &baselineFlaky, &seatTools, &coveringUnits,
 		); err != nil {
@@ -460,6 +480,8 @@ func readFileRows(db *sql.DB, where string, args ...any) ([]Row, error) {
 		r.Complexity = nullInt(complexity)
 		r.Symbols, r.SymbolsProbed = nullInt(symbols), nullInt(symbolsProbed)
 		r.Decisions, r.DecisionsProbed = nullInt(decisions), nullInt(decisionsProbed)
+		r.MutantsUnplaced, r.MutantsUnmeasured, r.MutantsDuplicate = nullInt(mutantsUnplaced), nullInt(mutantsUnmeasured), nullInt(mutantsDuplicate)
+		r.WriterAttempts = writerAttempts.String
 		r.ChallengerMutants, r.ChallengerSurvivedWriter, r.ChallengerSurvivedShadow = nullInt(chMutants), nullInt(chSurvW), nullInt(chSurvS)
 		r.ChallengerUnion, r.ChallengerShared = nullInt(chUnion), nullInt(chShared)
 		r.PriorsApplied, r.PriorDigest = nullInt(priorsApplied), priorDigest.String
@@ -522,7 +544,7 @@ func readModelCallRows(db *sql.DB, where string, args ...any) ([]ModelCallRow, e
 	rows, err := db.Query(`SELECT
 		repo, run_url, scan_id, path, role, model, calls, retries,
 		input_tokens, output_tokens, cached_input_tokens,
-		cache_write_input_tokens, unmetered_calls, wall_ms,
+		cache_write_input_tokens, unmetered_calls, cost_micro_usd, cost_basis, wall_ms,
 		statement_sha256
 	   FROM corral_model_calls WHERE `+where, args...) // #nosec G202 -- where is a constant clause from readGrains; every value is a bound parameter
 	if err != nil {
@@ -533,11 +555,12 @@ func readModelCallRows(db *sql.DB, where string, args ...any) ([]ModelCallRow, e
 	var out []ModelCallRow
 	for rows.Next() {
 		var c ModelCallRow
-		var cachedInputTokens, cacheWriteInputTokens, inputTokens, outputTokens, unmetered sql.NullInt64
+		var cachedInputTokens, cacheWriteInputTokens, inputTokens, outputTokens, unmetered, costMicro sql.NullInt64
+		var costBasis sql.NullString
 		if err := rows.Scan(
 			&c.Repo, &c.RunURL, &c.ScanID, &c.Path, &c.Role, &c.Model, &c.Calls, &c.Retries,
 			&inputTokens, &outputTokens, &cachedInputTokens,
-			&cacheWriteInputTokens, &unmetered, &c.WallMillis,
+			&cacheWriteInputTokens, &unmetered, &costMicro, &costBasis, &c.WallMillis,
 			&c.StatementSHA256,
 		); err != nil {
 			return nil, err
@@ -551,6 +574,8 @@ func readModelCallRows(db *sql.DB, where string, args ...any) ([]ModelCallRow, e
 		c.UnmeteredCalls = int(unmetered.Int64)
 		c.CachedInputTokens = nullInt64(cachedInputTokens)
 		c.CacheWriteInputTokens = nullInt64(cacheWriteInputTokens)
+		c.CostMicroUSD = nullInt64(costMicro)
+		c.CostBasis = costBasis.String
 		out = append(out, c)
 	}
 	return out, rows.Err()

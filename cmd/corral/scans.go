@@ -381,6 +381,14 @@ type scansShowModelCall struct {
 	// which is every provider but Anthropic.
 	CacheWriteInputTokens *int64 `json:"cache_write_input_tokens"`
 	WallMillis            int64  `json:"wall_ms"`
+	// CostMicroUSD is the ledger's figure for the row, in millionths of a
+	// dollar: null whenever there is no honest one (an unpriced model, an
+	// unmetered or agent seat). CostBasis is always beside it, never
+	// omitted: the dated price table the figure came from, or why there is
+	// none, so a figure never reaches a reader without its source. ""
+	// only on an entry written before cost was recorded.
+	CostMicroUSD *int64 `json:"cost_micro_usd"`
+	CostBasis    string `json:"cost_basis"`
 }
 
 // runScansShowJSONWithTiming is the --json branch of `--timing`: the ledger
@@ -410,7 +418,8 @@ func runScansShowJSONWithTiming(st scansReader, id int64, files []scanstore.File
 			InputTokens: meteredCount(c, c.InputTokens), OutputTokens: meteredCount(c, c.OutputTokens),
 			UnmeteredCalls:    c.UnmeteredCalls,
 			CachedInputTokens: c.CachedInputTokens, CacheWriteInputTokens: c.CacheWriteInputTokens,
-			WallMillis: c.WallMillis,
+			WallMillis:   c.WallMillis,
+			CostMicroUSD: c.CostMicroUSD, CostBasis: c.CostBasis,
 		})
 	}
 

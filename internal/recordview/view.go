@@ -96,10 +96,13 @@ type ChainView struct {
 	// signed entry means unchecked, never "verified" and never "failed".
 	// Keyless says whose trust it rests on — a repository, not a key — so
 	// an unchecked one names what was missing.
-	Pos        int
-	Kind       string
-	KeyID      string
-	Note       string
+	Pos   int
+	Kind  string
+	KeyID string
+	Note  string
+	// Retracted marks a row whose Note carries a retraction reason (Entry.Reason,
+	// a person's words), so the page can label it beside the note.
+	Retracted  bool
 	SigChecked bool
 	Keyless    bool
 }
@@ -302,6 +305,7 @@ func Build(entries []auditpush.LedgerEntry, checks []auditpush.ChainCheck) Site 
 		row := cv
 		if rt, gone := retracted[e.Hash]; gone {
 			row.Note = withNote(row.Note, "RETRACTED: "+rt.Reason)
+			row.Retracted = true
 		} else if !live[e.Hash] && e.Kind == auditpush.KindAdjudication {
 			row.Note = withNote(row.Note, "RETRACTED with the review it adjudicates")
 		}

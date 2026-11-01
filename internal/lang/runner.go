@@ -171,6 +171,17 @@ type Runner struct {
 	// 15.07 s against 11.13 s for another (n=3 each, one worker). Their
 	// EvidenceArgs add -count=1 for the same reason: see goEvidenceArgs.
 	EvidenceCache *EvidenceCache
+	// VersionCmd is argv with everything after the runner's own binary
+	// replaced by its version flag: the command that prints the version of the
+	// runner argv runs, in the form argv launches it (the entry script behind
+	// a host interpreter, the module behind `python3 -m`). It refuses
+	// (ok=false) where argv does not show the binary: a package script, a
+	// shell-wrapped command. Optional per runner, as EvidenceArgs is, so the
+	// parity table holds no entry for it; a row without one is recorded as
+	// "not read", never as absent. Set only where the runner's real
+	// `--version` output was captured (testdata/runners/*-version.txt).
+	// Callers go through the row, never a plugin.
+	VersionCmd func(argv []string) ([]string, bool)
 	// Disclose is what the scan line says about running this runner in
 	// repoDir; PreflightBin is the binary that must be on PATH.
 	Disclose     func(repoDir string, argv []string) []string
@@ -240,6 +251,7 @@ var runners = []Runner{
 		ListCmd:  pyListCmd, ParseList: pyParseTestList, SingleCmd: pySingleCmd,
 		FirstFailure: pyFirstFailure, FailedTests: pyFailedTests, DeselectCmd: pyDeselectCmd,
 		CollectionBase: stripPyCollectionTargets, TestsCmd: pyTestsCmd, TestUnit: pyTestUnit, CarryArgs: deselectArgs,
+		VersionCmd: versionAtWord("pytest"),
 	},
 	{
 		// No salvage: unittest exits 2 on pytest's --deselect, so a rerun
@@ -267,7 +279,8 @@ var runners = []Runner{
 		FirstFailure: firstOf(jestFailures), FailedTests: jestFailures, DeselectCmd: jestDeselectCmd, FailedUnits: jestFailedUnits,
 		ListUnits: jestListUnits, ParseUnits: jestParseUnits, UnitCmd: oneUnit(jestUnitsCmd), UnitCoruns: jestUnitCoruns,
 		UnitsCmd: jestUnitsCmd, UnitsCoruns: eachUnitCoruns(jestUnitCoruns), UnitForFile: fileUnitForFile, UnitNoun: "test files",
-		Note: "listing, one-test, one-file and several-file runs verified on jest 30.5",
+		VersionCmd: jestVersionCmd,
+		Note:       "listing, one-test, one-file and several-file runs verified on jest 30.5",
 	},
 	{
 		ListsFullNames: true,
@@ -293,6 +306,7 @@ var runners = []Runner{
 		ListUnits: vitestListUnits, ParseUnits: vitestParseUnits, UnitCmd: oneUnit(vitestUnitsCmd), UnitCoruns: vitestUnitCoruns,
 		UnitsCmd: vitestUnitsCmd, UnitsCoruns: eachUnitCoruns(vitestUnitCoruns), UnitForFile: fileUnitForFile, UnitNoun: "test files",
 		EvidenceArgs:   vitestEvidenceArgs,
+		VersionCmd:     vitestVersionCmd,
 		UnitNoCoverage: "no worker coverage: the run's V8 coverage named no project file, though corral ran the unit with --pool=threads; that is what vitest's forks pool gives (measured on vitest 3.2.7 and 5.0.3), so check whether the test file itself forces another pool",
 		Note:           "listing, one-test, one-file and several-file runs verified on vitest 3.2; the unit evidence pass runs each file with --pool=threads, because the forks pool wrote no worker coverage (measured on vitest 3.2.7 and 5.0.3); unit evidence counted through corral's vm source-map preload on vitest 3.2.7 and 5.0.3; vitest 1, 2 and 4 were not run",
 	},

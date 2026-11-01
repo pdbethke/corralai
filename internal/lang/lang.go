@@ -42,6 +42,12 @@ type Plugin interface {
 	Detect(codePath string) bool // by file extension
 	Scaffold() map[string]string // base workspace files (go.mod / none)
 	TestCmd() []string           // default recursive test command
+	// VersionCmd is the command that prints the language's interpreter or
+	// compiler version, run inside the jail the audit runs in so the version
+	// recorded is the one that graded (a run's results changed between Node 22
+	// and Node 24, and a bwrap run records no image). Required of every
+	// language: a plugin that cannot name its toolchain cannot be recorded.
+	VersionCmd() []string
 	// LineComment is the language's line-comment marker ("//" or "#"). It is
 	// a fact about the language, declared once here so every place that
 	// writes a comment into audited-language text (the authored-test record's

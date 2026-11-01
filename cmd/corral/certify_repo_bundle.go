@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/pdbethke/corralai/internal/auditpush"
+	"github.com/pdbethke/corralai/internal/pricing"
 	"github.com/pdbethke/corralai/internal/sandbox"
 	"github.com/pdbethke/corralai/internal/scanstore"
 )
@@ -124,8 +125,12 @@ func buildBundle(
 			SelectionMillis: scan.SelectionMillis,
 			// Same discipline: already nullable in the ledger, rides through
 			// as-is. nil unless THIS scan reused a prior one's evidence.
-			SelectionReused: scan.SelectionReused,
-			InputTokens:     scan.InputTokens, OutputTokens: scan.OutputTokens,
+			SelectionReused: scan.SelectionReused, UnitPass: scan.UnitPass,
+			TestCommand: scan.TestCommand, Runner: scan.Runner, Settings: scan.Settings, Toolchains: scan.Toolchains,
+			LoadStart: scan.LoadStart, LoadEnd: scan.LoadEnd, LoadPeak: scan.LoadPeak,
+			MemAvailableStartBytes: scan.MemAvailableStartBytes, PeakRSSBytes: scan.PeakRSSBytes, CPUMillis: scan.CPUMillis, HostNotMeasured: scan.HostNotMeasured,
+			Inventory: scan.Inventory, ShadowDraw: scan.ShadowDraw, MaxTokensReached: scan.MaxTokensReached,
+			InputTokens: scan.InputTokens, OutputTokens: scan.OutputTokens,
 			ModelCalls:   scan.ModelCalls,
 			SourcePushed: sourcePushed,
 			// The --transparency receipt. Already nullable in the ledger,
@@ -254,6 +259,10 @@ func buildAuditRows(files []scanstore.File, scanID int64, meta bundleMeta) []aud
 			SymbolsProbed:            f.SymbolsProbed,
 			Decisions:                f.Decisions,
 			DecisionsProbed:          f.DecisionsProbed,
+			MutantsUnplaced:          f.MutantsUnplaced,
+			MutantsUnmeasured:        f.MutantsUnmeasured,
+			MutantsDuplicate:         f.MutantsDuplicate,
+			WriterAttempts:           f.WriterAttempts,
 			ChallengerMutants:        f.ChallengerMutants,
 			ChallengerSurvivedWriter: f.ChallengerSurvivedWriter,
 			ChallengerSurvivedShadow: f.ChallengerSurvivedShadow,
@@ -292,8 +301,18 @@ func buildMutantRows(mutants []scanstore.Mutant, scanID int64, meta bundleMeta) 
 }
 
 func buildModelCallRows(calls []scanstore.ModelCall, scanID int64, meta bundleMeta) []auditpush.ModelCallRow {
+	// Whether a seat was an agent is what agentbackend.ForSeat resolved when
+	// the run started, which SeatTools already records per role. Read here
+	// rather than re-resolved: the cost must follow the record, and a
+	// re-resolution could disagree with it (a CLI installed since).
+	var tools map[string]string
+	toolsErr := error(nil)
+	if meta.SeatTools != "" {
+		toolsErr = json.Unmarshal([]byte(meta.SeatTools), &tools)
+	}
 	rows := make([]auditpush.ModelCallRow, 0, len(calls))
 	for _, c := range calls {
+		micro, basis := modelCallCost(c, tools, toolsErr)
 		rows = append(rows, auditpush.ModelCallRow{
 			Repo: meta.Repo, RunURL: meta.RunURL, ScanID: scanID,
 			Path: c.Path, Role: c.Role, Model: c.Model,
@@ -303,9 +322,35 @@ func buildModelCallRows(calls []scanstore.ModelCall, scanID int64, meta bundleMe
 			CacheWriteInputTokens: c.CacheWriteInputTokens,
 			UnmeteredCalls:        c.UnmeteredCalls,
 			WallMillis:            c.WallMillis,
+			CostMicroUSD:          micro, CostBasis: basis,
 		})
 	}
 	return rows
+}
+
+// modelCallCost prices one row from pricing.Current. A row that mixes metered
+// and unmetered calls gets NO figure: the cost of only the metered part would
+// read as the whole row's cost, so the basis names the unmetered calls
+// instead. A nil cache counter is silence from the provider and prices as 0
+// (a provider that did not report a cached prefix may have billed it at the
+// full input rate, so the figure is then an upper bound on that component).
+func modelCallCost(c scanstore.ModelCall, tools map[string]string, toolsErr error) (*int64, string) {
+	if toolsErr != nil {
+		return nil, pricing.BasisSeatToolsUnreadable
+	}
+	agent := tools[c.Role] != ""
+	if !agent && c.UnmeteredCalls > 0 && !auditpush.TokensUnmetered(c.Calls, c.UnmeteredCalls) {
+		return nil, pricing.BasisPartlyUnmetered(c.UnmeteredCalls, c.Calls)
+	}
+	var cached, written int64
+	if c.CachedInputTokens != nil {
+		cached = *c.CachedInputTokens
+	}
+	if c.CacheWriteInputTokens != nil {
+		written = *c.CacheWriteInputTokens
+	}
+	return pricing.Current.Cost(c.Model, c.InputTokens, cached, written, c.OutputTokens,
+		!auditpush.TokensUnmetered(c.Calls, c.UnmeteredCalls), agent)
 }
 
 func buildEventRows(events []scanstore.Event, scanID int64, meta bundleMeta) []auditpush.EventRow {

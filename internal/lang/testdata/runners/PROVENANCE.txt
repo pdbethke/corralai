@@ -33,3 +33,18 @@ vitest.projects.config.mjs as vitest.config.mjs, -nocolor with NO_COLOR=1.
 vitest 5 colours its output with no TTY and no colour variable, which is
 how a jailed run returns it; $DIR, ms timings, start time and duration
 replaced.
+*-version.txt (added 2026-10-31, captured by hand on this workstation, stdout of
+the command shown, first line is what the ledger records): vitest-version.txt is
+`node ./node_modules/vitest/vitest.mjs --version` run in the REA checkout
+(vitest 5.0.3) under node v24.22.1 (~/sdk/node-24.22.1); pytest-version.txt is
+`python3 -m pytest --version` (pytest 9.1.1, Python 3.14.4);
+toolchain-node-version.txt is node v22.23.4 (`node --version`) and
+toolchain-node24-version.txt node v24.22.1; toolchain-go-version.txt
+`go version` (go1.26.10); toolchain-python3-version.txt `python3 --version`;
+toolchain-ruby-version.txt `ruby --version` (3.3.8); toolchain-php-version.txt
+the first line of `php --version` (PHP 8.5.4); toolchain-rustc-version.txt
+`rustc --version` (1.90.0).
+jest-version.txt (added 2026-10-31): `node ./node_modules/jest/bin/jest.js --version`
+in a scratch directory after `npm install jest@30.5.2` (node v22.23.4); the
+output is the bare version, 30.5.2. Replaces the earlier note that jest had no
+version fixture.

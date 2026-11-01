@@ -35,6 +35,9 @@ func (phpPlugin) Scaffold() map[string]string { return map[string]string{} }
 // invoke.
 func (phpPlugin) TestCmd() []string { return []string{"vendor/bin/phpunit"} }
 
+// VersionCmd: see Plugin.VersionCmd.
+func (phpPlugin) VersionCmd() []string { return []string{"php", "--version"} }
+
 // CompileCheck syntax-checks BOTH files with `<interpreter> -l` (offline, no
 // autoloading needed). `php -l` only ever reports on a SINGLE file per
 // invocation, so this returns a TWO-command sequence — codePath then

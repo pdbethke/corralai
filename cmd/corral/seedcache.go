@@ -5,6 +5,7 @@ package main
 import (
 	"errors"
 	"sync"
+	"sync/atomic"
 )
 
 // seedCache memoizes repoSeed construction per language for the lifetime of one
@@ -26,6 +27,9 @@ type seedEntry struct {
 	once sync.Once
 	seed repoSeed
 	err  error
+	// built is set after the build ran, so peek can read seed and err
+	// without waiting on, or starting, a build.
+	built atomic.Bool
 }
 
 func newSeedCache(build func(lang string) (repoSeed, error)) *seedCache {
@@ -49,8 +53,23 @@ func (c *seedCache) get(lang string) (repoSeed, error) {
 	c.mu.Unlock()
 
 	// Outside the lock: a slow build must not block other languages.
-	e.once.Do(func() { e.seed, e.err = c.build(lang) })
+	e.once.Do(func() { e.seed, e.err = c.build(lang); e.built.Store(true) })
 	return e.seed, e.err
+}
+
+// peek returns the language's seed only if one was ALREADY built without
+// error. It never builds and never waits: a caller that must not spend time
+// preparing a jail (the toolchain version read, run after the audit) asks
+// this, not get.
+func (c *seedCache) peek(lang string) (repoSeed, bool) {
+	c.mu.Lock()
+	e := c.entries[lang]
+	closed := c.closed
+	c.mu.Unlock()
+	if closed || e == nil || !e.built.Load() || e.err != nil {
+		return repoSeed{}, false
+	}
+	return e.seed, true
 }
 
 // skipped is what every seed built without error left out as not text,

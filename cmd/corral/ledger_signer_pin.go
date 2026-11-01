@@ -486,7 +486,18 @@ func undoNewRoot(created []string) string {
 
 func printPinned(stdout io.Writer, repo string, pin *auditpush.KeylessPin, dir, file, rootID string) {
 	fmt.Fprintf(stdout, "pinned keyless signing of %s (repository id %s) to %s in %s (signed by root %s)\n", repo, pin.RepoID, pinPairs(pin), filepath.Join(dir, auditpush.ScansSubdir, file), rootID)
+	fmt.Fprintf(stdout, "%s\n", pinDependsOn)
 }
+
+// pinDependsOn is what the pin cannot defend by itself, printed with every
+// pin because the pin is an entry on the ledger branch: whoever can rewrite
+// the branch can cut the chain before the pin and append past it, and the
+// shorter chain verifies, its keyless entries reading keyless-unpinned with
+// no problem reported. corral builds no check for that here; it says where
+// the defence is.
+const pinDependsOn = "this pin holds only while the ledger branch cannot be force-pushed or deleted: protect it with a branch ruleset. " +
+	"A rewrite that cuts the chain before the pin and appends past it still verifies, so removing the pin is detected only by an anchor held outside the branch (`corral ledger verify --expect-head <hash> <dir>`). " +
+	"Verifiers should take the root public key from outside the ledger branch (your default branch, `--pub` or CORRALAI_LEDGER_PUBKEY), not from its LEDGER_PUBKEY."
 
 func pinPairs(pin *auditpush.KeylessPin) string {
 	pairs := make([]string, len(pin.Allow))

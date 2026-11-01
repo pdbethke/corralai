@@ -39,7 +39,8 @@ const description =
       entry on the repository's <code>corral/ledger</code> branch. This page reads those entries straight
       from GitHub and, before it draws a single figure, checks every hash, link and signature with corral's
       own verifier, compiled to WebAssembly, against the root key the branch itself publishes. That shows the
-      record is intact and signed by that key; which key it is, is named on each report.
+      record is intact and that each entry was signed by that key or, for a keyless entry, by a GitHub
+      Actions workflow of the repository at the level the entry shows; which key it is, is named on each report.
     </p>
 
     <form class="lookup" action="/results/" method="get" role="search">

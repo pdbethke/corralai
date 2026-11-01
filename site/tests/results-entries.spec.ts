@@ -31,7 +31,7 @@ async function render(page: import('@playwright/test').Page, entries: object[]) 
   // The renderer's imports (loader, charts, links) are not what is under
   // test: drop them, keep the module.
   const src = stripTypeScriptTypes(fs.readFileSync(path.join(SITE, 'src', 'lib', 'results-view.ts'), 'utf8')).replace(/^import .* from '\.\/[a-z-]+';$/gm, '');
-  await page.addScriptTag({ type: 'module', content: `${src}\nwindow.__entriesTable = entriesTable;` });
+  await page.addScriptTag({ type: 'module', content: `${src}\nwindow.__entriesTable = entriesTable;\nwindow.__verifiedCaption = verifiedCaption;\nwindow.__listedNote = listedNote;` });
   await page.waitForFunction(() => (window as any).__entriesTable !== undefined);
   await page.evaluate((es) => {
     const d = { entries: es, summary: { totals: { entries_verified: es.length, entries_unsigned: 0 } } };
@@ -78,4 +78,38 @@ test('the page draws keyless-unpinned and keyless-pinned-unchecked amber, and no
   expect(rule).toContain('.level-keyless-unpinned');
   expect(rule).toContain('.level-keyless-pinned-unchecked');
   expect(rule).not.toMatch(/\.level-(keyless-pinned|key)[,\s{]/);
+});
+
+// The summaries above the table word what the levels say. A keyless entry
+// was signed by a workflow of the repository, not by the root key, so the
+// verified tile's caption and the note under the heading must not say every
+// verified entry was signed by the root key once any keyless entry is in the
+// count; a key-only ledger keeps the plain wording.
+const totals = (o: object) => ({ entries_verified: 0, entries_unsigned: 0, entries_failed: 0, entries_key: 0, entries_keyless_pinned: 0, entries_keyless_pinned_unchecked: 0, entries_keyless_unpinned: 0, ...o });
+
+test('the verified caption and the listed note word keyless entries from the level counts, never as root-key signed', async ({ page }) => {
+  await render(page, []);
+  const words = await page.evaluate((ts) => {
+    const w = window as any;
+    return ts.map((t: object) => {
+      const d = { entries: [], summary: { totals: t }, root_keyid: 'ed25519:abc' };
+      const r = { kind: 'derived', repo: 'o/r', commit: 'c0ffee1234567890', rootPubSource: 'LEDGER_PUBKEY', derived: d };
+      return { caption: w.__verifiedCaption(d), note: w.__listedNote('o/r', { ok: true, listings: [] }, r).textContent };
+    });
+  }, [
+    totals({ entries_verified: 2, entries_keyless_unpinned: 2 }),
+    totals({ entries_verified: 3, entries_key: 1, entries_keyless_pinned: 1, entries_keyless_pinned_unchecked: 1 }),
+    totals({ entries_verified: 2, entries_key: 2 }),
+  ]);
+  for (const w of words.slice(0, 2)) {
+    expect(w.caption).not.toContain('signed by the root key');
+    expect(w.note).not.toContain('intact and signed by that key;');
+    expect(w.note).toContain('keyless');
+  }
+  expect(words[0].caption).toContain('2 signed keylessly by a workflow of this repository, with no workflow pinned');
+  expect(words[1].caption).toContain('1 signed by a key');
+  expect(words[1].caption).toContain('1 signed keylessly by the workflow and ref the root pinned');
+  expect(words[1].caption).toContain('1 signed keylessly under a pin no root key checked');
+  expect(words[2].caption).toBe('intact and signed by the root key named above, checked in this browser');
+  expect(words[2].note).toContain("So “verified” means the entries are intact and signed by that key; it does not show that the key is the project's.");
 });

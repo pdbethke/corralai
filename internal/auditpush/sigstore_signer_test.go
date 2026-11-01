@@ -580,3 +580,38 @@ func snapshotTree(t *testing.T, dir string) map[string]string {
 	}
 	return out
 }
+
+// On a keyless ledger whose root has only pinned it (no key registered), an
+// unsigned append is refused, and the refusal names what the ledger does
+// accept — a keyless entry or a root-signed one — rather than `corral ledger
+// signer add`, which is itself refused on a ledger with keyless entries.
+func TestUnsignedAppendOnAPinnedKeylessLedgerSaysWhatItAccepts(t *testing.T) {
+	s := ledgertest.New(t)
+	dir := t.TempDir()
+	root := seededKey(0x56)
+	signer := keylessTestSigner(t, s, keylessTestRepo, keylessTestRepo)
+	appendScan(t, dir, signer, "aaaa1111")
+	mustSignerChange(t, dir, SignerChange{Action: SignerPinKeyless, Name: "ci", Reason: "only main signs",
+		KeylessPin: &KeylessPin{RepoID: "42", Allow: []PinnedWorkflow{{Workflow: ".github/workflows/corral.yml", Ref: "refs/heads/main"}}}}, signerOf(root))
+	before := scanFileCount(t, dir)
+	_, err := AppendLedgerEntry(dir, scanEntry("bbbb2222"), nil)
+	if err == nil {
+		t.Fatal("an unsigned entry appended to a pinned ledger")
+	}
+	for _, want := range []string{"pinned for keyless signing", "id-token: write", "root key", "refuses unsigned"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q lacks %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "signer add") {
+		t.Errorf("error %q points at `signer add`, which a keyless ledger refuses", err)
+	}
+	if got := scanFileCount(t, dir); got != before {
+		t.Fatalf("%d files, want %d: the refused entry was written", got, before)
+	}
+	// The ledger still takes the two kinds of entry the refusal names.
+	appendScan(t, dir, signer, "cccc3333")
+	if _, err := AppendLedgerEntry(dir, scanEntry("dddd4444"), signerOf(root)); err != nil {
+		t.Fatalf("a root-signed append to a pinned ledger: %v", err)
+	}
+}

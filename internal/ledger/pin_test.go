@@ -62,14 +62,20 @@ func (p *pinChain) next(e ledger.Entry) ledger.Entry {
 // returns its file name.
 func (p *pinChain) signer(c ledger.SignerChange) string {
 	p.t.Helper()
-	e := p.next(ledger.Entry{Format: ledger.FileFormat, Kind: ledger.KindSigner, KeyID: ledger.KeyFingerprint(p.rootPub()), Signer: &c})
+	return p.signerBy(p.root, c)
+}
+
+// signerBy appends a signer entry signed by k, which need not be the root.
+func (p *pinChain) signerBy(k ed25519.PrivateKey, c ledger.SignerChange) string {
+	p.t.Helper()
+	e := p.next(ledger.Entry{Format: ledger.FileFormat, Kind: ledger.KindSigner, KeyID: ledger.KeyFingerprint(k.Public().(ed25519.PublicKey)), Signer: &c})
 	h, err := ledger.EntryHash(e)
 	if err != nil {
 		p.t.Fatal(err)
 	}
 	e.Hash = h
 	raw, _ := hex.DecodeString(h)
-	e.Signature = hex.EncodeToString(ed25519.Sign(p.root, raw))
+	e.Signature = hex.EncodeToString(ed25519.Sign(k, raw))
 	e = reparse(p.t, e)
 	p.entries = append(p.entries, e)
 	return e.File
@@ -217,22 +223,23 @@ func TestMissingBuildConfigUnderPinIsRefused(t *testing.T) {
 		name     string
 		claims   ledgertest.CertClaims
 		signedBy string
+		cause    string // the id cause, appended only when the pair matched
 	}{
-		{"no workflow", ledgertest.CertClaims{Ref: mainRef, RepoID: pinRepoID}, "(absent)@" + mainRef},
-		{"no ref", ledgertest.CertClaims{Workflow: "https://github.com/o/r/" + corralWF + "@" + mainRef, RepoID: pinRepoID}, corralWF + "@" + mainRef + "@(absent)"},
-		{"no repository id", run(corralWF, mainRef, ""), corralWF + "@" + mainRef},
-		{"nothing", ledgertest.CertClaims{}, "(absent)@(absent)"},
+		{"no workflow", ledgertest.CertClaims{Ref: mainRef, RepoID: pinRepoID}, "(absent)@" + mainRef, ""},
+		{"no ref", ledgertest.CertClaims{Workflow: "https://github.com/o/r/" + corralWF + "@" + mainRef, RepoID: pinRepoID}, corralWF + "@" + mainRef + "@(absent)", ""},
+		{"no repository id", run(corralWF, mainRef, ""), corralWF + "@" + mainRef, " (repository id (absent), pin " + pinRepoID + ")"},
+		{"nothing", ledgertest.CertClaims{}, "(absent)@(absent)", ""},
 		// The URI names the pinned ref but the certificate's own ref is
 		// another: both must match, so this is refused and shows both.
 		{"a ref the URI does not name", ledgertest.CertClaims{Workflow: "https://github.com/o/r/" + corralWF + "@" + mainRef, Ref: "refs/heads/attacker", RepoID: pinRepoID},
-			corralWF + "@" + mainRef + "@refs/heads/attacker"},
+			corralWF + "@" + mainRef + "@refs/heads/attacker", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			p := newPinChain(t)
 			pinFile := p.signer(pin(pinRepoID, allow(corralWF, mainRef)))
 			p.keylessAs(ledger.Entry{}, tc.claims)
-			if got, want := p.verify()[1].Problem, refusal(tc.signedBy, pinFile); got != want {
+			if got, want := p.verify()[1].Problem, refusal(tc.signedBy, pinFile)+tc.cause; got != want {
 				t.Fatalf("problem\n got %q\nwant %q", got, want)
 			}
 		})
@@ -245,8 +252,43 @@ func TestRepoIDMismatchIsRefused(t *testing.T) {
 	p := newPinChain(t)
 	pinFile := p.signer(pin(pinRepoID, allow(corralWF, mainRef)))
 	p.keylessAs(ledger.Entry{}, run(corralWF, mainRef, "43"))
-	if got, want := p.verify()[1].Problem, refusal(corralWF+"@"+mainRef, pinFile); got != want {
+	want := refusal(corralWF+"@"+mainRef, pinFile) + " (repository id 43, pin " + pinRepoID + ")"
+	if got := p.verify()[1].Problem; got != want {
 		t.Fatalf("problem\n got %q\nwant %q", got, want)
+	}
+}
+
+// A key the root registered is a signer of scans, not of the rules: a pin or
+// an unpin it signs is refused by the root-only authority rule, and the pin
+// in force (or its absence) is unchanged by it.
+func TestRegisteredNonRootKeyCannotPinOrUnpin(t *testing.T) {
+	op := key(0x64)
+	opPub := op.Public().(ed25519.PublicKey)
+	register := ledger.SignerChange{Action: ledger.SignerRegister, KeyID: ledger.KeyFingerprint(opPub), PubKey: hex.EncodeToString(opPub), Name: "laptop"}
+
+	p := newPinChain(t)
+	p.signer(register)
+	p.signerBy(op, pin(pinRepoID, allow(corralWF, mainRef)))
+	p.keyless(corralWF, "refs/heads/attacker")
+	checks := p.verify()
+	if !strings.Contains(checks[1].Problem, "must be signed by the ledger's root key") {
+		t.Fatalf("a pin signed by a registered non-root key must be refused: %+v", checks[1])
+	}
+	if checks[2].Problem != "" || checks[2].Level != ledger.LevelKeylessUnpinned {
+		t.Fatalf("a refused pin must not pin: %+v", checks[2])
+	}
+
+	p = newPinChain(t)
+	p.signer(register)
+	pinFile := p.signer(pin(pinRepoID, allow(corralWF, mainRef)))
+	p.signerBy(op, unpin("the laptop wants out"))
+	p.keyless(corralWF, "refs/heads/attacker")
+	checks = p.verify()
+	if !strings.Contains(checks[2].Problem, "must be signed by the ledger's root key") {
+		t.Fatalf("an unpin signed by a registered non-root key must be refused: %+v", checks[2])
+	}
+	if got, want := checks[3].Problem, refusal(corralWF+"@refs/heads/attacker", pinFile); got != want {
+		t.Fatalf("the pin must still be in force after a refused unpin\n got %q\nwant %q", got, want)
 	}
 }
 
@@ -594,5 +636,34 @@ func TestWorkflowOfAnotherRepositoryIsRefused(t *testing.T) {
 	p.keylessAs(ledger.Entry{}, ledgertest.CertClaims{Workflow: other, BuildSigner: other, Ref: mainRef, RepoID: pinRepoID})
 	if got, want := p.verify()[1].Problem, refusal(other, pinFile); got != want {
 		t.Fatalf("problem\n got %q\nwant %q", got, want)
+	}
+}
+
+// Derive counts the verified entries by level, so a page words its summary
+// from them instead of tallying the list: an unpinned keyless entry, the
+// root-signed pin (a key) and a pinned keyless entry are one of each.
+func TestDeriveCountsVerifiedEntriesByLevel(t *testing.T) {
+	p := newPinChain(t)
+	p.keyless(corralWF, mainRef)
+	p.signer(pin(pinRepoID, allow(corralWF, mainRef)))
+	p.keyless(corralWF, mainRef)
+	p.keyless(corralWF, mainRef)
+	var raw []ledger.RawEntry
+	for _, e := range p.entries {
+		raw = append(raw, ledger.RawEntry{Name: e.File, Bytes: e.Raw})
+	}
+	d, err := ledger.Derive(raw, p.trust(p.rootPub()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tot := d.Summary.Totals
+	if tot.EntriesVerified != 4 || tot.EntriesKey != 1 || tot.EntriesKeylessUnpinned != 1 || tot.EntriesKeylessPinned != 2 || tot.EntriesKeylessPinnedUnchecked != 0 {
+		t.Fatalf("by level: verified %d key %d unpinned %d pinned %d unchecked %d", tot.EntriesVerified, tot.EntriesKey, tot.EntriesKeylessUnpinned, tot.EntriesKeylessPinned, tot.EntriesKeylessPinnedUnchecked)
+	}
+	j := summaryJSON(t, d.Summary)
+	for _, k := range []string{`"entries_key":1`, `"entries_keyless_unpinned":1`, `"entries_keyless_pinned":2`, `"entries_keyless_pinned_unchecked":0`} {
+		if !strings.Contains(j, k) {
+			t.Errorf("want %s in %s", k, j)
+		}
 	}
 }

@@ -51,3 +51,13 @@ func ActiveSigners(entries []LedgerEntry) (rootKeyID string, active []SignerKey)
 	_, set := verifyEntries(entries, nil)
 	return set.RootID(), set.List()
 }
+
+// KeylessPinInForce is the keyless pin at the chain's head, read the way
+// ActiveSigners reads the set: a keyless walk that checks the root-only
+// authority rule by name but NO SIGNATURE, so it is a writer's convenience
+// ("is this ledger pinned?"), never an authorization. nil when no pin is in
+// force.
+func KeylessPinInForce(entries []LedgerEntry) *KeylessPin {
+	_, set := verifyEntries(entries, nil)
+	return set.Pin()
+}

@@ -155,6 +155,8 @@ test('a one-byte-tampered entry derives with a problem and every total empty', a
     caught_share: null, telemetry: null, last_run: null,
     // The entry counts describe the entry list, which a problem does not empty.
     entries_verified: 1, entries_unsigned: 0, entries_failed: 1,
+    // So do the verified entries by level: the one verified entry is key-signed.
+    entries_key: 1, entries_keyless_pinned: 0, entries_keyless_pinned_unchecked: 0, entries_keyless_unpinned: 0,
   });
   expect([runs, gaps, models, r.derived.scans, r.derived.files]).toEqual([[], [], [], [], []]);
 });

@@ -211,15 +211,19 @@ type Site struct {
 	Vendors            []string
 	SigsUnchecked      int
 	SigsUncheckedKey   int
-	SigsOK             int
-	SigsTotal          int
-	First, Last        time.Time
-	Models             []string
-	VerifierOnly       []string
-	Tools              []string
-	Scopes             []string
-	Repo               string
-	RepoURL            string
+	// SigsWeak counts verified signatures at a weak keyless level
+	// (keyless-unpinned, keyless-pinned-unchecked): each is a warn in its
+	// own row, so the banner that summarises them may not read ok.
+	SigsWeak     int
+	SigsOK       int
+	SigsTotal    int
+	First, Last  time.Time
+	Models       []string
+	VerifierOnly []string
+	Tools        []string
+	Scopes       []string
+	Repo         string
+	RepoURL      string
 }
 
 func shortHash(h string) string {
@@ -290,6 +294,9 @@ func Build(entries []auditpush.LedgerEntry, checks []auditpush.ChainCheck) Site 
 			switch {
 			case c.SigOK:
 				v.SigsOK++
+				if c.Level == ledger.LevelKeylessUnpinned || c.Level == ledger.LevelKeylessPinnedUnchecked {
+					v.SigsWeak++
+				}
 			case !c.SigChecked:
 				v.SigsUnchecked++
 				if !c.Keyless {

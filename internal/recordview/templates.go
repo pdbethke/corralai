@@ -68,7 +68,7 @@ const verifyBanner = `
 {{define "noledger"}}<div class="banner warn"><p><strong>Not a ledger directory.</strong> This target is a warehouse, so there is no chain, no reviews and no verdicts to show here. Point <code>corral ui --db</code> at a ledger directory (<code>.corral/ledger</code>) to see them.</p></div>{{end}}
 {{define "chainclaim"}}{{if not .HasLedger}}{{template "noledger"}}{{else if .LedgerEntries}}{{template "verify" .}}{{else}}{{template "emptyrecord"}}{{end}}{{end}}
 {{define "verify"}}
-<div class="banner{{if .ChainProblems}} bad{{else if or .Unverified .SigsUnchecked}} warn{{end}}">
+<div class="banner{{if .ChainProblems}} bad{{else if or .Unverified .SigsUnchecked .SigsWeak}} warn{{end}}">
   <p><strong>Chain:</strong>
   {{if .ChainProblems}}<span class="chip bad">{{.ChainProblems}} problem(s)</span>
   {{else if .Unverified}}<span class="chip ok">intact</span> across the {{.VerifiedEntries}} entries that were checked — every one's hash matches its bytes and every link names its predecessor.
@@ -76,8 +76,9 @@ const verifyBanner = `
   {{if .Unverified}}<p><span class="chip warn">not verified</span> {{.Unverified}} {{if eq .Unverified 1}}entry{{else}}entries{{end}} changed while being read — not verified; reload.</p>{{end}}
   <p><strong>Signatures:</strong>
   {{if not .SigsTotal}}<span class="chip warn">unsigned</span> — none of the {{.VerifiedEntries}} checked entries carries a signature.
-  {{else if not .SigsUnchecked}}<span class="chip ok">{{.SigsOK}}/{{.SigsTotal}} verified</span>
-  {{else}}<span class="chip warn">{{.SigsOK}}/{{.SigsTotal}} verified</span>{{if .SigsUncheckedKey}} — no root key given: {{.SigsUncheckedKey}} ed25519 signature{{if ne .SigsUncheckedKey 1}}s{{end}} not checked{{end}}. An unchecked signature's validity is <em>unknown</em>: that is not a pass and not a failure. Verify them yourself with the command below.{{end}}</p>
+  {{else if and (not .SigsUnchecked) (not .SigsWeak)}}<span class="chip ok">{{.SigsOK}}/{{.SigsTotal}} verified</span>
+  {{else if not .SigsUnchecked}}<span class="chip warn">{{.SigsOK}}/{{.SigsTotal}} verified</span> — {{.SigsWeak}} keyless signature{{if ne .SigsWeak 1}}s{{end}} verified only as a workflow of this repository: no pin a root key checked limits {{if eq .SigsWeak 1}}it{{else}}them{{end}} to one workflow and ref (each entry says its level).
+  {{else}}<span class="chip warn">{{.SigsOK}}/{{.SigsTotal}} verified</span>{{if .SigsUncheckedKey}} — no root key given: {{.SigsUncheckedKey}} ed25519 signature{{if ne .SigsUncheckedKey 1}}s{{end}} not checked{{end}}. An unchecked signature's validity is <em>unknown</em>: that is not a pass and not a failure. Verify them yourself with the command below.{{if .SigsWeak}} {{.SigsWeak}} keyless signature{{if ne .SigsWeak 1}}s{{end}} verified only as a workflow of this repository, with no pin a root key checked.{{end}}{{end}}</p>
 </div>
 {{end}}
 `

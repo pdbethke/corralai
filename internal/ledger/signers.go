@@ -244,3 +244,7 @@ func (s *SignerSet) seed(keys []SignerKey) {
 // with none, the chain's first signer entry or leading checkpoint. "" when
 // the chain has neither.
 func (s *SignerSet) RootID() string { return s.rootID }
+
+// Pin is the keyless pin in force at the point the walk reached (the head,
+// after a whole-chain walk), nil when none is.
+func (s *SignerSet) Pin() *KeylessPin { return s.pin }

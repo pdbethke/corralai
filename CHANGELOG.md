@@ -21,8 +21,22 @@ history of any release, `git log v0.3.4..v0.3.5`.
   now read "unpinned"**: that is what they always were (any branch of the
   repository could have signed), now said. Nothing that verified before stops
   verifying. `corral ledger signer pin` / `unpin` let the ledger's owner pin the
-  workflow and ref allowed to sign; an entry outside the pin fails, entries
-  before it keep their level. `corral setup` prints the filled-in command when
+  workflow and ref allowed to sign; while the pin is on the chain an entry
+  outside it fails, and entries before it keep their level. **The pin holds
+  only while the ledger branch cannot be force-pushed or deleted**: a rewrite
+  that cuts the chain before the pin and appends past it still verifies, as
+  `keyless-unpinned`, so protect the branch with a ruleset, detect a removed
+  pin with an anchor held outside it (`corral ledger verify --expect-head <hash>
+  <dir>`), and take the root public key from outside the ledger
+  branch (`--pub` / `CORRALAI_LEDGER_PUBKEY`), not from its `LEDGER_PUBKEY`.
+  The trigger is recorded, not pinned, so a pinned workflow that runs on
+  `pull_request_target` or `workflow_dispatch` can still sign for unmerged
+  code. **Upgrade every writer before you pin:** a corral release older than
+  this one rejects the pin entry, so the Action and every other writer of the
+  ledger must run a release that knows pins before the ledger is pinned. On a
+  pinned ledger an unsigned append is refused (a keyless or root-signed one is
+  accepted), and `corral ledger checkpoint` is refused while a pin is in force.
+  `corral setup` prints the filled-in command when
   the checkout's workflow uses the Action with a ledger, and writes nothing.
   Tested against an in-process test Sigstore only; a real Action run with a pin
   is owed. See [`docs/corral/github-action.md`](docs/corral/github-action.md).

@@ -285,3 +285,64 @@ func TestEveryLevelChipHasItsColour(t *testing.T) {
 		}
 	}
 }
+
+// The banner's signature chip is a summary of the levels below it, so it may
+// not read ok while any verified signature is a weak keyless one: an
+// unpinned keyless entry, or one under a pin no root key checked, is a warn
+// in its own row and a warn in the banner, which names how many. A checked
+// pin and a key read ok.
+func TestBannerWarnsWhenAVerifiedSignatureIsWeakKeyless(t *testing.T) {
+	render := func(s Site) string {
+		p, _ := NewPages()
+		var b bytes.Buffer
+		if err := p.Render(&b, s, "index.html"); err != nil {
+			t.Fatal(err)
+		}
+		return b.String()
+	}
+	build := func(levels ...ledger.SigLevel) Site {
+		var es []auditpush.LedgerEntry
+		var cs []auditpush.ChainCheck
+		for i, lv := range levels {
+			e := reviewEntry(strings.Repeat(string(rune('a'+i)), 12), i)
+			e.File = e.Hash + ".json.gz"
+			c := okCheck(e)
+			c.Level = lv
+			if lv != ledger.LevelKey {
+				c.Keyless, c.KeyID, c.Signer = true, "sigstore", "https://github.com/acme/widgets"
+			}
+			es, cs = append(es, e), append(cs, c)
+		}
+		return Build(es, cs)
+	}
+	for _, tc := range []struct {
+		name   string
+		levels []ledger.SigLevel
+		weak   int
+	}{
+		{"all unpinned", []ledger.SigLevel{ledger.LevelKeylessUnpinned, ledger.LevelKeylessUnpinned}, 2},
+		{"pinned unchecked", []ledger.SigLevel{ledger.LevelKeylessPinnedUnchecked}, 1},
+		{"mixed with a key", []ledger.SigLevel{ledger.LevelKey, ledger.LevelKeylessUnpinned}, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			idx := render(build(tc.levels...))
+			n := len(tc.levels)
+			if strings.Contains(idx, fmt.Sprintf(`chip ok">%d/%d verified`, n, n)) {
+				t.Errorf("the banner shows %d/%d verified as ok with %d weak keyless signature(s):\n%s", n, n, tc.weak, idx)
+			}
+			if !strings.Contains(idx, fmt.Sprintf(`chip warn">%d/%d verified`, n, n)) || !strings.Contains(idx, fmt.Sprintf("%d keyless", tc.weak)) {
+				t.Errorf("the banner must warn and count the %d weak keyless signature(s):\n%s", tc.weak, idx)
+			}
+			if !strings.Contains(idx, `<div class="banner warn">`) {
+				t.Errorf("the banner itself is not a warn:\n%s", idx)
+			}
+		})
+	}
+	for _, levels := range [][]ledger.SigLevel{{ledger.LevelKeylessPinned}, {ledger.LevelKey, ledger.LevelKeylessPinned}} {
+		idx := render(build(levels...))
+		n := len(levels)
+		if !strings.Contains(idx, fmt.Sprintf(`chip ok">%d/%d verified`, n, n)) {
+			t.Errorf("levels %v: strong signatures must read ok:\n%s", levels, idx)
+		}
+	}
+}

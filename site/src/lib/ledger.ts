@@ -61,6 +61,12 @@ export type Totals = {
   entries_verified: number;
   entries_unsigned: number;
   entries_failed: number;
+  // The verified entries by signature level, as Derive counted them, so a
+  // summary says how strong "verified" is without tallying the list.
+  entries_key: number;
+  entries_keyless_pinned: number;
+  entries_keyless_pinned_unchecked: number;
+  entries_keyless_unpinned: number;
 };
 
 export type RunPoint = {

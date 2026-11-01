@@ -262,6 +262,12 @@ func requireRegisteredSigner(existing []LedgerEntry, signer LedgerSigner) error 
 	if rootID == "" {
 		return nil
 	}
+	if signer == nil && len(active) == 0 && KeylessPinInForce(existing) != nil {
+		// A pinned keyless ledger whose root registered no key: `signer add`
+		// is refused on a ledger with keyless entries, so naming it would
+		// send the writer to a second refusal.
+		return fmt.Errorf("auditpush: this ledger is pinned for keyless signing and registers no keys, so it accepts keyless entries (the GitHub Action's `permissions: id-token: write` path, CORRALAI_LEDGER_SIGNER=sigstore) or entries signed by its root key, and refuses unsigned ones")
+	}
 	if signer == nil {
 		return fmt.Errorf("auditpush: this ledger registers its signers, so the verifier reports an unsigned entry as UNSIGNED among signed ones; sign with the root key or a registered one (register a machine key with `corral ledger signer add`)")
 	}
@@ -660,6 +666,14 @@ func WriteCheckpoint(dir string, signer LedgerSigner, rootPub ed25519.PublicKey)
 		if e.KeyID == ledger.KeyIDSigstore {
 			return "", 0, fmt.Errorf("auditpush: %s holds keyless (sigstore) entries, so it cannot be checkpointed — chain control stays with the root key, and pruning would delete entries a repository's identity vouched for. Nothing written", dir)
 		}
+	}
+	// A checkpoint carries the registered keys, not the keyless pin: pruning
+	// a pinned chain would drop the pin, and every keyless entry written
+	// after it would read keyless-unpinned with nothing to say a pin was
+	// ever there. Refused while one is in force, at this one door; the
+	// owner unpins first (a root-signed, visible step) and re-pins after.
+	if KeylessPinInForce(entries) != nil {
+		return "", 0, fmt.Errorf("auditpush: %s has a keyless pin in force, and a checkpoint does not carry the pin, so pruning would drop it. Run `corral ledger signer unpin` first, checkpoint, then pin again. Nothing written", dir)
 	}
 	// A checkpoint is the one verb that DESTROYS evidence, so it is the one
 	// verb that must look at it first. Pruning without verifying launders a

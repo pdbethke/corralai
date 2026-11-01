@@ -84,15 +84,31 @@ type KeylessPin struct {
 // for a reusable workflow .9 names the reusable one and .18 the caller, and
 // it is the caller that ran on the owner's ref. An extension the
 // certificate lacks never matches, so a pin is never passed by omission.
+//
+// When the run's pair is one the pin allows and only the repository id
+// differs, the refusal appends that cause: without it the message names a
+// workflow@ref that is in the pin and reads as contradicting itself.
 func PinProblem(pin *KeylessPin, pinFile string, id CertIdentity, repo string) string {
-	if id.RepoID != "" && id.RepoID == pin.RepoID {
-		for _, a := range pin.Allow {
-			if id.Ref != "" && id.Ref == a.Ref && id.Workflow == githubURL(repo)+"/"+a.Workflow+"@"+a.Ref {
-				return ""
-			}
+	pairAllowed := false
+	for _, a := range pin.Allow {
+		if id.Ref != "" && id.Ref == a.Ref && id.Workflow == githubURL(repo)+"/"+a.Workflow+"@"+a.Ref {
+			pairAllowed = true
+			break
 		}
 	}
-	return fmt.Sprintf("keyless entry: signed by %s, which the pin registered at %s does not allow", signedByRun(id, repo), pinFile)
+	idMatches := id.RepoID != "" && id.RepoID == pin.RepoID
+	if pairAllowed && idMatches {
+		return ""
+	}
+	refusal := fmt.Sprintf("keyless entry: signed by %s, which the pin registered at %s does not allow", signedByRun(id, repo), pinFile)
+	if pairAllowed {
+		certID := id.RepoID
+		if certID == "" {
+			certID = "(absent)"
+		}
+		refusal += fmt.Sprintf(" (repository id %s, pin %s)", certID, pin.RepoID)
+	}
+	return refusal
 }
 
 // signedByRun words the run a certificate names as <workflow>@<ref>: the

@@ -500,3 +500,89 @@ func TestVerifyWithoutPubStillPassesAfterAPin(t *testing.T) {
 		t.Fatalf("with no root key a pinned entry read as checked:\n%s", out.String())
 	}
 }
+
+// The pin lives on the ledger branch, so anyone who can rewrite that branch
+// can drop it: the verb says so on every successful pin, names the outside
+// anchor that detects the rewrite, and tells verifiers to take the root key
+// from outside the branch — on both the --new-root path and the existing-root
+// path, which print through one helper.
+func TestPinPrintsWhatThePinDependsOn(t *testing.T) {
+	want := []string{
+		"holds only while the ledger branch cannot be force-pushed or deleted",
+		"branch ruleset",
+		"--expect-head",
+		"take the root public key from outside the ledger branch",
+		"--pub",
+		"CORRALAI_LEDGER_PUBKEY",
+	}
+	check := func(name, out string) {
+		t.Helper()
+		for _, w := range want {
+			if !strings.Contains(out, w) {
+				t.Errorf("%s: output lacks %q:\n%s", name, w, out)
+			}
+		}
+	}
+	s := keylessPinEnv(t)
+	dir := t.TempDir()
+	appendKeyless(t, s, dir, "aaaa1111", pinClaims())
+	code, out := run(t, pinArgs(dir, "--repo-id", pinTestRepoID, "--new-root", "--root-key-out", filepath.Join(t.TempDir(), "root.seed"))...)
+	if code != 0 {
+		t.Fatalf("pin --new-root: exit %d\n%s", code, out)
+	}
+	check("--new-root", out)
+
+	f := newSignerFixture(t)
+	code, out = run(t, pinArgs(f.dir, "--repo-id", pinTestRepoID)...)
+	if code != 0 {
+		t.Fatalf("pin under a root: exit %d\n%s", code, out)
+	}
+	check("existing root", out)
+}
+
+// What the docs and the pin's own output say about a rewrite, executed: cut
+// the chain before the pin and append a keyless entry from another branch,
+// and the shorter chain still verifies under the right root key, the entry
+// reading keyless-unpinned with no problem. Only a head hash held from
+// outside the directory (`corral ledger verify --expect-head`) catches it.
+func TestTruncatingThePinIsCaughtOnlyByAnOutsideHead(t *testing.T) {
+	s := keylessPinEnv(t)
+	dir := t.TempDir()
+	seed := newRootPinned(t, s, dir)
+	pub := pubHexOfSeed(t, seed)
+	appendKeyless(t, s, dir, "bbbb2222", pinClaims())
+	rawPub, _ := hex.DecodeString(pub)
+	trust, err := ledgerTrust(rawPub, testKeylessRepo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checks, err := auditpush.VerifyLedgerDirTrust(dir, trust)
+	if err != nil || len(checks) != 3 {
+		t.Fatalf("pinned chain: %d checks, %v", len(checks), err)
+	}
+	head := checks[2].Hash
+
+	// The rewrite: everything from the pin on is removed.
+	for _, c := range checks[1:] {
+		if err := os.Remove(filepath.Join(dir, auditpush.ScansSubdir, c.File)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	attacker := pinClaims()
+	attacker.Workflow = "https://github.com/" + testKeylessRepo + "/" + pinTestWorkflow + "@refs/heads/attacker"
+	attacker.Ref = "refs/heads/attacker"
+	appendKeyless(t, s, dir, "cccc3333", attacker)
+
+	var out, errb bytes.Buffer
+	if code := runVerifyLedger(dir, pub, testKeylessRepo, "", &out, &errb); code != 0 {
+		t.Fatalf("the truncated chain no longer verifies, so the docs overstate the gap: exit %d\n%s%s", code, out.String(), errb.String())
+	}
+	if !strings.Contains(out.String(), ledger.LevelSentence(ledger.LevelKeylessUnpinned)) {
+		t.Fatalf("the attacker's entry does not read keyless-unpinned:\n%s", out.String())
+	}
+	out.Reset()
+	errb.Reset()
+	if code := runVerifyLedger(dir, pub, testKeylessRepo, head, &out, &errb); code == 0 {
+		t.Fatalf("--expect-head with the pinned chain's head did not catch the rewrite:\n%s%s", out.String(), errb.String())
+	}
+}

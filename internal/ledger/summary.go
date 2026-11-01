@@ -67,15 +67,37 @@ type Totals struct {
 	EntriesVerified int `json:"entries_verified"`
 	EntriesUnsigned int `json:"entries_unsigned"`
 	EntriesFailed   int `json:"entries_failed"`
+	// EntriesKey and the three EntriesKeyless* count the VERIFIED entries by
+	// signature level (EntryStatus.Level), so a page that summarises "n
+	// verified" can say how strong they are without tallying the list: a
+	// keyless-unpinned entry was signed by some workflow of the repository,
+	// not by the root's key, and a summary must not say otherwise. A
+	// verified entry with no level (one whose signature nothing checked) is
+	// in none of them.
+	EntriesKey                    int `json:"entries_key"`
+	EntriesKeylessPinned          int `json:"entries_keyless_pinned"`
+	EntriesKeylessPinnedUnchecked int `json:"entries_keyless_pinned_unchecked"`
+	EntriesKeylessUnpinned        int `json:"entries_keyless_unpinned"`
 }
 
 // countEntries sets Totals' entry counts from the statuses Derive returns.
 func (t *Totals) countEntries(es []EntryStatus) {
 	t.EntriesVerified, t.EntriesUnsigned, t.EntriesFailed = 0, 0, 0
+	t.EntriesKey, t.EntriesKeylessPinned, t.EntriesKeylessPinnedUnchecked, t.EntriesKeylessUnpinned = 0, 0, 0, 0
 	for _, e := range es {
 		switch e.Status {
 		case StatusVerified:
 			t.EntriesVerified++
+			switch e.Level {
+			case LevelKey:
+				t.EntriesKey++
+			case LevelKeylessPinned:
+				t.EntriesKeylessPinned++
+			case LevelKeylessPinnedUnchecked:
+				t.EntriesKeylessPinnedUnchecked++
+			case LevelKeylessUnpinned:
+				t.EntriesKeylessUnpinned++
+			}
 		case StatusUnsigned:
 			t.EntriesUnsigned++
 		case StatusFailed:

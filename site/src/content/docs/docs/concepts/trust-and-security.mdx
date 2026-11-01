@@ -208,11 +208,26 @@ everywhere it is shown:
 A keyless entry records the workflow, ref and trigger its certificate names.
 Every keyless entry reads `keyless-unpinned` until the ledger's owner opts in to
 a pin with `corral ledger signer pin` (one root-signed entry naming the workflow
-and the full ref); afterwards an entry from any other workflow or ref fails
-verification. The pin's root key is trust on first use: `LEDGER_PUBKEY` lives on
-the ledger branch, so also publish the root public key outside it (for example
-on your default branch) and pass it with `--pub`. The pin is tested against an
-in-process test Sigstore; a real GitHub Actions run with a pin is owed.
+and the full ref); while that entry is on the chain, an entry from any other
+workflow or ref fails verification.
+
+The pin holds only while the ledger branch cannot be force-pushed or deleted.
+Whoever can rewrite the branch can cut the chain before the pin and append a
+keyless entry past it: the shorter chain verifies and its entries read
+`keyless-unpinned`, with no problem reported, even under the right `--pub`.
+Protect the ledger branch with a branch ruleset that blocks force pushes and
+deletion. A removed pin is detected only by an anchor held outside the branch:
+`corral ledger verify --expect-head <hash> <dir>` with a head hash you kept
+elsewhere.
+
+The pin's root key is trust on first use: `LEDGER_PUBKEY` lives on the ledger
+branch, so whoever can push that branch can install their own root and pin.
+Verifiers should take the root public key from outside the ledger branch (for
+example from your default branch) and pass it with `--pub` or
+`CORRALAI_LEDGER_PUBKEY`. The public results page reads `LEDGER_PUBKEY` from the
+ledger branch, so it is only as strong as that branch's protection. The pin is
+tested against an in-process test Sigstore; a real GitHub Actions run with a pin
+is owed.
 
 Verification is therefore *against a repository you name*:
 

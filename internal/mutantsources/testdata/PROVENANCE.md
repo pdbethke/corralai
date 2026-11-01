@@ -22,8 +22,9 @@ A real StrykerJS mutation report, trimmed. It is the fixture `stryker_test.go` r
    - Survived single-line `11 19 20`, and the seven on line 578 (`512`-`518`) plus NoCoverage
      `520 521` on the same line, so the line-spreading sample has a crowded line to spread from.
    - Multi-line locations: Survived `117 282 426`, NoCoverage `607`.
-   - Anchors that occur more than once in the file (so the patch applier must refuse them):
-     Survived `374 422`, NoCoverage `593`.
+   - Lines that occur more than once in the file as whole lines, so the line-bounded anchor is
+     ambiguous and the patch applier must refuse them: Survived `374 422`. NoCoverage `593`'s
+     line also appears as the tail of more-indented lines, which is not a repeat: it is taken.
    - Other NoCoverage: `26 27 248 267`.
    Each kept mutant is unmodified.
 2. `projectRoot` was a host path on the capturing machine; it is replaced with `/work/rea`.

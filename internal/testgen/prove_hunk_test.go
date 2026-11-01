@@ -29,6 +29,12 @@ func TestProveHunkProvesOrNamesTheRefusal(t *testing.T) {
 		t.Fatalf("Span = %+v, want line 4", m.Span)
 	}
 
+	// A line-bounded anchor borrows the newline ending line 1; the span is
+	// the line the edit changes, line 2 (adequacy.EditSpan).
+	if lb, why := ProveHunk("a\nb\nc\n", "x", "\nb\n", "\nB\n"); why != HunkProven || lb.Span != (lang.LineRange{Start: 2, End: 2}) {
+		t.Fatalf("line-bounded anchor: %q, Span %+v, want line 2", why, lb.Span)
+	}
+
 	for _, tc := range []struct {
 		search, replace string
 		want            HunkRejection
@@ -40,6 +46,22 @@ func TestProveHunkProvesOrNamesTheRefusal(t *testing.T) {
 	} {
 		if _, why := ProveHunk(original, "x", tc.search, tc.replace); why != tc.want {
 			t.Errorf("ProveHunk(%q -> %q) = %q, want %q", tc.search, tc.replace, why, tc.want)
+		}
+	}
+
+	// Overlapping occurrences are two occurrences: "aa" in "aaa" starts at 0
+	// and at 1. Apply refuses it as non-unique, and so does ProveHunk. (The
+	// parser this was lifted from searched from i+len(search), which cannot
+	// see an overlap, and so filed this as an integrity failure; the kept set
+	// was the same either way.)
+	for _, tc := range []struct {
+		original, search, replace string
+		want                      HunkRejection
+	}{
+		{"aaa", "aa", "ab", HunkAnchorNotUnique},
+	} {
+		if _, why := ProveHunk(tc.original, "x", tc.search, tc.replace); why != tc.want {
+			t.Errorf("ProveHunk(%q in %q) = %q, want %q", tc.search, tc.original, why, tc.want)
 		}
 	}
 }

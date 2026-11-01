@@ -206,6 +206,6 @@ func ProveHunk(original, id, search, replace string) (adequacy.Mutant, HunkRejec
 		}
 		return adequacy.Mutant{}, HunkIntegrityFailed
 	}
-	m.Span = adequacy.HunkSpan(original, search)
+	m.Span = adequacy.EditSpan(original, search, replace)
 	return m, HunkProven
 }

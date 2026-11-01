@@ -368,6 +368,22 @@ func HunkSpan(original, search string) lang.LineRange {
 	return lang.LineRange{Start: start, End: end}
 }
 
+// EditSpan is HunkSpan for a hunk whose REPLACE is known: the lines the edit
+// actually changes. It differs from HunkSpan in one case, a LINE-BOUNDED
+// anchor — SEARCH and REPLACE both beginning with "\n", the newline that ends
+// the line before, borrowed so a line cannot match the tail of a longer one
+// (mutantsources builds them). That newline is unchanged, so the edit starts
+// on the next line. It lives here beside HunkSpan, and the patch applier and
+// RenderHunk both call it, so the recorded span and the rendered one cannot
+// disagree.
+func EditSpan(original, search, replace string) lang.LineRange {
+	r := HunkSpan(original, search)
+	if !r.IsZero() && strings.HasPrefix(search, "\n") && strings.HasPrefix(replace, "\n") && r.Start < r.End {
+		r.Start++
+	}
+	return r
+}
+
 // Jail runs a test command against a set of files (path -> content) in an
 // isolated environment and reports whether the test passed. Task 1 exercises
 // this via a fake; Task 2 wires in the real bwrap-jail adapter.

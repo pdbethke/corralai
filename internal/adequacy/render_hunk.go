@@ -72,7 +72,7 @@ func splitLines(s string) []string {
 // side and the added side are numbered against DIFFERENT files (see
 // RenderHunk's doc comment), so their line counts are tracked separately.
 func renderAnchoredHunk(m Mutant, original string, context int) string {
-	origSpan := HunkSpan(original, m.Search)
+	origSpan := EditSpan(original, m.Search, m.Replace)
 	if origSpan.IsZero() {
 		// The anchor is not IN original (a mutant graded against different
 		// bytes than it was cut from, or a hand-built fixture). Apply would
@@ -81,8 +81,16 @@ func renderAnchoredHunk(m Mutant, original string, context int) string {
 		return renderUnanchoredHunk(m)
 	}
 	start, origEnd := origSpan.Start, origSpan.End
+	replace := m.Replace
+	// A LINE-BOUNDED anchor (see EditSpan) borrows the newline before its
+	// first line on both sides. EditSpan already starts the span after it;
+	// the "+" side drops it too, or the writer would be shown an empty line
+	// that is not in the mutant.
+	if origSpan != HunkSpan(original, m.Search) {
+		replace = replace[1:]
+	}
 	origLines := splitLines(original)
-	replaceLines := splitLines(m.Replace)
+	replaceLines := splitLines(replace)
 
 	// The REPLACE region's end in the MUTATED file: the splice starts at
 	// the same `start` (the prefix before it is byte-identical in both

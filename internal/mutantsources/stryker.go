@@ -187,19 +187,24 @@ func ReadStryker(reportJSON []byte, files map[string][]byte, budget func(path st
 		fm.Counts = map[string]int{}
 		var candidates []adequacy.Mutant
 		sources := map[string]MutantSource{}
+		// seen holds every taken-status id, proven or not, so the first
+		// mutant under an id is the one kept or dropped and a later one
+		// cannot stand in for a first that failed its proof.
+		seen := map[string]bool{}
 		for _, sm := range rf.Mutants {
 			fm.Counts[sm.Status]++
 			if !takenStatuses[sm.Status] {
 				continue
 			}
+			id := "t/stryker/" + sm.ID
+			if seen[id] {
+				fm.Counts[dropDuplicateID]++
+				continue
+			}
+			seen[id] = true
 			search, replace, ok := strykerHunk(lines, sm.Location.Start, sm.Location.End, sm.Replacement)
 			if !ok {
 				fm.Counts[dropOutOfRange]++
-				continue
-			}
-			id := "t/stryker/" + sm.ID
-			if _, dup := sources[id]; dup {
-				fm.Counts[dropDuplicateID]++
 				continue
 			}
 			m, why := testgen.ProveHunk(original, id, search, replace)
@@ -256,6 +261,14 @@ func sha256Hex(b []byte) string {
 // the last of them, when there is one), and REPLACE is those lines with the
 // located columns replaced. ok is false when the location does not fit the
 // file.
+//
+// THE ANCHOR IS LINE-BOUNDED. Below line 1, SEARCH and REPLACE both begin
+// with the newline that ends the line before. Without it,
+// `    x: 1,` also matches the tail of `        x: 1,` elsewhere, and a line
+// that occurs once would be refused as ambiguous — 2 of the 31 such refusals
+// on REA's full report were this, not a repeated line. The borrowed newline
+// is unchanged on both sides, so the edit is still the located columns, and
+// adequacy.EditSpan (which testgen.ProveHunk records) starts the span after it.
 func strykerHunk(lines []string, start, end strykerPos, replacement string) (search, replace string, ok bool) {
 	if start.Line < 1 || end.Line < start.Line || end.Line > len(lines) {
 		return "", "", false
@@ -270,8 +283,12 @@ func strykerHunk(lines []string, start, end strykerPos, replacement string) (sea
 	if end.Line < len(lines) {
 		nl = "\n"
 	}
-	search = strings.Join(lines[start.Line-1:end.Line], "\n") + nl
-	replace = first[:from] + replacement + last[to:] + nl
+	pre := ""
+	if start.Line > 1 {
+		pre = "\n"
+	}
+	search = pre + strings.Join(lines[start.Line-1:end.Line], "\n") + nl
+	replace = pre + first[:from] + replacement + last[to:] + nl
 	return search, replace, true
 }
 

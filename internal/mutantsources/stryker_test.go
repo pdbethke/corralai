@@ -110,12 +110,15 @@ func strykerID(t *testing.T, id string) string {
 	return strings.TrimPrefix(id, p)
 }
 
-// The fixture's 23 Survived/NoCoverage mutants, less the three whose anchor
-// lines occur elsewhere in the file (374, 422, 593), which the patch applier
-// must refuse.
-var reaNonUnique = []string{"374", "422", "593"}
+// The fixture's 23 Survived/NoCoverage mutants, less the two whose WHOLE
+// lines (from the preceding newline to the line's end) occur again elsewhere
+// in the file (374, 422), which the patch applier must refuse because the
+// edit site would be ambiguous. 593's line, `      cleanup: "incomplete",`,
+// is also the tail of more-indented lines; that is not a repeat of the line,
+// so it is taken (see TestStrykerAnchorIsLineBounded).
+var reaNonUnique = []string{"374", "422"}
 
-const reaProvable = 20
+const reaProvable = 21
 
 func TestStrykerSurvivorsBecomeSingleRegionMutants(t *testing.T) {
 	fm, src, ms := readREA(t, 1000, 1)
@@ -481,5 +484,81 @@ func TestStrykerFileWithLineBreaksCorralCannotCountIsRefused(t *testing.T) {
 	}
 	if out, _ := f.Taken[0].Apply(crlf); out != "a();\r\nx();\r\n" {
 		t.Errorf("CRLF applied = %q", out)
+	}
+}
+
+// The anchor is LINE-BOUNDED: a line whose text is the tail of a
+// more-indented line elsewhere is still one line, and is taken; a line that
+// genuinely repeats is still refused. The span names the mutated lines, not
+// the newline the anchor borrows from the line before, and the rendered
+// hunk a writer is shown agrees with it.
+func TestStrykerAnchorIsLineBounded(t *testing.T) {
+	const src = "f({\n        x: 1,\n    y: 2,\n    x: 1,\n    y: 2,\n});\n"
+	rep := synthReport(t, src, []synthMutant{
+		// Line 4 `    x: 1,` is the tail of line 2 `        x: 1,`.
+		{"1", "Survived", 4, 8, 4, 9, "2"},
+		// Line 3 `    y: 2,` is line 5 exactly.
+		{"2", "Survived", 3, 8, 3, 9, "3"},
+		// A multi-line location starting on line 4.
+		{"3", "NoCoverage", 4, 5, 5, 9, "z: 0"},
+	})
+	got, err := ReadStryker(rep, map[string][]byte{"f.js": []byte(src)}, budgetOf(10), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fm := got["f.js"]
+	if fm.Counts["dropped:anchor-not-unique"] != 1 {
+		t.Errorf("dropped:anchor-not-unique = %d, want 1 (the genuine repeat): %v", fm.Counts["dropped:anchor-not-unique"], fm.Counts)
+	}
+	want := map[string]struct {
+		span    lang.LineRange
+		applied string
+		render  []string
+	}{
+		"t/stryker/1": {lang.LineRange{Start: 4, End: 4}, "f({\n        x: 1,\n    y: 2,\n    x: 2,\n    y: 2,\n});\n",
+			[]string{"--- SURVIVOR t/stryker/1 (lines 4-4) ---", "  3 |     y: 2,", "- 4 |     x: 1,", "+ 4 |     x: 2,", "  5 |     y: 2,"}},
+		"t/stryker/3": {lang.LineRange{Start: 4, End: 5}, "f({\n        x: 1,\n    y: 2,\n    z: 0,\n});\n",
+			[]string{"--- SURVIVOR t/stryker/3 (lines 4-4) ---", "  3 |     y: 2,", "- 4 |     x: 1,", "- 5 |     y: 2,", "+ 4 |     z: 0,", "  5 | });"}},
+	}
+	if len(fm.Taken) != len(want) {
+		t.Fatalf("took %d, want %d: %+v (Counts %v)", len(fm.Taken), len(want), fm.Taken, fm.Counts)
+	}
+	for _, m := range fm.Taken {
+		w, ok := want[m.ID]
+		if !ok {
+			t.Fatalf("took %s", m.ID)
+		}
+		if m.Span != w.span {
+			t.Errorf("%s Span = %+v, want %+v", m.ID, m.Span, w.span)
+		}
+		out, err := m.Apply(src)
+		if err != nil || out != w.applied {
+			t.Errorf("%s applied = %q (%v), want %q", m.ID, out, err, w.applied)
+		}
+		if r := adequacy.RenderHunk(m, src, 1); r != strings.Join(w.render, "\n") {
+			t.Errorf("%s rendered:\n%s\nwant:\n%s", m.ID, r, strings.Join(w.render, "\n"))
+		}
+	}
+}
+
+// "First is kept" holds whatever happens to the first: a second mutant under
+// an id whose first mutant failed the proof is still a duplicate, not a
+// replacement for it.
+func TestStrykerDuplicateIDAfterAFailedFirstIsDropped(t *testing.T) {
+	const src = "a();\nb();\n"
+	rep := synthReport(t, src, []synthMutant{
+		{"7", "Survived", 9, 1, 9, 2, "x"}, // out of range: fails
+		{"7", "Survived", 2, 1, 2, 4, "c()"},
+	})
+	got, err := ReadStryker(rep, map[string][]byte{"f.js": []byte(src)}, budgetOf(10), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fm := got["f.js"]
+	if len(fm.Taken) != 0 {
+		t.Errorf("a second mutant under id 7 was taken: %+v", fm.Taken)
+	}
+	if fm.Counts["dropped:duplicate-id"] != 1 || fm.Counts["dropped:location-out-of-range"] != 1 {
+		t.Errorf("Counts = %v", fm.Counts)
 	}
 }

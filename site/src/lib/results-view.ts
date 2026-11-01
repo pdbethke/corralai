@@ -358,7 +358,7 @@ function modelsBlock(lines: { ledger: string; m: ModelLine }[], showLedger: bool
   });
 }
 
-function entriesTable(d: Derived): HTMLElement {
+export function entriesTable(d: Derived): HTMLElement {
   const det = el('details', 'entries');
   const { v, n } = verifiedCounts(d);
   det.appendChild(el('summary', undefined, `Every entry and the key that signed it (${v} of ${n} verified)`));
@@ -374,8 +374,10 @@ function entriesTable(d: Derived): HTMLElement {
     status.appendChild(el('span', `status status-${e.status}`, e.status));
     if (e.problem) status.appendChild(el('div', 'entry-problem', e.problem));
     // The level's sentence, as Derive worded it. keyless-unpinned is a warn:
-    // any branch of the repository could have signed it.
+    // any branch of the repository could have signed it. keyless-pinned-unchecked
+    // is a warn too: a pin no root key checked must not read as strong.
     if (e.level_sentence) status.appendChild(el('div', `entry-level level-${e.level}`, e.level_sentence));
+    if (e.workflow) status.appendChild(el('div', 'entry-workflow', `workflow ${e.workflow}${e.trigger ? `, trigger ${e.trigger}` : ''}`));
     if (e.note) status.appendChild(el('div', 'entry-note', e.note));
     tr.append(el('td', 'mono', e.file), el('td', undefined, e.kind === '' ? 'scan' : e.kind), el('td', 'mono', e.keyid || '(none)'), status);
     body.appendChild(tr);

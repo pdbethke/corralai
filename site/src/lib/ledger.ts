@@ -32,6 +32,9 @@ export type EntryStatus = {
   // was ranked (a problem, or a signature that was not checked).
   level?: 'unsigned' | 'key' | 'keyless-unpinned' | 'keyless-pinned' | 'keyless-pinned-unchecked';
   level_sentence?: string;
+  // The signing certificate's workflow URI and trigger, on a keyless entry only.
+  workflow?: string;
+  trigger?: string;
 };
 
 export type Telemetry = {

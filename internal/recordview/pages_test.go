@@ -256,3 +256,32 @@ func TestKeylessUnpinnedRendersAsWarnWithItsWorkflow(t *testing.T) {
 		}
 	}
 }
+
+// A pin that no root key checked is a warn, not an ok, on both pages; only a
+// checked pin and a key read as ok.
+func TestEveryLevelChipHasItsColour(t *testing.T) {
+	want := map[ledger.SigLevel]string{
+		ledger.LevelKeylessUnpinned:        "warn",
+		ledger.LevelKeylessPinnedUnchecked: "warn",
+		ledger.LevelKeylessPinned:          "ok",
+		ledger.LevelKey:                    "ok",
+	}
+	p, _ := NewPages()
+	for lvl, class := range want {
+		k := reviewEntry("aaaaaaaaaaaa", 0)
+		k.File = k.Hash + ".json.gz"
+		kc := okCheck(k)
+		kc.Level = lvl
+		s := Build([]auditpush.LedgerEntry{k}, []auditpush.ChainCheck{kc})
+		for _, path := range []string{"chain-1.html", "entry/" + shortHash(k.Hash) + ".html"} {
+			var b bytes.Buffer
+			if err := p.Render(&b, s, path); err != nil {
+				t.Fatalf("%s: %v", path, err)
+			}
+			chip := `chip ` + class + `">` + html.EscapeString(ledger.LevelSentence(lvl))
+			if !strings.Contains(b.String(), chip) {
+				t.Errorf("%s: level %s is not drawn as %q", path, lvl, chip)
+			}
+		}
+	}
+}

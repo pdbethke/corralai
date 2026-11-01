@@ -98,3 +98,29 @@ func TestDeriveCarriesTheLevel(t *testing.T) {
 		t.Fatalf("entry status = %+v", d.Entries)
 	}
 }
+
+// Derive carries the certificate's workflow and trigger on a keyless entry
+// and on no other, so a page never has to read the certificate itself.
+func TestDeriveCarriesTheKeylessWorkflowAndTrigger(t *testing.T) {
+	p := newPinChain(t)
+	p.keyless(corralWF, "refs/heads/attacker")
+	raw := []ledger.RawEntry{{Name: p.entries[0].File, Bytes: p.entries[0].Raw}}
+	d, err := ledger.Derive(raw, p.trust(p.rootPub()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wf := "https://github.com/" + pinRepo + "/" + corralWF + "@refs/heads/attacker"
+	if got := d.Entries[0]; got.Workflow != wf || got.Trigger != "push" {
+		t.Errorf("entry carries workflow %q trigger %q, want %q push", got.Workflow, got.Trigger, wf)
+	}
+
+	dir := t.TempDir()
+	scan(t, dir, 1, nil)
+	d, err = ledger.Derive(rawDir(t, dir), ledger.Trust{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := d.Entries[0]; got.Workflow != "" || got.Trigger != "" {
+		t.Errorf("an unsigned entry carries workflow %q trigger %q", got.Workflow, got.Trigger)
+	}
+}

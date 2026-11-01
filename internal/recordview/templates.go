@@ -219,7 +219,7 @@ and the verdicts are all read through <code>internal/auditpush</code>, the same 
 // the bare verified chip. A keyless entry names the workflow and trigger its
 // certificate carries.
 const levelChip = `
-{{define "levelchip"}}{{if .LevelSentence}}<span class="chip{{if eq (printf "%s" .Level) "keyless-unpinned"}} warn{{else}} ok{{end}}">{{.LevelSentence}}</span>{{else}}<span class="chip ok">verified</span>{{end}}{{if .Workflow}} <span class="small">workflow {{.Workflow}}{{if .Trigger}}, trigger {{.Trigger}}{{end}}</span>{{end}}{{end}}
+{{define "levelchip"}}{{if .LevelSentence}}<span class="chip{{if or (eq (printf "%s" .Level) "keyless-unpinned") (eq (printf "%s" .Level) "keyless-pinned-unchecked")}} warn{{else}} ok{{end}}">{{.LevelSentence}}</span>{{else}}<span class="chip ok">verified</span>{{end}}{{if .Workflow}} <span class="small">workflow {{.Workflow}}{{if .Trigger}}, trigger {{.Trigger}}{{end}}</span>{{end}}{{end}}
 `
 
 // entryBanner is one entry's chain line, shared by review and scan pages.

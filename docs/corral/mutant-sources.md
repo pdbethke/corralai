@@ -45,17 +45,17 @@ wrote, so no third-party tool executes in the audited checkout.
 
 ## The tool's status is a claim, never the outcome
 
-Corral never records the tool's `Survived` or `Killed` as its own result. Each mutant's
+Corral never records the tool's `Survived` as its own result. Each mutant's
 row carries `Source`, `SourceTool`, `SourceOperator` and `SourceStatus`. `SourceStatus`
 is what the tool said, recorded as a declared claim; `Outcome` is what corral's run
-measured. A tool mutant the tool called survived can be killed by corral's run, and the
-reverse. `GeneratorModel` is set only on model mutants, and the mutant-generator's
+measured. A tool mutant the tool called survived can be killed by corral's run. A mutant the
+tool called killed is counted and never re-graded. `GeneratorModel` is set only on model mutants, and the mutant-generator's
 leaderboard credit counts only the mutants it planted. Each file's scan row carries
 `ToolMutants`: per-file counts, the seed, and any refusal. The report is named on the
 record by tool and sha256, never by the path you typed, because that path often sits
 under a home directory and the ledger is public. Because the source is recorded per
-mutant, a per-source statistic (gap yield, waste, how often the tool's status agrees
-with corral's outcome) is a query over signed entries. The fields and their tiers are
+mutant, a per-source statistic (gap yield, waste, how often a mutant the tool reported
+surviving or uncovered also survives corral's run) is a query over signed entries. The fields and their tiers are
 in [record-fields.md](record-fields.md).
 
 The verdict cache key includes the tool, the report's sha256 and the seed, so a
@@ -63,18 +63,24 @@ different report or sample is a different exam.
 
 ## The measured comparison (2026-11-01, one file)
 
-This is the first data point, quoted from the design spec. It is one file at one commit.
+This is the first data point, measured on 2026-11-01. It is one file at one commit.
+Corral's side is public ledger entry 163 on the `corral/ledger` branch
+(`scans/20261101T194309Z-aa48d494e972-eb54ee028a79.json.gz`). The Stryker run is not on the ledger.
 
-- File: REA `src/domain/analysisErrorProjection.ts` at aa48d494e, REA's own `domain` vitest project.
-- Stryker 10.0.0 with REA's own setup (per-test coverage and the TypeScript checker).
+- File: REA `src/domain/analysisErrorProjection.ts` at aa48d494e, a vitest config narrowed to REA's `domain` project.
+- Stryker 10.0.0 with per-test coverage and the TypeScript checker, run from scratch configs
+  (`stryker.corral-compare.config.mjs`, `vitest.corral-compare.config.ts`), REA's TypeScript 6
+  prepare script and `NODE_OPTIONS=--max-old-space-size=16384`. It took three setup failures to
+  get there: TypeScript 7's API, the checker running out of memory, and related tests pulling in
+  a non-domain CLI test. This is not REA's own unmodified Stryker setup.
 
 | | Stryker | corral (model mutants) |
 |---|---|---|
 | Mutants | 662 (340 did not compile) | 39 graded |
 | Survived | 159 survived, plus 75 no coverage | 21 |
 | Score | 27.3% mutation score | 0.46 kill rate (0.32-0.61) |
-| Tests that catch them | none | 17 proven |
-| Wall time | 63 min | 2h03m |
+| Tests that catch them | writes no tests | 17 proven |
+| Wall time | 63 min | 2h03m, including a 1h49m test-writing phase |
 
 How corral's 17 proven gaps line up with Stryker's mutants:
 

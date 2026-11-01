@@ -7,6 +7,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -579,5 +580,128 @@ func TestAVerdictCacheHitKeepsTheToolAccount(t *testing.T) {
 	}
 	if len(again.Mutants) != 1 || again.Mutants[0].Source != "tool" {
 		t.Errorf("cache-hit mutant rows = %+v", again.Mutants)
+	}
+}
+
+// --- final review, Important 1 -------------------------------------------
+
+// detailOf is what reposcan.Scan records as a file's Detail (the source of
+// the signed Row.Detail) when its executor returns err.
+func detailOf(t *testing.T, err error) string {
+	t.Helper()
+	out := reposcan.Scan(context.Background(), []reposcan.Job{{Path: "pkg/a.go"}}, errExecutor{err}, nil, 1)
+	return out[0].Detail
+}
+
+type errExecutor struct{ err error }
+
+func (e errExecutor) Execute(context.Context, reposcan.Job) (reposcan.FileResult, error) {
+	return reposcan.FileResult{}, e.err
+}
+
+// A reader error on a covered file goes through Execute to the signed
+// entry naming the report by tool and sha256, in both shapes of run: beside
+// a model (auditOneFile's door) and tool-only (the pre-check's door). The
+// terminal still names the path.
+func TestAToolReaderErrorNeverRecordsTheReportPath(t *testing.T) {
+	for _, mode := range []string{"both", "tool-only"} {
+		t.Run(mode, func(t *testing.T) {
+			noKeys(t)
+			withMachineLedger(t)
+			wiredAgent(t, "fakew", "", toolFixtureWriterTest)
+			wiredAgent(t, "fakem", "", "NONE")
+			prev := readStryker
+			readStryker = func([]byte, map[string][]byte, func(string) int, int64) (map[string]mutantsources.FileMutants, error) {
+				return nil, errors.New("mutantsources: forced reader failure")
+			}
+			t.Cleanup(func() { readStryker = prev })
+			root, report, goals := twoFileToolRepo(t)
+			mutant := "fakem"
+			if mode == "tool-only" {
+				mutant = "off"
+			}
+			var out, errb bytes.Buffer
+			runCertifyRepo([]string{
+				"--repo", root, "--goals", goals, "--all",
+				"--writer-model", "fakew", "--mutant-model", mutant, "--critic-model", "off",
+				"--mutants-from", "stryker:" + report, "--tool-sample-seed", "7",
+				"--substrate", substrateWorkspace, "--whole-suite", "--no-verdict-cache",
+				"--", "go", "test", "./...",
+			}, &out, &errb)
+			said := out.String() + errb.String()
+			if !strings.Contains(said, "forced reader failure") || !strings.Contains(said, report) {
+				t.Errorf("the terminal does not say the failure with the report path:\n%s", said)
+			}
+			raw := rawLedgerBytes(t, filepath.Join(root, ".corral", "ledger"))
+			for _, frag := range pathFragments(report) {
+				if strings.Contains(raw, frag) {
+					t.Errorf("the signed entry carries %q, a fragment of the operator's report path", frag)
+				}
+			}
+			src, _ := os.ReadFile(report) // #nosec G304 -- test temp path
+			entries, err := auditpush.ReadLedgerDir(filepath.Join(root, ".corral", "ledger"))
+			if err != nil || len(entries) != 1 {
+				t.Fatalf("want one entry, got %d (%v)\n%s", len(entries), err, said)
+			}
+			var a ledger.Row
+			for _, r := range entries[0].Bundle.Files {
+				if r.Path == "pkg/a.go" {
+					a = r
+				}
+			}
+			if !strings.Contains(a.Detail, "forced reader failure") || !strings.Contains(a.Detail, "sha256:"+reportSHA256(src)) {
+				t.Errorf("pkg/a.go Row.Detail = %q, want the failure naming the report by sha256", a.Detail)
+			}
+		})
+	}
+}
+
+// apply's tool-only refusal of a file the report has no entry for: the
+// terminal names the report path, the recorded detail its sha256.
+func TestApplysNoEntryRefusalRecordsNoPath(t *testing.T) {
+	_, report, _ := twoFileToolRepo(t)
+	s, err := resolveMutantsFrom(mutantsFromFlags{values: []string{"stryker:" + report}, seed: "1", mutantModel: "off"}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := s.forFile("pkg/b.go", []byte("package pkg\n"), 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aerr := r.apply(&advpool.RunSpec{})
+	if aerr == nil || !strings.Contains(aerr.Error(), report) {
+		t.Fatalf("the terminal refusal %v does not name the report path", aerr)
+	}
+	d := detailOf(t, aerr)
+	for _, frag := range pathFragments(report) {
+		if strings.Contains(d, frag) {
+			t.Errorf("recorded detail %q carries %q", d, frag)
+		}
+	}
+	if !strings.Contains(d, s.sha256) || !strings.Contains(d, "no entry for pkg/b.go") {
+		t.Errorf("recorded detail %q does not name the report by sha256 and the file", d)
+	}
+}
+
+// toolNoSource's checkout-open failure: the absolute repo directory is the
+// terminal's, never the record's.
+func TestToolNoSourceOpenErrorRecordsNoRepoDir(t *testing.T) {
+	_, report, _ := twoFileToolRepo(t)
+	s, err := resolveMutantsFrom(mutantsFromFlags{values: []string{"stryker:" + report}, seed: "1", mutantModel: "off"}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoDir := filepath.Join(t.TempDir(), pathMarker, "gone")
+	l := &localExecutor{repoDir: repoDir, toolSource: s}
+	_, terr := l.toolNoSource("pkg/a.go")
+	if terr == nil || !strings.Contains(terr.Error(), repoDir) {
+		t.Fatalf("the terminal error %v does not name the checkout", terr)
+	}
+	d := detailOf(t, terr)
+	if strings.Contains(d, pathMarker) || strings.Contains(d, filepath.Dir(repoDir)) {
+		t.Errorf("recorded detail %q carries the checkout directory", d)
+	}
+	if !strings.Contains(d, "pkg/a.go") {
+		t.Errorf("recorded detail %q does not name the file", d)
 	}
 }

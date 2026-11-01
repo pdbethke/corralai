@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -200,6 +201,11 @@ func (s *toolMutantSource) checkCoversSome(paths []string) error {
 	return fmt.Errorf("--mutants-from %s:%s covers none of the %d file(s) this run audits (%s); it reports on %s", s.tool, s.path, len(paths), strings.Join(paths, ", "), strings.Join(reported, ", "))
 }
 
+// readStryker is mutantsources.ReadStryker, a variable only so a test can
+// make the reader fail on a covered file (a path no fixture reaches) and
+// follow that error to the record.
+var readStryker = mutantsources.ReadStryker
+
 // toolFileMutants is one file's tool mutants, decided before its run starts.
 type toolFileMutants struct {
 	src *toolMutantSource
@@ -232,9 +238,13 @@ func (s *toolMutantSource) forFile(p string, code []byte, budget int) (toolFileM
 		r.counts = ledger.ToolMutantCounts{Path: path.Clean(p), Tool: s.label, Refused: r.none}
 		return r, nil
 	}
-	got, err := mutantsources.ReadStryker(s.report, map[string][]byte{p: code}, func(string) int { return budget }, s.seed)
+	got, err := readStryker(s.report, map[string][]byte{p: code}, func(string) int { return budget }, s.seed)
 	if err != nil {
-		return r, fmt.Errorf("--mutants-from %s:%s: %v", s.tool, s.path, err)
+		return r, recordedError{
+			msg:      fmt.Sprintf("--mutants-from %s:%s: %v", s.tool, s.path, err),
+			recorded: fmt.Sprintf("--mutants-from: the %s report sha256:%s: %v", s.label, s.sha256, err),
+			cause:    err,
+		}
 	}
 	r.covered, r.fm = true, got[path.Clean(p)]
 	r.counts = toolMutantCounts(r.fm)
@@ -385,8 +395,9 @@ func (s *toolMutantSource) preCheck(p string, code []byte) (toolFileMutants, err
 func (r toolFileMutants) apply(rs *advpool.RunSpec) error {
 	if r.none != "" {
 		if r.src.toolOnly {
+			const why = "COULD-NOT-GRADE: --mutant-model off makes the tool the only mutant source, and "
 			return localAuditError{usage: true, scanReason: reposcan.ReasonNoMutantSource,
-				msg: "COULD-NOT-GRADE: --mutant-model off makes the tool the only mutant source, and " + r.noneSaid}
+				msg: why + r.noneSaid, recorded: why + r.none}
 		}
 		return nil
 	}
@@ -397,4 +408,33 @@ func (r toolFileMutants) apply(rs *advpool.RunSpec) error {
 	}
 	rs.MutantSources = r.fm.Sources
 	return nil
+}
+
+// recordedError is an error whose terminal text (msg) names something the
+// record must not hold, a host path the operator typed or the absolute
+// checkout, with the text the record holds instead (reposcan.RecordedDetailer:
+// FileResult.Detail, and from it the signed Row.Detail). The record names
+// the report by tool and sha256 and a file by its repo-relative path.
+type recordedError struct {
+	msg, recorded string
+	cause         error
+}
+
+func (e recordedError) Error() string          { return e.msg }
+func (e recordedError) RecordedDetail() string { return e.recorded }
+func (e recordedError) Unwrap() error          { return e.cause }
+
+// pathlessErr is err's text without the path an *os.PathError (or
+// *os.LinkError) names: its operation and the underlying error ("open: no
+// such file or directory"). Any other error is its own text.
+func pathlessErr(err error) string {
+	var pe *os.PathError
+	if errors.As(err, &pe) {
+		return pe.Op + ": " + pe.Err.Error()
+	}
+	var le *os.LinkError
+	if errors.As(err, &le) {
+		return le.Op + ": " + le.Err.Error()
+	}
+	return err.Error()
 }

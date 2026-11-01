@@ -6036,14 +6036,21 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 // that cannot be read is an error (an executor error on the report), never
 // a no-mutant-source reason.
 func (l *localExecutor) toolNoSource(p string) (toolFileMutants, error) {
+	// The terminal's text keeps the error whole (the open names the absolute
+	// checkout); the record's names the file and the failure, never the
+	// directory (recordedError).
+	unread := func(err error) error {
+		const why = "reading %s to check it against the --mutants-from report: %v"
+		return recordedError{msg: fmt.Sprintf(why, p, err), recorded: fmt.Sprintf(why, p, pathlessErr(err)), cause: err}
+	}
 	root, err := os.OpenRoot(l.repoDir)
 	if err != nil {
-		return toolFileMutants{}, fmt.Errorf("reading %s to check it against the --mutants-from report: %w", p, err)
+		return toolFileMutants{}, unread(err)
 	}
 	defer func() { _ = root.Close() }()
 	code, err := root.ReadFile(p)
 	if err != nil {
-		return toolFileMutants{}, fmt.Errorf("reading %s to check it against the --mutants-from report: %w", p, err)
+		return toolFileMutants{}, unread(err)
 	}
 	return l.toolSource.preCheck(p, code)
 }

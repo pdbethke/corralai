@@ -105,6 +105,31 @@ type Cache interface {
 // gets the catch-all, which is the existing behavior.
 type ReasonCarrier interface{ ScanReason() string }
 
+// RecordedDetailer lets an Executor error say what the RECORD may hold of
+// it when its Error() — the terminal's text — names something the record
+// must not: a host path the operator typed, the absolute checkout directory.
+// FileResult.Detail is copied to the signed, public Row.Detail, so an error
+// whose message carries such a path implements this, and the terminal keeps
+// the path through the executor's own note. "" (or blank) means "no
+// opinion": Error() is the detail, which is the existing behaviour. Same
+// split as CoverageMap's Note / TerminalDetail, at the executor boundary.
+type RecordedDetailer interface{ RecordedDetail() string }
+
+// executorErrDetail is an executor error's text as the record holds it:
+// the outermost RecordedDetail in its chain that says something, else
+// Error(). A wrapper's own words are dropped with the inner error's
+// terminal text, which is the safe direction: a wrapper's prefix can carry
+// a path as easily as the error it wraps.
+func executorErrDetail(err error) string {
+	var rd RecordedDetailer
+	if errors.As(err, &rd) {
+		if s := strings.TrimSpace(rd.RecordedDetail()); s != "" {
+			return s
+		}
+	}
+	return err.Error()
+}
+
 // executorErrReason picks the most specific reason an executor error carries.
 func executorErrReason(err error) string {
 	var rc ReasonCarrier
@@ -164,7 +189,7 @@ func Scan(ctx context.Context, jobs []Job, ex Executor, c Cache, workers int) []
 				// discarding it, so an operator reading the report sees WHY,
 				// not just that grading failed. See buildScanFileRows /
 				// printRepoReport for where Detail surfaces.
-				out[i] = FileResult{Job: j, Gradable: false, Reason: executorErrReason(err), Detail: err.Error(), ComputedAt: time.Now()}
+				out[i] = FileResult{Job: j, Gradable: false, Reason: executorErrReason(err), Detail: executorErrDetail(err), ComputedAt: time.Now()}
 				return
 			}
 			res.Job = j

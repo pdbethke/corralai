@@ -913,9 +913,31 @@ type localAuditError struct {
 	// scanReason, when set, is the reposcan disposition this error deserves in
 	// a whole-repo report — see ScanReason.
 	scanReason string
+	// recorded, when set, is msg as the RECORD may hold it (RecordedDetail):
+	// msg is the terminal's and may name a host path the operator typed.
+	recorded string
 }
 
 func (e localAuditError) Error() string { return e.msg }
+
+// RecordedDetail implements reposcan.RecordedDetailer: recorded when set,
+// else the first cause's own recorded text, else "" (no opinion, so the
+// record holds Error() as it always has). A cause's text wins over msg
+// because msg was formatted from it, terminal path and all.
+func (e localAuditError) RecordedDetail() string {
+	if strings.TrimSpace(e.recorded) != "" {
+		return e.recorded
+	}
+	for _, c := range e.causes {
+		var rd reposcan.RecordedDetailer
+		if errors.As(c, &rd) {
+			if s := strings.TrimSpace(rd.RecordedDetail()); s != "" {
+				return s
+			}
+		}
+	}
+	return ""
+}
 
 // Unwrap exposes every error the message was built from.
 func (e localAuditError) Unwrap() []error { return e.causes }
@@ -2196,6 +2218,7 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 		_, toolBudget := advpool.PlanShards(sigs, rs)
 		tm, terr := in.toolSource.forFile(codeKey, code, toolBudget.Total)
 		if terr != nil {
+			// terr's RecordedDetail (the report by sha256) rides on causes.
 			return zero, auditUsageErr("%v", terr)
 		}
 		fmt.Fprintln(stdout, tm.line)

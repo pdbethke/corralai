@@ -167,6 +167,8 @@ test('A on the fixture shows the tiles from summary.totals and 2/2 entries verif
   await expect(entries.locator('tbody tr').first()).toContainText('scan');
   await expect(entries.locator('tbody tr').first()).toContainText('ed25519:f0b74a4534f38901');
   await expect(entries.locator('tbody tr').first()).toContainText('verified');
+  // Each row prints the sentence Derive worded for its level, not the page's own.
+  await expect(entries.locator('tbody tr').first().locator('.entry-level')).toHaveText('signed by a key this ledger\'s root holds or registered');
   expect(offsite).toEqual([]);
 });
 

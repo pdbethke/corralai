@@ -6,12 +6,14 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"html"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/pdbethke/corralai/internal/auditpush"
+	"github.com/pdbethke/corralai/internal/ledger"
 )
 
 func manyScans(n int) []auditpush.LedgerEntry {
@@ -219,5 +221,38 @@ func TestAKeylessEntryCheckedWithoutARootKeyReadsVerified(t *testing.T) {
 	idx = render(s, "index.html")
 	if !strings.Contains(idx, "no root key given: 1 ed25519 signature not checked") || !strings.Contains(idx, "1/2 verified") {
 		t.Errorf("a mixed page must name the unchecked ed25519 signature and count the verified keyless one:\n%s", idx)
+	}
+}
+
+// A keyless entry whose workflow is not pinned says so in the level's own
+// sentence, as a warn and never an ok, and names the workflow and trigger
+// the certificate carries, so a reader sees which branch signed it.
+func TestKeylessUnpinnedRendersAsWarnWithItsWorkflow(t *testing.T) {
+	k := reviewEntry("aaaaaaaaaaaa", 0)
+	k.File = k.Hash + ".json.gz"
+	kc := okCheck(k)
+	kc.Keyless, kc.KeyID, kc.Signer = true, "sigstore", "https://github.com/acme/widgets"
+	kc.Level = ledger.LevelKeylessUnpinned
+	kc.Cert = &ledger.CertIdentity{
+		Workflow: "https://github.com/acme/widgets/.github/workflows/x.yml@refs/heads/attacker",
+		Trigger:  "push",
+	}
+	s := Build([]auditpush.LedgerEntry{k}, []auditpush.ChainCheck{kc})
+	p, _ := NewPages()
+	for _, path := range []string{"chain-1.html", "entry/" + shortHash(k.Hash) + ".html"} {
+		var b bytes.Buffer
+		if err := p.Render(&b, s, path); err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		page := b.String()
+		sentence := html.EscapeString(ledger.LevelSentence(ledger.LevelKeylessUnpinned))
+		for _, want := range []string{`chip warn">` + sentence, "no workflow is pinned", "refs/heads/attacker", "trigger push"} {
+			if !strings.Contains(page, want) {
+				t.Errorf("%s lacks %q:\n%s", path, want, page)
+			}
+		}
+		if strings.Contains(page, `chip ok">`+sentence) {
+			t.Errorf("%s shows an unpinned keyless entry as ok", path)
+		}
 	}
 }

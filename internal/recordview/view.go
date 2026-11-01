@@ -20,6 +20,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/auditpush"
+	"github.com/pdbethke/corralai/internal/ledger"
 	"github.com/pdbethke/corralai/internal/review"
 )
 
@@ -105,6 +106,15 @@ type ChainView struct {
 	Retracted  bool
 	SigChecked bool
 	Keyless    bool
+	// Level and LevelSentence are the chain check's own ranking of this
+	// entry's signature and the one sentence for it (ledger.LevelSentence);
+	// the page prints the sentence and words nothing of its own. Workflow and
+	// Trigger are what a keyless entry's certificate says ran, empty for any
+	// other entry.
+	Level         ledger.SigLevel
+	LevelSentence string
+	Workflow      string
+	Trigger       string
 }
 
 // EntryView is one review entry as a page.
@@ -298,6 +308,10 @@ func Build(entries []auditpush.LedgerEntry, checks []auditpush.ChainCheck) Site 
 			SigOK: c.SigOK, Signer: c.Signer, ChainProblem: c.Problem, Genesis: c.Genesis,
 			Pos: i + 1, Kind: kind, KeyID: c.KeyID, Note: c.Note,
 			SigChecked: c.SigChecked, Keyless: c.Keyless,
+			Level: c.Level, LevelSentence: ledger.LevelSentence(c.Level),
+		}
+		if c.Cert != nil {
+			cv.Workflow, cv.Trigger = c.Cert.Workflow, c.Cert.Trigger
 		}
 		// The chain shows every entry (it IS the chain), but one that does
 		// not stand says so there, whatever its kind. Only the chain row

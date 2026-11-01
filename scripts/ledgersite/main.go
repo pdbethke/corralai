@@ -100,6 +100,27 @@ func main() {
 	}
 	fmt.Printf("signatures:        %d signed, %d checked, %d verified; %d NOT CHECKED (an ed25519 one needs -pubkey or CORRALAI_LEDGER_PUBKEY, a keyless one -repo)\n", signed, checked, ok, signed-checked)
 
+	// One line per signature level, in the words the chain check carries, so
+	// the build log says how much each signature shows rather than a count of
+	// "verified".
+	levels := map[ledger.SigLevel]int{}
+	for _, c := range checks {
+		levels[c.Level]++
+	}
+	var names []string
+	for l := range levels {
+		names = append(names, string(l))
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		l := ledger.SigLevel(n)
+		if l == "" {
+			fmt.Printf("level:             %d with no level (a problem, or a signature not checked)\n", levels[l])
+			continue
+		}
+		fmt.Printf("level %-18s %d: %s\n", n+":", levels[l], ledger.LevelSentence(l))
+	}
+
 	live := auditpush.LiveEntries(entries)
 	retracted := auditpush.Retracted(entries)
 	verdicts := auditpush.Adjudications(live) // only verdicts that stand, as the page counts them

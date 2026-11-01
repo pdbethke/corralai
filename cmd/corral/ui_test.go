@@ -7,8 +7,10 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"github.com/pdbethke/corralai/internal/auditpush"
+	"github.com/pdbethke/corralai/internal/ledger"
 	"github.com/pdbethke/corralai/internal/review"
 	"github.com/pdbethke/corralai/internal/scanstore"
+	"html"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -199,8 +201,8 @@ func TestUIShowsTheChainTheReviewsAndTheVerdicts(t *testing.T) {
 		if rows[i].Kind != k || rows[i].Pos != strconv.Itoa(len(wantKinds)-i) {
 			t.Errorf("row %d = #%s %s, want #%d %s (newest first)", i, rows[i].Pos, rows[i].Kind, len(wantKinds)-i, k)
 		}
-		if !strings.Contains(rows[i].Sig, `<span class="chip ok">verified</span>`) {
-			t.Errorf("row #%s (%s) signature = %q, want verified", rows[i].Pos, rows[i].Kind, rows[i].Sig)
+		if want := `<span class="chip ok">` + html.EscapeString(ledger.LevelSentence(ledger.LevelKey)) + `</span>`; !strings.Contains(rows[i].Sig, want) {
+			t.Errorf("row #%s (%s) signature = %q, want the key level's sentence", rows[i].Pos, rows[i].Kind, rows[i].Sig)
 		}
 	}
 	if !strings.HasPrefix(rows[3].Note, "RETRACTED: wrong commit") {

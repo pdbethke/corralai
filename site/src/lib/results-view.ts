@@ -373,6 +373,9 @@ function entriesTable(d: Derived): HTMLElement {
     const status = el('td');
     status.appendChild(el('span', `status status-${e.status}`, e.status));
     if (e.problem) status.appendChild(el('div', 'entry-problem', e.problem));
+    // The level's sentence, as Derive worded it. keyless-unpinned is a warn:
+    // any branch of the repository could have signed it.
+    if (e.level_sentence) status.appendChild(el('div', `entry-level level-${e.level}`, e.level_sentence));
     if (e.note) status.appendChild(el('div', 'entry-note', e.note));
     tr.append(el('td', 'mono', e.file), el('td', undefined, e.kind === '' ? 'scan' : e.kind), el('td', 'mono', e.keyid || '(none)'), status);
     body.appendChild(tr);

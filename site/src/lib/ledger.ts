@@ -27,6 +27,11 @@ export type EntryStatus = {
   problem?: string;
   signer?: string;
   note?: string;
+  // Derive's own ranking of the signature and its one sentence; the page
+  // prints the sentence and words nothing of its own. Absent when nothing
+  // was ranked (a problem, or a signature that was not checked).
+  level?: 'unsigned' | 'key' | 'keyless-unpinned' | 'keyless-pinned' | 'keyless-pinned-unchecked';
+  level_sentence?: string;
 };
 
 export type Telemetry = {

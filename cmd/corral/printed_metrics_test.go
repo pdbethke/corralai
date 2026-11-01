@@ -693,6 +693,7 @@ var printedMetrics = map[string]printedRow{
 	"internal/mission/store.go:ResumeMission":                            {Exempt: "error message: the numbers are limits, ids, exit codes, offsets and counts inside a failure text, not an audit measurement"},
 	"internal/mission/store.go:planToTasks":                              {Exempt: "task key formatting from a plan index"},
 	"internal/modelcorr/modelcorr.go:Compare":                            {Exempt: "error message: the numbers are limits, ids, exit codes, offsets and counts inside a failure text, not an audit measurement"},
+	"internal/mutantsources/stryker.go:ReadStryker":                      {Exempt: "error message: the number is the operator's per-file mutant budget inside a refusal; the taken and dropped counts are recorded by a later task (FileMutants.Counts)"},
 	"internal/modelrank/rank.go:prefer":                                  {Exempt: "rank note: the operator's --min-runs threshold echoed back"},
 	"internal/modelrank/rank.go:rowFor":                                  {Fields: []string{"SeatRow.Catches", "SeatRow.Opportunities", "Row.MutantsPlanted", "Row.MutantsGraded", "Row.MutantsInvalid", "Row.Survivors"}, Exempt: "review metrics: phase 1b"},
 	"internal/models/models.go:Load":                                     {Exempt: "error message: builds failure text from causes, ids and paths via %v; no measured number"},

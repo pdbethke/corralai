@@ -40,15 +40,21 @@ const (
 // MutantSource says where one mutant came from. Kind is corral's own
 // knowledge (it loaded the mutant); Tool, Operator and Status are copied from
 // the report and are the tool's claims.
+//
+// JSON-tagged because it rides advpool.Verdict.MutantSources, whose signed
+// digest is taken over the verdict's JSON.
 type MutantSource struct {
-	Kind string // KindModel or KindTool
+	Kind string `json:"kind"` // KindModel or KindTool
 	// Tool is the producing tool and its version as the report states them,
-	// e.g. "stryker@10.0.0".
-	Tool string
+	// e.g. "stryker@10.0.0". Empty for a model mutant.
+	Tool string `json:"tool,omitempty"`
 	// Operator is the tool's name for the mutation (Stryker's mutatorName).
-	Operator string
+	Operator string `json:"operator,omitempty"`
 	// Status is what the tool said happened to the mutant, e.g. "Survived".
-	Status string
+	Status string `json:"status,omitempty"`
+	// Model is the generator seat's model for a model mutant, filled by the
+	// advpool driver from the run's assignment; empty for a tool mutant.
+	Model string `json:"model,omitempty"`
 }
 
 // FileMutants is one audited file's tool mutants: those taken for grading,

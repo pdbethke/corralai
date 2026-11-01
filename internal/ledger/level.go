@@ -45,8 +45,11 @@ func LevelSentence(l SigLevel) string { return levelSentences[l] }
 
 // levelOf ranks one finished check. A Problem or an unchecked signature gets
 // no level; an unsigned entry with no Problem is unsigned, even among signed
-// ones (its Note says so).
-func levelOf(c ChainCheck) SigLevel {
+// ones (its Note says so). pinned says a keyless entry matched the pin in
+// force at its position, and pinChecked whether that pin's root signature
+// was checked; a keyless entry outside a pin never reaches here without a
+// Problem.
+func levelOf(c ChainCheck, pinned, pinChecked bool) SigLevel {
 	switch {
 	case c.Problem != "":
 		return ""
@@ -54,6 +57,10 @@ func levelOf(c ChainCheck) SigLevel {
 		return LevelUnsigned
 	case !c.SigChecked || !c.SigOK:
 		return ""
+	case c.Keyless && pinned && pinChecked:
+		return LevelKeylessPinned
+	case c.Keyless && pinned:
+		return LevelKeylessPinnedUnchecked
 	case c.Keyless:
 		return LevelKeylessUnpinned
 	default:

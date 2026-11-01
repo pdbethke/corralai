@@ -10,15 +10,19 @@ import (
 
 // The signer payloads and the pure rules over them live in internal/ledger.
 const (
-	KindSigner      = ledger.KindSigner
-	SignerRegister  = ledger.SignerRegister
-	SignerRevoke    = ledger.SignerRevoke
-	LegacyRootKeyID = ledger.LegacyRootKeyID
+	KindSigner         = ledger.KindSigner
+	SignerRegister     = ledger.SignerRegister
+	SignerRevoke       = ledger.SignerRevoke
+	SignerPinKeyless   = ledger.SignerPinKeyless
+	SignerUnpinKeyless = ledger.SignerUnpinKeyless
+	LegacyRootKeyID    = ledger.LegacyRootKeyID
 )
 
 type (
-	SignerChange = ledger.SignerChange
-	SignerKey    = ledger.SignerKey
+	SignerChange   = ledger.SignerChange
+	SignerKey      = ledger.SignerKey
+	KeylessPin     = ledger.KeylessPin
+	PinnedWorkflow = ledger.PinnedWorkflow
 )
 
 // KeyFingerprint names a public key; see ledger.KeyFingerprint.

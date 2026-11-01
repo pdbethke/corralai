@@ -353,7 +353,8 @@ func TestLedgerSignerUsesFingerprint(t *testing.T) {
 }
 
 // TestScansDescribesSignerEntries: `scans show` at a signer entry's position
-// says what the entry did, for a registration and a revocation.
+// says what the entry did, for a registration, a revocation, a keyless pin
+// and an unpin (which name no key, so must not read as a registration).
 func TestScansDescribesSignerEntries(t *testing.T) {
 	root, m := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x41}, ed25519.SeedSize)), ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x42}, ed25519.SeedSize))
 	pub := m.Public().(ed25519.PublicKey)
@@ -362,7 +363,10 @@ func TestScansDescribesSignerEntries(t *testing.T) {
 	dir := t.TempDir()
 	reg := auditpush.SignerChange{Action: auditpush.SignerRegister, KeyID: id, PubKey: hex.EncodeToString(pub), Name: "laptop"}
 	rev := auditpush.SignerChange{Action: auditpush.SignerRevoke, KeyID: id, PubKey: hex.EncodeToString(pub), Name: "-", Reason: "retired"}
-	for _, c := range []auditpush.SignerChange{reg, rev} {
+	pin := auditpush.SignerChange{Action: auditpush.SignerPinKeyless, Name: "ci", Reason: "main only",
+		KeylessPin: &auditpush.KeylessPin{RepoID: "42", Allow: []auditpush.PinnedWorkflow{{Workflow: ".github/workflows/corral.yml", Ref: "refs/heads/main"}}}}
+	unpin := auditpush.SignerChange{Action: auditpush.SignerUnpinKeyless, Reason: "moving to a key"}
+	for _, c := range []auditpush.SignerChange{reg, rev, pin, unpin} {
 		if _, err := auditpush.WriteSignerChange(dir, c, s); err != nil {
 			t.Fatal(err)
 		}
@@ -377,5 +381,11 @@ func TestScansDescribesSignerEntries(t *testing.T) {
 	}
 	if got, want := l.EntryKind(2), "signer revoke "+id+": retired"; got != want {
 		t.Errorf("revoke: %q, want %q", got, want)
+	}
+	if got, want := l.EntryKind(3), "signer pin-keyless"; got != want {
+		t.Errorf("pin: %q, want %q", got, want)
+	}
+	if got, want := l.EntryKind(4), "signer unpin-keyless"; got != want {
+		t.Errorf("unpin: %q, want %q", got, want)
 	}
 }

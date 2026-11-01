@@ -174,6 +174,16 @@ func walk(entries []Entry, t Trust, integrityOnly bool) ([]ChainCheck, *SignerSe
 				c.SigChecked = true
 			}
 		}
+		// The pin judges only a keyless entry whose bundle verified (cert is
+		// set exactly then): a failed bundle keeps its own Problem, and the
+		// pin never words a signature that did not verify. pinned is the
+		// pin in force at THIS position, read before any signer entry moves
+		// the set, so the entry is judged by the rule where it stands.
+		pinProblem, pinned, pinChecked := "", false, false
+		if c.Keyless && keyless == "" && cert != nil && set.pin != nil {
+			pinProblem = PinProblem(set.pin, set.pinFile, *cert, t.Repo)
+			pinned, pinChecked = pinProblem == "", set.pinChecked
+		}
 		shapeProblem := EntryShapeProblem(e)
 		changeProblem := ""
 		if e.Kind == KindSigner && shapeProblem == "" {
@@ -196,6 +206,8 @@ func walk(entries []Entry, t Trust, integrityOnly bool) ([]ChainCheck, *SignerSe
 			c.Problem = fmt.Sprintf("prev %.12s does not name the previous entry (%.12s) — an entry was removed, reordered or inserted", e.Prev, prevHash)
 		case keyless != "":
 			c.Problem = keyless
+		case pinProblem != "":
+			c.Problem = pinProblem
 		case seedProblem != "" && seedProblem == errCheckpointNotRoot:
 			// Before keyProblem: a checkpoint by a non-root key is not "an
 			// unregistered key" — the set is empty at a genesis — it is a
@@ -269,12 +281,12 @@ func walk(entries []Entry, t Trust, integrityOnly bool) ([]ChainCheck, *SignerSe
 		// after its own check: the change cannot vouch for itself, and a
 		// tampered or forged one leaves the set as it was.
 		if e.Kind == KindSigner && c.Problem == "" {
-			set.apply(e.Signer)
+			set.apply(e.Signer, e.File)
 		}
 		if e.Kind == KindCheckpoint && i == 0 && c.Problem == "" {
 			set.seed(e.Checkpoint.Signers)
 		}
-		c.Level = levelOf(c)
+		c.Level = levelOf(c, pinned, pinChecked)
 		out = append(out, c)
 		prevHash = e.Hash
 		seen[e.Hash] = true

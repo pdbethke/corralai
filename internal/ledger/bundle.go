@@ -268,6 +268,12 @@ type ToolMutantCounts struct {
 	// Tool is the tool and its version as the report states them, e.g.
 	// "stryker@10.0.0".
 	Tool string `json:"tool"`
+	// Report names the report the account was read from, as
+	// "sha256:<hex>" of its bytes: what a reader needs to replay Seed's
+	// sample against the same report. Set on every account, refusals and
+	// cache-served ones included; the report's path is never recorded. A
+	// key (it measures nothing), said in the ToolMutants tier note.
+	Report string `json:"report,omitempty"`
 	// Taken is how many of the file's mutants corral graded.
 	Taken *int `json:"taken,omitempty"`
 	// Survived, NoCoverage, Killed and CompileError are the TOOL's statuses,

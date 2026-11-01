@@ -153,6 +153,10 @@ func resolveMutantsFrom(f mutantsFromFlags, stdout io.Writer) (*toolMutantSource
 	return src, nil
 }
 
+// reportKey is how the record names the report: "sha256:<hex>" of its
+// bytes (ToolMutantCounts.Report), never its path.
+func (s *toolMutantSource) reportKey() string { return "sha256:" + s.sha256 }
+
 func reportSHA256(b []byte) string {
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
@@ -235,7 +239,7 @@ func (s *toolMutantSource) forFile(p string, code []byte, budget int) (toolFileM
 		r.none = fmt.Sprintf("the %s report with sha256 %s has no entry for %s", s.label, s.sha256, p)
 		r.noneSaid = fmt.Sprintf("the %s report %s has no entry for %s", s.label, s.path, p)
 		r.line = fmt.Sprintf("tool mutants (%s): none — %s", s.label, r.noneSaid)
-		r.counts = ledger.ToolMutantCounts{Path: path.Clean(p), Tool: s.label, Refused: r.none}
+		r.counts = ledger.ToolMutantCounts{Path: path.Clean(p), Tool: s.label, Report: s.reportKey(), Refused: r.none}
 		return r, nil
 	}
 	got, err := readStryker(s.report, map[string][]byte{p: code}, func(string) int { return budget }, s.seed)
@@ -248,6 +252,7 @@ func (s *toolMutantSource) forFile(p string, code []byte, budget int) (toolFileM
 	}
 	r.covered, r.fm = true, got[path.Clean(p)]
 	r.counts = toolMutantCounts(r.fm)
+	r.counts.Report = s.reportKey()
 	switch {
 	case r.fm.Refused != "":
 		r.none = r.fm.Refused

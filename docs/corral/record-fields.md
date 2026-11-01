@@ -410,7 +410,7 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `StatementSHA256` | key |  |
 | `Substrate` | measured |  |
 | `TestCommand` | measured |  |
-| `ToolMutants` | measured | per-status counts are the tool's own claims about its mutants; Taken and Dropped are corral's |
+| `ToolMutants` | measured | per-status counts are the tool's own claims about its mutants; Taken and Dropped are corral's; Report (the report's sha256) is a key |
 | `Toolchains` | measured |  |
 | `Top` | measured |  |
 | `TotalFiles` | measured |  |

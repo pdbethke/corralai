@@ -284,6 +284,10 @@ func TestRepoEntryRecordsToolMutantSources(t *testing.T) {
 		raw, _ := json.Marshal(c)
 		t.Errorf("recorded counts = %s", raw)
 	}
+	reportBytes, _ := os.ReadFile(report) // #nosec G304 -- test temp path
+	if c.Report != "sha256:"+reportSHA256(reportBytes) {
+		t.Errorf("recorded Report = %q, want the graded report's sha256:<hex>", c.Report)
+	}
 	// The line on screen is the line the record renders.
 	if !strings.Contains(out.String(), "pkg/a.go: "+toolMutantsLine(c)) {
 		t.Errorf("the printed line is not the recorded counts' line %q:\n%s", toolMutantsLine(c), out.String())
@@ -518,6 +522,12 @@ func TestRecordedToolReasonsNeverNameTheReportPath(t *testing.T) {
 				t.Errorf("pkg/b.go account = %+v", acc)
 			}
 			src, _ := os.ReadFile(report) // #nosec G304 -- test temp path
+			if acc.Report != "sha256:"+reportSHA256(src) {
+				t.Errorf("a refused file's account names no report: Report = %q", acc.Report)
+			}
+			if a, ok := accountFor(counts, "pkg/a.go"); !ok || a.Report != acc.Report {
+				t.Errorf("pkg/a.go account %+v does not name the same report", a)
+			}
 			if !strings.Contains(acc.Refused, reportSHA256(src)) {
 				t.Errorf("the recorded reason %q does not name the report by its sha256", acc.Refused)
 			}

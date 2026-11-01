@@ -881,3 +881,22 @@ func TestCoveringUnitsRoundTripsThroughTheWarehouse(t *testing.T) {
 		t.Errorf("read back CoveringUnits = %d on an unmeasured row, want nil", *got)
 	}
 }
+
+// TestScanToolMutantsReachTheWarehouse: each file's account of a mutation
+// tool's report, the report's sha256 included, is written and read back
+// byte for byte, like every scan field.
+func TestScanToolMutantsReachTheWarehouse(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "w.duckdb")
+	b := sampleBundle()
+	b.Scan.ToolMutants = `[{"path":"a.ts","tool":"stryker@10.0.0","report":"sha256:` + strings.Repeat("cd", 32) + `","taken":1}]`
+	if _, err := PushBundle(target, b); err != nil {
+		t.Fatalf("PushBundle: %v", err)
+	}
+	got, ok, err := readScanRow(openWarehouse(t, target), "repo = ?", "o/r")
+	if err != nil || !ok {
+		t.Fatalf("readScanRow: ok=%v err=%v", ok, err)
+	}
+	if got.ToolMutants != b.Scan.ToolMutants {
+		t.Errorf("tool_mutants round trip = %q, want %q", got.ToolMutants, b.Scan.ToolMutants)
+	}
+}

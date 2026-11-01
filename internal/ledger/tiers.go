@@ -136,9 +136,12 @@ func buildFieldTiers() map[[2]string]FieldTier {
 	add("MutantRow", TierKey, "", "MutantID ParentSHA256 Path Repo RunURL ScanID StatementSHA256")
 	add("MutantRow", TierMeasured, "", "Code DurationMillis InvalidReason KilledBy Outcome Proven ProvenByAuthoredAlone SelectionRule Shape SpanEnd SpanStart TestsRun")
 	add("MutantRow", TierMeasured, "", "GeneratorModel")
-	// Source, SourceTool and SourceOperator are what corral loaded the mutant
-	// from; SourceStatus is the tool's own verdict on it.
-	add("MutantRow", TierMeasured, "", "Source SourceOperator SourceTool")
+	// Source is what corral loaded the mutant as (model or tool): measured.
+	// SourceTool and SourceOperator are read from the tool's report, which
+	// anyone can edit, so they are the report's claims (founder, 2026-11-01);
+	// SourceStatus is the tool's own verdict on the mutant.
+	add("MutantRow", TierMeasured, "", "Source")
+	add("MutantRow", TierDeclared, "read from the tool's report: the report's own claim about which tool and operator made this mutant", "SourceOperator SourceTool")
 	add("MutantRow", TierDeclared, "the tool's own claim; Outcome is corral's measurement", "SourceStatus")
 	add("MutantAttemptRow", TierKey, "", "Commit MutantID Path Repo")
 	add("MutantAttemptRow", TierMeasured, "", "Outcome Model Role Shadow")

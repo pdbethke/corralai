@@ -186,9 +186,9 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `SelectionRule` | measured |  |
 | `Shape` | measured |  |
 | `Source` | measured |  |
-| `SourceOperator` | measured |  |
+| `SourceOperator` | declared | read from the tool's report: the report's own claim about which tool and operator made this mutant |
 | `SourceStatus` | declared | the tool's own claim; Outcome is corral's measurement |
-| `SourceTool` | measured |  |
+| `SourceTool` | declared | read from the tool's report: the report's own claim about which tool and operator made this mutant |
 | `SpanEnd` | measured |  |
 | `SpanStart` | measured |  |
 | `StatementSHA256` | key |  |

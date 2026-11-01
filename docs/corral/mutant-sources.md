@@ -54,8 +54,9 @@ wrote, so no third-party tool executes in the audited checkout.
 
 Corral never records the tool's `Survived` or `NoCoverage` as its own result. Each
 mutant's row carries `Source`, `SourceTool`, `SourceOperator` and `SourceStatus`.
-`SourceStatus` is what the tool said, recorded as a declared claim; `Outcome` is what
-corral's run measured. A mutant the tool called `Survived` or `NoCoverage` can be killed
+`SourceStatus` is what the tool said, recorded as a declared claim. `SourceTool` and
+`SourceOperator` are read from the same report, which anyone can edit, so they are
+declared too. `Source` (model or tool) and `Outcome` are what corral measured. A mutant the tool called `Survived` or `NoCoverage` can be killed
 by corral's run. A mutant the tool called killed is counted and never re-graded.
 
 `GeneratorModel` is set only on model mutants, and the mutant-generator's leaderboard

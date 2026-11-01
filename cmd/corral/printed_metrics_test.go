@@ -433,7 +433,7 @@ var printedMetrics = map[string]printedRow{
 	"cmd/corral/mutants_from.go:resolveMutantsFrom":   {Fields: []string{"ScanRow.ToolMutants"}},
 	"cmd/corral/mutants_from.go:formatToolSeed":       {Fields: []string{"ScanRow.ToolMutants"}},
 	"cmd/corral/mutants_from.go:countsByName":         {Fields: []string{"ScanRow.ToolMutants"}},
-	"cmd/corral/mutants_from.go:forFile":              {Exempt: "error message: wraps the reader's refusal, whose numbers are the report's own"},
+	"cmd/corral/mutants_from.go:forFile":              {Fields: []string{"Row.MutantBudget", "ScanRow.ToolMutants"}, Exempt: "error message: wraps the reader's refusal, whose numbers are the report's own"},
 	"cmd/corral/mutants_from.go:checkCoversSome":      {Exempt: "error message: the count of files the run audits, inside a refusal"},
 
 	"cmd/corral/review.go:printReview":              {Exempt: exReview},
@@ -585,6 +585,7 @@ var printedMetrics = map[string]printedRow{
 	"internal/adequacy/score.go:Score":                                   {Fields: []string{"Row.Detail"}, Exempt: "error message: durations and exit codes of a failed probe; the count of mutants the compile gate could not judge is printed only inside the Row.Detail note text"},
 	"internal/advpool/aggregate.go:aggregate":                            {Fields: []string{"Row.MutantsDistinct", "Row.KillRate", "Row.Detail"}},
 	"internal/advpool/budget.go:String":                                  {Fields: []string{"Row.MutantBudget", "Row.MutantBudgetRule"}},
+	"internal/advpool/budget.go:WithTool":                                {Fields: []string{"Row.MutantBudget", "ScanRow.ToolMutants"}},
 	"internal/advpool/driver.go:NewDriver":                               {Exempt: "error message: builds failure text from causes, ids and paths via %v; no measured number"},
 	"internal/advpool/driver.go:StartRun":                                {Exempt: "error message: the numbers are limits, ids, exit codes, offsets and counts inside a failure text, not an audit measurement"},
 	"internal/advpool/driver.go:Tick":                                    {Exempt: "error message: the numbers are limits, ids, exit codes, offsets and counts inside a failure text, not an audit measurement"},

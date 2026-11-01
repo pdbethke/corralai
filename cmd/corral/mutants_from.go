@@ -267,6 +267,12 @@ func (s *toolMutantSource) forFile(p string, code []byte, budget int) (toolFileM
 	if r.noneSaid != "" {
 		r.line += " — " + r.noneSaid
 	}
+	// Beside a generator the tool's sample uses the model's own per-file
+	// cap, so the exam is the two together: said here, where the tool's
+	// share is first known (advpool.MutantBudget.WithTool says it again).
+	if t := len(r.fm.Taken); t > 0 && !s.toolOnly {
+		r.line += fmt.Sprintf(" — with the model's %d under the same per-file cap: %d model + %d tool, an exam of up to %d", budget, budget, t, budget+t)
+	}
 	return r, nil
 }
 

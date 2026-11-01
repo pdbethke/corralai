@@ -715,3 +715,50 @@ func TestToolNoSourceOpenErrorRecordsNoRepoDir(t *testing.T) {
 		t.Errorf("recorded detail %q does not name the file", d)
 	}
 }
+
+// --- final review, Minor 1 -----------------------------------------------
+
+// A both-sources exam can be up to twice the fitted budget, because the
+// tool's sample uses the same per-file cap. Every surface that prints the
+// budget says so: the scan line beside the model, the per-file report line
+// and the --local verdict block. A tool-only scan line does not, because
+// there is no model share to add to.
+func TestTheCombinedExamSizeIsSaid(t *testing.T) {
+	report := writeTemp(t, string(toolFixtureReport(t, toolFixtureSrc)))
+	for _, model := range []string{"m", "off"} {
+		s, err := resolveMutantsFrom(mutantsFromFlags{values: []string{"stryker:" + report}, seed: "1", mutantModel: model}, io.Discard)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r, err := s.forFile("pkg/a.go", []byte(toolFixtureSrc), 5)
+		if err != nil {
+			t.Fatal(err)
+		}
+		said := strings.Contains(r.line, "5 model + 1 tool") && strings.Contains(r.line, "up to 6")
+		if model == "m" && !said {
+			t.Errorf("both sources: scan line %q does not say the combined exam size", r.line)
+		}
+		if model == "off" && strings.Contains(r.line, "model +") {
+			t.Errorf("tool-only: scan line %q claims a model share", r.line)
+		}
+	}
+
+	budget := advpool.MutantBudget{Rule: advpool.BudgetRuleComplexity, Total: 5, Complexity: 3, Floor: 4, Ceiling: 40}
+	var b bytes.Buffer
+	printWeakFile(&b, reposcan.WeakFile{Path: "pkg/a.go", MutantBudget: budget, ToolShare: 2})
+	if !strings.Contains(b.String(), "mutants: 5 model + 2 tool") {
+		t.Errorf("the report line does not say the combined exam:\n%s", b.String())
+	}
+	v := advpool.Verdict{MutantBudget: budget, RegionsTotal: 1, MutantSources: map[string]mutantsources.MutantSource{
+		"t/stryker/1": {Kind: mutantsources.KindTool}, "t/stryker/2": {Kind: mutantsources.KindTool}, "m1": {Kind: mutantsources.KindModel},
+	}}
+	b.Reset()
+	renderAdvVerdict(&b, "pkg/a.go", advVerdictFromPool(v))
+	if !strings.Contains(b.String(), "5 model + 2 tool") {
+		t.Errorf("the verdict block does not say the combined exam:\n%s", b.String())
+	}
+	rep := reposcan.Aggregate("o", "r", "c", 1, 1, []reposcan.FileResult{{Job: reposcan.Job{Path: "pkg/a.go"}, Gradable: true, Verdict: v}}, nil)
+	if len(rep.Weakest) == 0 || rep.Weakest[0].ToolShare != 2 {
+		t.Errorf("the report's file does not carry the verdict's tool share: %+v", rep.Weakest)
+	}
+}

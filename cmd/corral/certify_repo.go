@@ -4467,7 +4467,7 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 	if f.MutantBudget.Total > 0 {
 		// The exam's size and why: a reader comparing two files' kill rates
 		// needs to know one sat 8 questions and the other 40.
-		fmt.Fprintf(w, "\n   mutants: %s", f.MutantBudget)
+		fmt.Fprintf(w, "\n   mutants: %s", f.MutantBudget.WithTool(f.ToolShare))
 	}
 	if line := examConfidenceLine(f); line != "" {
 		fmt.Fprintf(w, "\n   confidence: %s", line)

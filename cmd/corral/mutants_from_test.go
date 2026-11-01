@@ -367,7 +367,11 @@ func TestToolMutantsForAFileWithNoSource(t *testing.T) {
 		if len(exam) != 1 || exam[0].ID != "t/stryker/2" || rs.MutantSources["t/stryker/2"].Kind != mutantsources.KindTool {
 			t.Errorf("model %q: exam %+v sources %+v", model, exam, rs.MutantSources)
 		}
-		const line = "tool mutants (stryker@10.0.0): taken 1 of 0 survivors + 1 no-coverage, 1 killed by the tool and not re-graded, 0 compile errors, 0 dropped"
+		line := "tool mutants (stryker@10.0.0): taken 1 of 0 survivors + 1 no-coverage, 1 killed by the tool and not re-graded, 0 compile errors, 0 dropped"
+		if model != "off" {
+			// Beside a model the combined exam is said (final review, Minor 1).
+			line += " — with the model's 5 under the same per-file cap: 5 model + 1 tool, an exam of up to 6"
+		}
 		if r.line != line {
 			t.Errorf("scan line =\n%q\nwant\n%q", r.line, line)
 		}

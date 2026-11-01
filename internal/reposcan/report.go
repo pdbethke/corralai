@@ -318,6 +318,11 @@ type WeakFile struct {
 	// explicit / default), with the file's summed complexity. Total 0 for a
 	// run that generated nothing (--mutants) or a row that predates it.
 	MutantBudget advpool.MutantBudget
+	// ToolShare is advpool.ToolShare of the verdict: the exam's tool
+	// mutants beside a seated generator, which the budget line adds to the
+	// model's (MutantBudget.WithTool). 0 for a tool-only run and a run with
+	// no tool source.
+	ToolShare int
 	// ExamCoverage mirrors advpool.Verdict.ExamCoverage: the symbols and
 	// decision points the graded mutants actually reached.
 	ExamCoverage advpool.ExamCoverage
@@ -651,6 +656,7 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 			PromptShape: r.Verdict.PromptShape,
 			// What the seats were asked for — see WeakFile.MutantBudget.
 			MutantBudget: r.Verdict.MutantBudget,
+			ToolShare:    advpool.ToolShare(r.Verdict),
 			ExamCoverage: r.Verdict.ExamCoverage,
 			// Whether this file's goal was served from the goal cache —
 			// see WeakFile.GoalReused.

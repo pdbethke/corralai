@@ -2214,6 +2214,7 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 	// generator seats are asked for (PlanShards is pure, and the driver
 	// calls it again on this spec, so the two cannot disagree), decided
 	// before the run starts so they join the exam the dev pass grades.
+	toolShare := 0 // the exam's tool mutants beside a generator seat
 	if in.toolSource != nil {
 		_, toolBudget := advpool.PlanShards(sigs, rs)
 		tm, terr := in.toolSource.forFile(codeKey, code, toolBudget.Total)
@@ -2230,6 +2231,9 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 		}
 		if aerr := tm.apply(&rs); aerr != nil {
 			return zero, aerr
+		}
+		if !in.toolSource.toolOnly {
+			toolShare = len(tm.fm.Taken)
 		}
 	}
 
@@ -2285,7 +2289,7 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 	// A replay grades a recorded exam, so it has no budget to disclose; a
 	// tool-only exam does, because the budget capped the tool's sample.
 	if rs.PresetMutants == nil || in.toolSource != nil {
-		fmt.Fprintf(stdout, "mutants: %s\n", budget)
+		fmt.Fprintf(stdout, "mutants: %s\n", budget.WithTool(toolShare))
 	}
 	// len(shards) is the shadow seat count too — one challenger per PRIMARY
 	// region, never a separate partition (see RoleMutantGeneratorShadow).
@@ -3037,6 +3041,7 @@ func advVerdictFromPool(v advpool.Verdict) advVerdict {
 		PoolScored:               v.PoolScored,
 		WriterSeatsUngraded:      v.WriterSeatsUngraded,
 		MutantBudget:             v.MutantBudget,
+		ToolShare:                advpool.ToolShare(v),
 		ExamCoverage:             v.ExamCoverage,
 		ExamIndicative:           v.ExamIndicative,
 		IndicativeReason:         v.IndicativeReason,

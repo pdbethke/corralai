@@ -539,6 +539,8 @@ var printedMetrics = map[string]printedRow{
 	"cmd/corral/ledger_signer.go:runSignerAdd":                           {Exempt: "status text: names, paths, hashes and passthrough strings printed via %v or a string operand; no measured number"},
 	"cmd/corral/ledger_signer.go:runSignerList":                          {Exempt: "status text: names, paths, hashes and passthrough strings printed via %v or a string operand; no measured number"},
 	"cmd/corral/ledger_signer.go:runSignerRevoke":                        {Exempt: "status text: names, paths, hashes and passthrough strings printed via %v or a string operand; no measured number"},
+	"cmd/corral/ledger_signer_pin.go:runSignerPin":                       {Exempt: "status text and usage refusals: names, paths, a repository id, causes via %v, and how many --workflow and --ref flags were given; no measured number"},
+	"cmd/corral/ledger_signer_pin.go:runSignerUnpin":                     {Exempt: "status text: names, paths, hashes and passthrough strings printed via %v or a string operand; no measured number"},
 	"cmd/corral/main.go:main":                                            {Exempt: "status text: names, paths, hashes and passthrough strings printed via %v or a string operand; no measured number"},
 	"cmd/corral/main.go:printVersion":                                    {Exempt: "status text: names, paths, hashes and passthrough strings printed via %v or a string operand; no measured number"},
 	"cmd/corral/mcp_findings.go:runFindingsMCP":                          {Exempt: "diagnostic text on stderr: causes, paths and names via %v or a string operand; no measured number"},

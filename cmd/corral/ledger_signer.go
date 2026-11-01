@@ -52,8 +52,17 @@ func rootSignerFromEnv() (auditpush.Ed25519LedgerSigner, ed25519.PublicKey, erro
 // The third check is what proves the seed is THIS chain's root: a chain
 // signed by anyone else shows Problems under it. Nothing is written when
 // any of them fails.
-func rootGate(verb, dir string, stderr io.Writer) (auditpush.Ed25519LedgerSigner, ed25519.PublicKey, bool) {
-	if refuseKeylessLedger(verb, dir, "nothing written", stderr) {
+//
+// keylessRepo is the repository (owner/name) a verb that reads keyless
+// entries names with --ledger-repo, and "" for one that does not. Only
+// `signer pin` and `signer unpin` name one: a pin is the root's statement
+// about which keyless runs may sign, so those two verbs exist FOR ledgers
+// that hold keyless entries, and the walk checks each keyless entry against
+// the repository and the Sigstore root (ledgerTrust) rather than failing
+// for want of a repository. add, revoke and checkpoint pass "" and keep
+// refuseKeylessLedger as their first check, for the reasons it records.
+func rootGate(verb, dir, keylessRepo string, stderr io.Writer) (auditpush.Ed25519LedgerSigner, ed25519.PublicKey, bool) {
+	if keylessRepo == "" && refuseKeylessLedger(verb, dir, "nothing written", stderr) {
 		return auditpush.Ed25519LedgerSigner{}, nil, false
 	}
 	signer, rootPub, err := rootSignerFromEnv()
@@ -68,7 +77,12 @@ func rootGate(verb, dir string, stderr io.Writer) (auditpush.Ed25519LedgerSigner
 		fmt.Fprintf(stderr, "corral ledger %s: %s names root %s but %s derives root %s — refusing, nothing written\n", verb, src, auditpush.KeyFingerprint(named), ledgerRootKeyEnv, signer.KeyID)
 		return signer, nil, false
 	}
-	checks, err := auditpush.VerifyLedgerDir(dir, rootPub)
+	trust, err := ledgerTrust(rootPub, keylessRepo)
+	if err != nil {
+		fmt.Fprintf(stderr, "corral ledger %s: %v\n", verb, err)
+		return signer, nil, false
+	}
+	checks, err := auditpush.VerifyLedgerDirTrust(dir, trust)
 	if err != nil {
 		fmt.Fprintf(stderr, "corral ledger %s: %v\n", verb, err)
 		return signer, nil, false
@@ -123,7 +137,7 @@ func refuseKeylessLedger(verb, dir, outcome string, stderr io.Writer) bool {
 	return false
 }
 
-// runLedgerSigner is `corral ledger signer add|revoke|list`.
+// runLedgerSigner is `corral ledger signer add|revoke|list|pin|unpin`.
 func runLedgerSigner(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprint(stderr, signerUsage)
@@ -136,6 +150,10 @@ func runLedgerSigner(args []string, stdout, stderr io.Writer) int {
 		return runSignerRevoke(args[1:], stdout, stderr)
 	case "list":
 		return runSignerList(args[1:], stdout, stderr)
+	case "pin":
+		return runSignerPin(args[1:], stdout, stderr)
+	case "unpin":
+		return runSignerUnpin(args[1:], stdout, stderr)
 	}
 	fmt.Fprintf(stderr, "corral ledger signer: unknown verb %q\n%s", args[0], signerUsage)
 	return 2
@@ -145,6 +163,11 @@ const signerUsage = `usage:
   corral ledger signer add <dir> --name <name> --pub <hex>      register a key (root seed in $CORRALAI_LEDGER_ROOT_KEY)
   corral ledger signer revoke <dir> --keyid <id> --reason "…"   retire a key
   corral ledger signer list <dir> [--pub <root hex>]            active signers, then revoked ones
+  corral ledger signer pin <dir> --ledger-repo <owner/name> --workflow <path> --ref <ref> [--workflow … --ref …]
+                           [--repo-id <digits>] [--new-root --root-key-out <path>]
+                                                                pin keyless signing to these workflow@ref pairs
+  corral ledger signer unpin <dir> --ledger-repo <owner/name> --reason "…"
+                                                                lift the keyless pin
 `
 
 func runSignerAdd(args []string, stdout, stderr io.Writer) int {
@@ -165,7 +188,7 @@ func runSignerAdd(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	dir := strings.TrimRight(fs.Arg(0), "/")
-	root, rootPub, ok := rootGate("signer add", dir, stderr)
+	root, rootPub, ok := rootGate("signer add", dir, "", stderr)
 	if !ok {
 		return 2
 	}
@@ -209,7 +232,7 @@ func runSignerRevoke(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	dir := strings.TrimRight(fs.Arg(0), "/")
-	root, _, ok := rootGate("signer revoke", dir, stderr)
+	root, _, ok := rootGate("signer revoke", dir, "", stderr)
 	if !ok {
 		return 2
 	}

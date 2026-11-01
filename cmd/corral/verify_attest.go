@@ -21,6 +21,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/certify"
+	"github.com/pdbethke/corralai/internal/ledger"
 )
 
 // runVerifyAttest is `corral verify` — the checker that ships with the
@@ -645,6 +646,16 @@ func runVerifyLedger(dir, pubFlag, repoFlag, expectHead string, stdout, stderr i
 		}
 		if c.Note != "" {
 			what += " — " + c.Note
+		}
+		// The level is the ledger package's one reading of the signature;
+		// a keyless entry also says which workflow and trigger signed it,
+		// because "a run of this repository" alone hides the difference
+		// between main and a branch an attacker pushed.
+		if c.Problem == "" && c.Level != "" {
+			what += " — " + ledger.LevelSentence(c.Level)
+			if c.Cert != nil {
+				what += fmt.Sprintf(" (%s, trigger %s)", c.Cert.Workflow, c.Cert.Trigger)
+			}
 		}
 		fmt.Fprintf(stdout, "%s %s  %.12s  %s\n", mark, c.File, c.Commit, what)
 	}

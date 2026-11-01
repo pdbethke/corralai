@@ -10,6 +10,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/ledger"
+	"github.com/pdbethke/corralai/internal/ledger/ledgertest"
 )
 
 // A keyless entry is checked against the repository that signed it, and the
@@ -80,5 +81,41 @@ func TestUILedgerRepoFlagReachesTheChainPage(t *testing.T) {
 	with := uiGet(t, uiHandler(fakeSeal{}, dir, testKeylessRepo), "/chain-1.html")
 	if with.Code != 200 || strings.Contains(with.Body.String(), "repository is not named") {
 		t.Fatalf("with --ledger-repo the page must not carry it (code %d)", with.Code)
+	}
+}
+
+// A keyless entry's line says what the signature shows and which workflow
+// and trigger made it, so a signature from a branch an attacker pushed does
+// not read the same as one from main.
+func TestVerifyPrintsTheLevelAndTheWorkflowOfAKeylessEntry(t *testing.T) {
+	isolateStateHome(t)
+	s := ledgertest.New(t)
+	wf := "https://github.com/" + testKeylessRepo + "/.github/workflows/corral.yml@refs/heads/attacker"
+	prevSigner := newKeylessLedgerSigner
+	newKeylessLedgerSigner = func() (auditpush.LedgerSigner, error) {
+		return auditpush.NewSigstoreLedgerSigner(func(h []byte) ([]byte, error) {
+			return s.IssueAs(t, h, testKeylessRepo, ledgertest.CertClaims{Workflow: wf, Ref: "refs/heads/attacker", Trigger: "push"}), nil
+		}, testKeylessRepo, s.Root(t)), nil
+	}
+	resetKeylessLedgerSigner()
+	t.Cleanup(func() { newKeylessLedgerSigner = prevSigner; resetKeylessLedgerSigner() })
+	prev := ledgerSigstoreRoot
+	ledgerSigstoreRoot = func() (*ledger.SigstoreRoot, error) { return s.Root(t), nil }
+	t.Cleanup(func() { ledgerSigstoreRoot = prev })
+	t.Setenv(auditpush.LedgerSignerEnv, "sigstore")
+	t.Setenv(auditpush.LedgerPubKeyEnv, "")
+	dir := t.TempDir()
+	b := auditpush.Bundle{Scan: auditpush.ScanRow{Repo: "r", Commit: "aaaa1111", ScanID: 1}, Files: []auditpush.Row{{Repo: "r", ScanID: 1, Path: "a.py"}}}
+	if _, err := pushBundle(dir+"/", b, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := runVerifyLedger(dir, "", testKeylessRepo, "", &out, &errb); code != 0 {
+		t.Fatalf("exit %d\n%s%s", code, out.String(), errb.String())
+	}
+	for _, want := range []string{"refs/heads/attacker", "any branch could have signed", "trigger push", "signed keylessly by"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("output lacks %q:\n%s", want, out.String())
+		}
 	}
 }

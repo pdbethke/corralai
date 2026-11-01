@@ -60,7 +60,10 @@ type ChainCheck struct {
 	Signer string
 	// Cert is what the signing certificate says about the run that signed:
 	// set only for a keyless entry whose bundle verified, nil otherwise.
-	Cert    *CertIdentity
+	Cert *CertIdentity
+	// Level is how much this entry's signature shows (see SigLevel). "" when
+	// the entry has a Problem or its signature was not checked.
+	Level   SigLevel
 	Problem string // "" when nothing is wrong
 	Genesis bool
 	// Kind is the entry's kind; Note says what a retraction or checkpoint
@@ -271,6 +274,7 @@ func walk(entries []Entry, t Trust, integrityOnly bool) ([]ChainCheck, *SignerSe
 		if e.Kind == KindCheckpoint && i == 0 && c.Problem == "" {
 			set.seed(e.Checkpoint.Signers)
 		}
+		c.Level = levelOf(c)
 		out = append(out, c)
 		prevHash = e.Hash
 		seen[e.Hash] = true

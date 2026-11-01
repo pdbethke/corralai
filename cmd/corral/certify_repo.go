@@ -1882,6 +1882,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			PushedBy:  auditpush.PushedByCertify,
 			TreeDirty: auditedTreeDirty, RepoIdentity: repoIdentity(*repoDir),
 			Sandbox: ex.sandboxIdentity(), SeedSkipped: ex.seedSkipped(),
+			ToolMutants: ex.toolMutants(),
 		})
 	// The hunks onto the mutant rows: `code` is the mutant's source, and
 	// the custody rule already withholds it (BlankUnpushedSource) unless
@@ -5168,6 +5169,9 @@ type localExecutor struct {
 	// toolSource is --mutants-from, read per file — see
 	// localAuditInput.toolSource. nil is a model-only scan.
 	toolSource *toolMutantSource
+	// toolCounts collects every audited file's account of the tool's report
+	// (localAuditInput.toolSink) for the scan row's ToolMutants.
+	toolCounts toolCountsCollector
 	// prior is the loaded --prior, resolved per file in newAuditRunSpec.
 	prior *prior.Prior
 
@@ -5477,6 +5481,16 @@ func (l *localExecutor) seedSkipped() string {
 	return seedSkippedJSON(l.seeds.skipped())
 }
 
+// toolMutants is every audited file's account of --mutants-from's report,
+// as the ledger's JSON text; "" for a dry run (no executor) and a scan with
+// no tool source.
+func (l *localExecutor) toolMutants() string {
+	if l == nil {
+		return ""
+	}
+	return toolMutantsJSON(l.toolCounts.all())
+}
+
 // sandboxIdentity is the jail the scan ran in; zero for a dry run (no
 // executor) and for the workspace substrate.
 func (l *localExecutor) sandboxIdentity() sandbox.Identity {
@@ -5607,6 +5621,7 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 		presetMutants: l.presetMutants[j.Path],
 		toolSource:    l.toolSource,
 		toolNote:      func(line string) { l.note("%s: %s\n", j.Path, line) },
+		toolSink:      l.toolCounts.add,
 		prior:         l.prior,
 		mutantSink:    l.mutantSink,
 		// This file's own adapter onto the scan's shared tape — see

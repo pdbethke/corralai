@@ -185,6 +185,10 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `ScanID` | key |  |
 | `SelectionRule` | measured |  |
 | `Shape` | measured |  |
+| `Source` | measured |  |
+| `SourceOperator` | measured |  |
+| `SourceStatus` | declared | the tool's own claim; Outcome is corral's measurement |
+| `SourceTool` | measured |  |
 | `SpanEnd` | measured |  |
 | `SpanStart` | measured |  |
 | `StatementSHA256` | key |  |
@@ -406,6 +410,7 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `StatementSHA256` | key |  |
 | `Substrate` | measured |  |
 | `TestCommand` | measured |  |
+| `ToolMutants` | measured |  |
 | `Toolchains` | measured |  |
 | `Top` | measured |  |
 | `TotalFiles` | measured |  |

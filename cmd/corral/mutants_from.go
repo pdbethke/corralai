@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"math"
@@ -15,8 +16,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/ledger"
 	"github.com/pdbethke/corralai/internal/mutantsources"
 	"github.com/pdbethke/corralai/internal/reposcan"
 )
@@ -58,7 +61,10 @@ type mutantsFromFlags struct {
 // toolMutantSource is one run's resolved --mutants-from: the report, what
 // identifies it, and whether it is the run's only mutant source.
 type toolMutantSource struct {
-	tool   string // the --mutants-from prefix, e.g. "stryker"
+	tool string // the --mutants-from prefix, e.g. "stryker"
+	// label is the tool and version the report names, e.g.
+	// "stryker@10.0.0": what every record of its mutants says.
+	label  string
 	path   string // the report path as typed
 	report []byte
 	sha256 string // of report
@@ -118,11 +124,15 @@ func resolveMutantsFrom(f mutantsFromFlags, stdout io.Writer) (*toolMutantSource
 		if err != nil {
 			return nil, fmt.Errorf("--mutants-from %s: %v", v, err)
 		}
+		label, err := mutantsources.StrykerTool(report)
+		if err != nil {
+			return nil, fmt.Errorf("--mutants-from %s: %v", v, err)
+		}
 		covers := make(map[string]bool, len(paths))
 		for _, rp := range paths {
 			covers[rp] = true
 		}
-		src = &toolMutantSource{tool: tool, path: p, report: report, sha256: reportSHA256(report), covers: covers, toolOnly: mutantSeatOff(f.mutantModel)}
+		src = &toolMutantSource{tool: tool, label: label, path: p, report: report, sha256: reportSHA256(report), covers: covers, toolOnly: mutantSeatOff(f.mutantModel)}
 	}
 	if seedText != "" {
 		seed, err := strconv.ParseInt(seedText, 0, 64)
@@ -198,6 +208,9 @@ type toolFileMutants struct {
 	covered bool
 	// line is the scan line: what was taken and what was not, or why none.
 	line string
+	// counts is the same account for the record (ScanRow.ToolMutants): the
+	// line is rendered from it when the file was counted.
+	counts ledger.ToolMutantCounts
 	// none is why the tool gives this file nothing to grade, "" when it
 	// does.
 	none string
@@ -209,7 +222,8 @@ func (s *toolMutantSource) forFile(p string, code []byte, budget int) (toolFileM
 	r := toolFileMutants{src: s}
 	if !s.covers[path.Clean(p)] {
 		r.none = fmt.Sprintf("the %s report %s has no entry for %s", s.tool, s.path, p)
-		r.line = fmt.Sprintf("tool mutants (%s): none — %s", s.tool, r.none)
+		r.line = fmt.Sprintf("tool mutants (%s): none — %s", s.label, r.none)
+		r.counts = ledger.ToolMutantCounts{Path: path.Clean(p), Tool: s.label, Refused: r.none}
 		return r, nil
 	}
 	got, err := mutantsources.ReadStryker(s.report, map[string][]byte{p: code}, func(string) int { return budget }, s.seed)
@@ -217,58 +231,122 @@ func (s *toolMutantSource) forFile(p string, code []byte, budget int) (toolFileM
 		return r, fmt.Errorf("--mutants-from %s:%s: %v", s.tool, s.path, err)
 	}
 	r.covered, r.fm = true, got[path.Clean(p)]
+	r.counts = toolMutantCounts(r.fm)
 	switch {
 	case r.fm.Refused != "":
 		r.none = r.fm.Refused
-		r.line = fmt.Sprintf("tool mutants (%s): refused — %s", s.tool, r.none)
+		r.line = fmt.Sprintf("tool mutants (%s): refused — %s", r.fm.Tool, r.none)
 		return r, nil
 	case len(r.fm.Taken) == 0:
 		r.none = fmt.Sprintf("the %s report leaves nothing to grade in %s: no Survived or NoCoverage mutant corral could apply", s.tool, p)
 	}
-	r.line = toolMutantsLine(r.fm, s.tool)
+	r.line = toolMutantsLine(r.counts)
 	if r.none != "" {
 		r.line += " — " + r.none
 	}
 	return r, nil
 }
 
-// toolMutantsLine is the scan line for a covered file: "tool mutants
-// (stryker@10.0.0): taken T of S survivors + N no-coverage, K killed by the
-// tool and not re-graded, C compile errors, D dropped: <reasons>", with any
-// other status the tool reported counted after it rather than left out.
-// tool names the tool when no taken mutant's source carries its version.
-func toolMutantsLine(fm mutantsources.FileMutants, tool string) string {
-	for _, src := range fm.Sources {
-		if src.Tool != "" {
-			tool = src.Tool
-			break
-		}
+// toolMutantCounts is a covered file's account of the tool's report, for the
+// record and for the scan line rendered from it. A refused file was never
+// counted, so it records the tool and the refusal and no count (R-T4); a
+// counted file's zeros are measured and kept. The tool's statuses are its
+// claims; Taken and the drops are corral's.
+func toolMutantCounts(fm mutantsources.FileMutants) ledger.ToolMutantCounts {
+	c := ledger.ToolMutantCounts{Path: fm.Path, Tool: fm.Tool, Refused: fm.Refused}
+	if fm.Refused != "" {
+		return c
 	}
-	c := fm.Counts
-	var dropped []string
-	droppedN := 0
-	var other []string
-	for k, n := range c {
+	n := func(v int) *int { return &v }
+	seed := fm.Seed
+	c.Seed = &seed
+	c.Taken = n(len(fm.Taken))
+	c.Survived, c.NoCoverage = n(fm.Counts["Survived"]), n(fm.Counts["NoCoverage"])
+	c.Killed, c.CompileError = n(fm.Counts["Killed"]), n(fm.Counts["CompileError"])
+	dropped := 0
+	for k, v := range fm.Counts {
 		switch {
 		case strings.HasPrefix(k, "dropped:"):
-			dropped = append(dropped, fmt.Sprintf("%s %d", strings.TrimPrefix(k, "dropped:"), n))
-			droppedN += n
+			if c.DroppedBy == nil {
+				c.DroppedBy = map[string]int{}
+			}
+			c.DroppedBy[strings.TrimPrefix(k, "dropped:")] = v
+			dropped += v
 		case k == "Survived", k == "NoCoverage", k == "Killed", k == "CompileError":
 		default:
-			other = append(other, fmt.Sprintf("%s %d", k, n))
+			if c.NotRegraded == nil {
+				c.NotRegraded = map[string]int{}
+			}
+			c.NotRegraded[k] = v
 		}
 	}
-	sort.Strings(dropped)
-	sort.Strings(other)
+	c.Dropped = n(dropped)
+	return c
+}
+
+// toolMutantsLine is the scan line for a counted file, rendered from the
+// counts the record carries so the screen and the record cannot disagree:
+// "tool mutants (stryker@10.0.0): taken T of S survivors + N no-coverage, K
+// killed by the tool and not re-graded, C compile errors, D dropped:
+// <reasons>", with any other status the tool reported counted after it
+// rather than left out. Only a counted file has a line from its counts (a
+// refused or uncovered one is a sentence, see forFile), and every count of
+// one is set.
+func toolMutantsLine(c ledger.ToolMutantCounts) string {
 	s := fmt.Sprintf("tool mutants (%s): taken %d of %d survivors + %d no-coverage, %d killed by the tool and not re-graded, %d compile errors, %d dropped",
-		tool, len(fm.Taken), c["Survived"], c["NoCoverage"], c["Killed"], c["CompileError"], droppedN)
-	if len(dropped) > 0 {
-		s += ": " + strings.Join(dropped, ", ")
+		c.Tool, *c.Taken, *c.Survived, *c.NoCoverage, *c.Killed, *c.CompileError, *c.Dropped)
+	if len(c.DroppedBy) > 0 {
+		s += ": " + countsByName(c.DroppedBy)
 	}
-	if len(other) > 0 {
-		s += "; not re-graded: " + strings.Join(other, ", ")
+	if len(c.NotRegraded) > 0 {
+		s += "; not re-graded: " + countsByName(c.NotRegraded)
 	}
 	return s
+}
+
+// countsByName is "name n, name n", sorted by name.
+func countsByName(m map[string]int) string {
+	names := make([]string, 0, len(m))
+	for k := range m {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	parts := make([]string, len(names))
+	for i, k := range names {
+		parts[i] = fmt.Sprintf("%s %d", k, m[k])
+	}
+	return strings.Join(parts, ", ")
+}
+
+// toolCountsCollector gathers the files' accounts as a repo scan's
+// concurrent audits report them. The zero value is ready to use.
+type toolCountsCollector struct {
+	mu     sync.Mutex
+	counts []ledger.ToolMutantCounts
+}
+
+func (c *toolCountsCollector) add(tc ledger.ToolMutantCounts) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.counts = append(c.counts, tc)
+}
+
+func (c *toolCountsCollector) all() []ledger.ToolMutantCounts {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]ledger.ToolMutantCounts(nil), c.counts...)
+}
+
+// toolMutantsJSON is ScanRow.ToolMutants: every file's account, sorted by
+// path, as JSON text. "" when the run had no tool source.
+func toolMutantsJSON(counts []ledger.ToolMutantCounts) string {
+	if len(counts) == 0 {
+		return ""
+	}
+	sorted := append([]ledger.ToolMutantCounts(nil), counts...)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Path < sorted[j].Path })
+	b, _ := json.Marshal(sorted) // strings, ints and string-keyed maps: always marshals
+	return string(b)
 }
 
 // noSourceReason is forFile's verdict on whether the tool gives this file

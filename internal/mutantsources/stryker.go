@@ -61,6 +61,11 @@ type MutantSource struct {
 // and an account of everything else in the report for that file.
 type FileMutants struct {
 	Path string
+	// Tool is the producing tool and its version as the report states them,
+	// e.g. "stryker@10.0.0": set on every file the report covers, refused
+	// ones included, so the record names the tool whether or not anything
+	// was taken.
+	Tool string
 	// Taken are the mutants to grade, each proven a single-region edit of the
 	// audited bytes, at most the file's budget.
 	Taken []adequacy.Mutant
@@ -154,7 +159,7 @@ func ReadStryker(reportJSON []byte, files map[string][]byte, budget func(path st
 	if err != nil {
 		return nil, err
 	}
-	tool := "stryker@" + rep.Framework.Version
+	tool := strykerTool(rep)
 
 	audited := make(map[string][]byte, len(files))
 	for p, b := range files {
@@ -172,7 +177,7 @@ func ReadStryker(reportJSON []byte, files map[string][]byte, budget func(path st
 		if n < 1 {
 			return nil, fmt.Errorf("mutantsources: the mutant budget for %s is %d; it must be at least 1", p, n)
 		}
-		fm := FileMutants{Path: p, Seed: seed}
+		fm := FileMutants{Path: p, Tool: tool, Seed: seed}
 		if refusal := refuseSource(p, rf.Source, bytes); refusal != "" {
 			fm.Refused = refusal
 			out[p] = fm
@@ -252,6 +257,18 @@ func StrykerPaths(reportJSON []byte) ([]string, error) {
 	sort.Strings(out)
 	return out, nil
 }
+
+// StrykerTool is the tool a StrykerJS report names, as every mutant and
+// file account from it records it: "stryker@<version>".
+func StrykerTool(reportJSON []byte) (string, error) {
+	rep, err := parseStryker(reportJSON)
+	if err != nil {
+		return "", err
+	}
+	return strykerTool(rep), nil
+}
+
+func strykerTool(rep strykerReport) string { return "stryker@" + rep.Framework.Version }
 
 // parseStryker reads a report and refuses one whose framework or version
 // this package cannot vouch for.

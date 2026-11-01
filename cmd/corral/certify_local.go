@@ -29,6 +29,7 @@ import (
 	"github.com/pdbethke/corralai/internal/creds"
 	"github.com/pdbethke/corralai/internal/hoststat"
 	"github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/ledger"
 	"github.com/pdbethke/corralai/internal/pairing"
 	"github.com/pdbethke/corralai/internal/queue"
 	"github.com/pdbethke/corralai/internal/repoindex"
@@ -459,6 +460,9 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 	// seedSkipped is what the jail's copy left out as not text, handed back
 	// by the audit (localAuditInput.seedSink) for the ledger entry.
 	var seedSkipped []seedSkip
+	// toolCounts is the file's account of --mutants-from's report, handed
+	// back by the audit (localAuditInput.toolSink) for the scan row.
+	var toolCounts []ledger.ToolMutantCounts
 	// interruptRefused: the run was stopped and refused its record, so the
 	// mutant set — partial, or empty — is not written either.
 	interruptRefused := false
@@ -550,6 +554,7 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 		presetMutants: presetMutants, mutantSink: mutantSink,
 		toolSource: toolSource,
 		seedSink:   func(s []seedSkip) { seedSkipped = s },
+		toolSink:   func(c ledger.ToolMutantCounts) { toolCounts = append(toolCounts, c) },
 		prior:      loadedPrior,
 
 		matrix: *matrixFlag, record: rec, bugCatchDB: bugCatchDBPath, criticScoreDB: criticScoreDBPath,
@@ -585,6 +590,7 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 		mutantsFrom: mutantsFromSHA, recorder: rc,
 		sandbox:     localSandboxIdentity(*jailFlag, stderr),
 		seedSkipped: seedSkippedJSON(seedSkipped),
+		toolMutants: toolMutantsJSON(toolCounts),
 		host:        hostSampler.Stop(),
 	}); berr != nil {
 		fmt.Fprintf(stderr, "corral certify --local: no ledger entry written: %v\n", berr)
@@ -753,6 +759,10 @@ type localAuditInput struct {
 	// line: a repo scan discards each file's stdout and prints progress
 	// through its own note instead.
 	toolNote func(line string)
+	// toolSink, when non-nil, is handed the file's account of the tool's
+	// report (the counts the scan line is rendered from) for the scan row's
+	// ToolMutants. A repo scan collects every file's; --local its one.
+	toolSink func(ledger.ToolMutantCounts)
 	// prior, when non-nil, is what earlier runs tried (--prior); resolved
 	// per file against ITS bytes in newAuditRunSpec — see internal/prior.
 	prior *prior.Prior
@@ -2191,6 +2201,9 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 		fmt.Fprintln(stdout, tm.line)
 		if in.toolNote != nil {
 			in.toolNote(tm.line)
+		}
+		if in.toolSink != nil {
+			in.toolSink(tm.counts)
 		}
 		if aerr := tm.apply(&rs); aerr != nil {
 			return zero, aerr

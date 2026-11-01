@@ -105,7 +105,7 @@ func buildFieldTiers() map[[2]string]FieldTier {
 	add("ScanRow", TierMeasured, "", `Audited Candidates TotalFiles Passed TreeDirty PreflightRan AllCandidates Top TreesRequested
 		Scope Substrate SandboxBackend SandboxImage ModelSet CorralVersion EngineVersion Cores SeedSkipped UnitPass TestCommand Runner Settings Toolchains HostNotMeasured SelectionReused
 		LoadStart LoadEnd LoadPeak MemAvailableStartBytes PeakRSSBytes CPUMillis
-		Inventory ShadowDraw MaxTokensReached
+		Inventory ShadowDraw MaxTokensReached ToolMutants
 		PushedBy Host SourcePushed StartedAt FinishedAt TotalMillis SelectionMillis ModelCalls InputTokens OutputTokens`)
 	add("ScanRow", TierMeta, noteRunAccount, "PreflightNote")
 
@@ -133,6 +133,10 @@ func buildFieldTiers() map[[2]string]FieldTier {
 	add("MutantRow", TierKey, "", "MutantID ParentSHA256 Path Repo RunURL ScanID StatementSHA256")
 	add("MutantRow", TierMeasured, "", "Code DurationMillis InvalidReason KilledBy Outcome Proven ProvenByAuthoredAlone SelectionRule Shape SpanEnd SpanStart TestsRun")
 	add("MutantRow", TierMeasured, "", "GeneratorModel")
+	// Source, SourceTool and SourceOperator are what corral loaded the mutant
+	// from; SourceStatus is the tool's own verdict on it.
+	add("MutantRow", TierMeasured, "", "Source SourceOperator SourceTool")
+	add("MutantRow", TierDeclared, "the tool's own claim; Outcome is corral's measurement", "SourceStatus")
 	add("MutantAttemptRow", TierKey, "", "Commit MutantID Path Repo")
 	add("MutantAttemptRow", TierMeasured, "", "Outcome Model Role Shadow")
 

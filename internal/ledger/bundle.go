@@ -245,6 +245,56 @@ type ScanRow struct {
 	// MaxTokensReached is whether the --max-tokens cap was reached. nil when no
 	// cap was set (the cap itself is in Settings), never false for "no cap".
 	MaxTokensReached *bool `json:",omitempty"`
+	// ToolMutants is each audited file's account of a mutation tool's report
+	// (--mutants-from), as JSON TEXT: an array of ToolMutantCounts sorted by
+	// path. Text rather than a list because a ScanRow is compared whole. Each
+	// number is the one the file's "tool mutants" scan line printed, rendered
+	// from the same value. Empty on a run with no tool source and on every
+	// row written before it.
+	ToolMutants string `json:",omitempty"`
+}
+
+// ToolMutantCounts is one audited file's account of a mutation tool's
+// report: what corral took to grade, what the tool said about the rest, and
+// what corral dropped and why. It is the per-source "waste" half of the
+// statistics (spec 2026-11-01-tool-mutant-sources-design.md §3); the graded
+// half is the MutantRows, whose Source names the tool.
+//
+// Every count is a pointer: a file whose report entry was refused (or that
+// the report does not mention) was never counted, so its counts are absent,
+// never 0 (phase-1 rule R-T4). A counted file's zeros are measured and kept.
+type ToolMutantCounts struct {
+	Path string `json:"path"`
+	// Tool is the tool and its version as the report states them, e.g.
+	// "stryker@10.0.0".
+	Tool string `json:"tool"`
+	// Report names the report the account was read from, as
+	// "sha256:<hex>" of its bytes: what a reader needs to replay Seed's
+	// sample against the same report. Set on every account, refusals and
+	// cache-served ones included; the report's path is never recorded. A
+	// key (it measures nothing), said in the ToolMutants tier note.
+	Report string `json:"report,omitempty"`
+	// Taken is how many of the file's mutants corral graded.
+	Taken *int `json:"taken,omitempty"`
+	// Survived, NoCoverage, Killed and CompileError are the TOOL's statuses,
+	// counted from its report: its claims, not corral's measurement.
+	Survived     *int `json:"survived,omitempty"`
+	NoCoverage   *int `json:"no_coverage,omitempty"`
+	Killed       *int `json:"killed,omitempty"`
+	CompileError *int `json:"compile_error,omitempty"`
+	// Dropped is how many Survived or NoCoverage mutants were not taken, and
+	// DroppedBy the same count by reason (over-budget, anchor-not-unique, ...).
+	Dropped   *int           `json:"dropped,omitempty"`
+	DroppedBy map[string]int `json:"dropped_by,omitempty"`
+	// NotRegraded is every other status the tool reported (Timeout,
+	// RuntimeError, Ignored, ...), counted and not graded.
+	NotRegraded map[string]int `json:"not_regraded,omitempty"`
+	// Seed is the seed the file's sample was drawn with; --tool-sample-seed
+	// replays it.
+	Seed *int64 `json:"seed,omitempty"`
+	// Refused says why none of the file's tool mutants could be used: the
+	// report has no entry for it, or its source is not the audited bytes.
+	Refused string `json:"refused,omitempty"`
 }
 
 // PushedByCertify is the ScanRow.PushedBy of a run's own entry.
@@ -295,6 +345,18 @@ type MutantRow struct {
 	// fault (from the hunk) and the seat that planted it.
 	Shape          string
 	GeneratorModel string
+	// Source is where the mutant came from: "model" (the generator seat
+	// planted it; GeneratorModel names the seat) or "tool" (a mutation
+	// tool's report supplied it; GeneratorModel is empty). SourceTool is the
+	// tool and its version, SourceOperator the tool's name for the mutation
+	// and SourceStatus what the tool said happened to it, e.g. "Survived" —
+	// the tool's claim, beside Outcome, corral's measurement. All four are
+	// omitted where the verdict recorded no source (a --mutants replay handed
+	// none, and every row written before them), never guessed.
+	Source         string `json:",omitempty"`
+	SourceTool     string `json:",omitempty"`
+	SourceOperator string `json:",omitempty"`
+	SourceStatus   string `json:",omitempty"`
 	// Code is the mutant's source. It IS the audited code, so it is written
 	// only when the bundle says --push-source was given.
 	Code            string

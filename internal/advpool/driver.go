@@ -19,6 +19,7 @@ import (
 	golang "github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/matrix"
 	"github.com/pdbethke/corralai/internal/modelcorr"
+	"github.com/pdbethke/corralai/internal/mutantsources"
 	"github.com/pdbethke/corralai/internal/queue"
 	"github.com/pdbethke/corralai/internal/repoindex"
 )
@@ -925,6 +926,16 @@ type Verdict struct {
 	// both construction paths carry it, and JSON-tagged, so the --local
 	// signed digest covers it.
 	SeatTools map[string]string `json:"seat_tools,omitempty"`
+	// MutantSources is where each mutant of the exam came from (graded, or
+	// refused by the compile gate, or unmeasured — so waste can be counted
+	// per source too), keyed by mutant ID: Kind model (with the generator seat's model) for what this run's
+	// generator planted, Kind tool (with the tool's own operator and status,
+	// which are its claims) for what a mutation tool's report supplied
+	// (RunSpec.ToolMutants, or a tool-only PresetMutants run). Exactly the
+	// exam's IDs, never one more. nil on a replay handed no sources and on a
+	// run that never assembled an exam. Set on BOTH construction paths
+	// (tickAggregate and timeoutVerdict) from runState.mutantSources.
+	MutantSources map[string]mutantsources.MutantSource `json:"mutant_sources,omitempty"`
 	// PromptShape discloses what a mutant-generator shard actually SAW:
 	// "chunk" when every shard of this run showed only its own symbols'
 	// bodies (see advpool's shardCode), "file" when even one shard fell back
@@ -1356,6 +1367,11 @@ type runState struct {
 	// nothing, so it stays "").
 	promptShape string
 
+	// mutantSources is Verdict.MutantSources, rebuilt from the assembled
+	// exam on every tickDevAdequacy entry (that function re-runs until the
+	// dev suite is scored, so it is recomputed, never accumulated).
+	mutantSources map[string]mutantsources.MutantSource
+
 	// shardStats is per-shard generation outcome, keyed by shard index — the
 	// metrics substrate. Recorded per shard and NEVER summed: summing collapses
 	// N seats into one row and makes an underperforming seat invisible by
@@ -1727,6 +1743,11 @@ func (d *Driver) StartRun(missionID int64, rs RunSpec, sigs []repoindex.Signatur
 	// is the value the scorer and validator write with, so the check and the
 	// write cannot disagree; a zero one (no door computed it) fails closed.
 	if err := golang.CheckTestLanding(rs.CodePath, rs.Landing.Landing); err != nil {
+		return fmt.Errorf("advpool: %w", err)
+	}
+	// And a spec whose handed-in mutants and their sources disagree: see
+	// checkMutantSources.
+	if err := checkMutantSources(rs); err != nil {
 		return fmt.Errorf("advpool: %w", err)
 	}
 	d.mu.Lock()
@@ -2317,6 +2338,9 @@ func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runS
 	var mutants []adequacy.Mutant
 	probed := 0
 	regionsTotal := 0
+	// generated names the mutants THIS run's generator planted, the ones
+	// whose source is the generator seat's model (examSources).
+	generated := map[string]bool{}
 
 	if run.rs.PresetMutants != nil {
 		// A replayed set IS the exam, already assembled. regionsTotal and
@@ -2420,6 +2444,7 @@ func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runS
 					m.ID = fmt.Sprintf("s%d/%s", shardIdx, m.ID)
 				}
 				mutants = append(mutants, m)
+				generated[m.ID] = true
 			}
 			if sharded {
 				st := run.shardStats[shardIdx]
@@ -2429,9 +2454,33 @@ func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runS
 			}
 		}
 		regionsTotal = len(mgs)
+
+		// A tool's mutants join HERE, where the generator's become the exam:
+		// after the shard prefixing (their t/<tool>/ IDs are already unique)
+		// and before the duplicate count, so a tool mutant identical to a
+		// model one is counted like any other repeat. Neither copy leaves the
+		// exam: adequacy.Score grades the edit once and attributes the outcome
+		// to both, so each keeps its own ID and source. Appended after the
+		// drop bookkeeping above too, so a generator that planted nothing or
+		// lost every region still leaves the tool's mutants to grade.
+		//
+		// An ID is a mutant's identity on the record. Generated IDs are
+		// corral-assigned (m<n>, s<k>/m<n>) and cannot reach t/, so a clash
+		// is a broken producer, refused rather than graded as two edits
+		// under one name.
+		for _, m := range run.rs.ToolMutants {
+			if generated[m.ID] {
+				return fmt.Errorf("advpool: run %d: generated mutant ID %q collides with a tool mutant's", missionID, m.ID)
+			}
+			mutants = append(mutants, m)
+		}
 	}
 	run.regionsTotal = regionsTotal
 	run.regionsProbed = probed
+	// Where every mutant of the exam came from — recomputed on each entry,
+	// like `mutants` itself, so a re-entered tick never carries a source for
+	// a mutant this pass did not assemble.
+	run.mutantSources = examSources(mutants, run.rs.MutantSources, generated, d.Assign[RoleMutantGenerator])
 
 	// TWO IDENTICAL HUNKS ARE ONE MEASUREMENT, and scoring charges a whole
 	// suite run for each. Sharded generation aims several seats at overlapping
@@ -3030,6 +3079,7 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	v.RegionsProbed = run.regionsProbed
 	v.DroppedRegions = run.droppedRegions
 	v.DuplicateMutants = run.dupMutants
+	v.MutantSources = run.mutantSources
 	// The evidence behind ProvenMissed rides onto the verdict beside the count
 	// itself — set here, with the other post-aggregate fields, rather than
 	// widening aggregate()'s already-long signature.
@@ -3646,6 +3696,9 @@ func (d *Driver) timeoutVerdict(run *runState) Verdict {
 	v.RegionsProbed = run.regionsProbed
 	v.DroppedRegions = run.droppedRegions
 	v.DuplicateMutants = run.dupMutants
+	// Where the graded mutants came from: a run that assembled its exam and
+	// only then stalled graded mutants from a known source, and must say so.
+	v.MutantSources = run.mutantSources
 	v.PromptShape = run.promptShape
 	v.MutantBudget = run.mutantBudget
 	v.ModelsByRole, v.ShadowSelection, v.SeatTools = run.signedSeats(d.Assign)
@@ -3718,7 +3771,14 @@ func (d *Driver) feedLeaderboard(v Verdict, testWriterMoot bool, criticObs []Cri
 	// at all — whether those mutants then SURVIVE is the dev suite's business,
 	// not the generator's, so a perfect suite killing them is not a generator
 	// failure.
-	d.Leaderboard.Record(v.ModelsByRole[RoleMutantGenerator], RoleMutantGenerator, outcome(v.MutantsTotal > 0))
+	//
+	// "Its" mutants: with a tool source in the exam, only the ones it
+	// planted count (generatorYield), so a generator that planted nothing
+	// fails however many tool mutants graded; and a tool-only run, which
+	// seated no generator, records nothing for one.
+	if planted, _, sat := generatorYield(v); sat {
+		d.Leaderboard.Record(v.ModelsByRole[RoleMutantGenerator], RoleMutantGenerator, outcome(planted > 0))
+	}
 	// test-critic: were its findings RIGHT? This used to be "did it flag
 	// anything", which rewarded noise — a critic whose two findings were
 	// both refuted by execution scored a pass, and one that correctly

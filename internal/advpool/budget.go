@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/pdbethke/corralai/internal/mutantsources"
 	"github.com/pdbethke/corralai/internal/repoindex"
 )
 
@@ -256,6 +257,38 @@ func splitByComplexity(shards []Shard, total int) {
 	for k := 0; k < spare-given; k++ {
 		shards[rems[k%n].i].Mutants++
 	}
+}
+
+// WithTool is String with the exam's tool share said beside it: on a
+// both-sources run (--mutants-from beside a generator seat) the tool's
+// sample is capped by the SAME per-file budget the generator was asked for,
+// fitted or not, so the exam can be up to Total+tool mutants, which String
+// alone would understate. tool <= 0 is String unchanged. The budget rule is
+// not changed by this; it is said.
+func (b MutantBudget) WithTool(tool int) string {
+	if tool <= 0 {
+		return b.String()
+	}
+	return fmt.Sprintf("%d model + %d tool, an exam of up to %d (the tool's sample uses the same per-file cap as the model); model: %s",
+		b.Total, tool, b.Total+tool, b.String())
+}
+
+// ToolShare is how many of a verdict's exam mutants came from a tool
+// source BESIDE a seated generator: the number WithTool adds to the model's
+// budget. 0 on a tool-only run (no generator seat, RegionsTotal 0), whose
+// budget line already says the budget capped the tool's sample, and on a
+// run with no tool source.
+func ToolShare(v Verdict) int {
+	if v.RegionsTotal == 0 {
+		return 0
+	}
+	n := 0
+	for _, s := range v.MutantSources {
+		if s.Kind == mutantsources.KindTool {
+			n++
+		}
+	}
+	return n
 }
 
 // String is the one-line disclosure every printer uses, so the header, the

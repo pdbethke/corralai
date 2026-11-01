@@ -220,6 +220,11 @@ proven test is printed at the end of the report with "add it to your suite", and
 `corral scans show <id> --evidence` prints it again later; corral does not write
 it into your repository or open a pull request.
 
+`certify` can also grade a mutation tool's mutants: `--mutants-from stryker:<report.json>`
+adds a StrykerJS report's survivors to the exam, or with `--mutant-model off` is the
+whole exam. Corral re-grades every one itself. See
+[docs/corral/mutant-sources.md](docs/corral/mutant-sources.md).
+
 That's four seats, not three: a repo scan derives a goal per file, so
 `--derive-model` is required whenever you're not supplying `--goals`
 yourself — without it corral refuses with "no goal source" before it does

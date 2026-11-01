@@ -647,6 +647,14 @@ type Mutant struct {
 	// through" a query. NULL on rows from before these columns.
 	Shape          string
 	GeneratorModel string
+	// Source, SourceTool, SourceOperator and SourceStatus say where the
+	// mutant came from: "model" or "tool", and for a tool mutant the tool,
+	// its operator and its own status (its claim). See ledger.MutantRow.
+	// Empty where the verdict recorded no source.
+	Source         string
+	SourceTool     string
+	SourceOperator string
+	SourceStatus   string
 	// ProvenByAuthoredAlone marks a survivor the pool's AUTHORED test killed
 	// where the dev suite's own tests never did — the strict subset of
 	// Proven that is a demonstrated gap rather than a demonstrated kill.

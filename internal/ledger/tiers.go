@@ -108,6 +108,9 @@ func buildFieldTiers() map[[2]string]FieldTier {
 		Inventory ShadowDraw MaxTokensReached
 		PushedBy Host SourcePushed StartedAt FinishedAt TotalMillis SelectionMillis ModelCalls InputTokens OutputTokens`)
 	add("ScanRow", TierMeta, noteRunAccount, "PreflightNote")
+	// Measured as a whole (corral read the report and counted it), with what
+	// it counts said: the per-status counts are the tool's claims.
+	add("ScanRow", TierMeasured, "per-status counts are the tool's own claims about its mutants; Taken and Dropped are corral's; Report (the report's sha256) is a key", "ToolMutants")
 
 	// Row: one per audited file.
 	add("Row", TierKey, "", "Repo Commit Path ScanID RunURL StatementSHA256 ParentSHA256 CacheKey PriorDigest ReusedFromScanID")
@@ -133,6 +136,13 @@ func buildFieldTiers() map[[2]string]FieldTier {
 	add("MutantRow", TierKey, "", "MutantID ParentSHA256 Path Repo RunURL ScanID StatementSHA256")
 	add("MutantRow", TierMeasured, "", "Code DurationMillis InvalidReason KilledBy Outcome Proven ProvenByAuthoredAlone SelectionRule Shape SpanEnd SpanStart TestsRun")
 	add("MutantRow", TierMeasured, "", "GeneratorModel")
+	// Source is what corral loaded the mutant as (model or tool): measured.
+	// SourceTool and SourceOperator are read from the tool's report, which
+	// anyone can edit, so they are the report's claims (founder, 2026-11-01);
+	// SourceStatus is the tool's own verdict on the mutant.
+	add("MutantRow", TierMeasured, "", "Source")
+	add("MutantRow", TierDeclared, "read from the tool's report: the report's own claim about which tool and operator made this mutant", "SourceOperator SourceTool")
+	add("MutantRow", TierDeclared, "the tool's own claim; Outcome is corral's measurement", "SourceStatus")
 	add("MutantAttemptRow", TierKey, "", "Commit MutantID Path Repo")
 	add("MutantAttemptRow", TierMeasured, "", "Outcome Model Role Shadow")
 

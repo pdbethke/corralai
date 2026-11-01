@@ -122,7 +122,10 @@ type advVerdict struct {
 	WriterProviderFailed bool `json:"writer_provider_failed,omitempty"`
 	// The exam's size and reach, and whether it was too small to certify —
 	// see advpool.Verdict's MutantBudget, ExamCoverage and ExamIndicative.
-	MutantBudget     advpool.MutantBudget `json:"mutant_budget,omitempty"`
+	MutantBudget advpool.MutantBudget `json:"mutant_budget,omitempty"`
+	// ToolShare is advpool.ToolShare: the exam's tool mutants beside the
+	// generator, said beside MutantBudget (WithTool).
+	ToolShare        int                  `json:"tool_share,omitempty"`
 	ExamCoverage     advpool.ExamCoverage `json:"exam_coverage,omitempty"`
 	ExamIndicative   bool                 `json:"exam_indicative,omitempty"`
 	IndicativeReason string               `json:"indicative_reason,omitempty"`
@@ -507,7 +510,7 @@ func renderAdvVerdict(w io.Writer, codePath string, v advVerdict) {
 		fmt.Fprintf(w, "  INDICATIVE:    %s — needs-review for that reason, not a weak suite\n", v.IndicativeReason)
 	}
 	if v.MutantBudget.Total > 0 {
-		fmt.Fprintf(w, "  mutants:       %s\n", v.MutantBudget)
+		fmt.Fprintf(w, "  mutants:       %s\n", v.MutantBudget.WithTool(v.ToolShare))
 	}
 	if c := v.ExamCoverage; c.Measured {
 		fmt.Fprintf(w, "  reach:         %d of %d symbols", c.SymbolsProbed, c.Symbols)

@@ -8,12 +8,14 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"sort"
 	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
 
 	"github.com/pdbethke/corralai/internal/auditpush"
+	"github.com/pdbethke/corralai/internal/mutantsources"
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/scanstore"
 )
@@ -259,6 +261,16 @@ func runScansShow(args []string, open func(string) (scansReader, error), stdout,
 			fmt.Fprintln(kw, l)
 		}
 		kw.Flush()
+	}
+
+	// WHERE EACH MUTANT CAME FROM, when the record says: a count per source,
+	// and each tool mutant's own status beside corral's outcome. Silent on
+	// a scan whose rows record no source — see mutantSourceListing.
+	if lines := mutantSourceListing(mutants); len(lines) > 0 {
+		fmt.Fprintln(stdout, "\nmutant sources:")
+		for _, l := range lines {
+			fmt.Fprintln(stdout, l)
+		}
 	}
 
 	// WHERE THE MINUTES WENT, one line per file, through the SAME helper the
@@ -562,6 +574,71 @@ func killedByListing(ms []scanstore.Mutant) []string {
 		lines = append(lines, fmt.Sprintf("  %s\t%s\t%s", m.Path, m.MutantID, m.KilledBy))
 	}
 	return lines
+}
+
+// mutantSourceListing says where a scan's graded mutants came from, from the
+// rows' own Source fields: one line per file and source (the generator
+// model, or the tool and its version) with how many were graded, survived
+// and were proven, then one line per tool mutant with the tool's status
+// beside corral's outcome — the tool's claim beside the measurement. nil
+// when no row records a source (a scan from before sources, or a --mutants
+// replay handed none), so nothing is printed for what was never recorded.
+func mutantSourceListing(ms []scanstore.Mutant) []string {
+	type key struct{ path, source, who string }
+	type tally struct{ graded, survived, proven int }
+	tallies := map[key]*tally{}
+	var keys []key
+	var tool []string
+	for _, m := range ms {
+		if m.Source == "" {
+			continue
+		}
+		who := m.GeneratorModel
+		if m.Source == mutantsources.KindTool {
+			who = m.SourceTool
+		}
+		k := key{m.Path, m.Source, who}
+		t := tallies[k]
+		if t == nil {
+			t = &tally{}
+			tallies[k] = t
+			keys = append(keys, k)
+		}
+		t.graded++
+		if m.Outcome == "survived" {
+			t.survived++
+		}
+		if m.Proven {
+			t.proven++
+		}
+		if m.Source == mutantsources.KindTool {
+			outcome := m.Outcome
+			if m.Proven {
+				outcome += ", proven"
+			}
+			tool = append(tool, fmt.Sprintf("  %s  %s  %s  tool said %s  corral: %s", m.Path, m.MutantID, m.SourceOperator, m.SourceStatus, outcome))
+		}
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		a, b := keys[i], keys[j]
+		if a.path != b.path {
+			return a.path < b.path
+		}
+		if a.source != b.source {
+			return a.source < b.source
+		}
+		return a.who < b.who
+	})
+	lines := make([]string, 0, len(keys)+len(tool))
+	for _, k := range keys {
+		t := tallies[k]
+		lines = append(lines, fmt.Sprintf("  %s  %s %s  graded %d  survived %d  proven %d", k.path, k.source, k.who, t.graded, t.survived, t.proven))
+	}
+	sort.Strings(tool)
+	return append(lines, tool...)
 }
 
 // scanFileSelectionWith renders WHICH MEASUREMENT a row's kill rate is, in one

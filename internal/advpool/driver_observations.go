@@ -94,18 +94,27 @@ func bugCatchObservations(run *runState, v Verdict) []BugCatchObservation {
 		})
 	}
 	// mutant-generator: one row PER SHARD. Never summed — see shardStat.
-	if len(run.shardStats) == 0 {
+	//
+	// Its planted and survived are ITS mutants only (generatorYield): with a
+	// tool source in the exam, the tool's mutants and survivors are not the
+	// model's potency. A tool-only run seated no generator and gets no row.
+	// With no tool source these are v.MutantsTotal and v.Survivors exactly.
+	genPlanted, genSurvived, genSat := generatorYield(v)
+	switch {
+	case !genSat:
+	case len(run.shardStats) == 0:
 		out = append(out, BugCatchObservation{
 			Model: v.ModelsByRole[RoleMutantGenerator], Role: RoleMutantGenerator,
-			MutantsPlanted: v.MutantsTotal, MutantsSurvived: v.Survivors,
+			MutantsPlanted: genPlanted, MutantsSurvived: genSurvived,
 			TestComplexity: run.testComplexity,
 		})
-	} else {
+	default:
 		// MutantsSurvived is measured against the MERGED mutant set (Scorer.Score
 		// runs once over the union of every shard's mutants — see
 		// tickDevAdequacy) — there is no sound way to attribute which shard's
 		// mutants specifically survived, so it CANNOT be split per shard without
-		// inventing a false per-shard attribution. Record v.Survivors on exactly
+		// inventing a false per-shard attribution. Record the generator's
+		// survivors (genSurvived) on exactly
 		// ONE row — the lowest NON-DROPPED shard index, never just the lowest
 		// index — so the run-level aggregate (SUM(mutants_survived) for this
 		// role) stays exact; every other shard row carries 0. A dropped seat
@@ -113,12 +122,19 @@ func bugCatchObservations(run *runState, v Verdict) []BugCatchObservation {
 		// mutants), so parking the run's survivor count there would produce an
 		// internally incoherent row (planted=0, survived>0) AND make the
 		// natural analytical filter "exclude shards that never ran" silently
-		// zero the run's adversary-potency aggregate. This is always safe: a
-		// run where every shard dropped produces zero mutants and errors out
-		// (see the len(mutants)==0 guard in tickDevAdequacy) before ever
-		// reaching a verdict, so there is always at least one non-dropped shard
-		// here. Do NOT "fix" this into an even/proportional split across
-		// shards — that would be a fabricated number, not a measured one.
+		// zero the run's adversary-potency aggregate.
+		//
+		// EVERY shard can be dropped here. Without a tool source such a run
+		// has no mutants and errors out at tickDevAdequacy's len(mutants)==0
+		// guard; WITH one (RunSpec.ToolMutants) the tool's mutants still
+		// grade and the run reaches a verdict. Then survivorIdx stays -1 and
+		// no row carries survivors — which is the measurement, not a gap:
+		// genSurvived counts only the generator's own mutants, and a
+		// generator whose every shard dropped graded none, so it is 0. Every
+		// row reads dropped, planted 0, survived 0: what the generator did.
+		//
+		// Do NOT "fix" this into an even/proportional split across shards —
+		// that would be a fabricated number, not a measured one.
 		survivorIdx := -1
 		for _, i := range sortedShardIndexes(run.shardStats) {
 			if !run.shardStats[i].dropped {
@@ -140,7 +156,7 @@ func bugCatchObservations(run *runState, v Verdict) []BugCatchObservation {
 				Dropped:          st.dropped,
 			}
 			if i == survivorIdx {
-				obs.MutantsSurvived = v.Survivors
+				obs.MutantsSurvived = genSurvived
 			}
 			out = append(out, obs)
 		}

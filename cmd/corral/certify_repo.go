@@ -71,7 +71,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// Per-role models. `certify --local` has had these all along; without them
 	// here a repo scan was locked to the Claude defaults with no override.
 	writerModelFlag := fs.String("writer-model", "", "model for the test-writer role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json), a concrete model name, or an agent seat (`codex`, `claude-code`, `antigravity`, or your own CORRALAI_AGENT_<NAME>)")
-	mutantModelFlag := fs.String("mutant-model", "", "model for the mutant-generator role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json), a concrete model name, or an agent seat (`codex`, `claude-code`, `antigravity`, or your own CORRALAI_AGENT_<NAME>)")
+	mutantModelFlag := fs.String("mutant-model", "", "model for the mutant-generator role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json), a concrete model name, or an agent seat (`codex`, `claude-code`, `antigravity`, or your own CORRALAI_AGENT_<NAME>). \"off\" leaves the seat empty, and is allowed only with --mutants-from, whose tool mutants are then the whole exam")
 	criticModelFlag := fs.String("critic-model", "", "model (or agent seat) for the test-critic role, which must differ from the writer's; \"off\" disables the critic entirely (it is advisory and never gates the verdict, so a single-vendor run with only one usable model can drop it). No default")
 	scopeTestsFlag := fs.Bool("scope-tests", false, "REMOVED — see --whole-suite. Selection by coverage evidence is now the default")
 	wholeSuiteFlag := fs.Bool("whole-suite", false, "grade every mutant against the project's WHOLE suite instead of the tests that demonstrably execute each file (the default, from one instrumented run per scan). Costs O(mutants x whole-suite runtime) per file and answers a different question — 'did ANY test catch it' rather than 'do this file's tests test it'. The verdict records which was used")
@@ -107,6 +107,9 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	noLedgerFlag := fs.Bool("no-ledger", false, "write no ledger entry and read no prior from the default ledger directory (an explicit --prior still applies)")
 	priorFlag := fs.String("prior", "", "what earlier runs already tried, so this run plants DIFFERENT faults: a corral-mutants document (see --record-mutants), a ledger directory (see --ledger), or a directory holding any number of either — a document brings the hunks, a ledger the outcomes, merged per edit. Applied only to a file whose bytes are EXACTLY what the prior was recorded against; a file the prior knows under other bytes gets none, and the report says so. A run handed a prior sits a different exam from one without — the verdict, the ledger and the signed statement carry priorsApplied and the prior's digest, and the digest is in the cache key, so a repeat audit never reads as the tests changing when only the exam did")
 	mutantsFlag := fs.String("mutants", "", "REPLAY a recorded mutant set (see --record-mutants) instead of generating one: every audited file is graded against exactly the mutants in this file, and not one generator model call is made. Mutants are authored by a model, so an ordinary run re-draws the exam every time and two runs of the same audit are not two samples of one measurement — pin the set and a change to anything ELSE becomes measurable. Every selected file must appear in the set with the SAME bytes it was recorded from; a missing file or a changed one is refused (exit 2) up front, never half-replayed. Reads a corral-mutants-2 document, or an older corral-mutants-1 one, whose whole-file mutants still replay byte-for-byte.")
+	var mutantsFromFlag stringSlice
+	fs.Var(&mutantsFromFlag, "mutants-from", mutantsFromHelp)
+	toolSeedFlag := fs.String("tool-sample-seed", "", toolSampleSeedHelp)
 	recordMutantsFlag := fs.String("record-mutants", "", "write the mutants this scan actually GRADED to this file, as a replayable corral-mutants-2 document — one entry per audited file, each mutant its SEARCH/REPLACE hunk, tied to the sha256 of the source it was derived from. Written even when the scan's gates fail: a red verdict is still a recorded exam. A v2 document re-recorded from a --mutants replay of an older corral-mutants-1 set contains that set's WHOLE-FILE entries, not hunks — the run graded what was recorded, and re-recording it does not manufacture anchors it never had")
 	writerModeFlag := fs.String("writer-mode", "", "how the test-writer attacks a file's survivors: `per-survivor` (the default) makes ONE call per survivor — each carrying the file once as a cacheable shared prefix plus that survivor's diff, each repaired on its own budget and each PROVEN ALONE against its own mutant — or `batched`, the original shape: one call carrying every survivor, one repair budget for the file, one proof pass over all of them. Nothing measured changes between them (a survivor is proven iff an authored test kills it alone and passes on the original, either way); what changes is that one unbuildable test no longer spends the whole file's retries and takes every other survivor down with it. The verdict, the report line, the ledger and the attestation all record which mode earned the numbers. Each survivor's proof in per-survivor mode runs its OWN compliant baseline (a compliant pass plus a canary, per seat), so a file with N survivors pays N baselines where batched paid one: on a repo whose suite takes a minute, prefer --writer-mode batched or expect N baselines' worth of wall clock.")
 
@@ -142,6 +145,15 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	writerMode, wmErr := advpool.ResolveWriterMode(*writerModeFlag)
 	if wmErr != nil {
 		fmt.Fprintf(stderr, "%s: %v\n", "corral certify --repo", wmErr)
+		return 2
+	}
+	// --mutants-from and --mutant-model off, checked against each other and
+	// against --mutants before anything is read or spent.
+	toolSource, tsErr := resolveMutantsFrom(mutantsFromFlags{
+		values: mutantsFromFlag, seed: *toolSeedFlag, mutantModel: *mutantModelFlag, replay: *mutantsFlag,
+	}, stdout)
+	if tsErr != nil {
+		fmt.Fprintf(stderr, "corral certify --repo: %v\n", tsErr)
 		return 2
 	}
 	if *runnerFlag != "" {
@@ -747,6 +759,21 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprintf(stdout, "  replaying a recorded mutant set for %d file(s) from %s — no mutant-generator model call will be made\n", len(presetMutants), p)
 	}
+	// --mutants-from: a report that covers none of the selected files would
+	// add nothing to any of them, so it is refused here, before any
+	// model-facing step, as a stale --mutants set is. Each file's own
+	// coverage and bytes are checked when it runs (localExecutor.Execute).
+	if toolSource != nil && len(selected) > 0 {
+		selPaths := make([]string, 0, len(selected))
+		for _, c := range selected {
+			selPaths = append(selPaths, c.Path)
+		}
+		sort.Strings(selPaths)
+		if err := toolSource.checkCoversSome(selPaths); err != nil {
+			fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
+			return 2
+		}
+	}
 	// EVERY scan-fatal preflight runs BEFORE the first derivation, because
 	// derivation is where the money goes: EmitJobs below performs up to --top
 	// sequential model calls, and an operator on a host that cannot sandbox
@@ -831,6 +858,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			ledgerDir = defaultLedgerDir(*repoDir)
 		}
 		ex.presetMutants = presetMutants
+		ex.toolSource = toolSource
 		ex.mutantSink = mutantRecorder.sink
 		// --prior: loaded once, resolved per file against its bytes. A path
 		// that cannot be read refuses the scan up front rather than running
@@ -877,6 +905,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// scan-wide facts too.
 		if _, err := resolveAuditRoles(localAuditInput{
 			cmdName:           "corral certify --repo",
+			toolSource:        toolSource,
 			writerModel:       *writerModelFlag,
 			mutantModel:       *mutantModelFlag,
 			criticModel:       *criticModelFlag,
@@ -1310,7 +1339,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// carries the flags that change what a mutant run against a given file
 	// MEASURES, not which files get audited. See auditConfigKey for the
 	// inclusion/exclusion rationale.
-	auditConfig := auditConfigKey(*wholeSuiteFlag, selectionMethod, checkArgv, mutantsFromSHA, writerMode)
+	auditConfig := auditConfigKey(*wholeSuiteFlag, selectionMethod, checkArgv, mutantsFromSHA, writerMode, toolSource.cacheKey())
 
 	// testSurfacePaths has to STAT the testdata entries it admits, and every
 	// read a scan performs is confined to the repository through an *os.Root —
@@ -1631,7 +1660,18 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	if *noVerdictCacheFlag || *noLedgerFlag {
 		verdictCacheDir = ""
 	}
-	results = reposcan.Scan(auditCtx, jobs, ex, newLedgerCache(verdictCacheDir, stderr), workers)
+	verdictCache := newLedgerCache(verdictCacheDir, stderr)
+	results = reposcan.Scan(auditCtx, jobs, ex, verdictCache, workers)
+	// A served file ran no audit, so its tool account comes from the entry
+	// that earned its verdict (ledgerCache.toolAccount).
+	for _, r := range results {
+		if !r.CacheHit || ex == nil {
+			continue
+		}
+		if acc, ok := verdictCache.toolAccount(r.Job.CacheKey); ok {
+			ex.toolCounts.add(acc)
+		}
+	}
 	// An operator's interrupt records nothing, for every seat type: no
 	// report of files that were stopped, no attestation, no ledger entry,
 	// no push. Checked again right before those writes, for a signal that
@@ -1853,6 +1893,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			PushedBy:  auditpush.PushedByCertify,
 			TreeDirty: auditedTreeDirty, RepoIdentity: repoIdentity(*repoDir),
 			Sandbox: ex.sandboxIdentity(), SeedSkipped: ex.seedSkipped(),
+			ToolMutants: ex.toolMutants(),
 		})
 	// The hunks onto the mutant rows: `code` is the mutant's source, and
 	// the custody rule already withholds it (BlankUnpushedSource) unless
@@ -2096,8 +2137,16 @@ func fileSelectionKey(sel lang.Selection) string {
 // Bias when adding to this list: include. Over-inclusion causes a needless
 // miss, which costs money. Under-inclusion serves a stale verdict, which
 // signs an unmeasured claim.
-func auditConfigKey(wholeSuite bool, method string, checkArgv []string, mutantsFrom, writerMode string) string {
+func auditConfigKey(wholeSuite bool, method string, checkArgv []string, mutantsFrom, writerMode, toolMutants string) string {
 	m := map[string]string{}
+	// A TOOL SOURCE (--mutants-from) changes the exam for the same reason a
+	// replay does: its tool, report digest and sample seed
+	// (toolMutantSource.cacheKey) are all here, so a run with tool mutants
+	// never reuses a model-only verdict, nor one made from another report or
+	// another sample of it. Absent, the key is exactly what it always was.
+	if toolMutants != "" {
+		m["tool-mutants"] = toolMutants
+	}
 	// The WRITER MODE, for the same reason the grading mode is here: the two
 	// shapes are different exams. Per-survivor proves each survivor ALONE
 	// against its own mutant, on its own repair budget, behind its own
@@ -4418,7 +4467,7 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 	if f.MutantBudget.Total > 0 {
 		// The exam's size and why: a reader comparing two files' kill rates
 		// needs to know one sat 8 questions and the other 40.
-		fmt.Fprintf(w, "\n   mutants: %s", f.MutantBudget)
+		fmt.Fprintf(w, "\n   mutants: %s", f.MutantBudget.WithTool(f.ToolShare))
 	}
 	if line := examConfidenceLine(f); line != "" {
 		fmt.Fprintf(w, "\n   confidence: %s", line)
@@ -4620,6 +4669,8 @@ func reasonGloss(reason string) string {
 		return " — the run was interrupted before this file was graded"
 	case reposcan.ReasonPrepFailed:
 		return " — the workspace could not be prepared for this file"
+	case reposcan.ReasonNoMutantSource:
+		return " — the run's only mutant source is a tool's report (--mutant-model off), and it gives this file nothing to grade; see the detail below"
 	case reposcan.ReasonMappedTestMissing:
 		return " — the --tests map names a test file that does not exist"
 	case reposcan.ReasonDeriveBudgetExhausted:
@@ -5126,6 +5177,12 @@ type localExecutor struct {
 	// refused (see presetMutantsForSelection), so a nil lookup here means an
 	// ordinary generated run, never a silent half-replay.
 	presetMutants map[string][]adequacy.Mutant
+	// toolSource is --mutants-from, read per file — see
+	// localAuditInput.toolSource. nil is a model-only scan.
+	toolSource *toolMutantSource
+	// toolCounts collects every audited file's account of the tool's report
+	// (localAuditInput.toolSink) for the scan row's ToolMutants.
+	toolCounts toolCountsCollector
 	// prior is the loaded --prior, resolved per file in newAuditRunSpec.
 	prior *prior.Prior
 
@@ -5435,6 +5492,16 @@ func (l *localExecutor) seedSkipped() string {
 	return seedSkippedJSON(l.seeds.skipped())
 }
 
+// toolMutants is every audited file's account of --mutants-from's report,
+// as the ledger's JSON text; "" for a dry run (no executor) and a scan with
+// no tool source.
+func (l *localExecutor) toolMutants() string {
+	if l == nil {
+		return ""
+	}
+	return toolMutantsJSON(l.toolCounts.all())
+}
+
 // sandboxIdentity is the jail the scan ran in; zero for a dry run (no
 // executor) and for the workspace substrate.
 func (l *localExecutor) sandboxIdentity() sandbox.Identity {
@@ -5563,6 +5630,9 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 
 		// A nil entry is an ordinary generated run — see localExecutor.presetMutants.
 		presetMutants: l.presetMutants[j.Path],
+		toolSource:    l.toolSource,
+		toolNote:      func(line string) { l.note("%s: %s\n", j.Path, line) },
+		toolSink:      l.toolCounts.add,
 		prior:         l.prior,
 		mutantSink:    l.mutantSink,
 		// This file's own adapter onto the scan's shared tape — see
@@ -5689,6 +5759,23 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 			return reposcan.FileResult{Gradable: false, Reason: reposcan.ReasonPrepFailed}, nil
 		}
 		in.seed = &seed
+	}
+
+	// A tool-only scan (--mutant-model off) whose report gives this file
+	// nothing to grade has no exam: reported with the reason, before a
+	// baseline is paid for, never graded on an empty exam.
+	if l.toolSource != nil && l.toolSource.toolOnly {
+		pre, err := l.toolNoSource(j.Path)
+		if err != nil {
+			return reposcan.FileResult{}, l.fail(j, err)
+		}
+		if pre.none != "" {
+			// The file's account goes on the scan row like every audited
+			// file's: a refused file is the waste statistic's whole point.
+			l.toolCounts.add(pre.counts)
+			l.note("%s: tool mutants (%s): none to grade — %s — not graded\n", j.Path, l.toolSource.label, pre.noneSaid)
+			return reposcan.FileResult{Gradable: false, Reason: reposcan.ReasonNoMutantSource, Detail: pre.none}, nil
+		}
 	}
 
 	// Honesty invariant 2: a flapping suite makes a mutant look killed or
@@ -5940,6 +6027,32 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 		l.note("%s: kill rate %.2f (%d survivor(s))\n", j.Path, v.DevKillRate, v.Survivors)
 	}
 	return res, nil
+}
+
+// toolNoSource is the tool-only scan's pre-check of the file at p
+// (toolMutantSource.preCheck): its none says why the report gives it
+// nothing to grade, "" when it does. The bytes are read through the
+// checkout's root, as every other read of the scan is. A file or report
+// that cannot be read is an error (an executor error on the report), never
+// a no-mutant-source reason.
+func (l *localExecutor) toolNoSource(p string) (toolFileMutants, error) {
+	// The terminal's text keeps the error whole (the open names the absolute
+	// checkout); the record's names the file and the failure, never the
+	// directory (recordedError).
+	unread := func(err error) error {
+		const why = "reading %s to check it against the --mutants-from report: %v"
+		return recordedError{msg: fmt.Sprintf(why, p, err), recorded: fmt.Sprintf(why, p, pathlessErr(err)), cause: err}
+	}
+	root, err := os.OpenRoot(l.repoDir)
+	if err != nil {
+		return toolFileMutants{}, unread(err)
+	}
+	defer func() { _ = root.Close() }()
+	code, err := root.ReadFile(p)
+	if err != nil {
+		return toolFileMutants{}, unread(err)
+	}
+	return l.toolSource.preCheck(p, code)
 }
 
 // redUnitRetry is the job's selection again without the units (or, for

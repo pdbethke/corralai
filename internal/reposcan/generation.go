@@ -348,7 +348,14 @@ package reposcan
 // graded before this lacked. "38" has not left its branch, and no vitest 5
 // file was graded under it (REA's runs were all ungraded), so no cached
 // verdict differs; not bumped.
-const VerdictGeneration = "38"
+// "39" (2026-11-01): the Verdict gained MutantSources, where each graded
+// mutant came from (the generator seat's model, or a mutation tool's report),
+// and a run can now grade a tool's mutants beside or instead of a model's
+// (RunSpec.ToolMutants, a tool-only PresetMutants run). A cached "38"
+// document unmarshals MutantSources as nil, which reads as "no source was
+// recorded" for mutants this generation would have named. "38" has reached
+// main, so this is a shape bump, not a ride-along.
+const VerdictGeneration = "39"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.
@@ -370,4 +377,4 @@ const VerdictGeneration = "38"
 // Verdict's own FIELDS") and nothing wider. Nor can any fingerprint catch the
 // behaviour half: a scorer that computes a DIFFERENT number into the SAME
 // field is invisible here, and remains a review responsibility.
-const VerdictShapeSHA256 = "80232f62d5589bea6840b561376493c777618e732d66f6e8f928fab92c0996df"
+const VerdictShapeSHA256 = "2476c942b8df1e6e64f023381160457f1f9da3a1874447724ab7300a262b86ff"

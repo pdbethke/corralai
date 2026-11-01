@@ -206,7 +206,7 @@ var scanRowColumns = []string{
 	"author", "committer", "co_authors", "scope", "tree_dirty", "repo_identity",
 	"sandbox_backend", "sandbox_image", "seed_skipped", "generated_with", "unit_pass", "test_command", "runner", "settings", "toolchains",
 	"load_start", "load_end", "load_peak", "mem_available_start_bytes", "peak_rss_bytes", "cpu_millis", "host_not_measured",
-	"inventory", "shadow_draw", "max_tokens_reached",
+	"inventory", "shadow_draw", "max_tokens_reached", "tool_mutants",
 }
 
 // scanRowSelectList is scanRowColumns as a SELECT list for the corral_scans
@@ -220,16 +220,23 @@ var scanRowColumns = []string{
 // column outside the migration list is base schema and is named as is, so a
 // table that is not corral's still fails loudly.
 func scanRowSelectList(db *sql.DB) (string, error) {
-	existing, err := existingColumns(db, "corral_scans")
+	return lateColumnSelectList(db, "corral_scans", scanRowColumns, corralScansMigrationCols)
+}
+
+// lateColumnSelectList is scanRowSelectList's rule for any table: columns
+// the table's additive migration adds are selected as NULL where this
+// database does not have them yet.
+func lateColumnSelectList(db *sql.DB, table string, columns []string, migration []struct{ name, ddl string }) (string, error) {
+	existing, err := existingColumns(db, table)
 	if err != nil {
 		return "", err
 	}
 	late := map[string]bool{}
-	for _, c := range corralScansMigrationCols {
+	for _, c := range migration {
 		late[c.name] = true
 	}
-	cols := make([]string, len(scanRowColumns))
-	for i, c := range scanRowColumns {
+	cols := make([]string, len(columns))
+	for i, c := range columns {
 		if late[c] && len(existing) > 0 && !existing[c] {
 			cols[i] = "NULL AS " + c
 			continue
@@ -259,7 +266,7 @@ func readScanRow(db *sql.DB, where string, args ...any) (ScanRow, bool, error) {
 	var treeDirty sql.NullBool
 	var loadStart, loadEnd, loadPeak sql.NullFloat64
 	var memAvail, peakRSS, cpuMillis sql.NullInt64
-	var hostNotMeasured, inventory, shadowDraw sql.NullString
+	var hostNotMeasured, inventory, shadowDraw, toolMutants sql.NullString
 	var maxTokensReached sql.NullBool
 	var top, totalFiles sql.NullInt64
 	// NULL header tokens: a scan none of whose calls was metered
@@ -276,7 +283,7 @@ func readScanRow(db *sql.DB, where string, args ...any) (ScanRow, bool, error) {
 		&preflightRan, &preflightNote, &scanFinished, &entryHash,
 		&author, &committer, &coAuthors, &scope, &treeDirty, &repoIdentity, &sandboxBackend, &sandboxImage, &seedSkipped, &generatedWith, &unitPass, &testCommand, &runner, &settings, &toolchains,
 		&loadStart, &loadEnd, &loadPeak, &memAvail, &peakRSS, &cpuMillis, &hostNotMeasured,
-		&inventory, &shadowDraw, &maxTokensReached,
+		&inventory, &shadowDraw, &maxTokensReached, &toolMutants,
 	); err != nil {
 		if err == sql.ErrNoRows {
 			return ScanRow{}, false, nil
@@ -317,6 +324,7 @@ func readScanRow(db *sql.DB, where string, args ...any) (ScanRow, bool, error) {
 	s.HostNotMeasured = hostNotMeasured.String
 	s.Inventory, s.ShadowDraw = inventory.String, shadowDraw.String
 	s.MaxTokensReached = nullBoolPtr(maxTokensReached)
+	s.ToolMutants = toolMutants.String
 	if treeDirty.Valid {
 		v := treeDirty.Bool
 		s.TreeDirty = &v
@@ -499,13 +507,25 @@ func readFileRows(db *sql.DB, where string, args ...any) ([]Row, error) {
 	return out, rows.Err()
 }
 
+// mutantRowColumns is what readMutantRows reads, in its Scan order. The
+// columns corralMutantsMigrationCols adds are read as NULL from a warehouse
+// no push of this version has met (lateColumnSelectList), as the scan
+// header's are.
+var mutantRowColumns = []string{
+	"repo", "run_url", "scan_id", "path", "mutant_id", "parent_sha256", "outcome",
+	"invalid_reason", "proven", "proven_by_authored_alone", "tests_run",
+	"selection_rule", "duration_ms", "killed_by", "span_start", "span_end", "code",
+	"statement_sha256", "shape", "generator_model",
+	"source", "source_tool", "source_operator", "source_status",
+}
+
 func readMutantRows(db *sql.DB, where string, args ...any) ([]MutantRow, error) {
-	rows, err := db.Query(`SELECT
-		repo, run_url, scan_id, path, mutant_id, parent_sha256, outcome,
-		invalid_reason, proven, proven_by_authored_alone, tests_run,
-		selection_rule, duration_ms, killed_by, span_start, span_end, code,
-		statement_sha256, shape, generator_model
-	   FROM corral_mutants WHERE `+where, args...) // #nosec G202 -- where is a constant clause from readGrains; every value is a bound parameter
+	selectList, err := lateColumnSelectList(db, "corral_mutants", mutantRowColumns, corralMutantsMigrationCols)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.Query(`SELECT `+selectList+`
+	   FROM corral_mutants WHERE `+where, args...) // #nosec G202 -- the select list is built from this package's own column names; where is a constant clause from readGrains; every value is a bound parameter
 	if err != nil {
 		return nil, err
 	}
@@ -518,16 +538,19 @@ func readMutantRows(db *sql.DB, where string, args ...any) ([]MutantRow, error) 
 		var durationMillis sql.NullInt64
 		var spanStart, spanEnd sql.NullInt64
 		var shape, generatorModel sql.NullString
+		var source, sourceTool, sourceOperator, sourceStatus sql.NullString
 		if err := rows.Scan(
 			&m.Repo, &m.RunURL, &m.ScanID, &m.Path, &m.MutantID, &parentSHA256, &m.Outcome,
 			&invalidReason, &m.Proven, &m.ProvenByAuthoredAlone, &m.TestsRun,
 			&selectionRule, &durationMillis, &killedBy, &spanStart, &spanEnd, &code,
 			&m.StatementSHA256, &shape, &generatorModel,
+			&source, &sourceTool, &sourceOperator, &sourceStatus,
 		); err != nil {
 			return nil, err
 		}
 		m.ParentSHA256 = parentSHA256.String
 		m.Shape, m.GeneratorModel = shape.String, generatorModel.String
+		m.Source, m.SourceTool, m.SourceOperator, m.SourceStatus = source.String, sourceTool.String, sourceOperator.String, sourceStatus.String
 		m.InvalidReason = invalidReason.String
 		m.SelectionRule = selectionRule.String
 		m.DurationMillis = nullInt64(durationMillis)

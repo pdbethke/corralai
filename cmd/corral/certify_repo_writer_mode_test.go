@@ -285,12 +285,12 @@ func TestWriterLineDisclosesUngradedSeatsAndSuppressesACachedCount(t *testing.T)
 // sign `writerMode: per-survivor` for a run that never executed it: exactly
 // the hardcoded-ModelSet failure, one dimension over.
 func TestWriterModeIsInTheVerdictCacheKey(t *testing.T) {
-	per := auditConfigKey(false, "", nil, "", advpool.WriterModePerSurvivor)
-	batched := auditConfigKey(false, "", nil, "", advpool.WriterModeBatched)
+	per := auditConfigKey(false, "", nil, "", advpool.WriterModePerSurvivor, "")
+	batched := auditConfigKey(false, "", nil, "", advpool.WriterModeBatched, "")
 	if per == batched {
 		t.Fatalf("auditConfigKey is blind to --writer-mode: %q for both modes — a batched run would be served a per-survivor verdict", per)
 	}
-	if unset := auditConfigKey(false, "", nil, "", ""); unset == per || unset == batched {
+	if unset := auditConfigKey(false, "", nil, "", "", ""); unset == per || unset == batched {
 		t.Errorf("an UNNAMED mode must key apart from both spellings, got %q", unset)
 	}
 	if !strings.Contains(per, "writer-mode=") {

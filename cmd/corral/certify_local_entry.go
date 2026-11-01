@@ -63,6 +63,9 @@ type localRunFacts struct {
 	// seedSkipped is what the jail's copy left out as not text, as the
 	// ledger's JSON text (seedSkippedJSON); "" when nothing was.
 	seedSkipped string
+	// toolMutants is the file's account of --mutants-from's report, as the
+	// ledger's JSON text (toolMutantsJSON); "" with no tool source.
+	toolMutants string
 	// mutantsFrom is the sha256 of the --mutants document the run replayed,
 	// "" when it generated its own exam — the same column a repo scan fills.
 	mutantsFrom string
@@ -201,6 +204,7 @@ func localEntryBundle(in localAuditInput, v advpool.Verdict, t advpool.RunTeleme
 			PushedBy:  auditpush.PushedByCertify,
 			TreeDirty: run.treeDirty, RepoIdentity: run.repoIdentity,
 			Sandbox: run.sandbox, SeedSkipped: run.seedSkipped,
+			ToolMutants: run.toolMutants,
 		})
 	if run.recorder != nil {
 		run.recorder.stampHunks(b.Mutants)

@@ -13,6 +13,7 @@ import (
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/modelcorr"
+	"github.com/pdbethke/corralai/internal/mutantsources"
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/scanstore"
 	"github.com/pdbethke/corralai/internal/statedir"
@@ -481,18 +482,25 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 // grading query treats it as "corral actually executed something against
 // this file", and that claim must be TRUE, not merely "corral meant to".
 //
-// Two of the six ungradable reasons never reach that bar:
+// Three of the seven ungradable reasons never reach that bar:
+//
 //   - reposcan.ReasonCancelled is written by reposcan.Scan itself, BEFORE
 //     ex.Execute is ever called (see internal/reposcan/scan.go) — the
 //     check command never ran, full stop. This function's own earlier
 //     comment used to concede this and stamp "proven" anyway; that was
 //     the overclaim, not a defensible choice.
+//
 //   - reposcan.ReasonPrepFailed is returned at the very top of
 //     localExecutor.Execute (cmd/corral/certify_repo.go), when the
 //     language-wide jail seed fails to build — BEFORE l.newBaseline is
 //     ever reached, so the check command never ran for this file either.
 //
-// Both get "" (no evidence claim), the same value an excluded file that
+//   - reposcan.ReasonNoMutantSource is returned by localExecutor.Execute
+//     BEFORE the baseline, when a tool-only run's report gives the file
+//     nothing to grade (toolMutantSource.preCheck), so the check
+//     command never ran for it.
+//
+// All three get "" (no evidence claim), the same value an excluded file that
 // was never even a candidate gets — deliberately not a fifth enum value:
 // "no evidence" and "" already mean the same thing everywhere else in
 // this table (see exclusionEvidence), and reusing it means one fewer
@@ -510,7 +518,7 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 // — see Execute's own ordering). All four keep "proven".
 func ungradableEvidence(reason string) string {
 	switch reason {
-	case reposcan.ReasonCancelled, reposcan.ReasonPrepFailed:
+	case reposcan.ReasonCancelled, reposcan.ReasonPrepFailed, reposcan.ReasonNoMutantSource:
 		return ""
 	default:
 		return "proven"
@@ -682,10 +690,10 @@ func buildScanMutantRows(scanID int64, results []reposcan.FileResult) []scanstor
 				// recorded no span.
 				SpanStart: m.Span.Start, SpanEnd: m.Span.End,
 				// WHAT KIND of fault, and WHO planted it: the grain "prone
-				// to" is measured at. The model is the file's generator
-				// seat; a shadow generator's mutants never reach these refs.
-				Shape: m.Shape, GeneratorModel: r.Verdict.ModelsByRole[advpool.RoleMutantGenerator],
+				// to" is measured at. See setMutantRowSource for who.
+				Shape: m.Shape,
 			})
+			setMutantRowSource(&rows[len(rows)-1], r.Verdict.MutantSources)
 		}
 		for _, m := range r.Verdict.DevSurvivedMutants {
 			rows = append(rows, scanstore.Mutant{
@@ -703,11 +711,34 @@ func buildScanMutantRows(scanID int64, results []reposcan.FileResult) []scanstor
 				TestsRun:              m.TestsRun, SelectionRule: m.Rule,
 				DurationMillis: millisOrNil(m.Duration),
 				SpanStart:      m.Span.Start, SpanEnd: m.Span.End,
-				Shape: m.Shape, GeneratorModel: r.Verdict.ModelsByRole[advpool.RoleMutantGenerator],
+				Shape: m.Shape,
 			})
+			setMutantRowSource(&rows[len(rows)-1], r.Verdict.MutantSources)
 		}
 	}
 	return rows
+}
+
+// setMutantRowSource fills a mutant row's source from the verdict's own
+// record of it (Verdict.MutantSources): Source and, for a model mutant, the
+// generator model the driver recorded as planting it; for a tool mutant the
+// tool, its operator and its status, and NO GeneratorModel — the generator
+// seat did not plant it, and crediting it would put a tool's mutants under a
+// model on the record. A mutant the verdict names no source for (a --mutants
+// replay handed none) gets none: no Source and no GeneratorModel, never the
+// seat's name guessed onto a mutant no generator was seen to plant.
+func setMutantRowSource(m *scanstore.Mutant, sources map[string]mutantsources.MutantSource) {
+	src, ok := sources[m.MutantID]
+	if !ok {
+		return
+	}
+	m.Source = src.Kind
+	switch src.Kind {
+	case mutantsources.KindModel:
+		m.GeneratorModel = src.Model
+	case mutantsources.KindTool:
+		m.SourceTool, m.SourceOperator, m.SourceStatus = src.Tool, src.Operator, src.Status
+	}
 }
 
 // buildScanModelCallRows maps every file's Verdict.ModelCalls into the

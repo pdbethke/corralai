@@ -158,7 +158,8 @@ CREATE TABLE IF NOT EXISTS corral_scans (
   host_not_measured VARCHAR,
   inventory        VARCHAR,
   shadow_draw      VARCHAR,
-  max_tokens_reached BOOLEAN
+  max_tokens_reached BOOLEAN,
+  tool_mutants     VARCHAR
 );`
 
 const auditsSchema = `
@@ -292,6 +293,10 @@ CREATE TABLE IF NOT EXISTS corral_mutants (
   killed_by        VARCHAR,
   shape            VARCHAR,
   generator_model  VARCHAR,
+  source           VARCHAR,
+  source_tool      VARCHAR,
+  source_operator  VARCHAR,
+  source_status    VARCHAR,
   span_start       INTEGER,
   span_end         INTEGER,
   code             VARCHAR,
@@ -541,6 +546,9 @@ var (
 		{"inventory", "inventory VARCHAR"},
 		{"shadow_draw", "shadow_draw VARCHAR"},
 		{"max_tokens_reached", "max_tokens_reached BOOLEAN"},
+		// Each file's account of a mutation tool's report (ScanRow.
+		// ToolMutants). NULL before it, and on a run with no tool source.
+		{"tool_mutants", "tool_mutants VARCHAR"},
 		// The tools the commit's footer lines declare (Identity.
 		// GeneratedWith), one per line. NULL before it: not read.
 		{"generated_with", "generated_with VARCHAR"},
@@ -549,6 +557,12 @@ var (
 		{"scan_uid", "scan_uid VARCHAR"},
 		{"shape", "shape VARCHAR"},
 		{"generator_model", "generator_model VARCHAR"},
+		// Where each mutant came from (MutantRow.Source...). NULL before
+		// them, and where the verdict recorded no source.
+		{"source", "source VARCHAR"},
+		{"source_tool", "source_tool VARCHAR"},
+		{"source_operator", "source_operator VARCHAR"},
+		{"source_status", "source_status VARCHAR"},
 	}
 	// cached_input_tokens is additive: a warehouse an earlier corral created
 	// gets it on the next push, and its existing rows keep NULL — correct,
@@ -1131,8 +1145,8 @@ func insertBundle(db *sql.DB, b Bundle, now time.Time, uid string) (Counts, erro
 		    sandbox_backend, sandbox_image, seed_skipped, generated_with, unit_pass,
 		    test_command, runner, settings, toolchains,
 		    load_start, load_end, load_peak, mem_available_start_bytes, peak_rss_bytes, cpu_millis, host_not_measured,
-		    inventory, shadow_draw, max_tokens_reached
-		  ) VALUES (`+placeholders(62)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+		    inventory, shadow_draw, max_tokens_reached, tool_mutants
+		  ) VALUES (`+placeholders(63)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 			uid, now, b.Scan.Repo, b.Scan.RunURL, b.Scan.ScanID, b.Scan.Commit,
 			b.Scan.CorralVersion, b.Scan.Substrate, b.Scan.Host, b.Scan.Cores,
 			nullIfZeroInt(b.Scan.TreesRequested), b.Scan.DiffBase,
@@ -1154,6 +1168,7 @@ func insertBundle(db *sql.DB, b Bundle, now time.Time, uid string) (Counts, erro
 			b.Scan.LoadStart, b.Scan.LoadEnd, b.Scan.LoadPeak,
 			b.Scan.MemAvailableStartBytes, b.Scan.PeakRSSBytes, b.Scan.CPUMillis, nullIfEmpty(b.Scan.HostNotMeasured),
 			nullIfEmpty(b.Scan.Inventory), nullIfEmpty(b.Scan.ShadowDraw), b.Scan.MaxTokensReached,
+			nullIfEmpty(b.Scan.ToolMutants),
 		); err != nil {
 			return Counts{}, fmt.Errorf("auditpush: insert scan row: %w", err)
 		}
@@ -1176,14 +1191,16 @@ func insertBundle(db *sql.DB, b Bundle, now time.Time, uid string) (Counts, erro
 		    scan_uid, ts, repo, run_url, scan_id, path, mutant_id, parent_sha256, outcome,
 		    invalid_reason, proven, proven_by_authored_alone, tests_run,
 		    selection_rule, duration_ms, killed_by, span_start, span_end, code,
-		    statement_sha256, schema_version, shape, generator_model
-		  ) VALUES (`+placeholders(23)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+		    statement_sha256, schema_version, shape, generator_model,
+		    source, source_tool, source_operator, source_status
+		  ) VALUES (`+placeholders(27)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 			uid, now, m.Repo, m.RunURL, m.ScanID, m.Path, m.MutantID,
 			nullIfEmpty(m.ParentSHA256), m.Outcome, nullIfEmpty(m.InvalidReason),
 			m.Proven, m.ProvenByAuthoredAlone, m.TestsRun,
 			nullIfEmpty(m.SelectionRule), m.DurationMillis, nullIfEmpty(m.KilledBy),
 			nullIfZeroInt(m.SpanStart), nullIfZeroInt(m.SpanEnd), code, m.StatementSHA256, SchemaVersion,
 			nullIfEmpty(m.Shape), nullIfEmpty(m.GeneratorModel),
+			nullIfEmpty(m.Source), nullIfEmpty(m.SourceTool), nullIfEmpty(m.SourceOperator), nullIfEmpty(m.SourceStatus),
 		); err != nil {
 			return Counts{}, fmt.Errorf("auditpush: insert mutant %s/%s: %w", m.Path, m.MutantID, err)
 		}

@@ -12,6 +12,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/mutantsources"
 	"github.com/pdbethke/corralai/internal/testmap"
 )
 
@@ -206,6 +207,40 @@ type RunSpec struct {
 	//
 	// nil — the default, and every pre-existing caller — generates as before.
 	PresetMutants []adequacy.Mutant
+
+	// ToolMutants JOIN generation: mutants an established mutation tool
+	// planted (internal/mutantsources), appended to the generator's mutants
+	// where those become the exam — after the sharded ID prefixing, before
+	// the duplicate count — so both sources sit ONE dev pass, one writer
+	// fan-out and one proof rule. The generator seat still runs. A run with
+	// only a tool source does not use this field: it is a PresetMutants run
+	// (no generator seat at all), and setting both is refused by StartRun.
+	//
+	// They join the PRIMARY exam only. A shadow (challenger) generator is
+	// graded on its own mutants for a head-to-head between models; a tool's
+	// mutants are not either model's, and adding them there would credit a
+	// challenger with gaps it did not find.
+	//
+	// They also make the exam non-empty on their own: a generator that
+	// planted nothing, or whose every region was dropped, leaves the tool's
+	// mutants to grade rather than ErrNoUsableMutants.
+	//
+	// nil — every caller that names no tool source — changes nothing.
+	ToolMutants []adequacy.Mutant
+
+	// MutantSources says where each mutant handed IN came from, keyed by
+	// mutant ID: every ToolMutants entry (Kind tool, required), and — when
+	// set at all on a PresetMutants run — every preset entry. It must name
+	// no ID the run was not given. StartRun refuses a spec that breaks any
+	// of these, because a mutant whose source is guessed is a record that
+	// cannot be queried for what it claims.
+	//
+	// The driver adds a Kind model entry for every mutant the generator
+	// planted, under the mutant-generator seat's assigned model, and carries
+	// the union out as Verdict.MutantSources, restricted to the exam that
+	// was graded. A PresetMutants replay with nil MutantSources signs none:
+	// its provenance is the run that recorded the set, not this one.
+	MutantSources map[string]mutantsources.MutantSource
 
 	// SelectionDuration and PoolDuration are the two phases of a file's audit
 	// the driver CANNOT time, handed to it by the caller that did.

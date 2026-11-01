@@ -815,7 +815,7 @@ What this puts on the record, in public, permanently:
   reported, even under the right `--pub`. corral does not detect that from
   inside the directory. Protect the ledger branch with a branch ruleset that
   blocks force pushes and deletion, and hold an anchor outside it: a removed
-  pin is detected only by `corral ledger verify --expect-head <hash> <dir>`
+  pin is detected only by `corral ledger verify --ledger-repo <owner/name> --pub <root-key-hex> --expect-head <hash> <dir>`
   with a head hash you kept elsewhere.
 - **The pin's root key is trust on first use.** `LEDGER_PUBKEY` is published on
   the ledger branch, so anyone who can push that branch could root it first or

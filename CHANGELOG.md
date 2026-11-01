@@ -26,8 +26,8 @@ history of any release, `git log v0.3.4..v0.3.5`.
   only while the ledger branch cannot be force-pushed or deleted**: a rewrite
   that cuts the chain before the pin and appends past it still verifies, as
   `keyless-unpinned`, so protect the branch with a ruleset, detect a removed
-  pin with an anchor held outside it (`corral ledger verify --expect-head <hash>
-  <dir>`), and take the root public key from outside the ledger
+  pin with an anchor held outside it (`corral ledger verify --ledger-repo <owner/name>
+  --pub <root-key-hex> --expect-head <hash> <dir>`), and take the root public key from outside the ledger
   branch (`--pub` / `CORRALAI_LEDGER_PUBKEY`), not from its `LEDGER_PUBKEY`.
   The trigger is recorded, not pinned, so a pinned workflow that runs on
   `pull_request_target` or `workflow_dispatch` can still sign for unmerged

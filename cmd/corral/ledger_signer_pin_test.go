@@ -586,3 +586,45 @@ func TestTruncatingThePinIsCaughtOnlyByAnOutsideHead(t *testing.T) {
 		t.Fatalf("--expect-head with the pinned chain's head did not catch the rewrite:\n%s%s", out.String(), errb.String())
 	}
 }
+
+// TestDocumentedAnchorCommandRunsAsWritten runs the anchor command exactly as
+// the pin's output and the docs print it, flag for flag: it must pass on the
+// intact pinned chain and fail once the pin is cut away. Written as the bare
+// `--expect-head <hash> <dir>` it failed on the intact chain too, because a
+// keyless entry needs --ledger-repo, so its exit code said nothing.
+func TestDocumentedAnchorCommandRunsAsWritten(t *testing.T) {
+	s := keylessPinEnv(t)
+	dir := t.TempDir()
+	seed := newRootPinned(t, s, dir)
+	pub := pubHexOfSeed(t, seed)
+	appendKeyless(t, s, dir, "bbbb2222", pinClaims())
+	rawPub, _ := hex.DecodeString(pub)
+	trust, err := ledgerTrust(rawPub, testKeylessRepo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checks, err := auditpush.VerifyLedgerDirTrust(dir, trust)
+	if err != nil || len(checks) != 3 {
+		t.Fatalf("pinned chain: %d checks, %v", len(checks), err)
+	}
+	head := checks[2].Hash
+	if !strings.Contains(pinDependsOn, "corral ledger verify --ledger-repo <owner/name> --pub <root-key-hex> --expect-head <hash> <dir>") {
+		t.Fatalf("the pin's advice no longer prints the command this test runs:\n%s", pinDependsOn)
+	}
+	argv := []string{"verify", "--ledger-repo", testKeylessRepo, "--pub", pub, "--expect-head", head, dir}
+	if code, out := run(t, argv...); code != 0 {
+		t.Fatalf("the documented command fails on the intact pinned chain: exit %d\n%s", code, out)
+	}
+	for _, c := range checks[1:] {
+		if err := os.Remove(filepath.Join(dir, auditpush.ScansSubdir, c.File)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	attacker := pinClaims()
+	attacker.Workflow = "https://github.com/" + testKeylessRepo + "/" + pinTestWorkflow + "@refs/heads/attacker"
+	attacker.Ref = "refs/heads/attacker"
+	appendKeyless(t, s, dir, "cccc3333", attacker)
+	if code, out := run(t, argv...); code == 0 {
+		t.Fatalf("the documented command did not catch the cut pin:\n%s", out)
+	}
+}

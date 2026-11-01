@@ -496,7 +496,7 @@ func printPinned(stdout io.Writer, repo string, pin *auditpush.KeylessPin, dir, 
 // no problem reported. corral builds no check for that here; it says where
 // the defence is.
 const pinDependsOn = "this pin holds only while the ledger branch cannot be force-pushed or deleted: protect it with a branch ruleset. " +
-	"A rewrite that cuts the chain before the pin and appends past it still verifies, so removing the pin is detected only by an anchor held outside the branch (`corral ledger verify --expect-head <hash> <dir>`). " +
+	"A rewrite that cuts the chain before the pin and appends past it still verifies, so removing the pin is detected only by an anchor held outside the branch (`corral ledger verify --ledger-repo <owner/name> --pub <root-key-hex> --expect-head <hash> <dir>`). " +
 	"Verifiers should take the root public key from outside the ledger branch (your default branch, `--pub` or CORRALAI_LEDGER_PUBKEY), not from its LEDGER_PUBKEY."
 
 func pinPairs(pin *auditpush.KeylessPin) string {

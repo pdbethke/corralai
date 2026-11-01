@@ -74,6 +74,16 @@ history of any release, `git log v0.3.4..v0.3.5`.
   matches as one prior with the same hunk recorded before. A `--mutants` replay
   with no recorded sources now records no `GeneratorModel`, since no generator
   ran. The mutant-generator's leaderboard credit counts only model-sourced mutants.
+  The model path's parse diagnostics now count a SEARCH that repeats overlapping
+  itself (`aa` in `aaa`) as anchor-not-unique rather than integrity-failed; the
+  set of mutants kept is unchanged. An executor error whose text names a host
+  path (an unreadable report, the checkout) records a path-free `Detail`
+  (`reposcan.RecordedDetailer`); the terminal still shows the path.
+  Each `ToolMutants` entry names its report as `Report` (`sha256:<hex>`). A
+  both-sources run's budget lines say `N model + T tool, an exam of up to N+T`,
+  because the tool's sample uses the model's per-file cap. A Stryker id,
+  operator, status or version that is not a plain token is recorded as
+  `not-a-plain-token` (an id by a digest).
 
 - **The signed record now holds every number a certify run prints, or a
   written reason why not, and every field says what it can be trusted

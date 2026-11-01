@@ -38,25 +38,37 @@ wrote, so no third-party tool executes in the audited checkout.
   report means wrong mutants, so that file's tool mutants are refused and the scan line says so.
 - Only `Survived` and `NoCoverage` mutants are taken. The rest (killed, compile errors and so on) are counted, not re-graded.
 - The taken mutants are capped by the file's mutant budget: a seeded sample, distinct lines first.
+  Beside a `--mutant-model` the cap is the same one the model is asked for, so a file's exam can
+  be up to twice its budget. The scan line and the `mutants:` line say both shares and the sum
+  (`N model + T tool, an exam of up to N+T`).
 - A line that occurs more than once in the file cannot be anchored to one place, so its
   mutants are dropped and counted. On REA's report that was 29 of 234 survivors.
 - A file containing a lone CR, U+2028 or U+2029 is refused, because the tool's line and
   column counts and corral's disagree on those.
+- A mutant's id, operator and status, and the report's Stryker version, are recorded only
+  when each is a plain token (letters, digits and `._@+-`, at most 64 characters). Any other
+  value is recorded as `not-a-plain-token` (an id as `not-a-plain-token-<digest>`), and the
+  mutant is still graded.
 
 ## The tool's status is a claim, never the outcome
 
-Corral never records the tool's `Survived` as its own result. Each mutant's
-row carries `Source`, `SourceTool`, `SourceOperator` and `SourceStatus`. `SourceStatus`
-is what the tool said, recorded as a declared claim; `Outcome` is what corral's run
-measured. A tool mutant the tool called survived can be killed by corral's run. A mutant the
-tool called killed is counted and never re-graded. `GeneratorModel` is set only on model mutants, and the mutant-generator's
-leaderboard credit counts only the mutants it planted. Each file's scan row carries
-`ToolMutants`: per-file counts, the seed, and any refusal. The report is named on the
-record by tool and sha256, never by the path you typed, because that path often sits
-under a home directory and the ledger is public. Because the source is recorded per
+Corral never records the tool's `Survived` or `NoCoverage` as its own result. Each
+mutant's row carries `Source`, `SourceTool`, `SourceOperator` and `SourceStatus`.
+`SourceStatus` is what the tool said, recorded as a declared claim; `Outcome` is what
+corral's run measured. A mutant the tool called `Survived` or `NoCoverage` can be killed
+by corral's run. A mutant the tool called killed is counted and never re-graded.
+
+`GeneratorModel` is set only on model mutants, and the mutant-generator's leaderboard
+credit counts only the mutants it planted.
+
+The run's one scan row carries `ToolMutants`, an array with one entry per audited file:
+its counts, the seed, the report (`Report`, as `sha256:<hex>`) and any refusal. The report
+is named on the record by tool and sha256, never by the path you typed, because that path
+often sits under a home directory and the ledger is public. The same holds for a file's
+`Detail` when the report could not be read for it. Because the source is recorded per
 mutant, a per-source statistic (gap yield, waste, how often a mutant the tool reported
-surviving or uncovered also survives corral's run) is a query over signed entries. The fields and their tiers are
-in [record-fields.md](record-fields.md).
+surviving or uncovered also survives corral's run) is a query over signed entries. The
+fields and their tiers are in [record-fields.md](record-fields.md).
 
 The verdict cache key includes the tool, the report's sha256 and the seed, so a
 different report or sample is a different exam.
@@ -69,10 +81,13 @@ Corral's side is public ledger entry 163 on the `corral/ledger` branch
 
 - File: REA `src/domain/analysisErrorProjection.ts` at aa48d494e, a vitest config narrowed to REA's `domain` project.
 - Stryker 10.0.0 with per-test coverage and the TypeScript checker, run from scratch configs
-  (`stryker.corral-compare.config.mjs`, `vitest.corral-compare.config.ts`), REA's TypeScript 6
-  prepare script and `NODE_OPTIONS=--max-old-space-size=16384`. It took three setup failures to
-  get there: TypeScript 7's API, the checker running out of memory, and related tests pulling in
-  a non-domain CLI test. This is not REA's own unmodified Stryker setup.
+  (`stryker.corral-compare.config.mjs`, `vitest.corral-compare.config.ts`) with
+  `NODE_OPTIONS=--max-old-space-size=16384`. REA depends on TypeScript 7.0.2, and Stryker's
+  TypeScript checker could not use TypeScript 7's API, so REA's own
+  `scripts/prepare-reverse-tools-mutation.mjs` points Stryker at a bundled TypeScript 6; that
+  script was used. It took three setup failures to get there: TypeScript 7's API, the checker
+  running out of memory, and related tests pulling in a non-domain CLI test. This is not REA's
+  own unmodified Stryker setup.
 
 | | Stryker | corral (model mutants) |
 |---|---|---|

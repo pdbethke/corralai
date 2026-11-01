@@ -78,35 +78,36 @@ func KeylessArtifact(e Entry) ([]byte, error) {
 // keyless entry may carry a bundle. checked is true when the bundle was put
 // to the signature check against a repository and a Sigstore root the
 // reader named — whatever it concluded — and false when it never got there.
-func keylessProblem(e Entry, t Trust, integrityOnly bool) (problem, signedBy string, checked bool) {
+func keylessProblem(e Entry, t Trust, integrityOnly bool) (problem, signedBy string, checked bool, cert *CertIdentity) {
 	keyless := e.KeyID == KeyIDSigstore
 	switch {
 	case !keyless && e.Format == Format6:
-		return fmt.Sprintf("%s is the keyless format; its keyid must be %q, not %q", Format6, KeyIDSigstore, e.KeyID), "", false
+		return fmt.Sprintf("%s is the keyless format; its keyid must be %q, not %q", Format6, KeyIDSigstore, e.KeyID), "", false, nil
 	case !keyless && len(e.Sigstore) > 0:
-		return fmt.Sprintf("carries a sigstore bundle but is not a keyless entry (keyid %q)", e.KeyID), "", false
+		return fmt.Sprintf("carries a sigstore bundle but is not a keyless entry (keyid %q)", e.KeyID), "", false, nil
 	case !keyless:
-		return "", "", false
+		return "", "", false, nil
 	case integrityOnly:
 		// VerifyIntegrity: no signature is checked; the shape rules are.
-		return keylessShapeProblem(e), "", false
+		return keylessShapeProblem(e), "", false, nil
 	case t.Repo == "":
 		// First, before any other check: the operator must name what to
 		// expect, and saying so is the most useful thing to read.
-		return ProblemNoLedgerRepo, "", false
+		return ProblemNoLedgerRepo, "", false, nil
 	}
 	if p := keylessShapeProblem(e); p != "" {
-		return p, "", false
+		return p, "", false, nil
 	}
 	art, err := KeylessArtifact(e)
 	if err != nil {
-		return "keyless entry: " + err.Error(), "", false
+		return "keyless entry: " + err.Error(), "", false, nil
 	}
 	checked = t.SigstoreRoot != nil
-	if err := VerifyKeylessSignature(e.Sigstore, art, t.Repo, t.SigstoreRoot); err != nil {
-		return "keyless entry: " + err.Error(), "", checked
+	id, err := VerifyKeylessIdentity(e.Sigstore, art, t.Repo, t.SigstoreRoot)
+	if err != nil {
+		return "keyless entry: " + err.Error(), "", checked, nil
 	}
-	return "", githubURL(t.Repo), true
+	return "", githubURL(t.Repo), true, &id
 }
 
 // keylessShapeProblem is the part of a keyless entry's check that needs no
@@ -135,11 +136,20 @@ func keylessShapeProblem(e Entry) string {
 // entry is placed, so an entry its readers would refuse is never written.
 // Neither repo nor r has a default.
 func VerifyKeylessSignature(bundleJSON, artifact []byte, repo string, r *SigstoreRoot) error {
+	_, err := VerifyKeylessIdentity(bundleJSON, artifact, repo, r)
+	return err
+}
+
+// VerifyKeylessIdentity is VerifyKeylessSignature that also returns the
+// facts the verified certificate carries about the run that signed, so a
+// caller can judge more than "some run of this repository". The identity is
+// the zero value whenever the error is non-nil.
+func VerifyKeylessIdentity(bundleJSON, artifact []byte, repo string, r *SigstoreRoot) (CertIdentity, error) {
 	switch {
 	case repo == "":
-		return errors.New(ProblemNoLedgerRepo)
+		return CertIdentity{}, errors.New(ProblemNoLedgerRepo)
 	case r == nil:
-		return errors.New("no Sigstore trust root was given to check it against")
+		return CertIdentity{}, errors.New("no Sigstore trust root was given to check it against")
 	}
 	return verifyBundle(bundleJSON, artifact, repo, r)
 }
@@ -241,7 +251,16 @@ const maxJSONInt = 1<<53 - 1
 // verifyBundle checks that bundleJSON is a Sigstore signature over artifact,
 // made in a GitHub Actions run of github.com/<repo>, witnessed by a Rekor log
 // in r. Every check is required; the first failure is returned.
-func verifyBundle(bundleJSON, artifact []byte, repo string, r *SigstoreRoot) error {
+func verifyBundle(bundleJSON, artifact []byte, repo string, r *SigstoreRoot) (CertIdentity, error) {
+	var id CertIdentity
+	if err := verifyBundleInto(bundleJSON, artifact, repo, r, &id); err != nil {
+		// Never hand back facts from a certificate whose bundle failed.
+		return CertIdentity{}, err
+	}
+	return id, nil
+}
+
+func verifyBundleInto(bundleJSON, artifact []byte, repo string, r *SigstoreRoot, out *CertIdentity) error {
 	var b sigstoreBundle
 	if err := strictDecode(bundleJSON, bundleShape, &b); err != nil {
 		return fmt.Errorf("the sigstore bundle is not the one shape corral accepts: %w", err)
@@ -298,16 +317,17 @@ func verifyBundle(bundleJSON, artifact []byte, repo string, r *SigstoreRoot) err
 	// 2. The identity: the token came from GitHub Actions, for exactly this
 	// repository. Defends against a valid Sigstore signature by anyone else
 	// — another repository, or a person's own account.
-	issuer, sourceRepo, err := fulcioIdentity(leaf)
+	issuer, id, err := fulcioIdentity(leaf)
 	if err != nil {
 		return err
 	}
 	if issuer != GitHubActionsIssuer {
 		return fmt.Errorf("signed with a token from %q, not GitHub Actions (%s)", issuer, GitHubActionsIssuer)
 	}
-	if want := githubURL(repo); sourceRepo != want {
-		return fmt.Errorf("signed from %s, not %s (the ledger's repository)", sourceRepo, want)
+	if want := githubURL(repo); id.Repo != want {
+		return fmt.Errorf("signed from %s, not %s (the ledger's repository)", id.Repo, want)
 	}
+	*out = id
 
 	// 3. The signature is over THIS entry. Defends against a genuine bundle
 	// lifted from another entry or artifact.
@@ -415,49 +435,93 @@ func chainsToFulcio(leaf *x509.Certificate, at time.Time, r *SigstoreRoot) bool 
 	return false
 }
 
+// Fulcio's GitHub workflow extensions, all under 1.3.6.1.4.1.57264.1. Every
+// one but the legacy issuer (1.1, raw bytes) is a DER UTF8String.
 var (
 	oidIssuerV1      = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 1}
+	oidBuildSigner   = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 9}
 	oidIssuerV2      = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 8}
+	oidRunnerEnv     = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 11}
 	oidSourceRepoURI = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 12}
+	oidSourceCommit  = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 13}
+	oidSourceRef     = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 14}
+	oidSourceRepoID  = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 15}
+	oidBuildConfig   = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 18}
+	oidBuildTrigger  = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 20}
 )
 
+// CertIdentity is what a verified Fulcio certificate says about the GitHub
+// Actions run that signed. Each field is the extension's value, or "" when
+// the certificate does not carry it: an absent extension is never guessed.
+// These are facts the certificate attests, not a verdict on them.
+type CertIdentity struct {
+	Repo        string // 1.3.6.1.4.1.57264.1.12 SourceRepositoryURI, e.g. https://github.com/o/r
+	RepoID      string // .15 SourceRepositoryIdentifier
+	Workflow    string // .18 BuildConfigURI: the full workflow@ref URI
+	BuildSigner string // .9 BuildSignerURI
+	Ref         string // .14 SourceRepositoryRef
+	Commit      string // .13 SourceRepositoryDigest
+	Trigger     string // .20 BuildTrigger
+	Runner      string // .11 RunnerEnvironment
+}
+
 // fulcioIdentity reads the OIDC issuer (1.8, a DER string; or, on an older
-// certificate without it, 1.1, raw bytes) and SourceRepositoryURI (1.12)
-// from a Fulcio certificate, as sigstore-go's fulcio/certificate
+// certificate without it, 1.1, raw bytes) and the GitHub workflow
+// extensions from a Fulcio certificate, as sigstore-go's fulcio/certificate
 // ParseExtensions does. Both issuer forms present and disagreeing is refused
-// rather than resolved by order.
-func fulcioIdentity(c *x509.Certificate) (issuer, sourceRepo string, err error) {
+// rather than resolved by order. A malformed DER value in any extension is
+// an error.
+func fulcioIdentity(c *x509.Certificate) (issuer string, id CertIdentity, err error) {
 	var v1, v2 string
 	var hasV1, hasV2 bool
+	fields := []struct {
+		oid asn1.ObjectIdentifier
+		dst *string
+		doc string
+	}{
+		{oidSourceRepoURI, &id.Repo, "source repository"},
+		{oidSourceRepoID, &id.RepoID, "source repository identifier"},
+		{oidBuildConfig, &id.Workflow, "build config"},
+		{oidBuildSigner, &id.BuildSigner, "build signer"},
+		{oidSourceRef, &id.Ref, "source ref"},
+		{oidSourceCommit, &id.Commit, "source commit"},
+		{oidBuildTrigger, &id.Trigger, "build trigger"},
+		{oidRunnerEnv, &id.Runner, "runner environment"},
+	}
 	for _, e := range c.Extensions {
 		switch {
 		case e.Id.Equal(oidIssuerV1):
 			v1, hasV1 = string(e.Value), true
+			continue
 		case e.Id.Equal(oidIssuerV2):
 			if v2, err = derString(e.Value); err != nil {
-				return "", "", fmt.Errorf("certificate issuer extension: %w", err)
+				return "", CertIdentity{}, fmt.Errorf("certificate issuer extension: %w", err)
 			}
 			hasV2 = true
-		case e.Id.Equal(oidSourceRepoURI):
-			if sourceRepo, err = derString(e.Value); err != nil {
-				return "", "", fmt.Errorf("certificate source repository extension: %w", err)
+			continue
+		}
+		for _, f := range fields {
+			if e.Id.Equal(f.oid) {
+				if *f.dst, err = derString(e.Value); err != nil {
+					return "", CertIdentity{}, fmt.Errorf("certificate %s extension: %w", f.doc, err)
+				}
 			}
 		}
 	}
 	switch {
 	case hasV1 && hasV2 && v1 != v2:
-		return "", "", fmt.Errorf("certificate names two issuers, %q and %q", v1, v2)
+		return "", CertIdentity{}, fmt.Errorf("certificate names two issuers, %q and %q", v1, v2)
 	case hasV2:
 		issuer = v2
 	case hasV1:
 		issuer = v1
 	default:
-		return "", "", errors.New("certificate names no OIDC issuer")
+		return "", CertIdentity{}, errors.New("certificate names no OIDC issuer")
 	}
-	if sourceRepo == "" {
-		return "", "", errors.New("certificate names no source repository")
+	if id.Repo == "" {
+		return "", CertIdentity{}, errors.New("certificate names no source repository")
 	}
-	return issuer, sourceRepo, nil
+	return issuer, id, nil
 }
 
 func derString(b []byte) (string, error) {

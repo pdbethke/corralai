@@ -25,6 +25,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/ledger"
+	"github.com/pdbethke/corralai/internal/ledger/ledgertest"
 )
 
 func trustFor(s *testSigstore, t *testing.T, repo string) ledger.Trust {
@@ -785,5 +786,59 @@ func TestSigCheckedIsPerEntry(t *testing.T) {
 		if c.SigChecked {
 			t.Errorf("VerifyIntegrity checks no signature: %+v", c)
 		}
+	}
+}
+
+// certEntry seals a keyless entry whose bundle was issued with the given
+// certificate claims, by the ledgertest CA.
+func certEntry(t *testing.T, s *ledgertest.Sigstore, repo string, c ledgertest.CertClaims) ledger.Entry {
+	t.Helper()
+	e := ledger.Entry{Format: ledger.Format6, KeyID: ledger.KeyIDSigstore,
+		Pushed: time.Now().UTC().Truncate(time.Microsecond),
+		Bundle: ledger.Bundle{Scan: ledger.ScanRow{Repo: repo, Commit: "abcdef123456", ScanID: 1, CorralVersion: "vtest"}}}
+	e.ScanUID = ledger.ScanUID(e.Bundle.Scan, e.Pushed)
+	e.Bundle.Scan.ScanUID = e.ScanUID
+	h, err := ledger.EntryHash(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Hash = h
+	art, err := ledger.KeylessArtifact(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Sigstore = s.IssueAs(t, art, repo, c)
+	return reparse(t, e)
+}
+
+// A verified keyless entry carries what its certificate says about the run
+// that signed, so a later policy can judge more than "some run of the repo".
+func TestKeylessEntryCarriesItsCertificateFacts(t *testing.T) {
+	s := ledgertest.New(t)
+	wf := "https://github.com/o/r/.github/workflows/corral.yml@refs/heads/attacker"
+	e := certEntry(t, s, "o/r", ledgertest.CertClaims{Workflow: wf, Ref: "refs/heads/attacker", Commit: "abc123",
+		RepoID: "42", Trigger: "push", Runner: "github-hosted", BuildSigner: wf})
+	c := only(t, ledger.Verify([]ledger.Entry{e}, ledger.Trust{Repo: "o/r", SigstoreRoot: s.Root(t)}))
+	if c.Problem != "" || !c.SigOK {
+		t.Fatalf("must verify: %+v", c)
+	}
+	want := ledger.CertIdentity{Repo: "https://github.com/o/r", RepoID: "42", Workflow: wf, BuildSigner: wf,
+		Ref: "refs/heads/attacker", Commit: "abc123", Trigger: "push", Runner: "github-hosted"}
+	if c.Cert == nil || *c.Cert != want {
+		t.Fatalf("cert facts = %+v, want %+v", c.Cert, want)
+	}
+}
+
+// An absent extension is "", never a guess; and a failed bundle carries none.
+func TestAbsentExtensionIsEmptyNotGuessed(t *testing.T) {
+	s := ledgertest.New(t)
+	e := certEntry(t, s, "o/r", ledgertest.CertClaims{})
+	c := only(t, ledger.Verify([]ledger.Entry{e}, ledger.Trust{Repo: "o/r", SigstoreRoot: s.Root(t)}))
+	if c.Cert == nil || *c.Cert != (ledger.CertIdentity{Repo: "https://github.com/o/r"}) {
+		t.Fatalf("only Repo may be set: %+v", c.Cert)
+	}
+	bad := only(t, ledger.Verify([]ledger.Entry{e}, ledger.Trust{Repo: "o/other", SigstoreRoot: s.Root(t)}))
+	if bad.Cert != nil {
+		t.Fatalf("an entry that failed verification must carry no cert facts: %+v", bad.Cert)
 	}
 }

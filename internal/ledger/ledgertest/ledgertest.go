@@ -129,8 +129,31 @@ func (s *Sigstore) Root(t testing.TB) *ledger.SigstoreRoot {
 // its signed entry timestamp, inclusion proof and signed checkpoint.
 func (s *Sigstore) Issue(t testing.TB, artifact []byte, repo string) []byte {
 	t.Helper()
+	return s.IssueAs(t, artifact, repo, defaultClaims(repo))
+}
+
+// CertClaims are the GitHub workflow extensions a test certificate carries.
+// A claim left "" is omitted from the certificate. Workflow is the .18 Build
+// Config URI and also names the certificate's SAN; the rest are .14 Ref,
+// .13 Commit, .15 RepoID, .20 Trigger, .11 Runner and .9 BuildSigner.
+type CertClaims struct {
+	Workflow, Ref, Commit, RepoID, Trigger, Runner, BuildSigner string
+}
+
+// defaultClaims are the values Issue and Certify have always issued: test
+// fixtures, not product defaults.
+func defaultClaims(repo string) CertClaims {
+	return CertClaims{
+		Workflow: "https://github.com/" + repo + "/.github/workflows/audit.yml@refs/heads/main",
+		Ref:      "refs/heads/main",
+	}
+}
+
+// IssueAs is Issue with the certificate's workflow claims named by the caller.
+func (s *Sigstore) IssueAs(t testing.TB, artifact []byte, repo string, c CertClaims) []byte {
+	t.Helper()
 	leafKey := key(t)
-	leaf := s.Certify(t, &leafKey.PublicKey, repo)
+	leaf := s.CertifyAs(t, &leafKey.PublicKey, repo, c)
 	digest := sha256.Sum256(artifact)
 	sig, err := ecdsa.SignASN1(rand.Reader, leafKey, digest[:])
 	if err != nil {
@@ -177,6 +200,13 @@ func (s *Sigstore) Issue(t testing.TB, artifact []byte, repo string) []byte {
 // issues one to a GitHub Actions run of github.com/<repo>. Returns its DER.
 func (s *Sigstore) Certify(t testing.TB, pub crypto.PublicKey, repo string) []byte {
 	t.Helper()
+	return s.CertifyAs(t, pub, repo, defaultClaims(repo))
+}
+
+// CertifyAs is Certify with the workflow claims named by the caller; a claim
+// left "" is omitted from the certificate.
+func (s *Sigstore) CertifyAs(t testing.TB, pub crypto.PublicKey, repo string, c CertClaims) []byte {
+	t.Helper()
 	notBefore := time.Now().UTC().Add(-time.Minute).Truncate(time.Second)
 	issuer, err := asn1.MarshalWithParams(ledger.GitHubActionsIssuer, "utf8")
 	if err != nil {
@@ -186,21 +216,38 @@ func (s *Sigstore) Certify(t testing.TB, pub crypto.PublicKey, repo string) []by
 	if err != nil {
 		t.Fatal(err)
 	}
-	san, err := url.Parse("https://github.com/" + repo + "/.github/workflows/audit.yml@refs/heads/main")
-	if err != nil {
-		t.Fatal(err)
+	exts := []pkix.Extension{
+		{Id: asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 1}, Value: []byte(ledger.GitHubActionsIssuer)},
+		{Id: asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 8}, Value: issuer},
+		{Id: asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 12}, Value: source},
 	}
-	return cert(t, &x509.Certificate{
+	for _, x := range []struct {
+		arc   int
+		claim string
+	}{{9, c.BuildSigner}, {11, c.Runner}, {13, c.Commit}, {14, c.Ref}, {15, c.RepoID}, {18, c.Workflow}, {20, c.Trigger}} {
+		if x.claim == "" {
+			continue
+		}
+		v, err := asn1.MarshalWithParams(x.claim, "utf8")
+		if err != nil {
+			t.Fatal(err)
+		}
+		exts = append(exts, pkix.Extension{Id: asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, x.arc}, Value: v})
+	}
+	tmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(time.Now().UnixNano()),
 		NotBefore:    notBefore, NotAfter: notBefore.Add(10 * time.Minute),
 		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageCodeSigning},
-		URIs: []*url.URL{san},
-		ExtraExtensions: []pkix.Extension{
-			{Id: asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 1}, Value: []byte(ledger.GitHubActionsIssuer)},
-			{Id: asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 8}, Value: issuer},
-			{Id: asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 12}, Value: source},
-		},
-	}, s.interCert, pub, s.interKey).Raw
+		ExtraExtensions: exts,
+	}
+	if c.Workflow != "" {
+		san, err := url.Parse(c.Workflow)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tmpl.URIs = []*url.URL{san}
+	}
+	return cert(t, tmpl, s.interCert, pub, s.interKey).Raw
 }
 
 // ChainPEM is the CA's chain above a leaf, intermediate first, as Fulcio

@@ -670,7 +670,7 @@ var printedMetrics = map[string]printedRow{
 	"internal/ledger/derive.go:ledgerProblem":                            {Exempt: "verify-time problem text: how many entries are off the single chain, computed when the ledger is read"},
 	"internal/ledger/keyless.go:KeylessArtifact":                         {Exempt: "error message: the numbers are limits, ids, exit codes, offsets and counts inside a failure text, not an audit measurement"},
 	"internal/ledger/keyless.go:UnmarshalJSON":                           {Exempt: "decoding helper: integer formatted for parsing"},
-	"internal/ledger/keyless.go:verifyBundle":                            {Exempt: "error message and the canonical transparency-log body whose index and time are the Sigstore bundle's own"},
+	"internal/ledger/keyless.go:verifyBundleInto":                        {Exempt: "error message and the canonical transparency-log body whose index and time are the Sigstore bundle's own"},
 	"internal/ledger/keyless.go:verifyCheckpoint":                        {Exempt: "error message: tree size mismatch in a checkpoint proof"},
 	"internal/ledger/keyless.go:verifyInclusion":                         {Exempt: "error message: inclusion proof sizes"},
 	"internal/ledger/scanuid.go:ScanUID":                                 {Exempt: "identity framing: the scan id and length-prefixed fields hashed into a scan uid"},

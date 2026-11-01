@@ -57,7 +57,10 @@ type ChainCheck struct {
 	// chain does not hold here). Filled with or without a key; only SigOK
 	// says the signature was checked. For a keyless entry it is the
 	// repository URI its certificate names, and only once that verified.
-	Signer  string
+	Signer string
+	// Cert is what the signing certificate says about the run that signed:
+	// set only for a keyless entry whose bundle verified, nil otherwise.
+	Cert    *CertIdentity
 	Problem string // "" when nothing is wrong
 	Genesis bool
 	// Kind is the entry's kind; Note says what a retraction or checkpoint
@@ -147,13 +150,14 @@ func walk(entries []Entry, t Trust, integrityOnly bool) ([]ChainCheck, *SignerSe
 		// never resolved against the signer set: it holds no key the set
 		// could name. keylessProblem also enforces, for EVERY entry, that
 		// format 6 and keyid "sigstore" go together.
-		keyless, signedBy, keylessChecked := keylessProblem(e, t, integrityOnly)
+		keyless, signedBy, keylessChecked, cert := keylessProblem(e, t, integrityOnly)
 		var name, keyProblem string
 		var key ed25519.PublicKey
 		if c.Keyless {
 			c.SigOK = keyless == "" && signedBy != ""
 			c.SigChecked = keylessChecked
 			c.Signer = signedBy
+			c.Cert = cert
 		} else {
 			// The key is resolved BEFORE the signature is checked, from the
 			// set as it stands at this entry — never from the entry's own

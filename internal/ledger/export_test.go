@@ -7,7 +7,10 @@ import "encoding/json"
 // VerifyKeylessBundle exposes the bundle check, over any artifact, to the
 // external test package: the differential and real-bundle tests verify bytes
 // that are not ledger entries.
-var VerifyKeylessBundle = verifyBundle
+func VerifyKeylessBundle(bundleJSON, artifact []byte, repo string, r *SigstoreRoot) error {
+	_, err := verifyBundle(bundleJSON, artifact, repo, r)
+	return err
+}
 
 // StrictDecodeBundle is the shape gate and decode the keyless verifier runs
 // on a bundle, and JSONDecodeBundle is the plain encoding/json decode of the

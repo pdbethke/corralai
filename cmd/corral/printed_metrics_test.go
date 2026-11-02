@@ -358,7 +358,8 @@ var printedMetrics = map[string]printedRow{
 		"Row.ProvenMissed", "Row.SymbolsProbed", "Row.Symbols", "Row.DecisionsProbed", "Row.Decisions",
 		"Row.RegionsProbed", "Row.RegionsTotal", "Row.DroppedRegions", "Row.VacuousFindings", "Row.VerdictJSON",
 		"Row.MutantsUnmeasured", "Row.MutantsDuplicate", "Row.WriterAttempts"}},
-	"cmd/corral/certify_adversarial.go:killConfirmationLine": {Fields: []string{"MutantRow.KillConfirmation", "MutantRow.UnrepeatedKilledBy"}},
+	"cmd/corral/certify_adversarial.go:killConfirmationLine": {Fields: []string{"MutantRow.KillConfirmation"},
+		Exempt: "wall time of the confirmation pass; not recorded, phase 3 reads it from the run log"},
 
 	"cmd/corral/certify_local.go:runCertifyLocalAs": {Fields: []string{"Row.MutantsPlanted", "Row.MutantsFrom"},
 		Exempt: "tape beat count describes the --record-tape file this run writes, an output artifact; record id is a key"},

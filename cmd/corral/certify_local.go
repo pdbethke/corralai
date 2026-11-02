@@ -3060,6 +3060,7 @@ func advVerdictFromPool(v advpool.Verdict) advVerdict {
 		AuthoredTogetherOutput:   v.AuthoredTogetherOutput,
 		DevKilledMutants:         v.DevKilledMutants,
 		DevSurvivedMutants:       v.DevSurvivedMutants,
+		ConfirmDuration:          v.ConfirmDuration,
 	}
 	for _, f := range v.VacuousFindings {
 		out.VacuousFindings = append(out.VacuousFindings, advFinding{

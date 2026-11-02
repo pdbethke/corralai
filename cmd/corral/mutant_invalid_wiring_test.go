@@ -67,6 +67,11 @@ func TestAdvVerdictCarriesAndShowsMutantsUnmeasured(t *testing.T) {
 	if !strings.Contains(b.String(), "unmeasured:    7 mutant(s)") {
 		t.Errorf("rendered verdict hides the unmeasured count:\n%s", b.String())
 	}
+	// A kill confirmation whose compliant re-run timed out is unmeasured
+	// too, so the line names both ways a command can fail to pass.
+	if !strings.Contains(b.String(), "fails or times out on the unmutated code") {
+		t.Errorf("the unmeasured line must cover a re-run that timed out:\n%s", b.String())
+	}
 	b.Reset()
 	renderAdvVerdict(&b, "x.go", advVerdict{MutantsTotal: 4})
 	if strings.Contains(b.String(), "unmeasured") {

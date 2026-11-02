@@ -401,7 +401,8 @@ this run was pushed without its source (<code>--push-source</code>). The counts 
 <span class="chip mute">unproven</span> one was not, so it may be a missing test or a fault no test can see.</p>
 {{range .Survivors}}
 <div class="finding"><p class="small mono"><strong>{{.ID}}</strong>{{if .Line}} · line {{.Line}}{{end}}
-{{if .Proven}}<span class="chip ok">proven</span>{{else}}<span class="chip mute">unproven</span>{{end}}</p>
+{{if .Proven}}<span class="chip ok">proven</span>{{else}}<span class="chip mute">unproven</span>{{end}}
+{{if .DidNotRepeat}}<span class="chip warn">first run failed in <code>{{.DidNotRepeat}}</code>, did not repeat</span>{{end}}</p>
 {{if .Diff}}<pre>{{.Diff}}</pre>{{end}}</div>
 {{end}}
 {{end}}

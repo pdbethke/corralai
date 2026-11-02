@@ -50,3 +50,26 @@ func TestPrintRepoReportWarnsWhenProvenTestsFailTogether(t *testing.T) {
 		t.Errorf("the report hands over the tests without saying they fail together:\n%s", got)
 	}
 }
+
+// The run line counts how the kills were confirmed from the verdict's own
+// mutant refs, and a kill refuted on repeat is counted as a survivor that
+// did not repeat, never as a kill.
+func TestRunLineCountsKillConfirmations(t *testing.T) {
+	v := advVerdictFromPool(advpool.Verdict{
+		DevKilledMutants: []advpool.MutantRef{
+			{ID: "a", KillConfirmation: "alone"}, {ID: "b", KillConfirmation: "alone"}, {ID: "c", KillConfirmation: "repeated"},
+		},
+		DevSurvivedMutants: []advpool.MutantRef{{ID: "d", UnrepeatedKilledBy: "test_slow"}, {ID: "e"}},
+	})
+	var b strings.Builder
+	renderAdvVerdict(&b, "x.go", v)
+	want := "  kills confirmed: 2 alone, 1 by repeating the run; 1 first-run failures did not repeat (now survivors)\n"
+	if !strings.Contains(b.String(), want) {
+		t.Errorf("missing the confirmation line %q in:\n%s", want, b.String())
+	}
+	b.Reset()
+	renderAdvVerdict(&b, "x.go", advVerdictFromPool(advpool.Verdict{DevSurvivedMutants: []advpool.MutantRef{{ID: "e"}}}))
+	if strings.Contains(b.String(), "kills confirmed") {
+		t.Errorf("no candidate, no line:\n%s", b.String())
+	}
+}

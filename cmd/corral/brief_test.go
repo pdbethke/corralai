@@ -36,7 +36,7 @@ func briefLedger(t *testing.T) (string, string) {
 		},
 		Mutants: []auditpush.MutantRow{
 			{Repo: "o/r", ScanID: 1, Path: "pkg/a.go", MutantID: "s0/m1", Outcome: "survived", Proven: true, SpanStart: 3, SpanEnd: 3, Shape: "return-changed", Code: adequacy.EncodeHunk("return a + b", "return a - b")},
-			{Repo: "o/r", ScanID: 1, Path: "pkg/a.go", MutantID: "s0/m2", Outcome: "survived", SpanStart: 7, SpanEnd: 9, Shape: "condition-negated"},
+			{Repo: "o/r", ScanID: 1, Path: "pkg/a.go", MutantID: "s0/m2", Outcome: "survived", SpanStart: 7, SpanEnd: 9, Shape: "condition-negated", UnrepeatedKilledBy: "TestSlow"},
 			{Repo: "o/r", ScanID: 1, Path: "pkg/a.go", MutantID: "s0/m3", Outcome: "killed", KilledBy: "TestX", SpanStart: 12, SpanEnd: 12},
 		},
 	}); err != nil {
@@ -118,6 +118,9 @@ func TestBriefJSONRoundTrips(t *testing.T) {
 	f := b.Paths[0].Findings[0]
 	if f.Review != hash || f.Adjudged != "confirmed" || f.Outcome != "adjudication by pdbethke" || b.Paths[0].DidNotHold != 1 || b.Paths[0].Undecided != 1 {
 		t.Fatalf("finding: %+v; counts %d/%d", f, b.Paths[0].DidNotHold, b.Paths[0].Undecided)
+	}
+	if raw := out.String(); !strings.Contains(raw, `"unrepeated_killed_by": "TestSlow"`) && !strings.Contains(raw, `"unrepeated_killed_by":"TestSlow"`) {
+		t.Errorf("the refuted first run's test does not travel in the JSON:\n%s", raw)
 	}
 	if b.Paths[0].ProvenGaps[0].Search != "return a + b" || b.Paths[0].Scan.AuthoredTst == "" {
 		t.Fatalf("the gap's hunk and the closing test travel: %+v", b.Paths[0])

@@ -177,3 +177,28 @@ func TestLoadReadsALedgerDirectory(t *testing.T) {
 		}
 	}
 }
+
+// A kill recorded before kills were confirmed is not the suite watching the
+// code: Render says so, while a confirmed kill keeps the old text.
+func TestRenderSaysAnOldKillIsUnconfirmed(t *testing.T) {
+	old := Render([]Tried{{Path: "a.py", ID: "m1", Outcome: "killed", KilledBy: "t::x"}})
+	if !strings.Contains(old, "(unconfirmed: recorded before kills were confirmed)") || strings.Contains(old, "the suite watches this") {
+		t.Errorf("old kill:\n%s", old)
+	}
+	for _, c := range []string{"alone", "repeated"} {
+		got := Render([]Tried{{Path: "a.py", ID: "m1", Outcome: "killed", KilledBy: "t::x", KillConfirmation: c}})
+		if !strings.Contains(got, "KILLED by t::x (the suite watches this)") {
+			t.Errorf("%s kill:\n%s", c, got)
+		}
+	}
+}
+
+// The digest must differ between a prior built from confirmed kills and one
+// built from unconfirmed kills.
+func TestDigestCoversKillConfirmation(t *testing.T) {
+	a := []Tried{{Path: "a.py", ID: "m1", Outcome: "killed"}}
+	b := []Tried{{Path: "a.py", ID: "m1", Outcome: "killed", KillConfirmation: "alone"}}
+	if Digest(a) == Digest(b) {
+		t.Error("digest ignores KillConfirmation")
+	}
+}

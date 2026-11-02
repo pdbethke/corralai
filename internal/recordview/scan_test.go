@@ -287,3 +287,18 @@ func TestAScanPageNamesItsJailAndImage(t *testing.T) {
 		t.Error("a scan that recorded no image must not show an image row")
 	}
 }
+
+// A survivor whose first grading run failed but did not repeat says which
+// test the first run blamed, so a reader can tell it from an ordinary
+// survivor. The page shows no confirmation chip on killed mutants because it
+// lists none; this is the one place the confirmation reaches it.
+func TestASurvivorThatDidNotRepeatNamesTheBlamedTest(t *testing.T) {
+	const hash = "94d9296c5801c7b56dea3ccb0e7517f7254fded3441bcbeefccc01f550dce4dc"
+	e := warpLikeScan(hash, true)
+	e.Bundle.Mutants[1].UnrepeatedKilledBy = "tests::slow_one"
+	_, page := renderOne(t, []auditpush.LedgerEntry{e})
+	p := page("94d9296c5801")
+	if !strings.Contains(p, "first run failed in") || !strings.Contains(p, "tests::slow_one") {
+		t.Errorf("the page hides the unrepeated first-run failure")
+	}
+}

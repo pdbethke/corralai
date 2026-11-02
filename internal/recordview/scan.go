@@ -69,6 +69,10 @@ type MutantView struct {
 	Line   int
 	Proven bool
 	Diff   string
+	// DidNotRepeat is the test a first grading run blamed for a kill that
+	// the repeat did not reproduce, so the mutant is a survivor. Empty for
+	// an ordinary survivor.
+	DidNotRepeat string
 }
 
 // ReasonCount is how many files a scan left out for one reason.
@@ -145,7 +149,7 @@ func buildScanView(e auditpush.LedgerEntry, c ChainView, retraction *auditpush.L
 			if m.Outcome != "survived" {
 				continue
 			}
-			mv := MutantView{ID: m.MutantID, Line: m.SpanStart, Proven: m.Proven, Diff: diffOf(m.Code)}
+			mv := MutantView{ID: m.MutantID, Line: m.SpanStart, Proven: m.Proven, Diff: diffOf(m.Code), DidNotRepeat: m.UnrepeatedKilledBy}
 			if mv.Diff == "" {
 				fv.Unsurfaced++
 			}

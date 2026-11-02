@@ -95,6 +95,11 @@ type BriefMutant struct {
 	Search   string `json:"search,omitempty"`
 	Replace  string `json:"replace,omitempty"`
 	KilledBy string `json:"killed_by,omitempty"`
+	// KillConfirmation is how a kill was confirmed ("alone", "repeated"); empty
+	// is unconfirmed. UnrepeatedKilledBy is the test a first run blamed on a
+	// mutant that then survived the repeat.
+	KillConfirmation   string `json:"kill_confirmation,omitempty"`
+	UnrepeatedKilledBy string `json:"unrepeated_killed_by,omitempty"`
 }
 
 // BriefClaim is one review finding that stands against the file.
@@ -226,7 +231,8 @@ func buildBrief(dir string, all []auditpush.LedgerEntry, paths []string, maxItem
 				if m.Path != r.Path || m.Outcome != "survived" {
 					continue
 				}
-				bm := BriefMutant{ID: m.MutantID, Span: spanText(m.SpanStart, m.SpanEnd), Shape: m.Shape, KilledBy: m.KilledBy}
+				bm := BriefMutant{ID: m.MutantID, Span: spanText(m.SpanStart, m.SpanEnd), Shape: m.Shape, KilledBy: m.KilledBy,
+					KillConfirmation: m.KillConfirmation, UnrepeatedKilledBy: m.UnrepeatedKilledBy}
 				if s, rep, ok := adequacy.DecodeHunk(m.Code); ok {
 					bm.Search, bm.Replace = s, rep
 				}

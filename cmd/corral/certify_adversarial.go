@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/brainclient"
@@ -46,13 +47,17 @@ type advVerdict struct {
 	MutantsUnmeasured int `json:"mutants_unmeasured,omitempty"`
 	// MutantsDistinct / MutantsDistinctSurvived mirror advpool.Verdict's:
 	// the distinct measured edits the 95% interval is taken over.
-	MutantsDistinct         int      `json:"mutants_distinct,omitempty"`
-	MutantsDistinctSurvived int      `json:"mutants_distinct_survived,omitempty"`
-	Survivors               int      `json:"Survivors"`
-	ProvenMissed            int      `json:"ProvenMissed"`
-	RegionsTotal            int      `json:"RegionsTotal"`
-	RegionsProbed           int      `json:"RegionsProbed"`
-	DroppedRegions          []string `json:"DroppedRegions"`
+	MutantsDistinct         int `json:"mutants_distinct,omitempty"`
+	MutantsDistinctSurvived int `json:"mutants_distinct_survived,omitempty"`
+	// DevKilledMutants / DevSurvivedMutants mirror advpool.Verdict's: the
+	// per-mutant refs the run line's confirmation counts are taken from.
+	DevKilledMutants   []advpool.MutantRef `json:"DevKilledMutants,omitempty"`
+	DevSurvivedMutants []advpool.MutantRef `json:"DevSurvivedMutants,omitempty"`
+	Survivors          int                 `json:"Survivors"`
+	ProvenMissed       int                 `json:"ProvenMissed"`
+	RegionsTotal       int                 `json:"RegionsTotal"`
+	RegionsProbed      int                 `json:"RegionsProbed"`
+	DroppedRegions     []string            `json:"DroppedRegions"`
 	// DuplicateMutants: generated mutants that were byte-identical edits of
 	// another and were collapsed before scoring — see
 	// adequacy.DedupeMutants. Disclosed so the graded denominator is
@@ -531,6 +536,9 @@ func renderAdvVerdict(w io.Writer, codePath string, v advVerdict) {
 	if v.MutantsUnmeasured > 0 {
 		fmt.Fprintf(w, "  unmeasured:    %d mutant(s) were not graded: the command chosen to grade them fails on the unmutated code, so its answer is not evidence\n", v.MutantsUnmeasured)
 	}
+	if line := killConfirmationLine(v.DevKilledMutants, v.DevSurvivedMutants); line != "" {
+		fmt.Fprint(w, line)
+	}
 	if v.TimedOut {
 		// A claim carries how it was earned: dev_kill_rate/survivors above
 		// ARE real measurements (the run wouldn't be here, gradable, if they
@@ -745,4 +753,29 @@ func printAuthoredTogether(w io.Writer, indent, together, out string) {
 			fmt.Fprintf(w, "%s  | %s\n", indent, l)
 		}
 	}
+}
+
+// killConfirmationLine says how the run's kills were confirmed, from the
+// verdict's own mutant refs: kills credited on the first run alone, kills
+// credited after the repeat, and first-run failures that did not repeat and
+// so became survivors. "" when there is no candidate to count.
+func killConfirmationLine(killed, survived []advpool.MutantRef) string {
+	var alone, repeated, refuted int
+	for _, m := range killed {
+		switch m.KillConfirmation {
+		case adequacy.KillConfirmedAlone:
+			alone++
+		case adequacy.KillConfirmedRepeated:
+			repeated++
+		}
+	}
+	for _, m := range survived {
+		if m.UnrepeatedKilledBy != "" {
+			refuted++
+		}
+	}
+	if alone+repeated+refuted == 0 {
+		return ""
+	}
+	return fmt.Sprintf("  kills confirmed: %d alone, %d by repeating the run; %d first-run failures did not repeat (now survivors)\n", alone, repeated, refuted)
 }

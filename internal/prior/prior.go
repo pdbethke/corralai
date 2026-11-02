@@ -51,7 +51,11 @@ type Tried struct {
 	// survivor.
 	Outcome  string
 	KilledBy string
-	Proven   bool
+	// KillConfirmation is how a kill was confirmed (adequacy.KillConfirmed*):
+	// empty on a kill recorded before kills were confirmed, which is
+	// UNCONFIRMED, not confirmed-by-default.
+	KillConfirmation string
+	Proven           bool
 }
 
 // Prior is everything a source held, indexed by path.
@@ -99,7 +103,7 @@ func Load(source string) (*Prior, error) {
 					// because it went unjudged. Render says what happened.
 					t := Tried{Path: m.Path, ParentSHA256: m.ParentSHA256, ID: m.MutantID,
 						Span: lang.LineRange{Start: m.SpanStart, End: m.SpanEnd}, Shape: m.Shape,
-						Outcome: m.Outcome, KilledBy: m.KilledBy, Proven: m.Proven}
+						Outcome: m.Outcome, KilledBy: m.KilledBy, KillConfirmation: m.KillConfirmation, Proven: m.Proven}
 					// The hunk, when the entry carries source (the local
 					// entry always does; a pushed one only with
 					// --push-source). A row without one is a bare outcome.
@@ -165,7 +169,7 @@ func mergeTried(all []Tried) map[string][]Tried {
 			into.Search, into.Replace = t.Search, t.Replace
 		}
 		if into.Outcome == "" && t.Outcome != "" {
-			into.Outcome, into.KilledBy, into.Proven = t.Outcome, t.KilledBy, t.Proven
+			into.Outcome, into.KilledBy, into.KillConfirmation, into.Proven = t.Outcome, t.KilledBy, t.KillConfirmation, t.Proven
 		}
 		if into.Shape == "" {
 			into.Shape = t.Shape
@@ -327,7 +331,7 @@ func Digest(tried []Tried) string {
 	for _, t := range sorted(tried) {
 		// The hunk is in the hash: Render quotes it, so two priors that
 		// hand the generator different text must never share a digest.
-		fmt.Fprintf(h, "%s\x00%s\x00%s\x00%d-%d\x00%s\x00%s\x00%s\x00%v\x00%s\x00%s\n", t.Path, t.ParentSHA256, t.ID, t.Span.Start, t.Span.End, t.Shape, t.Outcome, t.KilledBy, t.Proven, t.Search, t.Replace)
+		fmt.Fprintf(h, "%s\x00%s\x00%s\x00%d-%d\x00%s\x00%s\x00%s\x00%s\x00%v\x00%s\x00%s\n", t.Path, t.ParentSHA256, t.ID, t.Span.Start, t.Span.End, t.Shape, t.Outcome, t.KilledBy, t.KillConfirmation, t.Proven, t.Search, t.Replace)
 	}
 	return hex.EncodeToString(h.Sum(nil))[:16]
 }
@@ -380,6 +384,13 @@ func Render(tried []Tried) string {
 			fmt.Fprintf(&b, ": `%s` → `%s`", oneLine(t.Search), oneLine(t.Replace))
 		}
 		switch {
+		case t.Outcome == "killed" && t.KillConfirmation == "" && t.KilledBy != "":
+			// Every entry before generation 40 records kills nobody
+			// confirmed; presenting them as the suite watching the code
+			// would hand the generator a claim no run backed.
+			fmt.Fprintf(&b, " — KILLED by %s (unconfirmed: recorded before kills were confirmed)", t.KilledBy)
+		case t.Outcome == "killed" && t.KillConfirmation == "":
+			b.WriteString(" — KILLED (unconfirmed: recorded before kills were confirmed)")
 		case t.Outcome == "killed" && t.KilledBy != "":
 			fmt.Fprintf(&b, " — KILLED by %s (the suite watches this)", t.KilledBy)
 		case t.Outcome == "killed":

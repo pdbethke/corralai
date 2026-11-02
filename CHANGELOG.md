@@ -25,13 +25,23 @@ history of any release, `git log v0.3.4..v0.3.5`.
   repeat on the unmutated code leaves the mutant unmeasured: the run prints
   why, and the ledger records the file's count of unmeasured mutants (not yet
   a row per mutant).
-  Confirming a kill costs up to four more test runs. The verdict generation
-  is now `40`, so verdicts cached before this are re-measured rather than
-  reused. Each ledger mutant row gains `KillConfirmation` (`alone` or
-  `repeated`, on a confirmed kill) and `UnrepeatedKilledBy` (on a survivor
-  whose first-run failure did not repeat: the id of the test that run blamed,
-  never its output). A kill recorded before this has no `KillConfirmation`
-  and is unconfirmed, never "alone".
+  Confirmation runs **serially, after every mutant has been graded**, so it
+  adds to a run's wall clock rather than overlapping it; the run prints a
+  `confirming kill N of M` line per candidate and the time the pass took.
+  Confirming a kill costs up to four more test runs. On runners that cannot
+  run the blamed test alone (every runner but vitest, jest, pytest and
+  `go test`), each kill costs two more full runs of the grading command. The
+  verdict generation is now `40`, so verdicts cached before this are
+  re-measured rather than reused. Each ledger mutant row gains
+  `KillConfirmation`, one of `alone` (the blamed test alone failed on the
+  mutant and passed on the unmutated code), `repeated` (the grading run
+  failed again and passed on the unmutated code) or `reprobed` (the grading
+  run timed out and the unmutated code finished in time under the same cap)
+  on a kill, and `not-repeated` on a survivor whose first-run failure did not
+  repeat; plus `UnrepeatedKilledBy` on such a survivor (the id of the test
+  that first run blamed, never its output, absent when it named none). A
+  kill recorded before this has no `KillConfirmation` and is unconfirmed,
+  never "alone", and the record page marks an entry holding one.
 
 ## [v1.0.0-rc.30] — 2026-11-01
 

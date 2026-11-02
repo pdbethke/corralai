@@ -9,6 +9,28 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [Unreleased]
+
+### Breaking
+
+- **A kill is confirmed before it is credited, so kill rates can fall.** A
+  mutant used to count as killed on the exit code of one failing test run, and
+  one slow test that fails under load and passes alone could be credited with
+  many kills (REA's run t14 credited 7 kills to such a test). Now each failing
+  grading run is confirmed: the test the runner blamed is run alone on the
+  mutant and on the unmutated code where the runner can name and run one test,
+  and otherwise the grading run is repeated. A first-run failure that does not
+  repeat is recorded as a **survivor**, and counts as one everywhere (the kill
+  rate, the test writer's targets, proven gaps). A suite that also fails the
+  repeat on the unmutated code leaves the mutant unmeasured, with its reason.
+  Confirming a kill costs up to four more test runs. The verdict generation
+  is now `40`, so verdicts cached before this are re-measured rather than
+  reused. Each ledger mutant row gains `KillConfirmation` (`alone` or
+  `repeated`, on a confirmed kill) and `UnrepeatedKilledBy` (on a survivor
+  whose first-run failure did not repeat: the id of the test that run blamed,
+  never its output). A kill recorded before this has no `KillConfirmation`
+  and is unconfirmed, never "alone".
+
 ## [v1.0.0-rc.30] — 2026-11-01
 
 ### Added

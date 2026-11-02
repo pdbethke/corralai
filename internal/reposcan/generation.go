@@ -355,7 +355,18 @@ package reposcan
 // document unmarshals MutantSources as nil, which reads as "no source was
 // recorded" for mutants this generation would have named. "38" has reached
 // main, so this is a shape bump, not a ride-along.
-const VerdictGeneration = "39"
+// "40" (2026-11-02): a kill is confirmed before it is credited (spec
+// 2026-11-02-kill-confirmation-design.md). A failing grading run used to be
+// a kill on its exit code alone; REA's t14 credited 7 kills to one slow test
+// that passes alone on every one of those mutants. Now the test the run
+// blamed is run alone on the mutant and on the unmutated code, or the
+// grading run is repeated, and a first-run failure that does not repeat is a
+// survivor (MutantRef.UnrepeatedKilledBy names the test it blamed). The
+// meaning of "killed" changed, so a "39" verdict's kills are unconfirmed and
+// must be re-measured, not reused: kill rates can fall. MutantRef also gained
+// KillConfirmation and UnrepeatedKilledBy, which sit inside the Verdict's
+// mutant lists and so outside the shallow fingerprint below. Behaviour bump.
+const VerdictGeneration = "40"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

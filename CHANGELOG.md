@@ -30,7 +30,9 @@ history of any release, `git log v0.3.4..v0.3.5`.
   `confirming kill N of M` line per candidate and the time the pass took.
   Confirming a kill costs up to four more test runs. On runners that cannot
   run the blamed test alone (every runner but vitest, jest, pytest and
-  `go test`), each kill costs two more full runs of the grading command. The
+  `go test`, and on those four whenever the test command already carries a
+  name filter, or, for pytest, a long option corral cannot tell is a flag),
+  each kill costs two more full runs of the grading command. The
   verdict generation is now `40`, so verdicts cached before this are
   re-measured rather than reused. Each ledger mutant row gains
   `KillConfirmation`, one of `alone` (the blamed test alone failed on the

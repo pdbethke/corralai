@@ -2598,8 +2598,18 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 	// handed to all three scorer wirings so no substrate silently drops the
 	// column.
 	var failureParser lang.FailureParser
+	// A KILL IS CONFIRMED BEFORE IT IS CREDITED (spec 2026-11-02 §5). The
+	// runner row that names the failing test is also the one that can run it
+	// alone, so the confirmer is resolved here, off the same plugin and
+	// invocation, and handed to the same three scorer wirings. A runner with
+	// no KillerCmd row leaves it nil, and adequacy confirms by repeating the
+	// grading run instead: never an unconfirmed kill.
+	var killerCmd adequacy.KillerCmdFor
 	if plug, ok := lang.ByName(in.langName); ok {
 		failureParser = lang.FailureParserFor(plug, in.inv.WithArgv(in.checkArgv))
+		if f := lang.KillerCmdFor(plug, in.inv.WithArgv(in.checkArgv)); f != nil {
+			killerCmd = adequacy.KillerCmdFor(f)
+		}
 	}
 
 	// A KILLED MUTANT NEEDS ONE FAILING TEST. Resolved off the same plugin,
@@ -2754,7 +2764,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		// has ONE tree, and a scorer told to run six mutants at once against
 		// it would queue five of them behind the borrow channel for the whole
 		// audit. The number that scores must be the number that exists.
-		w.scorer = advpool.JailScorer{Jail: pool, RepoDir: in.repoDir, BaseFiles: base, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Landing: w.landing, Concurrency: pool.Trees(), Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, FailFast: failFast}
+		w.scorer = advpool.JailScorer{Jail: pool, RepoDir: in.repoDir, BaseFiles: base, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Landing: w.landing, Concurrency: pool.Trees(), Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, KillerCmd: killerCmd, FailFast: failFast}
 		w.validator = advpool.JailValidator{Jail: pool, RepoDir: in.repoDir, BaseFiles: base, DevTestPath: w.devTestKey, Landing: w.landing}
 		w.jailEnum = advpool.JailEnumerator{Jail: pool, BaseFiles: base}
 		// w.depBinds stays nil: there is nothing to bind read-only when the
@@ -2814,7 +2824,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		// RunSpec.Matrix, so wiring it here costs nothing when --matrix is off
 		// (the flag is the real gate).
 		enumerator := newRunEnumerator(in.iso, in.timeout, depBinds)
-		w.scorer = advpool.JailScorer{Jail: jail, RepoDir: in.repoDir, BaseFiles: repoFiles, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Landing: w.landing, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, FailFast: failFast}
+		w.scorer = advpool.JailScorer{Jail: jail, RepoDir: in.repoDir, BaseFiles: repoFiles, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Landing: w.landing, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, KillerCmd: killerCmd, FailFast: failFast}
 		w.validator = advpool.JailValidator{Jail: jail, RepoDir: in.repoDir, BaseFiles: repoFiles, DevTestPath: w.devTestKey, Landing: w.landing}
 		w.jailEnum = advpool.JailEnumerator{Jail: enumerator, BaseFiles: repoFiles}
 		if len(depBinds) > 0 {
@@ -2829,7 +2839,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		w.devTestKey = filepath.Base(in.testPath)
 		jail := newRunJail(in.iso, in.timeout, nil)
 		enumerator := newRunEnumerator(in.iso, in.timeout, nil)
-		w.scorer = advpool.JailScorer{Jail: jail, MutantTimeout: in.testTimeout, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, FailFast: failFast}
+		w.scorer = advpool.JailScorer{Jail: jail, MutantTimeout: in.testTimeout, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, KillerCmd: killerCmd, FailFast: failFast}
 		w.validator = advpool.JailValidator{Jail: jail}
 		w.jailEnum = advpool.JailEnumerator{Jail: enumerator}
 	}

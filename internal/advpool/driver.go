@@ -367,6 +367,17 @@ type MutantRef struct {
 	// With the generator model on the same row, "which shapes does this
 	// model plant, and which does this suite let through" is a query.
 	Shape string
+	// KillConfirmation is how this mutant's kill was confirmed
+	// (adequacy.MutantGrading.KillConfirmation): adequacy.KillConfirmedAlone
+	// or adequacy.KillConfirmedRepeated. Empty on a survivor, on a
+	// timeout-kill, and on every ref graded before confirmation existed — a
+	// reader treats its absence on a kill as "unconfirmed", never as alone.
+	KillConfirmation string
+	// UnrepeatedKilledBy is set on a SURVIVOR whose first grading run failed
+	// and whose repeat passed: the test id that first run blamed. A test id,
+	// never test output. It is a footnote to an ordinary survivor, not a
+	// separate class.
+	UnrepeatedKilledBy string
 }
 
 // toMutantRefs strips MUTANT SOURCE down to the reference scan_mutants needs:
@@ -390,6 +401,8 @@ func toMutantRefsWith(ms []adequacy.Mutant, grading map[string]adequacy.MutantGr
 			refs[i].Rule = g.Rule
 			refs[i].Duration = g.Duration
 			refs[i].KilledBy = g.KilledBy
+			refs[i].KillConfirmation = g.KillConfirmation
+			refs[i].UnrepeatedKilledBy = g.UnrepeatedKilledBy
 		}
 	}
 	return refs

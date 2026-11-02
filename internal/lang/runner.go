@@ -59,12 +59,12 @@ type Runner struct {
 	// FirstFailure names the first failing test in the runner's output (a
 	// label, never a grade); Flaky names tests that passed only on a retry.
 	FirstFailure func(output []byte) string
+	Flaky        func(output []byte) []string
 	// KillerCmd is the run's own argv, narrowed by name to the test
 	// FirstFailure named, so that it runs that test without the rest of the
 	// suite. No file is needed, because argv already scopes the files. false
 	// when argv carries a filter of its own, or the id cannot be narrowed to.
 	KillerCmd func(argv []string, killedBy string) ([]string, bool)
-	Flaky     func(output []byte) []string
 	// FailedTests and DeselectCmd let a partly failing authored test be
 	// salvaged: the failing ids, and argv rerun without them. DeselectCmd is
 	// shaped like SingleCmd, and refuses as it does (a name filter already in

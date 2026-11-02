@@ -35,6 +35,12 @@ func TestKillerCmdNarrowsTheRunByName(t *testing.T) {
 		{"python", "pytest", []string{"python3", "-m", "pytest", "-p", "no:cacheprovider", "tests"}, "tests/test_a.py::test_x",
 			[]string{"python3", "-m", "pytest", "-p", "no:cacheprovider", "tests/test_a.py::test_x"}},
 		{"go", "go-test", []string{"go", "test", "./..."}, "TestX/sub", []string{"go", "test", "-run", "^TestX$/^sub$", "./..."}},
+		{"go", "go-test", []string{"go", "test", "./..."}, "TestX/case_(a)", []string{"go", "test", "-run", `^TestX$/^case_\(a\)$`, "./..."}},
+		{"go", "go-test", []string{"go", "test", "./..."}, "TestX/x|y", []string{"go", "test", "-run", `^TestX$/^x\|y$`, "./..."}},
+		{"javascript", "vitest", []string{"node", "./node_modules/vitest/vitest.mjs", "watch"}, "A::b",
+			[]string{"node", "./node_modules/vitest/vitest.mjs", "run", "-t", `^A(?: | > )b$`}},
+		{"javascript", "vitest", []string{"node", "./node_modules/vitest/vitest.mjs"}, "A::b",
+			[]string{"node", "./node_modules/vitest/vitest.mjs", "run", "-t", `^A(?: | > )b$`}},
 	}
 	for _, c := range cases {
 		got, ok := killerRow(t, c.lang, c.runner).KillerCmd(c.argv, c.id)
@@ -55,6 +61,8 @@ func TestKillerCmdRefusesAFilteredArgv(t *testing.T) {
 		{"javascript", "jest", []string{"npx", "jest", "--testNamePattern", "y"}, "A::b"},
 		{"python", "pytest", []string{"python3", "-m", "pytest", "-k", "y"}, "t.py::x"},
 		{"go", "go-test", []string{"go", "test", "./..."}, ""},
+		{"go", "go-test", []string{"make", "test"}, "TestX"},
+		{"go", "go-test", []string{"sh", "-c", "go test ./..."}, "TestX"},
 		{"javascript", "vitest", []string{"node", "./node_modules/vitest/vitest.mjs", "run"}, ""},
 		{"javascript", "jest", []string{"npx", "jest"}, ""},
 	}
@@ -92,5 +100,23 @@ func TestKillerCmdForIsNilWithoutARow(t *testing.T) {
 	p, _ := ByName("ruby")
 	if KillerCmdFor(p, Invocation{Argv: []string{"bundle", "exec", "rspec"}}) != nil {
 		t.Error("rspec has no KillerCmd, KillerCmdFor must be nil")
+	}
+}
+
+func TestKillerCmdForShapesThroughAPackageScriptAsSingleTestCmdDoes(t *testing.T) {
+	p, _ := ByName("javascript")
+	inv := Invocation{Argv: []string{"npm", "test"}, Script: []string{"jest"}, Pass: "--", Narrow: true}
+	killer := KillerCmdFor(p, inv)
+	if killer == nil {
+		t.Fatal("KillerCmdFor is nil for a jest script")
+	}
+	got, ok := killer(inv.Argv, "Calc::adds")
+	want := []string{"npm", "test", "--", "--testNamePattern", "^Calc adds$"}
+	if !ok || !slices.Equal(got, want) {
+		t.Fatalf("got %q ok=%v, want %q", got, ok, want)
+	}
+	single, ok := SingleTestCmd(p, inv, "calc.test.js", "Calc::adds")
+	if !ok || !slices.Equal(single[:3], want[:3]) {
+		t.Fatalf("SingleTestCmd shapes as %q; killer %q does not match its prefix", single, got)
 	}
 }

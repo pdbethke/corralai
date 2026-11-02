@@ -9,6 +9,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -682,7 +683,7 @@ func goKillerCmd(argv []string, id string) ([]string, bool) {
 	}
 	parts := strings.Split(id, "/")
 	for i, p := range parts {
-		parts[i] = "^" + p + "$"
+		parts[i] = "^" + regexp.QuoteMeta(p) + "$"
 	}
 	return slices.Insert(slices.Clone(argv), 2, "-run", strings.Join(parts, "/")), true
 }

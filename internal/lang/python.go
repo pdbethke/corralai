@@ -1608,6 +1608,13 @@ var pyValueOptions = map[string]bool{
 	"--ignore": true, "--ignore-glob": true, "--override-ini": true,
 	"--tb": true, "--durations": true, "--cov": true, "--cov-config": true,
 	"--cov-report": true, "--cov-context": true, "--cov-fail-under": true,
+	// Path-valued report options (pytest's own --junit-xml spelling and the
+	// common report plugins). Missing, their value read as a target, and
+	// the kill-confirmation narrowing turned `--junit-xml out.xml tests`
+	// into `--junit-xml <node id>`: the node id became the report path and
+	// the whole suite ran.
+	"--junit-xml": true, "--html": true, "--alluredir": true,
+	"--json-report-file": true, "--report-log": true,
 }
 
 // stripPyCollectionTargets returns testCmd with its collection targets
@@ -1668,11 +1675,17 @@ func stripPyCollectionTargets(testCmd []string, repoRoot string) []string {
 // makes `pytest tests <node id>` a union that runs the whole directory. The
 // kill-confirmation run must run ONE test, so it cannot keep a directory.
 //
-// The strictness is safe even when pyValueOptions misses an option and its
-// value is dropped: a confirmation (adequacy) only counts when the narrowed
-// command FAILS on the mutant AND PASSES on the compliant code. A command
-// broken by a dropped option value fails on both, so it confirms nothing and
-// the kill falls through to re-running the full grading command.
+// Dropping an option's value is NOT safe in general, and an earlier comment
+// here said it was ("a command broken by a dropped value fails on both
+// codes"). For a path-valued option it is false: `--junit-xml out.xml tests`
+// with its value dropped becomes `--junit-xml <node id>`, pytest takes the
+// node id as the report path, runs the WHOLE suite, fails on the mutant and
+// passes on the compliant code — and a run of no single test is recorded
+// as confirmed "alone". What makes stripping safe is pyKillerCmd's refusal
+// (pyDropsAnOptionValue): a word after a long option this list does not
+// know is never dropped, the narrowing is refused instead, and the kill is
+// confirmed by repeating the grading run. Known value options keep their
+// value here; short flags are booleans unless listed.
 func stripPyPositionals(argv []string) []string {
 	if len(argv) == 0 {
 		return nil
@@ -1689,11 +1702,35 @@ func stripPyPositionals(argv []string) []string {
 	return out
 }
 
+// pyDropsAnOptionValue reports whether stripPyPositionals would drop a word
+// that directly follows a long option it does not know: `--opt word`, with
+// no `=` in the option and the option not in pyValueOptions. Such an option
+// may take a value (a plugin's, say), and dropping it would hand the next
+// word — the node id — to the option instead. `--` alone ends options and
+// takes nothing. Short flags (-q, -x, -v) are booleans unless listed.
+func pyDropsAnOptionValue(argv []string) bool {
+	for i := 2; i < len(argv); i++ {
+		tok, prev := argv[i], argv[i-1]
+		if strings.HasPrefix(tok, "-") {
+			continue
+		}
+		if strings.HasPrefix(prev, "--") && prev != "--" && !strings.Contains(prev, "=") && !pyValueOptions[prev] {
+			return true
+		}
+	}
+	return false
+}
+
 // pyKillerCmd is argv narrowed to the one node id pytest reported failing.
 // An `error:` id (a collection error) and an id with no `::` name no single
-// test, so there is nothing to run alone.
+// test, so there is nothing to run alone. An argv with a word after a long
+// option corral does not know is refused (pyDropsAnOptionValue): narrowing
+// it would guess whether that word is the option's value.
 func pyKillerCmd(argv []string, id string) ([]string, bool) {
 	if id == "" || strings.HasPrefix(id, "error:") || !strings.Contains(id, "::") || !narrowable(argv, "-k") {
+		return nil, false
+	}
+	if pyDropsAnOptionValue(argv) {
 		return nil, false
 	}
 	return pyTestsCmd(stripPyPositionals(argv), []string{id})

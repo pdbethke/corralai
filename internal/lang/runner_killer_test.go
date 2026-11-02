@@ -120,3 +120,38 @@ func TestKillerCmdForShapesThroughAPackageScriptAsSingleTestCmdDoes(t *testing.T
 		t.Fatalf("SingleTestCmd shapes as %q; killer %q does not match its prefix", single, got)
 	}
 }
+
+// A path-valued option's value is not a collection target. Dropping it made
+// `pytest --junit-xml out.xml tests` + K into `pytest --junit-xml K`: pytest
+// took K as the report path, ran the whole suite, and a confirmation that
+// ran no single test was recorded "alone".
+func TestPyKillerCmdKeepsAPathValuedOptionsValue(t *testing.T) {
+	r := killerRow(t, "python", "pytest")
+	for _, opt := range []string{"--junit-xml", "--html", "--alluredir", "--json-report-file", "--report-log"} {
+		got, ok := r.KillerCmd([]string{"pytest", opt, "out.xml", "tests"}, "tests/test_a.py::test_x")
+		want := []string{"pytest", opt, "out.xml", "tests/test_a.py::test_x"}
+		if !ok || !slices.Equal(got, want) {
+			t.Errorf("%s: got %q ok=%v, want %q", opt, got, ok, want)
+		}
+	}
+}
+
+// An unknown long option may take a value, and the word after it is then
+// not a target to drop. Narrowing would guess; it refuses, and the kill is
+// confirmed by repeating the grading run instead.
+func TestPyKillerCmdRefusesAWordAfterAnUnknownLongOption(t *testing.T) {
+	r := killerRow(t, "python", "pytest")
+	if got, ok := r.KillerCmd([]string{"pytest", "--some-plugin-opt", "val", "tests"}, "tests/test_a.py::test_x"); ok {
+		t.Errorf("narrowed to %q, want a refusal", got)
+	}
+	// A short flag is a boolean and still narrows.
+	got, ok := r.KillerCmd([]string{"pytest", "-q", "tests"}, "tests/test_a.py::test_x")
+	if want := []string{"pytest", "-q", "tests/test_a.py::test_x"}; !ok || !slices.Equal(got, want) {
+		t.Errorf("-q tests: got %q ok=%v, want %q", got, ok, want)
+	}
+	// A long option carrying its own value consumes nothing.
+	got, ok = r.KillerCmd([]string{"pytest", "--some-plugin-opt=val", "tests"}, "tests/test_a.py::test_x")
+	if want := []string{"pytest", "--some-plugin-opt=val", "tests/test_a.py::test_x"}; !ok || !slices.Equal(got, want) {
+		t.Errorf("--opt=val tests: got %q ok=%v, want %q", got, ok, want)
+	}
+}

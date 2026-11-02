@@ -174,3 +174,16 @@ func vitestUnitCoruns(unit, other string) bool {
 func vitestEvidenceArgs(unitCmd []string) []string {
 	return append(withoutFlag(unitCmd, "--pool"), "--pool=threads")
 }
+
+// vitestKillerCmd is argv, under `run`, narrowed by name to the test the
+// failing run named. No file is appended: argv already scopes the files.
+func vitestKillerCmd(argv []string, id string) ([]string, bool) {
+	if id == "" || !narrowable(argv, "-t", "--testNamePattern") {
+		return nil, false
+	}
+	cmd, ok := vitestWithMode(argv, "run")
+	if !ok {
+		return nil, false
+	}
+	return append(cmd, "-t", vitestNamePattern(id)), true
+}

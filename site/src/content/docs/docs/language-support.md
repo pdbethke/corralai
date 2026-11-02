@@ -15,15 +15,17 @@ What corral does with each language's tests. This page is rendered from the same
 | List the tests | ✓ | ✓ | ✓ | ✓ | ✓ (rspec) | ✓ | ✓ |
 | Run one test alone (critic claims checked) | ✓ | ✓ | ✓ | ✓ | ✓ (rspec) | ✓ | ✓ |
 | Name the killing test | ✓ | ✓ | ✓ | ✓ | ✓ (rspec, minitest) | ✓ | ✓ |
-| Stop at the first failure | ✓ | ✓ (jest, mocha) | ✓ | ✓ | ✓ (rspec) | — (1) | ✓ (jest, mocha) |
-| Keep the passing part of an authored test | ✓ | ✓ | ✓ | ✓ | ✓ (rspec, minitest) | — (2) | ✓ |
-| Run one test unit | ✓ | ✓ | ✓ | — (3) | ✓ (rspec) | ✓ | ✓ |
+| Confirm a kill by running the killing test alone | ✓ | ✓ (jest, vitest) | — (1) | ✓ | — (1) | — (1) | ✓ (jest, vitest) |
+| Stop at the first failure | ✓ | ✓ (jest, mocha) | ✓ | ✓ | ✓ (rspec) | — (2) | ✓ (jest, mocha) |
+| Keep the passing part of an authored test | ✓ | ✓ | ✓ | ✓ | ✓ (rspec, minitest) | — (3) | ✓ |
+| Run one test unit | ✓ | ✓ | ✓ | — (4) | ✓ (rspec) | ✓ | ✓ |
 | Coverage pre-flight | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Grade only the tests that run the file | ✓ | ✓ | ✓ | ✓ | ✓ (rspec) | ✓ | ✓ |
 
-1. nextest's --fail-fast and libtest's lack of one are not yet verified against a real run (runner table Phase 5)
-2. libtest --skip and nextest filtersets are not yet verified for salvage (runner table Phase 5)
-3. its evidence is per test, from one instrumented run (lang.TestEvidence), which the selection engine reads at test grain; a unit pass would be a second, coarser answer to the same question
+1. no row narrows a run to the killing test by name yet; kills there are confirmed by repeating the grading run (kill-confirmation phase 1)
+2. nextest's --fail-fast and libtest's lack of one are not yet verified against a real run (runner table Phase 5)
+3. libtest --skip and nextest filtersets are not yet verified for salvage (runner table Phase 5)
+4. its evidence is per test, from one instrumented run (lang.TestEvidence), which the selection engine reads at test grain; a unit pass would be a second, coarser answer to the same question
 
 ## By runner
 

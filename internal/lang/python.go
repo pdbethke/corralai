@@ -1660,6 +1660,45 @@ func stripPyCollectionTargets(testCmd []string, repoRoot string) []string {
 	return out
 }
 
+// stripPyPositionals is argv with every positional word removed: it keeps
+// argv[0], every `-`-prefixed token, and a word that is the separate value of
+// a preceding pyValueOptions option (one with no `=` in it, so `-m pytest`
+// keeps `pytest`). It is stricter than stripPyCollectionTargets on purpose:
+// that one fails open without a repo root and leaves `tests` in place, which
+// makes `pytest tests <node id>` a union that runs the whole directory. The
+// kill-confirmation run must run ONE test, so it cannot keep a directory.
+//
+// The strictness is safe even when pyValueOptions misses an option and its
+// value is dropped: a confirmation (adequacy) only counts when the narrowed
+// command FAILS on the mutant AND PASSES on the compliant code. A command
+// broken by a dropped option value fails on both, so it confirms nothing and
+// the kill falls through to re-running the full grading command.
+func stripPyPositionals(argv []string) []string {
+	if len(argv) == 0 {
+		return nil
+	}
+	out := []string{argv[0]}
+	for i := 1; i < len(argv); i++ {
+		tok := argv[i]
+		prev := argv[i-1]
+		if strings.HasPrefix(tok, "-") ||
+			(strings.HasPrefix(prev, "-") && !strings.Contains(prev, "=") && pyValueOptions[prev]) {
+			out = append(out, tok)
+		}
+	}
+	return out
+}
+
+// pyKillerCmd is argv narrowed to the one node id pytest reported failing.
+// An `error:` id (a collection error) and an id with no `::` name no single
+// test, so there is nothing to run alone.
+func pyKillerCmd(argv []string, id string) ([]string, bool) {
+	if id == "" || strings.HasPrefix(id, "error:") || !strings.Contains(id, "::") || !narrowable(argv, "-k") {
+		return nil, false
+	}
+	return pyTestsCmd(stripPyPositionals(argv), []string{id})
+}
+
 // isPyCollectionTarget reports whether tok names tests to collect: a node id
 // (`path::selector`), or an existing file/directory under repoRoot. The path
 // is resolved against repoRoot, never the process's own cwd, and an absolute

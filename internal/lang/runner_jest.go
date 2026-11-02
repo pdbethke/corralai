@@ -141,3 +141,12 @@ func jestUnitsCmd(argv []string, units []string) ([]string, bool) {
 func jestUnitCoruns(unit, other string) bool {
 	return unit != other && strings.HasSuffix(other, "/"+unit)
 }
+
+// jestKillerCmd is argv narrowed by name to the test the failing run named,
+// matched as the full name jest builds (describe and test titles, space-joined).
+func jestKillerCmd(argv []string, id string) ([]string, bool) {
+	if id == "" || !jestNarrowable(argv) {
+		return nil, false
+	}
+	return append(slices.Clone(argv), "--testNamePattern", "^"+jsRegexQuote(fullName(id))+"$"), true
+}

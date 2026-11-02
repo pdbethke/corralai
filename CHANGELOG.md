@@ -22,7 +22,9 @@ history of any release, `git log v0.3.4..v0.3.5`.
   and otherwise the grading run is repeated. A first-run failure that does not
   repeat is recorded as a **survivor**, and counts as one everywhere (the kill
   rate, the test writer's targets, proven gaps). A suite that also fails the
-  repeat on the unmutated code leaves the mutant unmeasured, with its reason.
+  repeat on the unmutated code leaves the mutant unmeasured: the run prints
+  why, and the ledger records the file's count of unmeasured mutants (not yet
+  a row per mutant).
   Confirming a kill costs up to four more test runs. The verdict generation
   is now `40`, so verdicts cached before this are re-measured rather than
   reused. Each ledger mutant row gains `KillConfirmation` (`alone` or

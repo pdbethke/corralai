@@ -367,11 +367,14 @@ type MutantRef struct {
 	// With the generator model on the same row, "which shapes does this
 	// model plant, and which does this suite let through" is a query.
 	Shape string
-	// KillConfirmation is how this mutant's kill was confirmed
-	// (adequacy.MutantGrading.KillConfirmation): adequacy.KillConfirmedAlone
-	// or adequacy.KillConfirmedRepeated. Empty on a survivor, on a
-	// timeout-kill, and on every ref graded before confirmation existed — a
-	// reader treats its absence on a kill as "unconfirmed", never as alone.
+	// KillConfirmation is the outcome of confirming this mutant's first
+	// failing grading run (adequacy.MutantGrading.KillConfirmation): "alone",
+	// "repeated" or "reprobed" (a timeout kill) on a KILLED ref;
+	// "not-repeated" on a SURVIVOR whose first-run failure did not repeat.
+	// Empty on a mutant that was never a candidate, and on every ref graded
+	// before confirmation existed — a reader treats its absence on a kill as
+	// "unconfirmed", never as alone. It never decides killed-ness: which
+	// list the ref sits in does.
 	KillConfirmation string
 	// UnrepeatedKilledBy is set on a SURVIVOR whose first grading run failed
 	// and whose repeat passed: the test id that first run blamed. A test id,
@@ -895,6 +898,18 @@ type Verdict struct {
 	// what keeps the default rendering from appearing alongside the real one.
 	MutantDurationMedian time.Duration `json:"-"`
 	MutantDurationMax    time.Duration `json:"-"`
+	// ConfirmDuration is the wall clock the DEV pass spent confirming its
+	// candidate kills (adequacy.Report.ConfirmDuration): serial runs after
+	// grading, which add to the run instead of overlapping it. Zero when no
+	// grading run failed. Set at both construction sites (tickAggregate and
+	// timeoutVerdict).
+	//
+	// `json:"-"` because it is NOT recorded, deliberately and for now: it is
+	// printed on the run line (the run log), where phase 3 of kill
+	// confirmation reads it, and has no ledger field to land in yet. A
+	// verdict served from the cache therefore carries zero, which is true:
+	// that run confirmed nothing.
+	ConfirmDuration time.Duration `json:"-"`
 	// ChallengerAgreement is the primary writer's agreement with the
 	// challenger writer over the SAME survivor set — Jaccard-over-survivors
 	// and Cohen's kappa, from internal/modelcorr. nil whenever no comparable
@@ -1465,6 +1480,9 @@ type runState struct {
 	// ones — which the per-mutant rows can answer only in aggregate.
 	mutantDurationMedian time.Duration
 	mutantDurationMax    time.Duration
+	// confirmDuration is the dev pass's kill-confirmation wall clock, from
+	// its report (adequacy.Report.ConfirmDuration). See Verdict.ConfirmDuration.
+	confirmDuration time.Duration
 
 	// timing is what this run has spent so far, phase by phase (see Timing).
 	// Filled in at the DAG's own boundaries — the same points emit() already
@@ -2122,7 +2140,7 @@ func applyDevScore(ctx context.Context, run *runState, scorer Scorer, mutants []
 	run.compileGateNote = rep.CompileGateNote
 	run.mutantsUnmeasured = len(rep.Unmeasured)
 	if run.mutantsUnmeasured > 0 {
-		log.Printf("advpool: %s: %d mutant(s) UNMEASURED — the grading command fails on the compliant code, so they are not counted as graded: %s",
+		log.Printf("advpool: %s: %d mutant(s) UNMEASURED — the grading command fails or times out on the compliant code, so they are not counted as graded: %s",
 			run.rs.CodePath, run.mutantsUnmeasured, rep.UnmeasuredReasons[rep.Unmeasured[0]])
 	}
 	// Minus the unmeasured too: a mutant the scorer could not measure is
@@ -2137,6 +2155,7 @@ func applyDevScore(ctx context.Context, run *runState, scorer Scorer, mutants []
 	run.perMutant = rep.PerMutant
 	run.mutantDurationMedian = rep.MutantDurationMedian
 	run.mutantDurationMax = rep.MutantDurationMax
+	run.confirmDuration = rep.ConfirmDuration
 	run.devSurvivors = survivorsFrom(rep, mutants)
 	run.devKilled = toMutantRefsWith(killedFrom(rep, mutants), rep.PerMutant)
 	run.mutants = mutants
@@ -3140,6 +3159,7 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	v.Timing.Total = totalWith(v.Timing, d.now().Sub(run.startedAt))
 	v.MutantDurationMedian = run.mutantDurationMedian
 	v.MutantDurationMax = run.mutantDurationMax
+	v.ConfirmDuration = run.confirmDuration
 	// The mutant-level evidence behind DevKillRate/Survivors, carried the same
 	// way — see Verdict.DevKilledMutants.
 	v.DevKilledMutants = run.devKilled
@@ -3731,6 +3751,7 @@ func (d *Driver) timeoutVerdict(run *runState) Verdict {
 	v.Timing.Total = totalWith(v.Timing, d.now().Sub(run.startedAt))
 	v.MutantDurationMedian = run.mutantDurationMedian
 	v.MutantDurationMax = run.mutantDurationMax
+	v.ConfirmDuration = run.confirmDuration
 	v.Status = StatusNeedsReview
 	v.TimedOut = true
 	v.DevScored = run.devScored

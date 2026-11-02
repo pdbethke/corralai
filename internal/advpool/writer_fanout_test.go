@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	golang "github.com/pdbethke/corralai/internal/lang"
@@ -30,6 +31,9 @@ type fanoutScorer struct {
 	kills     map[string]string // test source -> the mutant id it kills
 	devDone   bool
 	authored  []authoredCall
+	// confirmDuration is what the dev pass's report says its
+	// kill-confirmation pass took.
+	confirmDuration time.Duration
 }
 
 func (f *fanoutScorer) Score(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (float64, []adequacy.Mutant, error) {
@@ -39,7 +43,7 @@ func (f *fanoutScorer) Score(ctx context.Context, codePath, code, test string, m
 func (f *fanoutScorer) ScoreReport(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (adequacy.Report, error) {
 	if !f.devDone {
 		f.devDone = true
-		rep := adequacy.Report{CompliantPass: true, CanaryKilled: true, Total: len(mutants)}
+		rep := adequacy.Report{CompliantPass: true, CanaryKilled: true, Total: len(mutants), ConfirmDuration: f.confirmDuration}
 		alive := map[string]bool{}
 		for _, s := range f.survivors {
 			alive[s.ID] = true

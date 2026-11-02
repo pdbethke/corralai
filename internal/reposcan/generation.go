@@ -364,8 +364,11 @@ package reposcan
 // survivor (MutantRef.UnrepeatedKilledBy names the test it blamed). The
 // meaning of "killed" changed, so a "39" verdict's kills are unconfirmed and
 // must be re-measured, not reused: kill rates can fall. MutantRef also gained
-// KillConfirmation and UnrepeatedKilledBy, which sit inside the Verdict's
-// mutant lists and so outside the shallow fingerprint below. Behaviour bump.
+// KillConfirmation ("alone", "repeated", or "reprobed" for a timeout kill
+// whose compliant re-probe passed, on a kill; "not-repeated" on a refuted
+// survivor) and UnrepeatedKilledBy, which sit inside the Verdict's mutant
+// lists and so outside the shallow fingerprint below; Verdict gained
+// ConfirmDuration (`json:"-"`, not recorded). Behaviour bump.
 const VerdictGeneration = "40"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
@@ -388,4 +391,4 @@ const VerdictGeneration = "40"
 // Verdict's own FIELDS") and nothing wider. Nor can any fingerprint catch the
 // behaviour half: a scorer that computes a DIFFERENT number into the SAME
 // field is invisible here, and remains a review responsibility.
-const VerdictShapeSHA256 = "2476c942b8df1e6e64f023381160457f1f9da3a1874447724ab7300a262b86ff"
+const VerdictShapeSHA256 = "15d4b6d3dbcbec3b66fcbe12a8b03c6b5e73d81a07657181fd99dabcf3dfdbc8"

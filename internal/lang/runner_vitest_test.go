@@ -139,3 +139,20 @@ func TestVitestSingleCmdUsesTheBothJoinersPattern(t *testing.T) {
 		t.Fatalf("cmd = %q, want %q", cmd, want)
 	}
 }
+
+// Vitest's -t pattern accepts both joiners (" " for vitest 3, " > " for
+// vitest 5), so a title that literally holds " > " selects the nested test
+// whose titles join to the same name under vitest 5. Coruns must say so, or
+// the resolver hands back an id whose one-test run runs two.
+func TestVitestCorunsComparesBothJoiners(t *testing.T) {
+	r := killerRow(t, "javascript", "vitest")
+	if !r.Coruns("Calc > adds", "Calc::adds") {
+		t.Error(`"Calc > adds" (one title) runs "Calc::adds" under vitest 5's joiner; Coruns said no`)
+	}
+	if !r.Coruns("Calc::adds", "Calc adds") {
+		t.Error(`"Calc::adds" runs a top-level "Calc adds" under vitest 3's joiner; Coruns said no`)
+	}
+	if r.Coruns("Calc::adds", "Calc::subtracts") || r.Coruns("Calc::adds", "Calc::adds") {
+		t.Error("Coruns reported a different test, or the test itself, as a co-run")
+	}
+}

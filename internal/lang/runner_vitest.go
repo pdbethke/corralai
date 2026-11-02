@@ -4,6 +4,7 @@ package lang
 
 import (
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -102,6 +103,26 @@ func vitestNamePattern(id string) string {
 		parts[i] = jsRegexQuote(p)
 	}
 	return "^" + strings.Join(parts, "(?: | > )") + "$"
+}
+
+// vitestCoruns is Coruns for vitest: other runs too when the -t pattern
+// built for id (vitestNamePattern) matches other's titles under EITHER
+// joiner — " " (vitest 3) or " > " (vitest 5) — because the pattern accepts
+// both and the version is not known here. Comparing space-joined full names
+// alone, as fullNameColl does for jest and mocha, missed a title that
+// literally holds " > ": `Calc > adds` as one title selects the nested
+// `Calc::adds` on vitest 5. A pattern that does not compile is reported as a
+// co-run, the direction that refuses rather than guesses.
+func vitestCoruns(id, other string) bool {
+	if id == other {
+		return false
+	}
+	re, err := regexp.Compile(vitestNamePattern(id))
+	if err != nil {
+		return true
+	}
+	parts := strings.Split(other, "::")
+	return re.MatchString(strings.Join(parts, " ")) || re.MatchString(strings.Join(parts, " > "))
 }
 
 // vitestListUnits is vitest's own `list --filesOnly` over argv: the test

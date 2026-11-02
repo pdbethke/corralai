@@ -357,6 +357,19 @@ type MutantRow struct {
 	SourceTool     string `json:",omitempty"`
 	SourceOperator string `json:",omitempty"`
 	SourceStatus   string `json:",omitempty"`
+	// KillConfirmation is how a killed mutant's kill was confirmed: "alone"
+	// (the test the failing run blamed failed by itself on the mutant and
+	// passed on the unmutated code) or "repeated" (the grading command
+	// failed again on the mutant and passed on the unmutated code). Omitted
+	// on a survivor, on a timeout-kill, and on every row written before
+	// confirmation existed; a reader treats its absence on a kill as
+	// "unconfirmed", never as "alone".
+	KillConfirmation string `json:",omitempty"`
+	// UnrepeatedKilledBy is set on a SURVIVOR whose first grading run failed
+	// and whose repeat passed: the test id that first run blamed. It is a
+	// test id, never test output, and a footnote to an ordinary survivor —
+	// the mutant counts as survived everywhere.
+	UnrepeatedKilledBy string `json:",omitempty"`
 	// Code is the mutant's source. It IS the audited code, so it is written
 	// only when the bundle says --push-source was given.
 	Code            string

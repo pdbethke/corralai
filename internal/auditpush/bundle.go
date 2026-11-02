@@ -297,6 +297,8 @@ CREATE TABLE IF NOT EXISTS corral_mutants (
   source_tool      VARCHAR,
   source_operator  VARCHAR,
   source_status    VARCHAR,
+  kill_confirmation VARCHAR,
+  unrepeated_killed_by VARCHAR,
   span_start       INTEGER,
   span_end         INTEGER,
   code             VARCHAR,
@@ -563,6 +565,11 @@ var (
 		{"source_tool", "source_tool VARCHAR"},
 		{"source_operator", "source_operator VARCHAR"},
 		{"source_status", "source_status VARCHAR"},
+		// How each kill was confirmed, and the test a refuted first run
+		// blamed (MutantRow.KillConfirmation, UnrepeatedKilledBy). NULL
+		// before them: a kill with no confirmation is unconfirmed.
+		{"kill_confirmation", "kill_confirmation VARCHAR"},
+		{"unrepeated_killed_by", "unrepeated_killed_by VARCHAR"},
 	}
 	// cached_input_tokens is additive: a warehouse an earlier corral created
 	// gets it on the next push, and its existing rows keep NULL — correct,
@@ -1192,8 +1199,9 @@ func insertBundle(db *sql.DB, b Bundle, now time.Time, uid string) (Counts, erro
 		    invalid_reason, proven, proven_by_authored_alone, tests_run,
 		    selection_rule, duration_ms, killed_by, span_start, span_end, code,
 		    statement_sha256, schema_version, shape, generator_model,
-		    source, source_tool, source_operator, source_status
-		  ) VALUES (`+placeholders(27)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+		    source, source_tool, source_operator, source_status,
+		    kill_confirmation, unrepeated_killed_by
+		  ) VALUES (`+placeholders(29)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 			uid, now, m.Repo, m.RunURL, m.ScanID, m.Path, m.MutantID,
 			nullIfEmpty(m.ParentSHA256), m.Outcome, nullIfEmpty(m.InvalidReason),
 			m.Proven, m.ProvenByAuthoredAlone, m.TestsRun,
@@ -1201,6 +1209,7 @@ func insertBundle(db *sql.DB, b Bundle, now time.Time, uid string) (Counts, erro
 			nullIfZeroInt(m.SpanStart), nullIfZeroInt(m.SpanEnd), code, m.StatementSHA256, SchemaVersion,
 			nullIfEmpty(m.Shape), nullIfEmpty(m.GeneratorModel),
 			nullIfEmpty(m.Source), nullIfEmpty(m.SourceTool), nullIfEmpty(m.SourceOperator), nullIfEmpty(m.SourceStatus),
+			nullIfEmpty(m.KillConfirmation), nullIfEmpty(m.UnrepeatedKilledBy),
 		); err != nil {
 			return Counts{}, fmt.Errorf("auditpush: insert mutant %s/%s: %w", m.Path, m.MutantID, err)
 		}

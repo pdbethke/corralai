@@ -293,6 +293,7 @@ func buildMutantRows(mutants []scanstore.Mutant, scanID int64, meta bundleMeta) 
 			SpanStart: m.SpanStart, SpanEnd: m.SpanEnd,
 			Shape: m.Shape, GeneratorModel: m.GeneratorModel,
 			Source: m.Source, SourceTool: m.SourceTool, SourceOperator: m.SourceOperator, SourceStatus: m.SourceStatus,
+			KillConfirmation: m.KillConfirmation, UnrepeatedKilledBy: m.UnrepeatedKilledBy,
 			// InvalidReason and Code have no ledger column: the local
 			// scan_mutants table admits only killed|survived (its CHECK
 			// predates this schema and DuckDB cannot alter one in place), and

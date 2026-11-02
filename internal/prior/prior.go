@@ -51,9 +51,11 @@ type Tried struct {
 	// survivor.
 	Outcome  string
 	KilledBy string
-	// KillConfirmation is how a kill was confirmed (adequacy.KillConfirmed*):
-	// empty on a kill recorded before kills were confirmed, which is
-	// UNCONFIRMED, not confirmed-by-default.
+	// KillConfirmation is the confirmation outcome: "alone", "repeated" or
+	// "reprobed" on a kill, "not-repeated" on a survivor whose first-run
+	// failure did not repeat. Empty on a kill recorded before kills were
+	// confirmed, which is UNCONFIRMED, not confirmed-by-default. Never read
+	// for killed-ness: that is Outcome.
 	KillConfirmation string
 	Proven           bool
 }
@@ -391,6 +393,12 @@ func Render(tried []Tried) string {
 			fmt.Fprintf(&b, " — KILLED by %s (unconfirmed: recorded before kills were confirmed)", t.KilledBy)
 		case t.Outcome == "killed" && t.KillConfirmation == "":
 			b.WriteString(" — KILLED (unconfirmed: recorded before kills were confirmed)")
+		case t.Outcome == "killed" && t.KillConfirmation == "reprobed" && t.KilledBy != "":
+			// A timeout kill: confirmed by the compliant re-probe, which
+			// finished under the same cap the mutant ran out of.
+			fmt.Fprintf(&b, " — KILLED by %s (timed out; the unmutated code finished in time)", t.KilledBy)
+		case t.Outcome == "killed" && t.KillConfirmation == "reprobed":
+			b.WriteString(" — KILLED (timed out; the unmutated code finished in time)")
 		case t.Outcome == "killed" && t.KilledBy != "":
 			fmt.Fprintf(&b, " — KILLED by %s (the suite watches this)", t.KilledBy)
 		case t.Outcome == "killed":

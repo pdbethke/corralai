@@ -193,6 +193,29 @@ func TestRenderSaysAnOldKillIsUnconfirmed(t *testing.T) {
 	}
 }
 
+// A timeout kill is confirmed by its compliant re-probe ("reprobed"), not
+// recorded before confirmation existed: Render must say what confirmed it,
+// never that it is unconfirmed.
+func TestRenderSaysATimeoutKillWasReprobed(t *testing.T) {
+	got := Render([]Tried{{Path: "a.py", ID: "m1", Outcome: "killed", KillConfirmation: "reprobed"}})
+	if !strings.Contains(got, " — KILLED (timed out; the unmutated code finished in time)") || strings.Contains(got, "unconfirmed") {
+		t.Errorf("reprobed kill:\n%s", got)
+	}
+	got = Render([]Tried{{Path: "a.py", ID: "m1", Outcome: "killed", KilledBy: "t::x", KillConfirmation: "reprobed"}})
+	if !strings.Contains(got, " — KILLED by t::x (timed out; the unmutated code finished in time)") {
+		t.Errorf("reprobed kill with a killer:\n%s", got)
+	}
+}
+
+// A refuted kill is a survivor. Its non-empty KillConfirmation must never
+// make Render call it killed: killed-ness is the Outcome.
+func TestRenderDoesNotReadNotRepeatedAsAKill(t *testing.T) {
+	got := Render([]Tried{{Path: "a.py", ID: "m1", Outcome: "survived", KillConfirmation: "not-repeated"}})
+	if !strings.Contains(got, "SURVIVED, unproven") || strings.Contains(got, "KILLED") {
+		t.Errorf("refuted survivor:\n%s", got)
+	}
+}
+
 // The digest must differ between a prior built from confirmed kills and one
 // built from unconfirmed kills.
 func TestDigestCoversKillConfirmation(t *testing.T) {

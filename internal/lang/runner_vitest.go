@@ -87,7 +87,21 @@ func vitestSingleCmd(argv []string, testPath, id string) ([]string, bool) {
 	if id == "" || !ok {
 		return nil, false
 	}
-	return append(cmd, "-t", "^"+jsRegexQuote(fullName(id))+"$", testPath), true
+	return append(cmd, "-t", vitestNamePattern(id), testPath), true
+}
+
+// vitestNamePattern is the anchored -t regex for the test whose id is its
+// describe and test titles joined by "::". Vitest 3 matches -t against the
+// titles joined by a space; vitest 5 joins them with " > ". Measured on REA
+// (vitest 5.0.3): the space form ran 0 tests and exited 0, so every check
+// built on it checked nothing, while the " > " form ran the test. The
+// pattern accepts either joiner so one command works on both versions.
+func vitestNamePattern(id string) string {
+	parts := strings.Split(id, "::")
+	for i, p := range parts {
+		parts[i] = jsRegexQuote(p)
+	}
+	return "^" + strings.Join(parts, "(?: | > )") + "$"
 }
 
 // vitestListUnits is vitest's own `list --filesOnly` over argv: the test

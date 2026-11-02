@@ -3,6 +3,7 @@
 package lang
 
 import (
+	"regexp"
 	"slices"
 	"testing"
 )
@@ -22,18 +23,18 @@ func TestVitestCommands(t *testing.T) {
 	}{
 		{[]string{"npx", "vitest", "run"},
 			[]string{"npx", "vitest", "list", "a.test.ts"},
-			[]string{"npx", "vitest", "run", "-t", `^Calc adds$`, "a.test.ts"}},
+			[]string{"npx", "vitest", "run", "-t", `^Calc(?: | > )adds$`, "a.test.ts"}},
 		// a bare vitest would watch on a TTY; the single run is always `run`
 		{[]string{"npx", "vitest", "--root", "web"},
 			[]string{"npx", "vitest", "list", "--root", "web", "a.test.ts"},
-			[]string{"npx", "vitest", "run", "--root", "web", "-t", `^Calc adds$`, "a.test.ts"}},
+			[]string{"npx", "vitest", "run", "--root", "web", "-t", `^Calc(?: | > )adds$`, "a.test.ts"}},
 		{[]string{"npx", "vitest", "watch"},
 			[]string{"npx", "vitest", "list", "a.test.ts"},
-			[]string{"npx", "vitest", "run", "-t", `^Calc adds$`, "a.test.ts"}},
+			[]string{"npx", "vitest", "run", "-t", `^Calc(?: | > )adds$`, "a.test.ts"}},
 		// AGENTS.md's jail recipe: a host interpreter running vitest's entry script
 		{[]string{"node", "./node_modules/vitest/vitest.mjs", "run"},
 			[]string{"node", "./node_modules/vitest/vitest.mjs", "list", "a.test.ts"},
-			[]string{"node", "./node_modules/vitest/vitest.mjs", "run", "-t", `^Calc adds$`, "a.test.ts"}},
+			[]string{"node", "./node_modules/vitest/vitest.mjs", "run", "-t", `^Calc(?: | > )adds$`, "a.test.ts"}},
 	} {
 		if got, ok := vitestListCmd(c.argv, "a.test.ts"); !ok || !slices.Equal(got, c.list) {
 			t.Errorf("list(%q) = %q, %v; want %q", c.argv, got, ok, c.list)
@@ -108,5 +109,33 @@ func TestVitestEvidenceArgsThreadsPool(t *testing.T) {
 	}
 	if got := EvidenceNote(ts, Cmd([]string{"jest"})); got != "" {
 		t.Errorf("jest EvidenceNote = %q, want \"\"", got)
+	}
+}
+
+func TestVitestNamePatternMatchesBothJoiners(t *testing.T) {
+	got := vitestNamePattern("evidenceBundleForTarget relationship pruning::projects a valid graph with more than 125,000 dependents")
+	want := `^evidenceBundleForTarget relationship pruning(?: | > )projects a valid graph with more than 125,000 dependents$`
+	if got != want {
+		t.Fatalf("pattern = %q, want %q", got, want)
+	}
+	re := regexp.MustCompile(got)
+	for _, full := range []string{
+		"evidenceBundleForTarget relationship pruning projects a valid graph with more than 125,000 dependents",   // vitest 3
+		"evidenceBundleForTarget relationship pruning > projects a valid graph with more than 125,000 dependents", // vitest 5
+	} {
+		if !re.MatchString(full) {
+			t.Errorf("pattern does not match %q", full)
+		}
+	}
+}
+
+func TestVitestSingleCmdUsesTheBothJoinersPattern(t *testing.T) {
+	cmd, ok := vitestSingleCmd([]string{"npx", "vitest"}, "src/a.test.ts", "Calc::adds")
+	if !ok {
+		t.Fatal("refused")
+	}
+	want := []string{"npx", "vitest", "run", "-t", `^Calc(?: | > )adds$`, "src/a.test.ts"}
+	if !slices.Equal(cmd, want) {
+		t.Fatalf("cmd = %q, want %q", cmd, want)
 	}
 }

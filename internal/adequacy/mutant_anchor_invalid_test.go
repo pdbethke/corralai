@@ -56,10 +56,11 @@ func TestScoreTreatsAnUnappliableMutantAsInvalid(t *testing.T) {
 	if _, ok := rep.PerMutant["m9"]; ok {
 		t.Error("an unappliable mutant has a grading entry, but nothing graded it")
 	}
-	// baseline + canary + the one mutant that applies. The jail must never
+	// baseline + canary + the one mutant that applies, plus m1's kill
+	// confirmation (a repeat and a compliant re-run). The jail must never
 	// have been asked about m9: there was no file to hand it.
-	if j.testRuns != 3 {
-		t.Errorf("testRuns = %d, want 3 (baseline, canary, m1) — the jail was run for a mutant that could not be materialised", j.testRuns)
+	if j.testRuns != 5 {
+		t.Errorf("testRuns = %d, want 5 (baseline, canary, m1, m1's 2 confirmation runs) — the jail was run for a mutant that could not be materialised", j.testRuns)
 	}
 	if got := rep.KillRate(); got != 1 {
 		t.Errorf("KillRate = %v, want 1 (1 of 1 graded)", got)

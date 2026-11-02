@@ -83,9 +83,15 @@ func TestDuplicateMutantsAreGradedOnceAndAnsweredTwice(t *testing.T) {
 		_ = r
 		graded++
 	}
-	// baseline + canary + 3 distinct mutants = 5 runs.
-	if graded != 5 {
-		t.Errorf("%d jail runs, want 5 (baseline, canary, 3 distinct edits) — a duplicate was run again", graded)
+	// baseline + canary + 3 distinct mutants = 5 runs, plus the kill
+	// confirmation of the 2 distinct KILLED edits (no confirmer here, so each
+	// is a repeat on the mutant and a compliant re-run) = 9. A duplicate is
+	// confirmed through its representative, never on its own.
+	if graded != 9 {
+		t.Errorf("%d jail runs, want 9 (baseline, canary, 3 distinct edits, 2 confirmations of 2 runs) — a duplicate was run again", graded)
+	}
+	if c := rep.PerMutant["m1-dup"].KillConfirmation; c != rep.PerMutant["m1"].KillConfirmation || c != KillConfirmedRepeated {
+		t.Errorf("KillConfirmation m1=%q m1-dup=%q, want both %q — the twin inherits the confirmed outcome", rep.PerMutant["m1"].KillConfirmation, c, KillConfirmedRepeated)
 	}
 }
 

@@ -20,7 +20,9 @@ import (
 // confirmation nobody records is a measurement dropped on the floor.
 
 // confirmationResult is one file with a kill confirmed alone, a kill
-// confirmed by repeat, and a survivor whose first-run failure did not repeat.
+// confirmed by repeat, a timeout kill confirmed by its compliant re-probe,
+// a survivor whose first-run failure did not repeat, and one such survivor
+// whose first run named no test — recorded by its KillConfirmation alone.
 func confirmationResult() reposcan.FileResult {
 	return reposcan.FileResult{
 		Job:      reposcan.Job{Path: "pkg/a.py", Lang: "python"},
@@ -29,15 +31,17 @@ func confirmationResult() reposcan.FileResult {
 			DevKilledMutants: []advpool.MutantRef{
 				{ID: "k1", ParentSHA256: "p", KilledBy: "a.py::test_x", KillConfirmation: adequacy.KillConfirmedAlone},
 				{ID: "k2", ParentSHA256: "p", KillConfirmation: adequacy.KillConfirmedRepeated},
+				{ID: "k3", ParentSHA256: "p", KillConfirmation: adequacy.KillConfirmedReprobed},
 			},
 			DevSurvivedMutants: []advpool.MutantRef{
-				{ID: "s1", ParentSHA256: "p", UnrepeatedKilledBy: "a.py::test_x"},
+				{ID: "s1", ParentSHA256: "p", UnrepeatedKilledBy: "a.py::test_x", KillConfirmation: adequacy.KillNotRepeated},
+				{ID: "s2", ParentSHA256: "p", KillConfirmation: adequacy.KillNotRepeated},
 			},
 		},
 	}
 }
 
-// checkConfirmationRows asserts the three rows' confirmation fields, at
+// checkConfirmationRows asserts the five rows' confirmation fields, at
 // whatever grain they were read back.
 func checkConfirmationRows(t *testing.T, where string, rows []scanstore.Mutant) {
 	t.Helper()
@@ -45,13 +49,15 @@ func checkConfirmationRows(t *testing.T, where string, rows []scanstore.Mutant) 
 	for _, r := range rows {
 		byID[r.MutantID] = r
 	}
-	if len(byID) != 3 {
-		t.Fatalf("%s: %d mutant row(s), want 3: %+v", where, len(byID), rows)
+	if len(byID) != 5 {
+		t.Fatalf("%s: %d mutant row(s), want 5: %+v", where, len(byID), rows)
 	}
 	want := map[string][2]string{
 		"k1": {adequacy.KillConfirmedAlone, ""},
 		"k2": {adequacy.KillConfirmedRepeated, ""},
-		"s1": {"", "a.py::test_x"},
+		"k3": {adequacy.KillConfirmedReprobed, ""},
+		"s1": {adequacy.KillNotRepeated, "a.py::test_x"},
+		"s2": {adequacy.KillNotRepeated, ""},
 	}
 	for id, w := range want {
 		m := byID[id]
@@ -60,8 +66,13 @@ func checkConfirmationRows(t *testing.T, where string, rows []scanstore.Mutant) 
 				where, id, m.KillConfirmation, m.UnrepeatedKilledBy, w[0], w[1])
 		}
 	}
-	if s := byID["s1"]; s.Outcome != "survived" || s.KilledBy != "" {
-		t.Errorf("%s: the refuted kill must be an ordinary survivor with no KilledBy, got %+v", where, s)
+	for _, id := range []string{"s1", "s2"} {
+		if s := byID[id]; s.Outcome != "survived" || s.KilledBy != "" {
+			t.Errorf("%s: the refuted kill %s must be an ordinary survivor with no KilledBy, got %+v", where, id, s)
+		}
+	}
+	if k := byID["k3"]; k.Outcome != "killed" {
+		t.Errorf("%s: the reprobed timeout kill must be killed, got %+v", where, k)
 	}
 }
 
@@ -108,11 +119,13 @@ func TestKillConfirmationRoundTrips(t *testing.T) {
 	if err := db.QueryRow(`SELECT count(*) FROM corral_mutants WHERE
 		(mutant_id = 'k1' AND kill_confirmation = 'alone' AND unrepeated_killed_by IS NULL) OR
 		(mutant_id = 'k2' AND kill_confirmation = 'repeated') OR
-		(mutant_id = 's1' AND kill_confirmation IS NULL AND unrepeated_killed_by = 'a.py::test_x')`).Scan(&n); err != nil {
+		(mutant_id = 'k3' AND kill_confirmation = 'reprobed') OR
+		(mutant_id = 's1' AND kill_confirmation = 'not-repeated' AND unrepeated_killed_by = 'a.py::test_x') OR
+		(mutant_id = 's2' AND kill_confirmation = 'not-repeated' AND unrepeated_killed_by IS NULL)`).Scan(&n); err != nil {
 		t.Fatalf("querying the view by confirmation: %v", err)
 	}
-	if n != 3 {
-		t.Errorf("the view holds %d row(s) with their confirmation, want 3", n)
+	if n != 5 {
+		t.Errorf("the view holds %d row(s) with their confirmation, want 5", n)
 	}
 	wb, err := auditpush.ReadBundleForScan(db, auditpush.ScanRow{Repo: "o/r", ScanID: 1, ScanUID: entries[0].ScanUID})
 	if err != nil {

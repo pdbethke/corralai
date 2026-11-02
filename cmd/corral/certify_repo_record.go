@@ -685,8 +685,8 @@ func buildScanMutantRows(scanID int64, results []reposcan.FileResult) []scanstor
 				// "nothing caught it". Empty here too whenever the runner's
 				// output did not say, and stored as NULL rather than "".
 				KilledBy: m.KilledBy,
-				// HOW the kill was confirmed (alone or by repeat). Empty on a
-				// timeout-kill, and never guessed for one graded before it.
+				// HOW the kill was confirmed (alone, by repeat, or reprobed
+				// after a timeout). Never guessed for one graded before it.
 				KillConfirmation: m.KillConfirmation,
 				// WHERE the fault was — the term an exam's coverage is
 				// computed from. 0/0 (stored NULL) when the generator
@@ -712,8 +712,11 @@ func buildScanMutantRows(scanID int64, results []reposcan.FileResult) []scanstor
 				// too, where the two are NOT the same claim.
 				ProvenByAuthoredAlone: proven[m.ID],
 				TestsRun:              m.TestsRun, SelectionRule: m.Rule,
-				// A first-run failure its repeat did not bear out: the test
-				// that run blamed, on the survivor it turned out to be.
+				// A first-run failure its repeat did not bear out: the
+				// refutation itself ("not-repeated", recorded even when the
+				// run named no test) and the test that run blamed, on the
+				// survivor it turned out to be.
+				KillConfirmation:   m.KillConfirmation,
 				UnrepeatedKilledBy: m.UnrepeatedKilledBy,
 				DurationMillis:     millisOrNil(m.Duration),
 				SpanStart:          m.Span.Start, SpanEnd: m.Span.End,

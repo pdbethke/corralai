@@ -357,18 +357,23 @@ type MutantRow struct {
 	SourceTool     string `json:",omitempty"`
 	SourceOperator string `json:",omitempty"`
 	SourceStatus   string `json:",omitempty"`
-	// KillConfirmation is how a killed mutant's kill was confirmed: "alone"
-	// (the test the failing run blamed failed by itself on the mutant and
-	// passed on the unmutated code) or "repeated" (the grading command
-	// failed again on the mutant and passed on the unmutated code). Omitted
-	// on a survivor, on a timeout-kill, and on every row written before
-	// confirmation existed; a reader treats its absence on a kill as
-	// "unconfirmed", never as "alone".
+	// KillConfirmation is the outcome of confirming the mutant's first
+	// failing grading run. On a KILLED row: "alone" (the test the failing
+	// run blamed failed by itself on the mutant and passed on the unmutated
+	// code), "repeated" (the grading command failed again on the mutant and
+	// passed on the unmutated code) or "reprobed" (the grading run timed
+	// out, and the same command finished and passed on the unmutated code
+	// under the same cap). On a SURVIVED row: "not-repeated" (its first run
+	// failed and the repeat passed, so that failure was not the mutant's).
+	// Omitted on a mutant that was never a candidate and on every row
+	// written before confirmation existed; a reader treats its absence on a
+	// kill as "unconfirmed", never as "alone", and never reads this field
+	// for killed-ness — Outcome is that.
 	KillConfirmation string `json:",omitempty"`
-	// UnrepeatedKilledBy is set on a SURVIVOR whose first grading run failed
-	// and whose repeat passed: the test id that first run blamed. It is a
-	// test id, never test output, and a footnote to an ordinary survivor —
-	// the mutant counts as survived everywhere.
+	// UnrepeatedKilledBy is set on a "not-repeated" SURVIVOR: the test id
+	// its first run blamed, omitted when that run named none. It is a test
+	// id, never test output, and a footnote to an ordinary survivor — the
+	// mutant counts as survived everywhere.
 	UnrepeatedKilledBy string `json:",omitempty"`
 	// Code is the mutant's source. It IS the audited code, so it is written
 	// only when the bundle says --push-source was given.

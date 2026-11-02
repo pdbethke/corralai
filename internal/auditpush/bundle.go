@@ -565,7 +565,8 @@ var (
 		{"source_tool", "source_tool VARCHAR"},
 		{"source_operator", "source_operator VARCHAR"},
 		{"source_status", "source_status VARCHAR"},
-		// How each kill was confirmed, and the test a refuted first run
+		// The confirmation outcome (alone/repeated/reprobed on a kill,
+		// not-repeated on a survivor) and the test a refuted first run
 		// blamed (MutantRow.KillConfirmation, UnrepeatedKilledBy). NULL
 		// before them: a kill with no confirmation is unconfirmed.
 		{"kill_confirmation", "kill_confirmation VARCHAR"},

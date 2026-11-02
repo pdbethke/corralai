@@ -655,9 +655,10 @@ type Mutant struct {
 	SourceTool     string
 	SourceOperator string
 	SourceStatus   string
-	// KillConfirmation and UnrepeatedKilledBy are how a kill was confirmed
-	// and, on a survivor, the test a first run blamed that its repeat did
-	// not bear out. See ledger.MutantRow.
+	// KillConfirmation is the confirmation outcome (alone, repeated or
+	// reprobed on a kill; not-repeated on a survivor) and
+	// UnrepeatedKilledBy, on a not-repeated survivor, the test its first run
+	// blamed. See ledger.MutantRow.
 	KillConfirmation   string
 	UnrepeatedKilledBy string
 	// ProvenByAuthoredAlone marks a survivor the pool's AUTHORED test killed

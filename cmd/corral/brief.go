@@ -95,9 +95,10 @@ type BriefMutant struct {
 	Search   string `json:"search,omitempty"`
 	Replace  string `json:"replace,omitempty"`
 	KilledBy string `json:"killed_by,omitempty"`
-	// KillConfirmation is how a kill was confirmed ("alone", "repeated"); empty
-	// is unconfirmed. UnrepeatedKilledBy is the test a first run blamed on a
-	// mutant that then survived the repeat.
+	// KillConfirmation is the confirmation outcome ("alone", "repeated",
+	// "reprobed" on a kill; "not-repeated" on a survivor), shown as-is;
+	// empty on a kill is unconfirmed. UnrepeatedKilledBy is the test a first
+	// run blamed on a mutant that then survived the repeat.
 	KillConfirmation   string `json:"kill_confirmation,omitempty"`
 	UnrepeatedKilledBy string `json:"unrepeated_killed_by,omitempty"`
 }

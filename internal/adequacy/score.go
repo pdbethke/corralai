@@ -1500,8 +1500,20 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 	//
 	// A jail error that is not a timeout, or the file's own cancellation,
 	// fails the report as any mutant that could not be RUN always has.
+	gradingFailed := false
+	for _, o := range outcomes {
+		if o.err != nil {
+			gradingFailed = true
+			break
+		}
+	}
 	for i, m := range mutants {
-		if repOf[i] != i || !outcomes[i].candidate || outcomes[i].err != nil {
+		// A grading error fails the report below, so confirming would be up
+		// to four serial runs per candidate whose answers nobody reads.
+		if gradingFailed {
+			break
+		}
+		if repOf[i] != i || !outcomes[i].candidate {
 			continue
 		}
 		if err := confirmKill(m, &outcomes[i]); err != nil {

@@ -43,7 +43,12 @@ const (
 	rPass    scriptedResult = "pass"
 	rFail    scriptedResult = "fail"
 	rTimeout scriptedResult = "timeout"
+	// rBroken is a jail that could not run the command at all: an error
+	// that is neither a timeout nor the file's own cancellation.
+	rBroken scriptedResult = "broken"
 )
+
+var errJailBroken = errors.New("jail could not run the command")
 
 type scriptedCall struct {
 	code string
@@ -98,6 +103,8 @@ func (j *scriptedJail) answer(ctx context.Context, files map[string]string, cmd 
 		return true, nil
 	case rFail:
 		return false, nil
+	case rBroken:
+		return false, errJailBroken
 	default:
 		return false, ErrTestTimeout
 	}
@@ -509,6 +516,39 @@ func TestTimeoutKillIsNotReconfirmed(t *testing.T) {
 		t.Errorf("KillConfirmation = %q, want empty on a timeout kill", g.KillConfirmation)
 	}
 	// baseline, canary, grading (timed out), compliant re-probe.
+	if n := len(j.calls()); n != 4 {
+		t.Errorf("runs = %d (%v), want 4", n, j.calls())
+	}
+}
+
+// A jail that cannot RUN the repeat (not a timeout, not a cancellation) is
+// not evidence either way: Score fails with that error, as a mutant that
+// could not be run always has, and never guesses a verdict.
+func TestConfirmJailErrorOnTheRepeatFailsTheReport(t *testing.T) {
+	j := newScriptedJail(t, baseScript(map[string][]scriptedResult{
+		scriptKey(confirmMutantCode, confirmSuite): {rFail, rBroken},
+	}))
+	rep, err := Score(context.Background(), j, nil, "a.py", confirmCode, oneMutant(), confirmSuite)
+	if !errors.Is(err, errJailBroken) {
+		t.Fatalf("Score error = %v, want it to wrap %v", err, errJailBroken)
+	}
+	if rep.Total != 0 || rep.Killed != nil || rep.Survived != nil || rep.Unmeasured != nil || rep.PerMutant != nil || rep.CompliantPass {
+		t.Errorf("report = %+v, want Report{}", rep)
+	}
+}
+
+// A grading run that could not run fails the report, so no candidate is
+// confirmed first: the confirmation runs would be answers nobody reads.
+func TestConfirmSkippedWhenGradingFailed(t *testing.T) {
+	j := newScriptedJail(t, baseScript(map[string][]scriptedResult{
+		scriptKey(confirmMutantCode, confirmSuite): {rFail},
+		scriptKey("BROKEN\n", confirmSuite):        {rBroken},
+	}))
+	mutants := []Mutant{{ID: "m", Replace: confirmMutantCode}, {ID: "b", Replace: "BROKEN\n"}}
+	if _, err := Score(context.Background(), j, nil, "a.py", confirmCode, mutants, confirmSuite); !errors.Is(err, errJailBroken) {
+		t.Fatalf("Score error = %v, want it to wrap %v", err, errJailBroken)
+	}
+	// baseline, canary, the two grading runs; no confirmation of m.
 	if n := len(j.calls()); n != 4 {
 		t.Errorf("runs = %d (%v), want 4", n, j.calls())
 	}

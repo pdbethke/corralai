@@ -3,8 +3,10 @@
 package adequacy
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
 	"strings"
 	"sync"
 	"testing"
@@ -215,8 +217,11 @@ func TestConfirmRefutesAFalseKill(t *testing.T) {
 	if g.UnrepeatedKilledBy != confirmKilledBy {
 		t.Errorf("UnrepeatedKilledBy = %q, want %q", g.UnrepeatedKilledBy, confirmKilledBy)
 	}
-	if g.KilledBy != "" || g.KillConfirmation != "" {
-		t.Errorf("KilledBy=%q KillConfirmation=%q, want both empty on a survivor", g.KilledBy, g.KillConfirmation)
+	if g.KilledBy != "" {
+		t.Errorf("KilledBy = %q, want empty on a survivor", g.KilledBy)
+	}
+	if g.KillConfirmation != KillNotRepeated {
+		t.Errorf("KillConfirmation = %q, want %q: a refuted kill records its refutation", g.KillConfirmation, KillNotRepeated)
 	}
 	if rep.Total != 1 {
 		t.Errorf("Total = %d, want 1 — a refuted kill is an ordinary survivor", rep.Total)
@@ -499,7 +504,9 @@ func TestSurvivorIsNeverConfirmed(t *testing.T) {
 }
 
 // A timeout kill already carries its own confirmation (the compliant
-// re-probe); it is not confirmed again and its KillConfirmation stays "".
+// re-probe finished in time under the same cap); it is not confirmed again,
+// and it records that confirmation as "reprobed" rather than "", which now
+// means only "recorded before kills were confirmed".
 func TestTimeoutKillIsNotReconfirmed(t *testing.T) {
 	j := newScriptedJail(t, baseScript(map[string][]scriptedResult{
 		scriptKey(confirmMutantCode, confirmSuite): {rTimeout},
@@ -512,8 +519,8 @@ func TestTimeoutKillIsNotReconfirmed(t *testing.T) {
 	if !hasID(rep.Killed, "m") {
 		t.Fatalf("Killed = %v, want m", rep.Killed)
 	}
-	if g := rep.PerMutant["m"]; g.KillConfirmation != "" {
-		t.Errorf("KillConfirmation = %q, want empty on a timeout kill", g.KillConfirmation)
+	if g := rep.PerMutant["m"]; g.KillConfirmation != KillConfirmedReprobed {
+		t.Errorf("KillConfirmation = %q, want %q on a timeout kill", g.KillConfirmation, KillConfirmedReprobed)
 	}
 	// baseline, canary, grading (timed out), compliant re-probe.
 	if n := len(j.calls()); n != 4 {
@@ -551,5 +558,147 @@ func TestConfirmSkippedWhenGradingFailed(t *testing.T) {
 	// baseline, canary, the two grading runs; no confirmation of m.
 	if n := len(j.calls()); n != 4 {
 		t.Errorf("runs = %d (%v), want 4", n, j.calls())
+	}
+}
+
+// A refuted kill whose first run named no test (no parser, or output the
+// parser could not read) still records its refutation: UnrepeatedKilledBy
+// is "" there, so KillConfirmation is the only thing that says it happened.
+func TestConfirmRefutationWithNoNamedTestIsRecorded(t *testing.T) {
+	j := newScriptedJail(t, baseScript(map[string][]scriptedResult{
+		scriptKey(confirmMutantCode, confirmSuite): {rFail, rPass},
+	}))
+	rep, err := Score(context.Background(), j, nil, "a.py", confirmCode, oneMutant(), confirmSuite)
+	if err != nil {
+		t.Fatalf("Score: %v", err)
+	}
+	if !hasID(rep.Survived, "m") {
+		t.Fatalf("Survived = %v, want m", rep.Survived)
+	}
+	g := rep.PerMutant["m"]
+	if g.UnrepeatedKilledBy != "" || g.KillConfirmation != KillNotRepeated {
+		t.Errorf("UnrepeatedKilledBy=%q KillConfirmation=%q, want \"\" and %q", g.UnrepeatedKilledBy, g.KillConfirmation, KillNotRepeated)
+	}
+}
+
+// t14 had seven candidates blamed on one test K. The compliant code is the
+// same for every mutant of the file, so step A's compliant run of K is paid
+// for once per Score call, not once per candidate.
+func TestConfirmMemoizesTheCompliantStepARun(t *testing.T) {
+	j := newScriptedJail(t, baseScript(map[string][]scriptedResult{
+		scriptKey("MUTANT 1\n", confirmSuite): {rFail},
+		scriptKey("MUTANT 2\n", confirmSuite): {rFail},
+		scriptKey("MUTANT 1\n", confirmK):     {rFail},
+		scriptKey("MUTANT 2\n", confirmK):     {rFail},
+		scriptKey(confirmCode, confirmK):      {rPass},
+	}))
+	mutants := []Mutant{{ID: "m1", Replace: "MUTANT 1\n"}, {ID: "m2", Replace: "MUTANT 2\n"}}
+	rep, err := Score(context.Background(), detailedScriptedJail{j}, nil, "a.py", confirmCode, mutants, confirmSuite,
+		WithFailureParser(pythonFailureParser(t)), WithKillConfirmer(testConfirmer))
+	if err != nil {
+		t.Fatalf("Score: %v", err)
+	}
+	for _, id := range []string{"m1", "m2"} {
+		if g := rep.PerMutant[id]; !hasID(rep.Killed, id) || g.KillConfirmation != KillConfirmedAlone {
+			t.Errorf("%s: Killed=%v KillConfirmation=%q, want killed %q", id, rep.Killed, g.KillConfirmation, KillConfirmedAlone)
+		}
+	}
+	n := 0
+	for _, c := range j.calls() {
+		if c.code == confirmCode && c.cmd == "k a.py::test_x" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("compliant step-A runs = %d, want 1 (%v)", n, j.calls())
+	}
+}
+
+// Only a PASS is remembered. A compliant step-A run that timed out is not an
+// answer about K, so the next candidate blamed on K runs it again.
+func TestConfirmDoesNotMemoizeACompliantTimeout(t *testing.T) {
+	j := newScriptedJail(t, baseScript(map[string][]scriptedResult{
+		scriptKey("MUTANT 1\n", confirmSuite): {rFail, rFail},
+		scriptKey("MUTANT 2\n", confirmSuite): {rFail},
+		scriptKey("MUTANT 1\n", confirmK):     {rFail},
+		scriptKey("MUTANT 2\n", confirmK):     {rFail},
+		scriptKey(confirmCode, confirmK):      {rTimeout, rPass},
+		scriptKey(confirmCode, confirmSuite):  {rPass, rPass},
+	}))
+	mutants := []Mutant{{ID: "m1", Replace: "MUTANT 1\n"}, {ID: "m2", Replace: "MUTANT 2\n"}}
+	rep, err := Score(context.Background(), detailedScriptedJail{j}, nil, "a.py", confirmCode, mutants, confirmSuite,
+		WithFailureParser(pythonFailureParser(t)), WithKillConfirmer(testConfirmer))
+	if err != nil {
+		t.Fatalf("Score: %v", err)
+	}
+	if g := rep.PerMutant["m1"]; g.KillConfirmation != KillConfirmedRepeated {
+		t.Errorf("m1 KillConfirmation = %q, want %q", g.KillConfirmation, KillConfirmedRepeated)
+	}
+	if g := rep.PerMutant["m2"]; g.KillConfirmation != KillConfirmedAlone {
+		t.Errorf("m2 KillConfirmation = %q, want %q", g.KillConfirmation, KillConfirmedAlone)
+	}
+	n := 0
+	for _, c := range j.calls() {
+		if c.code == confirmCode && c.cmd == "k a.py::test_x" {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Errorf("compliant step-A runs = %d, want 2 (%v)", n, j.calls())
+	}
+}
+
+// The confirmation pass is serial wall clock added to the run, so its cost
+// is measured and handed back; a run with no candidate spent none.
+func TestConfirmDurationIsMeasured(t *testing.T) {
+	j := newScriptedJail(t, baseScript(map[string][]scriptedResult{
+		scriptKey(confirmMutantCode, confirmSuite): {rFail, rFail},
+		scriptKey(confirmCode, confirmSuite):       {rPass, rPass},
+	}))
+	j.onCall = func(code string, cmd []string) { time.Sleep(5 * time.Millisecond) }
+	rep, err := Score(context.Background(), j, nil, "a.py", confirmCode, oneMutant(), confirmSuite)
+	if err != nil {
+		t.Fatalf("Score: %v", err)
+	}
+	if rep.ConfirmDuration < 10*time.Millisecond {
+		t.Errorf("ConfirmDuration = %s, want at least the two confirmation runs (10ms)", rep.ConfirmDuration)
+	}
+
+	s := newScriptedJail(t, baseScript(map[string][]scriptedResult{
+		scriptKey(confirmMutantCode, confirmSuite): {rPass},
+	}))
+	rep, err = Score(context.Background(), s, nil, "a.py", confirmCode, oneMutant(), confirmSuite)
+	if err != nil {
+		t.Fatalf("Score: %v", err)
+	}
+	if rep.ConfirmDuration != 0 {
+		t.Errorf("ConfirmDuration = %s, want 0 with no candidate", rep.ConfirmDuration)
+	}
+}
+
+// The serial pass says what it is doing, one beat per candidate, so a run
+// that sits in it for minutes is not silent.
+func TestConfirmPrintsAProgressBeat(t *testing.T) {
+	var buf bytes.Buffer
+	prev, flags := log.Writer(), log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	t.Cleanup(func() { log.SetOutput(prev); log.SetFlags(flags) })
+
+	j := newScriptedJail(t, baseScript(map[string][]scriptedResult{
+		scriptKey("MUTANT 1\n", confirmSuite): {rFail, rFail},
+		scriptKey("MUTANT 2\n", confirmSuite): {rPass},
+		scriptKey("MUTANT 3\n", confirmSuite): {rFail, rFail},
+		scriptKey(confirmCode, confirmSuite):  {rPass},
+	}))
+	mutants := []Mutant{{ID: "m1", Replace: "MUTANT 1\n"}, {ID: "m2", Replace: "MUTANT 2\n"}, {ID: "m3", Replace: "MUTANT 3\n"}}
+	if _, err := Score(context.Background(), j, nil, "a.py", confirmCode, mutants, confirmSuite); err != nil {
+		t.Fatalf("Score: %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{"confirming kill 1 of 2 (m1)", "confirming kill 2 of 2 (m3)"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("log lacks %q:\n%s", want, out)
+		}
 	}
 }

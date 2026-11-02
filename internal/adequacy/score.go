@@ -108,9 +108,16 @@ type scoreConfig struct {
 	killConfirmer KillerCmdFor
 }
 
-// KillConfirmedAlone and KillConfirmedRepeated are the two values of
-// MutantGrading.KillConfirmation: HOW a failing grading run was confirmed to
-// be the mutant's doing before it was credited as a kill.
+// The values of MutantGrading.KillConfirmation: what the confirmation of a
+// failing grading run concluded. Three are set on a KILL and say HOW it was
+// confirmed before it was credited; one is set on a SURVIVOR and says a
+// first-run failure was refuted. A closed set: readers print it as-is.
+//
+// "" means the mutant was never a candidate (it survived its first run, or
+// was unmeasured), or the entry was recorded before confirmation existed
+// (generation < 40). On a KILL, "" therefore means only the latter:
+// recorded before kills were confirmed. KillConfirmation is never itself
+// evidence that a mutant was killed — Outcome / Report.Killed is.
 const (
 	// KillConfirmedAlone: the test the failing run blamed was run BY ITSELF
 	// on the mutant and failed, and by itself on the compliant code and
@@ -124,6 +131,19 @@ const (
 	// only fails alongside others (an order-dependent test), and an
 	// environment that failed the same way twice in a row.
 	KillConfirmedRepeated = "repeated"
+	// KillConfirmedReprobed: the mutant's grading run TIMED OUT, and the
+	// same command then finished and passed on the unmutated code under the
+	// same cap (the timeout branch's compliant re-probe, which has existed
+	// since before confirmation did). That re-probe is the confirmation: the
+	// box was healthy enough to finish the unmutated run, so the hang was
+	// the mutant's. No further runs are made for it.
+	KillConfirmedReprobed = "reprobed"
+	// KillNotRepeated: set on a SURVIVOR. Its first grading run failed, and
+	// the repeat of that command passed on the mutant, so the first failure
+	// was not the mutant's doing. Recorded even when the first run named no
+	// test (UnrepeatedKilledBy ""), because a refutation nobody records is a
+	// measurement dropped on the floor.
+	KillNotRepeated = "not-repeated"
 )
 
 // KillerCmdFor narrows base — the command the mutant was graded with — to the
@@ -604,6 +624,13 @@ type Report struct {
 	// never their mean: it is a duration something actually took.
 	MutantDurationMedian time.Duration
 	MutantDurationMax    time.Duration
+	// ConfirmDuration is the wall clock of the kill-confirmation pass: the
+	// serial runs Score makes after every grading run has finished, to
+	// confirm each failing run before it is credited (see Score). Zero when
+	// no run was a candidate. Uncontended by construction — the pass runs
+	// alone — so unlike the per-mutant durations it is a real cost the run
+	// paid on top of grading.
+	ConfirmDuration time.Duration
 }
 
 // MutantGrading is what a single mutant was actually graded with.
@@ -634,10 +661,12 @@ type MutantGrading struct {
 	// own summary, so an unparsable run stores NULL rather than naming a test
 	// that may not have run.
 	KilledBy string
-	// KillConfirmation is how this mutant's kill was confirmed:
-	// KillConfirmedAlone or KillConfirmedRepeated. "" unless the mutant was
-	// killed by a grading run that FINISHED and failed — a timeout kill's
-	// compliant re-probe is already its confirmation and leaves this empty.
+	// KillConfirmation is the outcome of confirming this mutant's first
+	// failing grading run: KillConfirmedAlone, KillConfirmedRepeated or
+	// KillConfirmedReprobed on a KILL; KillNotRepeated on a SURVIVOR whose
+	// first-run failure did not repeat. "" when the mutant was never a
+	// candidate (it survived its first run, or was unmeasured). It is never
+	// itself the verdict: whether the mutant was killed is Report.Killed.
 	//
 	// It exists because every kill used to be the unchecked exit code of ONE
 	// run. REA's run t14 (2026-11-01) credited 7 kills to one slow test that
@@ -645,8 +674,9 @@ type MutantGrading struct {
 	// a per-test timeout under parallel load, signed as seven caught bugs.
 	KillConfirmation string
 	// UnrepeatedKilledBy is set on a SURVIVOR whose first grading run failed
-	// and whose repeat passed: the test that first run blamed (KilledBy then,
-	// cleared now), which may be "" when the run named none. A refuted kill
+	// and whose repeat passed (KillConfirmation KillNotRepeated): the test
+	// that first run blamed (KilledBy then, cleared now), which may be ""
+	// when the run named none — the refutation itself is KillConfirmation. A refuted kill
 	// is an ordinary survivor everywhere; this is its footnote, kept because
 	// a test that fails on a mutant only some of the time is itself a
 	// finding, and dropping the name would discard a real measurement.
@@ -1330,6 +1360,10 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 						outcomes[i] = outcome{err: fmt.Errorf("mutant %s: run timed out, and the compliant baseline FAILED when re-run under the same budget (%s) — the suite is not stable right now, so nothing is inferred from this mutant", m.ID, mutantCap)}
 						return
 					}
+					// The re-probe IS this kill's confirmation: the
+					// unmutated code finished, and passed, in the budget
+					// the mutant ran out of.
+					grading.KillConfirmation = KillConfirmedReprobed
 					outcomes[i] = outcome{killed: true, grading: grading}
 					return
 				}
@@ -1376,6 +1410,7 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 	// the why). It rewrites o in place: killed stays set with a
 	// KillConfirmation, or becomes a survivor with UnrepeatedKilledBy, or
 	// becomes unmeasured.
+	compliantKPassed := map[string]bool{}
 	confirmKill := func(m Mutant, o *outcome) error {
 		// The anchor applied for the grading run a moment ago against the
 		// same bytes; re-applying is the file existing for one more run,
@@ -1396,11 +1431,22 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 					return err
 				}
 				if !mp && !mto {
+					// The compliant code is the same for every mutant of
+					// this file, so a PASS of K on it is remembered per
+					// narrowed command (t14: seven candidates on one K).
+					// Only a pass: an error or a timeout is not an answer
+					// about K, and the next candidate asks again.
+					key := strings.Join(k, "\x00")
+					if compliantKPassed[key] {
+						g.KillConfirmation = KillConfirmedAlone
+						return nil
+					}
 					cp, cto, err := confirmRun(compliantCode, k, budget)
 					if err != nil {
 						return err
 					}
 					if cp && !cto {
+						compliantKPassed[key] = true
 						g.KillConfirmation = KillConfirmedAlone
 						return nil
 					}
@@ -1416,6 +1462,7 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 		if mp {
 			o.killed = false
 			g.UnrepeatedKilledBy, g.KilledBy = g.KilledBy, ""
+			g.KillConfirmation = KillNotRepeated
 			return nil
 		}
 		cp, cto, err := confirmRun(compliantCode, o.gradeCmd, budget)
@@ -1507,6 +1554,16 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 			break
 		}
 	}
+	candidates := 0
+	if !gradingFailed {
+		for i := range mutants {
+			if repOf[i] == i && outcomes[i].candidate {
+				candidates++
+			}
+		}
+	}
+	confirmStart := time.Now()
+	confirmed := 0
 	for i, m := range mutants {
 		// A grading error fails the report below, so confirming would be up
 		// to four serial runs per candidate whose answers nobody reads.
@@ -1516,12 +1573,22 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 		if repOf[i] != i || !outcomes[i].candidate {
 			continue
 		}
+		// A beat per candidate, on the channel this scorer already reports
+		// on (log, as the fail-fast note above): the pass is serial wall
+		// clock after every parallel run, and minutes of silence there read
+		// as a hang.
+		confirmed++
+		log.Printf("adequacy: confirming kill %d of %d (%s)", confirmed, candidates, m.ID)
 		if err := confirmKill(m, &outcomes[i]); err != nil {
 			// The report fails on this error below; confirming the rest
 			// would be runs whose answers nobody reads.
 			outcomes[i].err = fmt.Errorf("mutant %s: confirming its kill: %w", m.ID, err)
 			break
 		}
+	}
+
+	if candidates > 0 {
+		rep.ConfirmDuration = time.Since(confirmStart)
 	}
 
 	// Every duplicate inherits its representative's outcome VERBATIM — the

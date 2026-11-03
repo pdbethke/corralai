@@ -363,6 +363,15 @@ type JailScorer struct {
 	// place that resolves a plugin for a run also decides whether that
 	// plugin's runner output is parseable at all.
 	FailureParser golang.FailureParser
+	// KillerCmd, when non-nil, narrows a mutant's grading command to the one
+	// test the failing run blamed, so a kill is confirmed by that test alone
+	// on the mutant and on the unmutated code (see adequacy.WithKillConfirmer).
+	// nil — every existing JailScorer{} literal — still confirms every kill,
+	// by repeating its grading run: there is no unconfirmed state.
+	//
+	// Passed in rather than derived from Lang here for the reason
+	// FailureParser is: it is the same runner row, resolved in the same place.
+	KillerCmd adequacy.KillerCmdFor
 	// FailFast, when non-nil, lets each MUTANT's run stop at its first failing
 	// test (see adequacy.WithMutantFailFast). nil — every existing
 	// JailScorer{} literal, and the `--no-fail-fast` escape hatch — runs every
@@ -383,6 +392,7 @@ func (s JailScorer) baseScoreOpts() []adequacy.ScoreOption {
 		adequacy.WithMutantTimeout(s.MutantTimeout),
 		adequacy.WithConcurrency(s.Concurrency),
 		adequacy.WithFailureParser(s.FailureParser),
+		adequacy.WithKillConfirmer(s.KillerCmd),
 		adequacy.WithMutantFailFast(s.FailFast),
 	}
 }

@@ -357,7 +357,7 @@ const scanTmpl = `<!doctype html>
 <p class="small"><a href="../index.html">← the record</a></p>
 <h1>Audit <span class="mono">{{.Short}}</span></h1>
 <p class="lede"><span class="mono">{{.RepoName}}</span>{{with .Scan.Scope}}, scoped to <span class="mono">{{.}}</span>,{{end}} at <span class="mono">{{.ShortSHA}}</span>:
-{{if .Graded}}the project's own tests caught {{.Killed}} of {{.Graded}} planted faults, {{.Survived}} got through,
+{{if .Graded}}the project's own tests caught {{.Killed}} of {{.Graded}} planted faults{{if .Caveat}} <span class="chip warn">{{.Caveat}}</span>{{end}}, {{.Survived}} got through,
 and corral proved {{.Proven}} of those missing tests by writing a test and running it.{{else}}nothing was graded.{{end}}</p>
 
 {{if .Retracted}}<div class="banner bad"><p><strong>This audit was retracted.</strong> The entry stays in the chain and no
@@ -383,7 +383,7 @@ longer stands as the record{{if .RetractedReason}}: <span title="{{tierNote "Ent
 <h2 class="mono">{{.Path}}</h2>
 <div class="stats">
   <div class="stat"><b>{{if .Rate}}{{.Rate}}{{else}}—{{end}}</b><span>kill rate{{if .Interval}}, 95% interval {{.Interval}}{{else if not .Rate}} (not graded){{end}}</span></div>
-  <div class="stat"><b>{{if .Rate}}{{.Killed}} of {{.MutantsGraded}}{{else}}—{{end}}</b><span>caught by the project's tests</span></div>
+  <div class="stat"><b>{{if .Rate}}{{.Killed}} of {{.MutantsGraded}}{{else}}—{{end}}</b><span>caught by the project's tests{{if and .Rate .Caveat}} <span class="chip warn">{{.Caveat}}</span>{{end}}</span></div>
   <div class="stat"><b>{{.Survivors | len}}</b><span>got through</span></div>
   <div class="stat"><b>{{.ProvenMissed}}</b><span>proven missing tests</span></div>
 </div>
@@ -401,7 +401,8 @@ this run was pushed without its source (<code>--push-source</code>). The counts 
 <span class="chip mute">unproven</span> one was not, so it may be a missing test or a fault no test can see.</p>
 {{range .Survivors}}
 <div class="finding"><p class="small mono"><strong>{{.ID}}</strong>{{if .Line}} · line {{.Line}}{{end}}
-{{if .Proven}}<span class="chip ok">proven</span>{{else}}<span class="chip mute">unproven</span>{{end}}</p>
+{{if .Proven}}<span class="chip ok">proven</span>{{else}}<span class="chip mute">unproven</span>{{end}}
+{{if .DidNotRepeat}}<span class="chip warn">first run failed in <code>{{.DidNotRepeat}}</code>, did not repeat</span>{{end}}</p>
 {{if .Diff}}<pre>{{.Diff}}</pre>{{end}}</div>
 {{end}}
 {{end}}
@@ -418,7 +419,7 @@ const rowTmpls = `
 <td class="nowrap"><a href="{{entryURL .Short}}">{{date .Pushed}}</a>{{if .Retracted}} <span class="chip bad">retracted</span>{{end}}</td>
 <td class="mono small">{{.RepoName}}{{with .Scan.Scope}}<br><span class="small">{{.}}</span>{{end}}</td>
 <td class="mono small">{{range $i, $f := .Audited}}{{if $i}}, {{end}}{{$f.Path}}{{else}}<span class="chip mute">none</span>{{end}}</td>
-<td class="nowrap">{{if .Graded}}{{.Rate}} <span class="small">({{.Killed}} of {{.Graded}})</span>{{else}}<span class="chip mute">not graded</span>{{end}}</td>
+<td class="nowrap">{{if .Graded}}{{.Rate}} <span class="small">({{.Killed}} of {{.Graded}})</span>{{if .Caveat}} <span class="chip warn">{{.Caveat}}</span>{{end}}{{else}}<span class="chip mute">not graded</span>{{end}}</td>
 <td>{{.Survived}}</td>
 <td>{{if .Proven}}<span class="chip ok">{{.Proven}}</span>{{else}}0{{end}}</td>
 <td class="mono small">{{if .CommitURL}}<a href="{{.CommitURL}}">{{.ShortSHA}}</a>{{else}}{{.ShortSHA}}{{end}}</td>

@@ -571,7 +571,11 @@ func killedByListing(ms []scanstore.Mutant) []string {
 		if m.Outcome != "killed" || m.KilledBy == "" {
 			continue
 		}
-		lines = append(lines, fmt.Sprintf("  %s\t%s\t%s", m.Path, m.MutantID, m.KilledBy))
+		confirmation := m.KillConfirmation
+		if confirmation == "" {
+			confirmation = "unconfirmed"
+		}
+		lines = append(lines, fmt.Sprintf("  %s\t%s\t%s\t%s", m.Path, m.MutantID, m.KilledBy, confirmation))
 	}
 	return lines
 }

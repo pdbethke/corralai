@@ -173,6 +173,7 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `DurationMillis` | measured |  |
 | `GeneratorModel` | measured |  |
 | `InvalidReason` | measured |  |
+| `KillConfirmation` | measured |  |
 | `KilledBy` | measured |  |
 | `MutantID` | key |  |
 | `Outcome` | measured |  |
@@ -193,6 +194,7 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `SpanStart` | measured |  |
 | `StatementSHA256` | key |  |
 | `TestsRun` | measured |  |
+| `UnrepeatedKilledBy` | measured |  |
 
 ## PinnedWorkflow
 

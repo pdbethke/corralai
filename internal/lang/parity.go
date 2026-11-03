@@ -81,6 +81,7 @@ var Capabilities = []Capability{
 	rowCapability("list", "List the tests", func(r Runner) bool { return r.ListCmd != nil && r.ParseList != nil }),
 	rowCapability("single", "Run one test alone (critic claims checked)", func(r Runner) bool { return r.SingleCmd != nil }),
 	rowCapability("first-failure", "Name the killing test", func(r Runner) bool { return r.FirstFailure != nil }),
+	rowCapability("confirm-alone", "Confirm a kill by running the killing test alone", func(r Runner) bool { return r.KillerCmd != nil }),
 	rowCapability("fail-fast", "Stop at the first failure", func(r Runner) bool { return len(r.FailFast) > 0 }),
 	rowCapability("salvage", "Keep the passing part of an authored test", func(r Runner) bool { return r.FailedTests != nil && r.DeselectCmd != nil }),
 	rowCapability("units", "Run one test unit", func(r Runner) bool { return r.ListUnits != nil && r.UnitCmd != nil }),
@@ -120,6 +121,12 @@ func selectionCapable(p Plugin, rows []Runner) bool {
 type Exemption struct{ Lang, Capability, Reason string }
 
 var ParityExemptions = []Exemption{
+	{"ruby", "confirm-alone", "no row narrows a run to the killing test by name yet; kills there are confirmed by repeating the grading run (kill-confirmation phase 1)"},
+
+	{"php", "confirm-alone", "no row narrows a run to the killing test by name yet; kills there are confirmed by repeating the grading run (kill-confirmation phase 1)"},
+
+	{"rust", "confirm-alone", "no row narrows a run to the killing test by name yet; kills there are confirmed by repeating the grading run (kill-confirmation phase 1)"},
+
 	{"rust", "fail-fast", "nextest's --fail-fast and libtest's lack of one are not yet verified against a real run (runner table Phase 5)"},
 
 	{"rust", "salvage", "libtest --skip and nextest filtersets are not yet verified for salvage (runner table Phase 5)"},

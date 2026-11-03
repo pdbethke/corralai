@@ -9,6 +9,42 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [Unreleased]
+
+### Breaking
+
+- **A kill is confirmed before it is credited, so kill rates can fall.** A
+  mutant used to count as killed on the exit code of one failing test run, and
+  one slow test that fails under load and passes alone could be credited with
+  many kills (REA's run t14 credited 7 kills to such a test). Now each failing
+  grading run is confirmed: the test the runner blamed is run alone on the
+  mutant and on the unmutated code where the runner can name and run one test,
+  and otherwise the grading run is repeated. A first-run failure that does not
+  repeat is recorded as a **survivor**, and counts as one everywhere (the kill
+  rate, the test writer's targets, proven gaps). A suite that also fails the
+  repeat on the unmutated code leaves the mutant unmeasured: the run prints
+  why, and the ledger records the file's count of unmeasured mutants (not yet
+  a row per mutant).
+  Confirmation runs **serially, after every mutant has been graded**, so it
+  adds to a run's wall clock rather than overlapping it; the run prints a
+  `confirming kill N of M` line per candidate and the time the pass took.
+  Confirming a kill costs up to four more test runs. On runners that cannot
+  run the blamed test alone (every runner but vitest, jest, pytest and
+  `go test`, and on those four whenever the test command already carries a
+  name filter, or, for pytest, a long option corral cannot tell is a flag),
+  each kill costs two more full runs of the grading command. The
+  verdict generation is now `40`, so verdicts cached before this are
+  re-measured rather than reused. Each ledger mutant row gains
+  `KillConfirmation`, one of `alone` (the blamed test alone failed on the
+  mutant and passed on the unmutated code), `repeated` (the grading run
+  failed again and passed on the unmutated code) or `reprobed` (the grading
+  run timed out and the unmutated code finished in time under the same cap)
+  on a kill, and `not-repeated` on a survivor whose first-run failure did not
+  repeat; plus `UnrepeatedKilledBy` on such a survivor (the id of the test
+  that first run blamed, never its output, absent when it named none). A
+  kill recorded before this has no `KillConfirmation` and is unconfirmed,
+  never "alone", and the record page marks an entry holding one.
+
 ## [v1.0.0-rc.30] — 2026-11-01
 
 ### Added

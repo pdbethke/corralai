@@ -4,6 +4,7 @@ package lang
 
 import (
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -87,7 +88,41 @@ func vitestSingleCmd(argv []string, testPath, id string) ([]string, bool) {
 	if id == "" || !ok {
 		return nil, false
 	}
-	return append(cmd, "-t", "^"+jsRegexQuote(fullName(id))+"$", testPath), true
+	return append(cmd, "-t", vitestNamePattern(id), testPath), true
+}
+
+// vitestNamePattern is the anchored -t regex for the test whose id is its
+// describe and test titles joined by "::". Vitest 3 matches -t against the
+// titles joined by a space; vitest 5 joins them with " > ". Measured on REA
+// (vitest 5.0.3): the space form ran 0 tests and exited 0, so every check
+// built on it checked nothing, while the " > " form ran the test. The
+// pattern accepts either joiner so one command works on both versions.
+func vitestNamePattern(id string) string {
+	parts := strings.Split(id, "::")
+	for i, p := range parts {
+		parts[i] = jsRegexQuote(p)
+	}
+	return "^" + strings.Join(parts, "(?: | > )") + "$"
+}
+
+// vitestCoruns is Coruns for vitest: other runs too when the -t pattern
+// built for id (vitestNamePattern) matches other's titles under EITHER
+// joiner — " " (vitest 3) or " > " (vitest 5) — because the pattern accepts
+// both and the version is not known here. Comparing space-joined full names
+// alone, as fullNameColl does for jest and mocha, missed a title that
+// literally holds " > ": `Calc > adds` as one title selects the nested
+// `Calc::adds` on vitest 5. A pattern that does not compile is reported as a
+// co-run, the direction that refuses rather than guesses.
+func vitestCoruns(id, other string) bool {
+	if id == other {
+		return false
+	}
+	re, err := regexp.Compile(vitestNamePattern(id))
+	if err != nil {
+		return true
+	}
+	parts := strings.Split(other, "::")
+	return re.MatchString(strings.Join(parts, " ")) || re.MatchString(strings.Join(parts, " > "))
 }
 
 // vitestListUnits is vitest's own `list --filesOnly` over argv: the test
@@ -159,4 +194,17 @@ func vitestUnitCoruns(unit, other string) bool {
 // vitest 5.0.3). --poolOptions and every other flag are left as written.
 func vitestEvidenceArgs(unitCmd []string) []string {
 	return append(withoutFlag(unitCmd, "--pool"), "--pool=threads")
+}
+
+// vitestKillerCmd is argv, under `run`, narrowed by name to the test the
+// failing run named. No file is appended: argv already scopes the files.
+func vitestKillerCmd(argv []string, id string) ([]string, bool) {
+	if id == "" || !narrowable(argv, "-t", "--testNamePattern") {
+		return nil, false
+	}
+	cmd, ok := vitestWithMode(argv, "run")
+	if !ok {
+		return nil, false
+	}
+	return append(cmd, "-t", vitestNamePattern(id)), true
 }

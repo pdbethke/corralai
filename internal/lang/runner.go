@@ -60,6 +60,11 @@ type Runner struct {
 	// label, never a grade); Flaky names tests that passed only on a retry.
 	FirstFailure func(output []byte) string
 	Flaky        func(output []byte) []string
+	// KillerCmd is the run's own argv, narrowed by name to the test
+	// FirstFailure named, so that it runs that test without the rest of the
+	// suite. No file is needed, because argv already scopes the files. false
+	// when argv carries a filter of its own, or the id cannot be narrowed to.
+	KillerCmd func(argv []string, killedBy string) ([]string, bool)
 	// FailedTests and DeselectCmd let a partly failing authored test be
 	// salvaged: the failing ids, and argv rerun without them. DeselectCmd is
 	// shaped like SingleCmd, and refuses as it does (a name filter already in
@@ -230,7 +235,7 @@ var runners = []Runner{
 		Name: "go test", ID: "go-test", Languages: []string{"go"}, Default: true, Detect: goTestCmd,
 		FailFast: []string{"-failfast"},
 		ListCmd:  goListCmd, ParseList: goParseTestList, SingleCmd: goSingleCmd,
-		FirstFailure: goFirstFailure, FailedTests: goFailedTests, DeselectCmd: goDeselectCmd,
+		FirstFailure: goFirstFailure, FailedTests: goFailedTests, DeselectCmd: goDeselectCmd, KillerCmd: goKillerCmd,
 		ListUnits: goTestListUnits, ParseUnits: goParseUnits, UnitCmd: oneUnit(goTestUnitsCmd),
 		UnitsCmd: goTestUnitsCmd, UnitForFile: goUnitForFile, UnitNoun: "packages",
 		EvidenceArgs: goTestEvidenceArgs, EvidenceCache: goEvidenceCache,
@@ -249,7 +254,7 @@ var runners = []Runner{
 		Name: "pytest", ID: "pytest", Languages: []string{"python"}, Default: true, Words: []string{"pytest"},
 		FailFast: []string{"-x"},
 		ListCmd:  pyListCmd, ParseList: pyParseTestList, SingleCmd: pySingleCmd,
-		FirstFailure: pyFirstFailure, FailedTests: pyFailedTests, DeselectCmd: pyDeselectCmd,
+		FirstFailure: pyFirstFailure, FailedTests: pyFailedTests, DeselectCmd: pyDeselectCmd, KillerCmd: pyKillerCmd,
 		CollectionBase: stripPyCollectionTargets, TestsCmd: pyTestsCmd, TestUnit: pyTestUnit, CarryArgs: deselectArgs,
 		VersionCmd: versionAtWord("pytest"),
 	},
@@ -276,7 +281,7 @@ var runners = []Runner{
 			return wordIndex(argv, "jest") >= 0 || entryScriptIndex(argv, "jest", "bin/jest.js") >= 0
 		},
 		ListCmd: jestListCmd, ParseList: jestParseList, SingleCmd: jestSingleCmd, ResolveByList: true, Coruns: jestCoruns,
-		FirstFailure: firstOf(jestFailures), FailedTests: jestFailures, DeselectCmd: jestDeselectCmd, FailedUnits: jestFailedUnits,
+		FirstFailure: firstOf(jestFailures), FailedTests: jestFailures, DeselectCmd: jestDeselectCmd, FailedUnits: jestFailedUnits, KillerCmd: jestKillerCmd,
 		ListUnits: jestListUnits, ParseUnits: jestParseUnits, UnitCmd: oneUnit(jestUnitsCmd), UnitCoruns: jestUnitCoruns,
 		UnitsCmd: jestUnitsCmd, UnitsCoruns: eachUnitCoruns(jestUnitCoruns), UnitForFile: fileUnitForFile, UnitNoun: "test files",
 		VersionCmd: jestVersionCmd,
@@ -301,8 +306,8 @@ var runners = []Runner{
 		// script is still read through Words.
 		Name: "vitest", ID: "vitest", Languages: []string{"javascript", "typescript"}, Words: []string{"vitest"},
 		Detect:  func(argv []string) bool { return vitestIndex(argv) >= 0 },
-		ListCmd: vitestListCmd, ParseList: vitestParseList, SingleCmd: vitestSingleCmd, ResolveByList: true, Coruns: fullNameColl,
-		FirstFailure: firstOf(vitestFailures), FailedTests: vitestFailures, DeselectCmd: vitestDeselectCmd, FailedUnits: vitestFailedUnits,
+		ListCmd: vitestListCmd, ParseList: vitestParseList, SingleCmd: vitestSingleCmd, ResolveByList: true, Coruns: vitestCoruns,
+		FirstFailure: firstOf(vitestFailures), FailedTests: vitestFailures, DeselectCmd: vitestDeselectCmd, FailedUnits: vitestFailedUnits, KillerCmd: vitestKillerCmd,
 		ListUnits: vitestListUnits, ParseUnits: vitestParseUnits, UnitCmd: oneUnit(vitestUnitsCmd), UnitCoruns: vitestUnitCoruns,
 		UnitsCmd: vitestUnitsCmd, UnitsCoruns: eachUnitCoruns(vitestUnitCoruns), UnitForFile: fileUnitForFile, UnitNoun: "test files",
 		EvidenceArgs:   vitestEvidenceArgs,
@@ -574,6 +579,19 @@ func FailureParserFor(p Plugin, inv Invocation) FailureParser {
 		return flakyRowParser{rowParser{r}}
 	}
 	return rowParser{r}
+}
+
+// KillerCmdFor is argv's runner narrowed by name to the test FirstFailure
+// named, shaped as SingleTestCmd is (so a package script still passes the
+// words through). nil when the runner has no KillerCmd.
+func KillerCmdFor(p Plugin, inv Invocation) func(argv []string, killedBy string) ([]string, bool) {
+	r, ok := RunnerFor(p, inv)
+	if !ok || r.KillerCmd == nil {
+		return nil
+	}
+	return func(argv []string, killedBy string) ([]string, bool) {
+		return inv.WithArgv(argv).shape(p, func(w []string) ([]string, bool) { return r.KillerCmd(w, killedBy) })
+	}
 }
 
 type rowParser struct{ r Runner }

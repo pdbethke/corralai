@@ -143,6 +143,9 @@ func buildFieldTiers() map[[2]string]FieldTier {
 	add("MutantRow", TierMeasured, "", "Source")
 	add("MutantRow", TierDeclared, "read from the tool's report: the report's own claim about which tool and operator made this mutant", "SourceOperator SourceTool")
 	add("MutantRow", TierDeclared, "the tool's own claim; Outcome is corral's measurement", "SourceStatus")
+	// How a kill was confirmed, and the test a refuted first run blamed:
+	// both are what corral's own confirmation runs measured.
+	add("MutantRow", TierMeasured, "", "KillConfirmation UnrepeatedKilledBy")
 	add("MutantAttemptRow", TierKey, "", "Commit MutantID Path Repo")
 	add("MutantAttemptRow", TierMeasured, "", "Outcome Model Role Shadow")
 

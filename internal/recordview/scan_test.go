@@ -287,3 +287,46 @@ func TestAScanPageNamesItsJailAndImage(t *testing.T) {
 		t.Error("a scan that recorded no image must not show an image row")
 	}
 }
+
+// A survivor whose first grading run failed but did not repeat says which
+// test the first run blamed, so a reader can tell it from an ordinary
+// survivor. (Killed mutants are not listed; their confirmation reaches the
+// page only as the unconfirmed-kills caveat beside the counts.)
+func TestASurvivorThatDidNotRepeatNamesTheBlamedTest(t *testing.T) {
+	const hash = "94d9296c5801c7b56dea3ccb0e7517f7254fded3441bcbeefccc01f550dce4dc"
+	e := warpLikeScan(hash, true)
+	e.Bundle.Mutants[1].UnrepeatedKilledBy = "tests::slow_one"
+	_, page := renderOne(t, []auditpush.LedgerEntry{e})
+	p := page("94d9296c5801")
+	if !strings.Contains(p, "first run failed in") || !strings.Contains(p, "tests::slow_one") {
+		t.Errorf("the page hides the unrepeated first-run failure")
+	}
+}
+
+// An entry recorded before corral confirmed kills holds killed rows with no
+// KillConfirmation. Its kill rate and "caught N of M" are kills nobody
+// confirmed, so the page says so beside them (spec 2026-11-02 §3: an
+// unconfirmed kill must not be shown as a kill). A confirmed entry gets no
+// chip.
+func TestUnconfirmedKillsCarryACaveat(t *testing.T) {
+	const chip = "kills not confirmed: recorded before corral confirmed kills"
+	old := warpLikeScan("eeeeeeeeeeee0000", true)
+	index, page := renderOne(t, []auditpush.LedgerEntry{old})
+	if p := page("eeeeeeeeeeee"); strings.Count(p, chip) < 2 {
+		t.Errorf("the audit page must mark the entry's caught count and the file's kill rate (%d marks):\n%s", strings.Count(p, chip), p)
+	}
+	if !strings.Contains(index, chip) {
+		t.Errorf("the index row's rate must carry the caveat too")
+	}
+
+	for _, c := range []string{"alone", "repeated", "reprobed"} {
+		ok := warpLikeScan("ffffffffffff0000", true)
+		ok.Bundle.Mutants[2].KillConfirmation = c
+		// A refuted survivor's "not-repeated" is not a kill and changes nothing.
+		ok.Bundle.Mutants[1].KillConfirmation = "not-repeated"
+		index, page := renderOne(t, []auditpush.LedgerEntry{ok})
+		if strings.Contains(page("ffffffffffff"), chip) || strings.Contains(index, chip) {
+			t.Errorf("%s: a confirmed entry carries the unconfirmed caveat", c)
+		}
+	}
+}

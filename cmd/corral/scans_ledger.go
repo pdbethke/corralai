@@ -146,6 +146,7 @@ func (l *ledgerScans) MutantsForScan(_ context.Context, scanID int64) ([]scansto
 			KilledBy: m.KilledBy, SpanStart: m.SpanStart, SpanEnd: m.SpanEnd,
 			Shape: m.Shape, GeneratorModel: m.GeneratorModel,
 			Source: m.Source, SourceTool: m.SourceTool, SourceOperator: m.SourceOperator, SourceStatus: m.SourceStatus,
+			KillConfirmation: m.KillConfirmation, UnrepeatedKilledBy: m.UnrepeatedKilledBy,
 		})
 	}
 	return out, nil

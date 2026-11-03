@@ -46,7 +46,17 @@ type ScanView struct {
 	LeftOut     []string
 	LeftOutMore int
 	LeftOutRaw  string
+	// Caveat is set when any audited file's Caveat is: the entry's caught
+	// count holds kills nobody confirmed.
+	Caveat string
 }
+
+// UnconfirmedKillsCaveat marks a kill rate whose kills include one recorded
+// with no KillConfirmation: every entry before verdict generation 40, when a
+// kill was one failing run's exit code. Shown beside the number as SealRow's
+// Caveat is, because an unconfirmed kill presented as a kill is the claim
+// kill confirmation exists to stop making.
+const UnconfirmedKillsCaveat = "kills not confirmed: recorded before corral confirmed kills"
 
 // leftOutShown is how many left-out files the page names before counting.
 const leftOutShown = 10
@@ -60,6 +70,10 @@ type ScanFileView struct {
 	Survivors   []MutantView
 	Unsurfaced  int // survivors recorded without a diff (source withheld)
 	HasAuthored bool
+	// Caveat is UnconfirmedKillsCaveat when any of this file's KILLED rows
+	// has no KillConfirmation, else "". Killed-ness is the row's Outcome;
+	// a survivor's "not-repeated" never sets it.
+	Caveat string
 }
 
 // MutantView is one surviving mutant: where, whether a test corral wrote
@@ -69,6 +83,10 @@ type MutantView struct {
 	Line   int
 	Proven bool
 	Diff   string
+	// DidNotRepeat is the test a first grading run blamed for a kill that
+	// the repeat did not reproduce, so the mutant is a survivor. Empty for
+	// an ordinary survivor.
+	DidNotRepeat string
 }
 
 // ReasonCount is how many files a scan left out for one reason.
@@ -142,10 +160,14 @@ func buildScanView(e auditpush.LedgerEntry, c ChainView, retraction *auditpush.L
 		sv.Survived += f.Survivors
 		sv.Proven += f.ProvenMissed
 		for _, m := range byPath[f.Path] {
+			if m.Outcome == "killed" && m.KillConfirmation == "" {
+				fv.Caveat = UnconfirmedKillsCaveat
+				sv.Caveat = UnconfirmedKillsCaveat
+			}
 			if m.Outcome != "survived" {
 				continue
 			}
-			mv := MutantView{ID: m.MutantID, Line: m.SpanStart, Proven: m.Proven, Diff: diffOf(m.Code)}
+			mv := MutantView{ID: m.MutantID, Line: m.SpanStart, Proven: m.Proven, Diff: diffOf(m.Code), DidNotRepeat: m.UnrepeatedKilledBy}
 			if mv.Diff == "" {
 				fv.Unsurfaced++
 			}

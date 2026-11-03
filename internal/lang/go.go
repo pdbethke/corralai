@@ -9,6 +9,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -670,4 +671,19 @@ func (goPlugin) CoverageCounts(stdout, modulePath string) (map[string]LineCounts
 		counts[p] = LineCounts{Executed: t.executed, Executable: t.executable}
 	}
 	return counts, nil
+}
+
+// goKillerCmd is argv with `-run` for the one test the failing run named,
+// inserted right after the `test` word. Each `/`-separated part is anchored
+// on its own (`TestX/sub` is `^TestX$/^sub$`), because go test matches a
+// subtest pattern level by level.
+func goKillerCmd(argv []string, id string) ([]string, bool) {
+	if id == "" || !narrowable(argv, "-run") || !goTestCmd(argv) {
+		return nil, false
+	}
+	parts := strings.Split(id, "/")
+	for i, p := range parts {
+		parts[i] = "^" + regexp.QuoteMeta(p) + "$"
+	}
+	return slices.Insert(slices.Clone(argv), 2, "-run", strings.Join(parts, "/")), true
 }

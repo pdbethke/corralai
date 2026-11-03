@@ -369,6 +369,9 @@ func TestScansShow_NamesTheTestThatKilledEachMutant(t *testing.T) {
 	if !strings.Contains(got, "tests/test_recipes.py::test_scale") {
 		t.Errorf("the killer is not named:\n%s", got)
 	}
+	if !strings.Contains(got, "m1  tests/test_recipes.py::test_scale  unconfirmed") {
+		t.Errorf("a kill with no recorded confirmation must read unconfirmed:\n%s", got)
+	}
 	if strings.Contains(got, "m2") || strings.Contains(got, "m3") {
 		t.Errorf("a mutant with no recorded killer was listed anyway:\n%s", got)
 	}
@@ -522,5 +525,20 @@ func TestScanFileSelectionSaysRedUnitsWereLeftOut(t *testing.T) {
 	f.SelectionExcluded = 0
 	if got, want := scanFileSelectionWith(f, mutantSpread{}), "unit-evidence 4/2186 (2 unreported)"; got != want {
 		t.Errorf("no exclusion: got %q, want %q", got, want)
+	}
+}
+
+// A confirmed kill shows how it was confirmed.
+func TestScansShow_ShowsHowAKillWasConfirmed(t *testing.T) {
+	r := &fakeScansReader{
+		files:   []scanstore.File{{Path: "r.py", Disposition: "audited", KillRate: ptrF(1), Survivors: 0}},
+		mutants: []scanstore.Mutant{{Path: "r.py", MutantID: "m1", Outcome: "killed", KilledBy: "t::a", KillConfirmation: "repeated"}},
+	}
+	var out, errOut bytes.Buffer
+	if code := runScansShow([]string{"7"}, openFake(r), &out, &errOut); code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "m1  t::a  repeated") {
+		t.Errorf("confirmation missing:\n%s", out.String())
 	}
 }

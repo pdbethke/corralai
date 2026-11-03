@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/brainclient"
@@ -46,13 +47,21 @@ type advVerdict struct {
 	MutantsUnmeasured int `json:"mutants_unmeasured,omitempty"`
 	// MutantsDistinct / MutantsDistinctSurvived mirror advpool.Verdict's:
 	// the distinct measured edits the 95% interval is taken over.
-	MutantsDistinct         int      `json:"mutants_distinct,omitempty"`
-	MutantsDistinctSurvived int      `json:"mutants_distinct_survived,omitempty"`
-	Survivors               int      `json:"Survivors"`
-	ProvenMissed            int      `json:"ProvenMissed"`
-	RegionsTotal            int      `json:"RegionsTotal"`
-	RegionsProbed           int      `json:"RegionsProbed"`
-	DroppedRegions          []string `json:"DroppedRegions"`
+	MutantsDistinct         int `json:"mutants_distinct,omitempty"`
+	MutantsDistinctSurvived int `json:"mutants_distinct_survived,omitempty"`
+	// DevKilledMutants / DevSurvivedMutants mirror advpool.Verdict's: the
+	// per-mutant refs the run line's confirmation counts are taken from.
+	DevKilledMutants   []advpool.MutantRef `json:"DevKilledMutants,omitempty"`
+	DevSurvivedMutants []advpool.MutantRef `json:"DevSurvivedMutants,omitempty"`
+	// ConfirmDuration mirrors advpool.Verdict's: the dev pass's
+	// kill-confirmation wall clock, printed on the run line. `json:"-"` as
+	// there: not recorded.
+	ConfirmDuration time.Duration `json:"-"`
+	Survivors       int           `json:"Survivors"`
+	ProvenMissed    int           `json:"ProvenMissed"`
+	RegionsTotal    int           `json:"RegionsTotal"`
+	RegionsProbed   int           `json:"RegionsProbed"`
+	DroppedRegions  []string      `json:"DroppedRegions"`
 	// DuplicateMutants: generated mutants that were byte-identical edits of
 	// another and were collapsed before scoring — see
 	// adequacy.DedupeMutants. Disclosed so the graded denominator is
@@ -529,7 +538,10 @@ func renderAdvVerdict(w io.Writer, codePath string, v advVerdict) {
 		fmt.Fprintf(w, "  invalid:       %d mutant(s) failed the compile check and were not graded (evidence about the generator, not your tests)\n", v.MutantsInvalid)
 	}
 	if v.MutantsUnmeasured > 0 {
-		fmt.Fprintf(w, "  unmeasured:    %d mutant(s) were not graded: the command chosen to grade them fails on the unmutated code, so its answer is not evidence\n", v.MutantsUnmeasured)
+		fmt.Fprintf(w, "  unmeasured:    %d mutant(s) were not graded: the command chosen to grade them fails or times out on the unmutated code, so its answer is not evidence\n", v.MutantsUnmeasured)
+	}
+	if line := killConfirmationLine(v.DevKilledMutants, v.DevSurvivedMutants, v.ConfirmDuration); line != "" {
+		fmt.Fprint(w, line)
 	}
 	if v.TimedOut {
 		// A claim carries how it was earned: dev_kill_rate/survivors above
@@ -745,4 +757,38 @@ func printAuthoredTogether(w io.Writer, indent, together, out string) {
 			fmt.Fprintf(w, "%s  | %s\n", indent, l)
 		}
 	}
+}
+
+// killConfirmationLine says how the run's kills were confirmed, from the
+// verdict's own mutant refs: kills confirmed by the blamed test alone, by
+// repeating the run, and by a timeout's compliant re-probe, then first-run
+// failures that did not repeat and so became survivors (counted by their
+// KillConfirmation, so one whose first run named no test is counted too).
+// The confirmation pass's wall clock is appended when it was measured.
+// "" when there is nothing to count.
+func killConfirmationLine(killed, survived []advpool.MutantRef, took time.Duration) string {
+	var alone, repeated, reprobed, refuted int
+	for _, m := range killed {
+		switch m.KillConfirmation {
+		case adequacy.KillConfirmedAlone:
+			alone++
+		case adequacy.KillConfirmedRepeated:
+			repeated++
+		case adequacy.KillConfirmedReprobed:
+			reprobed++
+		}
+	}
+	for _, m := range survived {
+		if m.KillConfirmation == adequacy.KillNotRepeated {
+			refuted++
+		}
+	}
+	if alone+repeated+reprobed+refuted == 0 {
+		return ""
+	}
+	line := fmt.Sprintf("  kills confirmed: %d alone, %d by repeating the run, %d by timeout; %d first-run failures did not repeat (now survivors)", alone, repeated, reprobed, refuted)
+	if took > 0 {
+		line += fmt.Sprintf(" (confirmation took %s)", took.Round(time.Millisecond))
+	}
+	return line + "\n"
 }

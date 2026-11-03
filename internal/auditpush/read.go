@@ -517,6 +517,7 @@ var mutantRowColumns = []string{
 	"selection_rule", "duration_ms", "killed_by", "span_start", "span_end", "code",
 	"statement_sha256", "shape", "generator_model",
 	"source", "source_tool", "source_operator", "source_status",
+	"kill_confirmation", "unrepeated_killed_by",
 }
 
 func readMutantRows(db *sql.DB, where string, args ...any) ([]MutantRow, error) {
@@ -539,18 +540,21 @@ func readMutantRows(db *sql.DB, where string, args ...any) ([]MutantRow, error) 
 		var spanStart, spanEnd sql.NullInt64
 		var shape, generatorModel sql.NullString
 		var source, sourceTool, sourceOperator, sourceStatus sql.NullString
+		var killConfirmation, unrepeatedKilledBy sql.NullString
 		if err := rows.Scan(
 			&m.Repo, &m.RunURL, &m.ScanID, &m.Path, &m.MutantID, &parentSHA256, &m.Outcome,
 			&invalidReason, &m.Proven, &m.ProvenByAuthoredAlone, &m.TestsRun,
 			&selectionRule, &durationMillis, &killedBy, &spanStart, &spanEnd, &code,
 			&m.StatementSHA256, &shape, &generatorModel,
 			&source, &sourceTool, &sourceOperator, &sourceStatus,
+			&killConfirmation, &unrepeatedKilledBy,
 		); err != nil {
 			return nil, err
 		}
 		m.ParentSHA256 = parentSHA256.String
 		m.Shape, m.GeneratorModel = shape.String, generatorModel.String
 		m.Source, m.SourceTool, m.SourceOperator, m.SourceStatus = source.String, sourceTool.String, sourceOperator.String, sourceStatus.String
+		m.KillConfirmation, m.UnrepeatedKilledBy = killConfirmation.String, unrepeatedKilledBy.String
 		m.InvalidReason = invalidReason.String
 		m.SelectionRule = selectionRule.String
 		m.DurationMillis = nullInt64(durationMillis)

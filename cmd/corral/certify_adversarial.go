@@ -552,12 +552,15 @@ func renderAdvVerdict(w io.Writer, codePath string, v advVerdict) {
 		// here would read as a clean, converged result, which this is not.
 		fmt.Fprintln(w, "  TIMED OUT:     the pool did not converge before its deadline")
 		if v.PoolScored {
-			// A run CAN reach pool-adequacy, prove survivors catchable, and
-			// only then stall on the test-critic. That ProvenMissed was earned
-			// in the jail like any other, so printing "(not run)" over it
-			// discards the strongest evidence this tool produces. Say what
-			// actually did not finish instead.
-			fmt.Fprintf(w, "  proven_missed: %d (measured — the test-critic never finished)\n", v.ProvenMissed)
+			// A run CAN prove survivors catchable and only then stall: on the
+			// test-critic, or partway through the per-survivor writer seats.
+			// Those proofs were earned in the jail like any other, so printing
+			// "(not run)" over them discards the strongest evidence this tool
+			// produces. Say what did not finish instead; the ungraded-seats
+			// line below says what the count is over. (This said "the
+			// test-critic never finished", which was the only stall it could
+			// describe until a timed-out fan-out kept its proofs.)
+			fmt.Fprintf(w, "  proven_missed: %d (measured before the deadline — the pool did not finish)\n", v.ProvenMissed)
 		} else {
 			fmt.Fprintln(w, "  proven_missed: (not run — pool did not converge)")
 		}

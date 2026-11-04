@@ -4467,6 +4467,14 @@ func TestMaxProvenMissedFailsClosedOnATimedOutFile(t *testing.T) {
 			want: 0,
 		},
 		{
+			// A fan-out the deadline cut short keeps the proofs its graded
+			// seats earned, but the seats that never graded could still have
+			// proven more: its zero is a floor, not an answer.
+			name: "timed out partway through the writer seats",
+			file: reposcan.WeakFile{Path: "a.go", KillRate: 0.8, Survivors: 3, ProvenMissed: 0, TimedOut: true, PoolScored: true, WriterSeatsUngraded: 2},
+			want: 1,
+		},
+		{
 			name: "clean file, nothing timed out",
 			file: reposcan.WeakFile{Path: "a.go", KillRate: 0.9, Survivors: 0, ProvenMissed: 0},
 			want: 0,

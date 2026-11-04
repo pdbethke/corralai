@@ -293,6 +293,15 @@ type WeakFile struct {
 	// adequacy.MutantGrading.Duration. A distribution, not a budget.
 	MutantMillisMedian int64
 	MutantMillisMax    int64
+	// DevKilledMutants, DevSurvivedMutants and ConfirmDuration mirror the
+	// verdict's: the dev pass's mutant refs, whose KillConfirmation says how
+	// each kill was confirmed (or that a first-run failure did not repeat),
+	// and the wall clock of the serial confirmation pass. The --repo per-file
+	// block prints the same "kills confirmed" line certify --local does from
+	// them; until 2026-11-03 only --local printed it.
+	DevKilledMutants   []advpool.MutantRef
+	DevSurvivedMutants []advpool.MutantRef
+	ConfirmDuration    time.Duration
 	// Challenger mirrors advpool.Verdict.ChallengerAgreement: the primary
 	// writer's agreement with the challenger writer over the survivors BOTH
 	// seats genuinely attempted — which under the per-survivor writer mode is
@@ -648,6 +657,9 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 			MutantsInvalid:          r.Verdict.MutantsInvalid,
 			MutantMillisMedian:      r.Verdict.MutantDurationMedian.Milliseconds(),
 			MutantMillisMax:         r.Verdict.MutantDurationMax.Milliseconds(),
+			DevKilledMutants:        r.Verdict.DevKilledMutants,
+			DevSurvivedMutants:      r.Verdict.DevSurvivedMutants,
+			ConfirmDuration:         r.Verdict.ConfirmDuration,
 			// The primary/challenger agreement, carried straight through —
 			// nil whenever no comparable pair exists (see
 			// advpool.Verdict.ChallengerAgreement's doc).

@@ -3673,6 +3673,19 @@ func (d *Driver) timeoutVerdict(run *runState) Verdict {
 	v.MutantsUnmeasured = run.mutantsUnmeasured
 	v.MutantsDistinct, v.MutantsDistinctSurvived = run.examSample.distinct, run.examSample.survived
 	v.Survivors = len(run.devSurvivors)
+	// A per-survivor fan-out the deadline cut short never reached
+	// finishWriterFanout, so its seats' proofs are still on the seats. Fold
+	// them now. When any seat graded, the proven count is a measurement over
+	// the graded seats (WriterSeatsUngraded below says how many did not), so
+	// the pool counts as scored; the end-of-run writer diagnosis is not set,
+	// because the seats that never graded were never given the chance.
+	if run.writerMode == WriterModePerSurvivor && !run.poolScored {
+		if _, measured, salvaged := d.bankWriterProofs(run); measured > 0 {
+			run.primaryWriterMeasured = true
+			run.writerSalvaged = salvaged > 0
+			run.poolScored = true
+		}
+	}
 	v.ProvenMissed = run.provenMissed
 	// The mutant-level evidence must ride the TIMEOUT verdict too, for the
 	// same reason BaselineDuration and the could-not-grade flags do below:

@@ -3834,7 +3834,10 @@ func repoScanExitCode(r reposcan.RepoReport, nothingInScope bool, unpairableInDi
 			// A run CAN converge its pool score and only then stall on the
 			// critic, and that ProvenMissed is a real measurement the
 			// threshold comparison above already judges. Only a timeout with
-			// no pool score behind it is the unmeasured kind.
+			// no pool score behind it is the unmeasured kind — or one whose
+			// pool score covers only some of the writer seats: a timed-out
+			// fan-out keeps the proofs its graded seats earned, and the seats
+			// that never graded could still have proven more.
 			// The compile-gate zero denominator, which has no survivors to
 			// hang the check below on: every mutant for this file was
 			// rejected, so NOTHING was graded, so ProvenMissed 0 is not a
@@ -3846,7 +3849,7 @@ func repoScanExitCode(r reposcan.RepoReport, nothingInScope bool, unpairableInDi
 			if noGradableMutant(f) {
 				return 1
 			}
-			if f.Survivors > 0 && (f.TestWriterFailed || f.PoolTestUnsound || (f.TimedOut && !f.PoolScored)) {
+			if f.Survivors > 0 && (f.TestWriterFailed || f.PoolTestUnsound || (f.TimedOut && (!f.PoolScored || f.WriterSeatsUngraded > 0))) {
 				return 1
 			}
 		}
@@ -4388,7 +4391,11 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 	// result) — either way it must be printed, never left as a bare survivor
 	// count that could be misread as silence on the question.
 	detail := fmt.Sprintf("(%d survivor(s))", f.Survivors)
-	if f.Survivors > 0 && !f.TestWriterFailed && !f.TimedOut && !f.PoolTestUnsound {
+	// A timed-out file prints its count when the pool scored before the
+	// deadline: a per-survivor fan-out the deadline cut short keeps the
+	// proofs its graded seats earned, and the writer line below says how
+	// many seats never graded.
+	if f.Survivors > 0 && !f.TestWriterFailed && (!f.TimedOut || f.PoolScored) && !f.PoolTestUnsound {
 		detail = fmt.Sprintf("(%d survivor(s), %d proven missed)", f.Survivors, f.ProvenMissed)
 	}
 	rate := fmt.Sprintf("%.2f", f.KillRate)
@@ -4532,6 +4539,12 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 		fmt.Fprintln(w, timingLine(f.Timing, f.MutantsGraded,
 			time.Duration(f.MutantMillisMedian)*time.Millisecond,
 			time.Duration(f.MutantMillisMax)*time.Millisecond))
+	}
+	// How the dev pass's kills were confirmed: the same line certify --local
+	// prints, one space deeper to sit in this block. Suppressed on a reused
+	// verdict for the timing line's reason: those are the earning run's.
+	if line := killConfirmationLine(f.DevKilledMutants, f.DevSurvivedMutants, f.ConfirmDuration); line != "" && !f.CacheHit {
+		fmt.Fprint(w, " "+line)
 	}
 
 	// The artifact that makes "N proven, catchable gap(s)" actionable. --repo

@@ -6,6 +6,8 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+
+	"github.com/pdbethke/corralai/internal/ledger"
 )
 
 // ReadBundle reconstructs the Bundle PushBundle wrote for one (repo, scanID)
@@ -324,7 +326,7 @@ func readScanRow(db *sql.DB, where string, args ...any) (ScanRow, bool, error) {
 	s.HostNotMeasured = hostNotMeasured.String
 	s.Inventory, s.ShadowDraw = inventory.String, shadowDraw.String
 	s.MaxTokensReached = nullBoolPtr(maxTokensReached)
-	s.ToolMutants = toolMutants.String
+	s.ToolMutants = ledger.JSONText[[]ledger.ToolMutantCounts](toolMutants.String)
 	if treeDirty.Valid {
 		v := treeDirty.Bool
 		s.TreeDirty = &v

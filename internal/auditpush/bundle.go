@@ -1176,7 +1176,7 @@ func insertBundle(db *sql.DB, b Bundle, now time.Time, uid string) (Counts, erro
 			b.Scan.LoadStart, b.Scan.LoadEnd, b.Scan.LoadPeak,
 			b.Scan.MemAvailableStartBytes, b.Scan.PeakRSSBytes, b.Scan.CPUMillis, nullIfEmpty(b.Scan.HostNotMeasured),
 			nullIfEmpty(b.Scan.Inventory), nullIfEmpty(b.Scan.ShadowDraw), b.Scan.MaxTokensReached,
-			nullIfEmpty(b.Scan.ToolMutants),
+			nullIfEmpty(string(b.Scan.ToolMutants)),
 		); err != nil {
 			return Counts{}, fmt.Errorf("auditpush: insert scan row: %w", err)
 		}

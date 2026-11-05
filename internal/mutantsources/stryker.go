@@ -10,8 +10,11 @@
 // exactly one thing: choosing which mutants are worth a jail run at all
 // (Survived and NoCoverage), and the rest are counted, not re-graded.
 //
-// It sits below advpool (which will consume it) and imports only adequacy and
-// testgen, so the arrow points one way.
+// It sits below advpool (which will consume it) and imports only adequacy,
+// testgen and ledger, so the arrow points one way. It fills
+// ledger.ReportMutant directly rather than a mirrored type of its own: a
+// field-by-field converter between two copies of one record is where a
+// field gets dropped on the floor.
 package mutantsources
 
 import (
@@ -29,6 +32,7 @@ import (
 	"unicode/utf16"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
+	"github.com/pdbethke/corralai/internal/ledger"
 	"github.com/pdbethke/corralai/internal/testgen"
 )
 
@@ -81,7 +85,45 @@ type FileMutants struct {
 	// Refused is one sentence saying why none of this file's tool mutants
 	// can be used. Taken is empty whenever it is set.
 	Refused string
+	// Reported is every mutant the report holds for the file, in its order,
+	// as the record holds it (ToolMutantCounts.Mutants). Empty on a refused
+	// file: nothing was tied to the audited bytes.
+	Reported []ledger.ReportMutant
+	// Tests names the tests Reported refers to (ToolMutantCounts.Tests).
+	Tests map[string]string
+	// Match is how strongly the report was tied to the audited file
+	// (MatchEmbeddedSource, MatchAnchored) and Units the column unit the
+	// reader applied (UnitsUTF16, ...). Both are empty on a refused file:
+	// nothing was tied, so no strength is claimed.
+	Match string
+	Units string
+	// SchemaVersion and Thresholds are the report's own (recordable)
+	// schemaVersion and thresholds, set on every file the reader returns,
+	// refused ones included: they describe the report, not the file.
+	SchemaVersion string
+	Thresholds    *ledger.ToolThresholds
+	// Language is the report's own label for the file's language and
+	// Dependencies the tool's declared plugin packages and versions (each
+	// name through recordableName, each version through recordable). Both
+	// are set on refused files too: they are the report's claims.
+	Language     string
+	Dependencies map[string]string
 }
+
+// How a report was tied to the audited file. Embedded-source: the report
+// carried the whole file and it matched the audited bytes by sha256. Anchored:
+// a reader without the file's bytes tied each mutant by an anchor.
+const (
+	MatchEmbeddedSource = "embedded-source"
+	MatchAnchored       = "anchored"
+)
+
+// The column unit a reader applied to a tool's locations.
+const (
+	UnitsUTF16      = "utf16"
+	UnitsBytes      = "bytes"
+	UnitsCodepoints = "codepoints"
+)
 
 // Statuses whose mutants are taken. Survived: tests ran the mutant and none
 // failed. NoCoverage: no test even runs the line, which is often the cheapest
@@ -136,23 +178,56 @@ func strykerMutantID(id string) string {
 // reader uses. The shape was read from a real StrykerJS 10.0.0 report
 // (testdata/PROVENANCE.md), not assumed.
 type strykerReport struct {
-	Framework *struct {
+	// SchemaVersion and Thresholds are the report's own values, recorded on
+	// each file's account (ledger.ToolMutantCounts) as declared.
+	SchemaVersion string                 `json:"schemaVersion"`
+	Thresholds    *ledger.ToolThresholds `json:"thresholds"`
+	Framework     *struct {
 		Name    string `json:"name"`
 		Version string `json:"version"`
+		// Dependencies are the tool's plugin packages and their versions
+		// (e.g. the TypeScript checker and TypeScript itself), which decide
+		// which mutants come out as CompileError.
+		Dependencies map[string]string `json:"dependencies"`
 	} `json:"framework"`
 	Files map[string]struct {
-		Source  string `json:"source"`
-		Mutants []struct {
-			ID          string `json:"id"`
-			MutatorName string `json:"mutatorName"`
-			Replacement string `json:"replacement"`
-			Status      string `json:"status"`
-			Location    struct {
-				Start strykerPos `json:"start"`
-				End   strykerPos `json:"end"`
-			} `json:"location"`
-		} `json:"mutants"`
+		Source   string                `json:"source"`
+		Language string                `json:"language"`
+		Mutants  []strykerReportMutant `json:"mutants"`
 	} `json:"files"`
+	// TestFiles names the tests killedBy and coveredBy refer to by id. Only
+	// each test's id and name are read; a test file's source is not.
+	TestFiles map[string]struct {
+		Tests []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"tests"`
+	} `json:"testFiles"`
+}
+
+// strykerReportMutant is one mutant as the schema states it: every field
+// the schema defines for a mutant result is parsed, so each is recorded
+// (ledger.ReportMutant) or excluded in writing (excludedFields), never
+// silently dropped. TestEveryParsedFieldIsRecordedOrExcluded holds the two
+// lists together.
+type strykerReportMutant struct {
+	ID          string `json:"id"`
+	MutatorName string `json:"mutatorName"`
+	Replacement string `json:"replacement"`
+	Status      string `json:"status"`
+	Location    struct {
+		Start strykerPos `json:"start"`
+		End   strykerPos `json:"end"`
+	} `json:"location"`
+	StatusReason   string   `json:"statusReason"`
+	Static         *bool    `json:"static"`
+	TestsCompleted *int     `json:"testsCompleted"`
+	KilledBy       []string `json:"killedBy"`
+	CoveredBy      []string `json:"coveredBy"`
+	// Duration is the schema's per-mutant time in milliseconds. StrykerJS
+	// 10 does not write it.
+	Duration    *float64 `json:"duration"`
+	Description string   `json:"description"`
 }
 
 type strykerPos struct {
@@ -165,7 +240,7 @@ type strykerPos struct {
 // their columns come from other parsers and nobody here has checked them.
 const strykerJS = "StrykerJS"
 
-// ReadStryker reads a StrykerJS JSON report into mutants for the audited
+// readStryker reads a StrykerJS JSON report into mutants for the audited
 // files. files maps repo-relative path to the exact bytes corral audits;
 // budget gives each file's mutant cap (the run's per-file budget — there is
 // no default); seed drives the over-budget sample.
@@ -183,7 +258,7 @@ const strykerJS = "StrykerJS"
 // dist/src/mutant.js toPosition, core dist/src/utils/object-utils.js), and
 // stryker_test.go checks every taken mutant against a whole-file splice at
 // those columns on REA's real report.
-func ReadStryker(reportJSON []byte, files map[string][]byte, budget func(path string) int, seed int64) (map[string]FileMutants, error) {
+func readStryker(reportJSON []byte, files map[string][]byte, budget func(path string) int, seed int64) (map[string]FileMutants, error) {
 	if budget == nil {
 		return nil, errors.New("mutantsources: no mutant budget given; pass the run's per-file budget")
 	}
@@ -192,6 +267,7 @@ func ReadStryker(reportJSON []byte, files map[string][]byte, budget func(path st
 		return nil, err
 	}
 	tool := strykerTool(rep)
+	names := strykerTestNames(rep)
 
 	audited := make(map[string][]byte, len(files))
 	for p, b := range files {
@@ -209,45 +285,66 @@ func ReadStryker(reportJSON []byte, files map[string][]byte, budget func(path st
 		if n < 1 {
 			return nil, fmt.Errorf("mutantsources: the mutant budget for %s is %d; it must be at least 1", p, n)
 		}
-		fm := FileMutants{Path: p, Tool: tool, Seed: seed}
+		fm := FileMutants{Path: p, Tool: tool, Seed: seed,
+			SchemaVersion: recordable(rep.SchemaVersion), Thresholds: rep.Thresholds,
+			Language: recordable(rf.Language), Dependencies: recordableDependencies(rep.Framework.Dependencies)}
 		if refusal := refuseSource(p, rf.Source, bytes); refusal != "" {
 			fm.Refused = refusal
 			out[p] = fm
 			continue
 		}
+		fm.Match, fm.Units = MatchEmbeddedSource, UnitsUTF16
 		original := rf.Source
 		lines := strings.Split(original, "\n")
+		lineStarts := lineStartOffsets(lines)
 		fm.Counts = map[string]int{}
 		var candidates []adequacy.Mutant
 		sources := map[string]MutantSource{}
+		// fm.Reported[candidateAt[id]] is the record of candidate id, whose
+		// fate (graded or over-budget) is known only after the sample.
+		fm.Reported = make([]ledger.ReportMutant, 0, len(rf.Mutants))
+		fm.Tests = map[string]string{}
+		candidateAt := map[string]int{}
 		// seen holds every taken-status id, proven or not, so the first
 		// mutant under an id is the one kept or dropped and a later one
 		// cannot stand in for a first that failed its proof.
 		seen := map[string]bool{}
 		for _, sm := range rf.Mutants {
-			status := recordable(sm.Status)
+			rm := strykerReported(sm, lines, lineStarts, names, fm.Tests)
+			// fate records the mutant with what corral did with it; every
+			// path through the loop below calls it exactly once, so the
+			// record and Counts are the same account.
+			fate := func(f string) { rm.Fate = f; fm.Reported = append(fm.Reported, rm) }
+			status := rm.Status
 			fm.Counts[status]++
 			if !takenStatuses[status] {
+				fate("not-taken:" + status)
 				continue
 			}
-			id := strykerMutantID(sm.ID)
+			id := rm.ID
 			if seen[id] {
 				fm.Counts[dropDuplicateID]++
+				fate(dropDuplicateID)
 				continue
 			}
 			seen[id] = true
 			search, replace, ok := strykerHunk(lines, sm.Location.Start, sm.Location.End, sm.Replacement)
 			if !ok {
 				fm.Counts[dropOutOfRange]++
+				fate(dropOutOfRange)
 				continue
 			}
+			rm.ReplacementSHA256 = sha256Hex([]byte(replace))
 			m, why := testgen.ProveHunk(original, id, search, replace)
 			if why != testgen.HunkProven {
 				fm.Counts["dropped:"+string(why)]++
+				fate("dropped:" + string(why))
 				continue
 			}
 			candidates = append(candidates, m)
-			sources[id] = MutantSource{Kind: KindTool, Tool: tool, Operator: recordable(sm.MutatorName), Status: status}
+			sources[id] = MutantSource{Kind: KindTool, Tool: tool, Operator: rm.Operator, Status: status}
+			candidateAt[id] = len(fm.Reported)
+			fate(dropOverBudget) // until the sample takes it
 		}
 		fm.Taken = spreadSample(candidates, n, seed)
 		if d := len(candidates) - len(fm.Taken); d > 0 {
@@ -256,6 +353,7 @@ func ReadStryker(reportJSON []byte, files map[string][]byte, budget func(path st
 		fm.Sources = make(map[string]MutantSource, len(fm.Taken))
 		for _, m := range fm.Taken {
 			fm.Sources[m.ID] = sources[m.ID]
+			fm.Reported[candidateAt[m.ID]].Fate = "graded"
 		}
 		out[p] = fm
 	}
@@ -270,15 +368,15 @@ func ReadStryker(reportJSON []byte, files map[string][]byte, budget func(path st
 	return out, nil
 }
 
-// StrykerPaths returns the files a StrykerJS report covers, cleaned the way
-// ReadStryker matches them against audited paths, sorted. It refuses exactly
-// the reports ReadStryker refuses for their shape (unreadable JSON, another
+// strykerPaths returns the files a StrykerJS report covers, cleaned the way
+// readStryker matches them against audited paths, sorted. It refuses exactly
+// the reports readStryker refuses for their shape (unreadable JSON, another
 // framework, no version), so a caller auditing many files can check the
 // report once and learn which files have a tool source before reading any of
-// them: ReadStryker itself treats a report covering none of the files it is
+// them: readStryker itself treats a report covering none of the files it is
 // handed as an error, which is right for one call and wrong for a scan that
 // asks file by file.
-func StrykerPaths(reportJSON []byte) ([]string, error) {
+func strykerPaths(reportJSON []byte) ([]string, error) {
 	rep, err := parseStryker(reportJSON)
 	if err != nil {
 		return nil, err
@@ -291,14 +389,29 @@ func StrykerPaths(reportJSON []byte) ([]string, error) {
 	return out, nil
 }
 
-// StrykerTool is the tool a StrykerJS report names, as every mutant and
-// file account from it records it: "stryker@<version>".
-func StrykerTool(reportJSON []byte) (string, error) {
-	rep, err := parseStryker(reportJSON)
+// strykerReader is StrykerJS behind the Reader interface; the functions
+// above and below are its body.
+type strykerReader struct{}
+
+func init() { Register(strykerReader{}) }
+
+func (strykerReader) Tool() string { return "stryker" }
+
+func (strykerReader) Paths(r Report) ([]string, error) { return strykerPaths(r.Bytes) }
+
+func (strykerReader) Label(r Report, declared string) (string, error) {
+	rep, err := parseStryker(r.Bytes)
 	if err != nil {
 		return "", err
 	}
+	if declared != "" && declared != rep.Framework.Version {
+		return "", fmt.Errorf("mutantsources: --mutants-from declares stryker@%s but the report says StrykerJS %s; the report's version is the record's, so a contradicting one is refused rather than overridden", declared, rep.Framework.Version)
+	}
 	return strykerTool(rep), nil
+}
+
+func (strykerReader) Read(r Report, files map[string][]byte, budget func(string) int, seed int64) (map[string]FileMutants, error) {
+	return readStryker(r.Bytes, files, budget, seed)
 }
 
 func strykerTool(rep strykerReport) string { return "stryker@" + recordable(rep.Framework.Version) }

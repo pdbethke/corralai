@@ -134,7 +134,10 @@ type advVerdict struct {
 	MutantBudget advpool.MutantBudget `json:"mutant_budget,omitempty"`
 	// ToolShare is advpool.ToolShare: the exam's tool mutants beside the
 	// generator, said beside MutantBudget (WithTool).
-	ToolShare        int                  `json:"tool_share,omitempty"`
+	ToolShare int `json:"tool_share,omitempty"`
+	// ToolShares is advpool.ToolShares: ToolShare by tool, so a run with
+	// several tools says each one's share.
+	ToolShares       map[string]int       `json:"tool_shares,omitempty"`
 	ExamCoverage     advpool.ExamCoverage `json:"exam_coverage,omitempty"`
 	ExamIndicative   bool                 `json:"exam_indicative,omitempty"`
 	IndicativeReason string               `json:"indicative_reason,omitempty"`
@@ -519,7 +522,7 @@ func renderAdvVerdict(w io.Writer, codePath string, v advVerdict) {
 		fmt.Fprintf(w, "  INDICATIVE:    %s — needs-review for that reason, not a weak suite\n", v.IndicativeReason)
 	}
 	if v.MutantBudget.Total > 0 {
-		fmt.Fprintf(w, "  mutants:       %s\n", v.MutantBudget.WithTool(v.ToolShare))
+		fmt.Fprintf(w, "  mutants:       %s\n", v.MutantBudget.WithTools(v.ToolShares))
 	}
 	if c := v.ExamCoverage; c.Measured {
 		fmt.Fprintf(w, "  reach:         %d of %d symbols", c.SymbolsProbed, c.Symbols)

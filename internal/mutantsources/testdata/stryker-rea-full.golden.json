@@ -1,0 +1,579 @@
+{
+  "src/domain/analysisErrorProjection.ts": {
+    "tool": "stryker@10.0.0",
+    "refused": "",
+    "seed": 20261101,
+    "taken": [
+      {
+        "id": "t/stryker/11",
+        "parent_sha256": "a670809bcfcdd001fe1deb8462433fea700c502dbe0cd20e6e33e27a746b3fa7",
+        "span_start": 80,
+        "span_end": 80,
+        "search_sha256": "4f8fc5919cba380ee9fb596c31522071ffe8fafff5a9b4805434e379c2d27e52",
+        "replace_sha256": "e9765d4ef75fb5d53f66dd5ef8cabbafbd79becc42a01c02e802d8215b2a232e"
+      },
+      {
+        "id": "t/stryker/147",
+        "parent_sha256": "a670809bcfcdd001fe1deb8462433fea700c502dbe0cd20e6e33e27a746b3fa7",
+        "span_start": 207,
+        "span_end": 207,
+        "search_sha256": "0bd241e40336026acfee13fcbfbea1eb4db14b7762811c2ab1c457981b1145b2",
+        "replace_sha256": "4cfa8489b72fa63234b40b1bc008c34ee3d1c27a2d28da87187ae321063923ad"
+      },
+      {
+        "id": "t/stryker/188",
+        "parent_sha256": "a670809bcfcdd001fe1deb8462433fea700c502dbe0cd20e6e33e27a746b3fa7",
+        "span_start": 243,
+        "span_end": 243,
+        "search_sha256": "5c71ac30ce5876ae45c7b16ea521ef72328b504a3f1bddb8bc424eba93eb0db1",
+        "replace_sha256": "221b7e1e8a98d64427b60b74acd2034d30a824389ec3f6dc96400b5fb660b71b"
+      },
+      {
+        "id": "t/stryker/200",
+        "parent_sha256": "a670809bcfcdd001fe1deb8462433fea700c502dbe0cd20e6e33e27a746b3fa7",
+        "span_start": 251,
+        "span_end": 251,
+        "search_sha256": "a113a062f7b7bb9d5d1af68696e974f2210e1cf05b20f54655961352bd17362b",
+        "replace_sha256": "022ea65e17c2efa2e5bfb3ba6f11386b6c559fb843dbcb2c8e926420a36186b4"
+      },
+      {
+        "id": "t/stryker/210",
+        "parent_sha256": "a670809bcfcdd001fe1deb8462433fea700c502dbe0cd20e6e33e27a746b3fa7",
+        "span_start": 252,
+        "span_end": 252,
+        "search_sha256": "56b87cfdf99c92298109f6ed80d43d8ffc98985ce928b391bd168d283e212a09",
+        "replace_sha256": "3e2879f2ff9f0a5ab14f660078e12b32d2c7458e923e9eab5b94c31a3b5e43ee"
+      },
+      {
+        "id": "t/stryker/214",
+        "parent_sha256": "a670809bcfcdd001fe1deb8462433fea700c502dbe0cd20e6e33e27a746b3fa7",
+        "span_start": 255,
+        "span_end": 255,
+        "search_sha256": "fbdbde86e285448f86c3c6b18dc12d512fc86544cd37b690ffd87f8998a72459",
+        "replace_sha256": "894d853e82ea9d488e495ba35c7d8c92a6f0dc428544f7c7f36dbdc27d3be95b"
+      },
+      {
+        "id": "t/stryker/221",
+        "parent_sha256": "a670809bcfcdd001fe1deb8462433fea700c502dbe0cd20e6e33e27a746b3fa7",
+        "span_start": 262,
+        "span_end": 262,
+        "search_sha256": "7880630acc67ea9eee82c39522988b2cf307b5a8b98e2252990001ff9394cd81",
+        "replace_sha256": "bdc74988ae93fa458f4fa45ad29643f3a98307e933c3b4a8e95512204a189c9a"
+      },
+      {
+        "id": "t/stryker/236",
+        "parent_sha256": "a670809bcfcdd001fe1deb8462433fea700c502dbe0cd20e6e33e27a746b3fa7",
+        "span_start": 265,
+        "span_end": 265,
+        "search_sha256": "187ec1909796e7a2e778c3e583482718a8dc45f823351e2d6ddfe1f65a2278b9",
+        "replace_sha256": "f6eb5092e79ec6f527d7154eca18c9510274b4231432bd0b0102a168442f6894"
+      },
+      {
+        "id": "t/stryker/24",
+        "parent_sha256": "a670809bcfcdd001fe1deb8462433fea700c502dbe0cd20e6e33e27a746b3fa7",
+        "span_start": 100,
+        "span_end": 100,
+        "search_sha256": "423b9ca913bb02a101e018165af069591c0d4688afcb9a4d79f51de80611e3b9",
+        "replace_sha256": "43558590befc3e3de6fa94f5699b6318467ffc35316bdd79e08504dc73e80038"
+      },
+      {
+        "id": "t/stryker/248",
+        "parent_sha256": "a670809bcfcdd001fe1deb8462433fea700c502dbe0cd20e6e33e27a746b3fa7",
+        "span_start": 273,
+        "span_end": 273,
+        "search_sha256": "4c1ea9575c004465728414a5dc48ccec9d211834f66cb22e745056797015d787",
+        "replace_sha256": "3ab613f029175e18dcff7ad014a87ab492d9a18de89e2765adf8da524de72291"
+      },
+      {
+        "id": "t/stryker/267",
+        "parent_sha256": "a670809bcfcdd001fe1deb8462433fea700c502dbe0cd20e6e33e27a746b3fa7",
+        "span_start": 326,
+        "span_end": 326,
+        "search_sha256": "b9471d09a62bcc8ff5f46e974173479f7e39ec65225c539fe222920cafa4a4db",
+        "replace_sha256": "c6afd64e8119e60787eef712e9491793d1d48aab81cabe208a6b8d8ee88d962a"
+      },
+      {
+        "id": "t/stryker/290",
+        "parent_sha256": "a670809bcfcdd001fe1deb8462433fea700c502dbe0cd20e6e33e27a746b3fa7",
+        "span_start": 371,
+        "span_end": 377,
+        "search_sha256": "a07a6c4c49da271458317d51cb5868ce8038697cc180be5d018b01b2b99c2a85",
+        "replace_sha256": "7e0fa4e363d9bd6b3bd4772a23070ef7dd76acebdc37de7fca8ef81bc2b4b290"
+      },
+      {
+        "id": "t/stryker/298",
+        "parent_sha256": "a670809bcfcdd001fe1deb8462433fea700c502dbe0cd20e6e33e27a746b3fa7",
+        "span_start": 378,
+        "span_end": 378,
+        "search_sha256": "c5c5d3017f15a5c404c55dfc07b8bc99d939ec9f5308910129c790b702cd070e",
+        "replace_sha256": "80728f9c947a0d782995e43501da01f6f0eca08cc322d6f51ebc9d18154b2a22"
+      },
+      {
+        "id": "t/stryker/313",
+        "parent_sha256": "a670809bcfcdd001fe1deb8462433fea700c502dbe0cd20e6e33e27a746b3fa7",
+        "span_start": 386,
+        "span_end": 386,
+        "search_sha256": "0fce977184604810012f9b878225017d1d4dfd19c9f1f6a6c7af94d7e6b9c7b2",
+        "replace_sha256": "c2429f0e53c7b5653bcb13d429541eb7f5d5790bd05f5949a38b5419d7a97d86"
+      },
+      {
+        "id": "t/stryker/323",
+        "parent_sha256": "a670809bcfcdd001fe1deb8462433fea700c502dbe0cd20e6e33e27a746b3fa7",
+        "span_start": 388,
+        "span_end": 388,
+        "search_sha256": "99964c40439d26d135f2e991e0e1cbdd7b461c83b928d3814e47081111f80ce4",
+        "replace_sha256": "abc8cb1bbf9ba2a7fdb2c8558a3f43d96c47f13214af6fbd10bd04950bf894e8"
+      },
+      {
+        "id": "t/stryker/331",
+        "parent_sha256": "a670809bcfcdd001fe1deb8462433fea700c502dbe0cd20e6e33e27a746b3fa7",
+        "span_start": 397,
+        "span_end": 397,
+        "search_sha256": "0cfff8bb1f734816a3d4e107441e5c8a50a87c58b9640ee79e2078f7c0bca5e2",
+        "replace_sha256": "5b33644d586ba1c2b652bb7b27ce67660246549db7e6ec0b672cef57fdb2480b"
+      },
+      {
+        "id": "t/stryker/338",
+        "parent_sha256": "a670809bcfcdd001fe1deb8462433fea700c502dbe0cd20e6e33e27a746b3fa7",
+        "span_start": 406,
+        "span_end": 406,
+        "search_sha256": "8a3ddb1af5614503c035b64cb4a4898c35930b9e3233a6e660a2832b664bf98e",
+        "replace_sha256": "5b33644d586ba1c2b652bb7b27ce67660246549db7e6ec0b672cef57fdb2480b"
+      },
+      {
+        "id": "t/stryker/341",
+        "parent_sha256": "a670809bcfcdd001fe1deb8462433fea700c502dbe0cd20e6e33e27a746b3fa7",
+        "span_start": 408,
+        "span_end": 408,
+        "search_sha256": "d74364f4629ae7c1d8eb58a88391f2885e887e524fa6bd2cc4b9dad24ab61496",
+        "replace_sha256": "6aecf1a26c8d10c1933361a50112ed597db85a7a83ccb5db8da446c87c0d3ec7"
+      },
+      {
+        "id": "t/stryker/353",
+        "parent_sha256": "a670809bcfcdd001fe1deb8462433fea700c502dbe0cd20e6e33e27a746b3fa7",
+        "span_start": 421,
+        "span_end": 421,
+        "search_sha256": "4b1f04faaaba990aef2032e2595ee92952a94fec964112d030fa41e1b199a6dd",
+        "replace_sha256": "70448bb72da6982ad92ad91b02ff31a28485b33612b40eda4d262ea08d76de2e"
+      },
+      {
+        "id": "t/stryker/382",
+        "parent_sha256": "a670809bcfcdd001fe1deb8462433fea700c502dbe0cd20e6e33e27a746b3fa7",
+        "span_start": 444,
+        "span_end": 444,
+        "search_sha256": "b75e30cc50a41d461fdce91d6fd54ce08b28abaa7f28472c8480d631b344cfbc",
+        "replace_sha256": "874fce11186bd2de7b4a0b9c5c1dc11ed36f69ea19ca8a0df8f8bad17060bf2b"
+      },
+      {
+        "id": "t/stryker/426",
+        "parent_sha256": "a670809bcfcdd001fe1deb8462433fea700c502dbe0cd20e6e33e27a746b3fa7",
+        "span_start": 504,
+        "span_end": 519,
+        "search_sha256": "383cb8430b40d8232b99cee324fdcf91b029bf8fd639db2349a6e6ce1b54abea",
+        "replace_sha256": "385a8556672d26d2fe94020390a32c99e9fbec0a38e2c933e22c26c051c81ebd"
+      },
+      {
+        "id": "t/stryker/427",
+        "parent_sha256": "a670809bcfcdd001fe1deb8462433fea700c502dbe0cd20e6e33e27a746b3fa7",
+        "span_start": 506,
+        "span_end": 518,
+        "search_sha256": "ace4073083a53485079cd41dec17734522063502c4ec697ad26bdbd00969a8b0",
+        "replace_sha256": "7e0fa4e363d9bd6b3bd4772a23070ef7dd76acebdc37de7fca8ef81bc2b4b290"
+      },
+      {
+        "id": "t/stryker/451",
+        "parent_sha256": "a670809bcfcdd001fe1deb8462433fea700c502dbe0cd20e6e33e27a746b3fa7",
+        "span_start": 536,
+        "span_end": 536,
+        "search_sha256": "182341c92763822d741a205f1baecd257323f04ae5f6e434005f1400de691c66",
+        "replace_sha256": "4b10f22e9103e09df26691f555aea873602a0d10938c944c986311ed47334283"
+      },
+      {
+        "id": "t/stryker/472",
+        "parent_sha256": "a670809bcfcdd001fe1deb8462433fea700c502dbe0cd20e6e33e27a746b3fa7",
+        "span_start": 543,
+        "span_end": 543,
+        "search_sha256": "fba7419f683f6c8ea13daaca5c13fb25282ddde1a9303540f09bfece00d57e39",
+        "replace_sha256": "a8f7017c5594d5963ee89fbff7674cd3f14bc87a5b56970fb853c67aca561ae7"
+      },
+      {
+        "id": "t/stryker/482",
+        "parent_sha256": "a670809bcfcdd001fe1deb8462433fea700c502dbe0cd20e6e33e27a746b3fa7",
+        "span_start": 552,
+        "span_end": 565,
+        "search_sha256": "63b372e161a78dbd66a05ecd7c653d854ebfc6eb28814669b35dd830d932c447",
+        "replace_sha256": "7e0fa4e363d9bd6b3bd4772a23070ef7dd76acebdc37de7fca8ef81bc2b4b290"
+      },
+      {
+        "id": "t/stryker/483",
+        "parent_sha256": "a670809bcfcdd001fe1deb8462433fea700c502dbe0cd20e6e33e27a746b3fa7",
+        "span_start": 553,
+        "span_end": 553,
+        "search_sha256": "ba863fc7355cfa3decb97c7b4aa3595b416c95a5d71660d200b266b535bf04a1",
+        "replace_sha256": "d1b98fbd9a1ea184f8aa92b5067a8b7bf51e64c176a3676384015b45149f2a34"
+      },
+      {
+        "id": "t/stryker/489",
+        "parent_sha256": "a670809bcfcdd001fe1deb8462433fea700c502dbe0cd20e6e33e27a746b3fa7",
+        "span_start": 557,
+        "span_end": 557,
+        "search_sha256": "b486fd39a12e5f456d5cc73d13350772fe1832c2b3356381430a09a84ba4df14",
+        "replace_sha256": "4209b0368aebbb7fa786fc6f5006d34434a2702eb2ddf36acf315fd555d58785"
+      },
+      {
+        "id": "t/stryker/510",
+        "parent_sha256": "a670809bcfcdd001fe1deb8462433fea700c502dbe0cd20e6e33e27a746b3fa7",
+        "span_start": 577,
+        "span_end": 577,
+        "search_sha256": "532a864cb8cf49c90a6df11f8036f8dfa289aecb95c4f30e2657c15e59da8c07",
+        "replace_sha256": "1f5329008260beb5e52a724ca04f0db2ade66a418ba7d4efb6989f8905d989c3"
+      },
+      {
+        "id": "t/stryker/527",
+        "parent_sha256": "a670809bcfcdd001fe1deb8462433fea700c502dbe0cd20e6e33e27a746b3fa7",
+        "span_start": 581,
+        "span_end": 581,
+        "search_sha256": "5b107d62b3306d557aec2a7fc2992ebc4022d91730c27987ddc1f0137bd40c44",
+        "replace_sha256": "82eeb38e7ee2a1a0c68a0bc8cfc686c9e07414f75df27ce551809babe9bc2368"
+      },
+      {
+        "id": "t/stryker/541",
+        "parent_sha256": "a670809bcfcdd001fe1deb8462433fea700c502dbe0cd20e6e33e27a746b3fa7",
+        "span_start": 594,
+        "span_end": 598,
+        "search_sha256": "2cd17df4d76dbe07790c997e73425233bc1d07b7e30771a5e4a6e7f3bf7d4a24",
+        "replace_sha256": "5b33644d586ba1c2b652bb7b27ce67660246549db7e6ec0b672cef57fdb2480b"
+      },
+      {
+        "id": "t/stryker/545",
+        "parent_sha256": "a670809bcfcdd001fe1deb8462433fea700c502dbe0cd20e6e33e27a746b3fa7",
+        "span_start": 600,
+        "span_end": 600,
+        "search_sha256": "8c828f6a933e20f61646a3e69419ca657b8f7756b5b1d66a072f0f882d85ca90",
+        "replace_sha256": "6f91f5e6d5f2d0f1a814a0d8127a768ff2486ae97dc63481e0ec3ee3e3d429cb"
+      },
+      {
+        "id": "t/stryker/571",
+        "parent_sha256": "a670809bcfcdd001fe1deb8462433fea700c502dbe0cd20e6e33e27a746b3fa7",
+        "span_start": 620,
+        "span_end": 620,
+        "search_sha256": "5bb1c7342d2c39e41908fd93b85263c25cc552bb2b3adb199624f2edc4867f9e",
+        "replace_sha256": "5b33644d586ba1c2b652bb7b27ce67660246549db7e6ec0b672cef57fdb2480b"
+      },
+      {
+        "id": "t/stryker/577",
+        "parent_sha256": "a670809bcfcdd001fe1deb8462433fea700c502dbe0cd20e6e33e27a746b3fa7",
+        "span_start": 622,
+        "span_end": 622,
+        "search_sha256": "65123046e794e2fd89a18575c7eeeb679eff15d782d203e5bf4bf46fdf422891",
+        "replace_sha256": "6342af0bdfd2418b5dbc009b1b208dfe90225b3db149fd618175c7f933140160"
+      },
+      {
+        "id": "t/stryker/592",
+        "parent_sha256": "a670809bcfcdd001fe1deb8462433fea700c502dbe0cd20e6e33e27a746b3fa7",
+        "span_start": 627,
+        "span_end": 636,
+        "search_sha256": "0ea55d66eb64eb1468b9913e79fc7abd9dd9bfc7e02755b0809b1359cc27c672",
+        "replace_sha256": "7e0fa4e363d9bd6b3bd4772a23070ef7dd76acebdc37de7fca8ef81bc2b4b290"
+      },
+      {
+        "id": "t/stryker/605",
+        "parent_sha256": "a670809bcfcdd001fe1deb8462433fea700c502dbe0cd20e6e33e27a746b3fa7",
+        "span_start": 637,
+        "span_end": 637,
+        "search_sha256": "451e1ca510575cf3b3a3608ab4acc93536552c82ecc0aa4a52c70dc304297046",
+        "replace_sha256": "7f1b4e8bac8c26938bf02625a783febdd2fa4a674d3421715d84e2e8f25a1f8c"
+      },
+      {
+        "id": "t/stryker/609",
+        "parent_sha256": "a670809bcfcdd001fe1deb8462433fea700c502dbe0cd20e6e33e27a746b3fa7",
+        "span_start": 639,
+        "span_end": 639,
+        "search_sha256": "0f5ca07a18c7d7635503e3564cc83beaeb56ed9fe1001d06a1bb7f005c2cd498",
+        "replace_sha256": "9ec2a8f2f7caa63b7453fe8cec41cc0d3ac75dccdfc3440e59d3283aa3321366"
+      },
+      {
+        "id": "t/stryker/614",
+        "parent_sha256": "a670809bcfcdd001fe1deb8462433fea700c502dbe0cd20e6e33e27a746b3fa7",
+        "span_start": 640,
+        "span_end": 640,
+        "search_sha256": "2d1b7d8ffa597b6b0271d1c5f4c7755f5ef100675167cda527935ad91c76ed75",
+        "replace_sha256": "67d2cb37c33b86df44fd2a4e655b59934de0eea120ac6c3e18f0a15159beb118"
+      },
+      {
+        "id": "t/stryker/635",
+        "parent_sha256": "a670809bcfcdd001fe1deb8462433fea700c502dbe0cd20e6e33e27a746b3fa7",
+        "span_start": 653,
+        "span_end": 656,
+        "search_sha256": "0ce91162d3ede89e5c09f1aa81c6f82956836a51d7496f5c4e938d3959129247",
+        "replace_sha256": "0bf42a52a1eec967ed12322e4297b539579e06a333020b6e2513a584924dd737"
+      },
+      {
+        "id": "t/stryker/638",
+        "parent_sha256": "a670809bcfcdd001fe1deb8462433fea700c502dbe0cd20e6e33e27a746b3fa7",
+        "span_start": 659,
+        "span_end": 672,
+        "search_sha256": "ab1b4af90fb11ad2c8898c23ccc755acd2e843f2a815b0c2f3eadc99a8289349",
+        "replace_sha256": "7e0fa4e363d9bd6b3bd4772a23070ef7dd76acebdc37de7fca8ef81bc2b4b290"
+      },
+      {
+        "id": "t/stryker/651",
+        "parent_sha256": "a670809bcfcdd001fe1deb8462433fea700c502dbe0cd20e6e33e27a746b3fa7",
+        "span_start": 668,
+        "span_end": 668,
+        "search_sha256": "a6fb242a90656813d1ffaa8f450f3089e3b0ab3a35259b0fc8dd5b547644473d",
+        "replace_sha256": "b0bc4fb2f27cfad19b97d3db37c948cdf5c9593cbdaa24401410d186a5d0cb3a"
+      }
+    ],
+    "sources": {
+      "t/stryker/11": {
+        "kind": "tool",
+        "tool": "stryker@10.0.0",
+        "operator": "LogicalOperator",
+        "status": "Survived"
+      },
+      "t/stryker/147": {
+        "kind": "tool",
+        "tool": "stryker@10.0.0",
+        "operator": "ConditionalExpression",
+        "status": "Survived"
+      },
+      "t/stryker/188": {
+        "kind": "tool",
+        "tool": "stryker@10.0.0",
+        "operator": "ConditionalExpression",
+        "status": "Survived"
+      },
+      "t/stryker/200": {
+        "kind": "tool",
+        "tool": "stryker@10.0.0",
+        "operator": "ConditionalExpression",
+        "status": "Survived"
+      },
+      "t/stryker/210": {
+        "kind": "tool",
+        "tool": "stryker@10.0.0",
+        "operator": "ConditionalExpression",
+        "status": "Survived"
+      },
+      "t/stryker/214": {
+        "kind": "tool",
+        "tool": "stryker@10.0.0",
+        "operator": "ConditionalExpression",
+        "status": "Survived"
+      },
+      "t/stryker/221": {
+        "kind": "tool",
+        "tool": "stryker@10.0.0",
+        "operator": "ConditionalExpression",
+        "status": "Survived"
+      },
+      "t/stryker/236": {
+        "kind": "tool",
+        "tool": "stryker@10.0.0",
+        "operator": "ConditionalExpression",
+        "status": "Survived"
+      },
+      "t/stryker/24": {
+        "kind": "tool",
+        "tool": "stryker@10.0.0",
+        "operator": "ConditionalExpression",
+        "status": "Survived"
+      },
+      "t/stryker/248": {
+        "kind": "tool",
+        "tool": "stryker@10.0.0",
+        "operator": "ConditionalExpression",
+        "status": "NoCoverage"
+      },
+      "t/stryker/267": {
+        "kind": "tool",
+        "tool": "stryker@10.0.0",
+        "operator": "StringLiteral",
+        "status": "NoCoverage"
+      },
+      "t/stryker/290": {
+        "kind": "tool",
+        "tool": "stryker@10.0.0",
+        "operator": "ObjectLiteral",
+        "status": "Survived"
+      },
+      "t/stryker/298": {
+        "kind": "tool",
+        "tool": "stryker@10.0.0",
+        "operator": "ConditionalExpression",
+        "status": "Survived"
+      },
+      "t/stryker/313": {
+        "kind": "tool",
+        "tool": "stryker@10.0.0",
+        "operator": "ConditionalExpression",
+        "status": "Survived"
+      },
+      "t/stryker/323": {
+        "kind": "tool",
+        "tool": "stryker@10.0.0",
+        "operator": "EqualityOperator",
+        "status": "Survived"
+      },
+      "t/stryker/331": {
+        "kind": "tool",
+        "tool": "stryker@10.0.0",
+        "operator": "ObjectLiteral",
+        "status": "NoCoverage"
+      },
+      "t/stryker/338": {
+        "kind": "tool",
+        "tool": "stryker@10.0.0",
+        "operator": "ObjectLiteral",
+        "status": "NoCoverage"
+      },
+      "t/stryker/341": {
+        "kind": "tool",
+        "tool": "stryker@10.0.0",
+        "operator": "ObjectLiteral",
+        "status": "Survived"
+      },
+      "t/stryker/353": {
+        "kind": "tool",
+        "tool": "stryker@10.0.0",
+        "operator": "ObjectLiteral",
+        "status": "NoCoverage"
+      },
+      "t/stryker/382": {
+        "kind": "tool",
+        "tool": "stryker@10.0.0",
+        "operator": "ObjectLiteral",
+        "status": "Survived"
+      },
+      "t/stryker/426": {
+        "kind": "tool",
+        "tool": "stryker@10.0.0",
+        "operator": "BlockStatement",
+        "status": "Survived"
+      },
+      "t/stryker/427": {
+        "kind": "tool",
+        "tool": "stryker@10.0.0",
+        "operator": "ObjectLiteral",
+        "status": "Survived"
+      },
+      "t/stryker/451": {
+        "kind": "tool",
+        "tool": "stryker@10.0.0",
+        "operator": "ConditionalExpression",
+        "status": "Survived"
+      },
+      "t/stryker/472": {
+        "kind": "tool",
+        "tool": "stryker@10.0.0",
+        "operator": "ConditionalExpression",
+        "status": "Survived"
+      },
+      "t/stryker/482": {
+        "kind": "tool",
+        "tool": "stryker@10.0.0",
+        "operator": "ObjectLiteral",
+        "status": "Survived"
+      },
+      "t/stryker/483": {
+        "kind": "tool",
+        "tool": "stryker@10.0.0",
+        "operator": "StringLiteral",
+        "status": "Survived"
+      },
+      "t/stryker/489": {
+        "kind": "tool",
+        "tool": "stryker@10.0.0",
+        "operator": "ObjectLiteral",
+        "status": "NoCoverage"
+      },
+      "t/stryker/510": {
+        "kind": "tool",
+        "tool": "stryker@10.0.0",
+        "operator": "ConditionalExpression",
+        "status": "Survived"
+      },
+      "t/stryker/527": {
+        "kind": "tool",
+        "tool": "stryker@10.0.0",
+        "operator": "StringLiteral",
+        "status": "NoCoverage"
+      },
+      "t/stryker/541": {
+        "kind": "tool",
+        "tool": "stryker@10.0.0",
+        "operator": "ObjectLiteral",
+        "status": "Survived"
+      },
+      "t/stryker/545": {
+        "kind": "tool",
+        "tool": "stryker@10.0.0",
+        "operator": "ConditionalExpression",
+        "status": "Survived"
+      },
+      "t/stryker/571": {
+        "kind": "tool",
+        "tool": "stryker@10.0.0",
+        "operator": "ObjectLiteral",
+        "status": "NoCoverage"
+      },
+      "t/stryker/577": {
+        "kind": "tool",
+        "tool": "stryker@10.0.0",
+        "operator": "StringLiteral",
+        "status": "NoCoverage"
+      },
+      "t/stryker/592": {
+        "kind": "tool",
+        "tool": "stryker@10.0.0",
+        "operator": "ObjectLiteral",
+        "status": "NoCoverage"
+      },
+      "t/stryker/605": {
+        "kind": "tool",
+        "tool": "stryker@10.0.0",
+        "operator": "EqualityOperator",
+        "status": "Survived"
+      },
+      "t/stryker/609": {
+        "kind": "tool",
+        "tool": "stryker@10.0.0",
+        "operator": "ConditionalExpression",
+        "status": "NoCoverage"
+      },
+      "t/stryker/614": {
+        "kind": "tool",
+        "tool": "stryker@10.0.0",
+        "operator": "StringLiteral",
+        "status": "NoCoverage"
+      },
+      "t/stryker/635": {
+        "kind": "tool",
+        "tool": "stryker@10.0.0",
+        "operator": "ObjectLiteral",
+        "status": "Survived"
+      },
+      "t/stryker/638": {
+        "kind": "tool",
+        "tool": "stryker@10.0.0",
+        "operator": "ObjectLiteral",
+        "status": "Survived"
+      },
+      "t/stryker/651": {
+        "kind": "tool",
+        "tool": "stryker@10.0.0",
+        "operator": "ArrayDeclaration",
+        "status": "NoCoverage"
+      }
+    },
+    "counts": {
+      "CompileError": 340,
+      "Killed": 88,
+      "NoCoverage": 75,
+      "Survived": 159,
+      "dropped:anchor-not-unique": 29,
+      "dropped:over-budget": 165
+    }
+  }
+}

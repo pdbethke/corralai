@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/pdbethke/corralai/internal/auditpush"
+	"github.com/pdbethke/corralai/internal/ledger"
 	"github.com/pdbethke/corralai/internal/pricing"
 	"github.com/pdbethke/corralai/internal/sandbox"
 	"github.com/pdbethke/corralai/internal/scanstore"
@@ -81,7 +82,7 @@ type bundleMeta struct {
 	SeedSkipped string
 	// ToolMutants is each file's account of a mutation tool's report, as
 	// ScanRow.ToolMutants's JSON text (toolMutantsJSON).
-	ToolMutants string
+	ToolMutants ledger.JSONText[[]ledger.ToolMutantCounts]
 }
 
 // buildBundle maps one recorded scan — its header and all four row grains —

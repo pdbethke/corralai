@@ -251,7 +251,7 @@ type ScanRow struct {
 	// number is the one the file's "tool mutants" scan line printed, rendered
 	// from the same value. Empty on a run with no tool source and on every
 	// row written before it.
-	ToolMutants string `json:",omitempty"`
+	ToolMutants JSONText[[]ToolMutantCounts] `json:",omitempty"`
 }
 
 // ToolMutantCounts is one audited file's account of a mutation tool's
@@ -274,6 +274,11 @@ type ToolMutantCounts struct {
 	// cache-served ones included; the report's path is never recorded. A
 	// key (it measures nothing), said in the ToolMutants tier note.
 	Report string `json:"report,omitempty"`
+	// Match is how strongly the report was tied to the audited file
+	// ("embedded-source", "anchored"); Units the column unit the reader
+	// applied. Both absent on a refused account.
+	Match string `json:"match,omitempty"`
+	Units string `json:"units,omitempty"`
 	// Taken is how many of the file's mutants corral graded.
 	Taken *int `json:"taken,omitempty"`
 	// Survived, NoCoverage, Killed and CompileError are the TOOL's statuses,
@@ -295,6 +300,94 @@ type ToolMutantCounts struct {
 	// Refused says why none of the file's tool mutants could be used: the
 	// report has no entry for it, or its source is not the audited bytes.
 	Refused string `json:"refused,omitempty"`
+	// Mutants is every mutant the report holds for the file, in the
+	// report's order, whatever happened to it: graded, dropped and why, or
+	// not taken under the tool's status. Absent on a refused account, which
+	// tied nothing to the audited bytes. Bounded per file; see
+	// MutantsTruncated.
+	Mutants []ReportMutant `json:"mutants,omitempty"`
+	// MutantsTruncated says what the per-file bound did to Mutants, as
+	// "covered_by lists replaced by counts; <n> of <m> mutants recorded".
+	// Absent when the whole list fit.
+	MutantsTruncated string `json:"mutants_truncated,omitempty"`
+	// Tests names the tests Mutants refer to: the tool's test id (as
+	// ReportMutant.KilledBy and CoveredBy hold it) to the test's name, once
+	// per file rather than once per mutant. Only ids some recorded mutant
+	// refers to, and only those the report names; a name that could carry a
+	// host identifier (a path, an email address, a control character, or
+	// over 256 bytes) is held as a digest of it.
+	Tests map[string]string `json:"tests,omitempty"`
+	// SchemaVersion is the report's own schemaVersion (the
+	// mutation-testing-report-schema version it says it follows), held as
+	// written when it is a plain token. Absent when the report gives none,
+	// and on an account corral made without reading the report's entry for
+	// the file (a report with no entry for it).
+	SchemaVersion string `json:"schema_version,omitempty"`
+	// Thresholds are the report's own mutation-score thresholds, as the
+	// tool's configuration set them. Absent when the report gives none, as
+	// SchemaVersion.
+	Thresholds *ToolThresholds `json:"thresholds,omitempty"`
+	// Language is the report's own label for the file's language, held as
+	// written when it is a plain token. It is the tool's claim; the language
+	// corral graded the file as is its own (Row.Lang).
+	Language string `json:"language,omitempty"`
+	// Dependencies are the tool's declared plugin packages and their
+	// versions (Stryker's framework.dependencies, e.g. its TypeScript
+	// checker and TypeScript itself), which decide which of its mutants come
+	// out as compile errors. Names pass the same host-identifier filter as
+	// test names; versions are held as written when plain tokens.
+	Dependencies map[string]string `json:"dependencies,omitempty"`
+}
+
+// ToolThresholds are a mutation tool's mutation-score thresholds as its
+// report states them: the tool's values, not corral's, and they decide
+// nothing here. Each is absent when the report gives none; Stryker's break
+// may be null, which means no break threshold, and is recorded absent.
+type ToolThresholds struct {
+	High  *float64 `json:"high,omitempty"`
+	Low   *float64 `json:"low,omitempty"`
+	Break *float64 `json:"break,omitempty"`
+}
+
+// ReportMutant is one mutant of a mutation tool's report as the record holds
+// it. What the tool said (status, location, which tests covered or killed
+// it) is its claim; the byte span, the replacement hash and the fate are
+// corral's. No free text from the report is here: tests are referred to by
+// the tool's ids (each a plain token or a digest of one), their names are
+// held once per file in ToolMutantCounts.Tests after the host-identifier
+// filter, and the tool's statusReason and description are never recorded.
+type ReportMutant struct {
+	// ID is the mutant's id as recorded on its MutantRow: t/<tool>/<id>. A
+	// second mutant the report gives an id already used carries the same ID,
+	// with Fate dropped:duplicate-id.
+	ID string `json:"id"`
+	// IDSource is "tool" when the report gave the id, "derived" when the
+	// reader made one.
+	IDSource string `json:"id_source"`
+	Operator string `json:"operator,omitempty"`
+	Status   string `json:"status"`
+	// Span is startLine, startCol, endLine, endCol exactly as the tool
+	// stated them, in the tool's own units (ToolMutantCounts.Units).
+	Span [4]int `json:"span"`
+	// ByteSpan is corral's conversion of Span to byte offsets into the
+	// audited file, start and end-exclusive; nil when it did not convert.
+	ByteSpan *[2]int `json:"byte_span,omitempty"`
+	// ReplacementSHA256 is the sha256 of the REPLACE text of the hunk corral
+	// built for a taken-status mutant; absent for any other.
+	ReplacementSHA256 string `json:"replacement_sha256,omitempty"`
+	Static            *bool  `json:"static,omitempty"`
+	TestsCompleted    *int   `json:"tests_completed,omitempty"`
+	// KilledBy and CoveredBy are the tool's test ids, each a plain token or
+	// a digest of one; ToolMutantCounts.Tests names them. CoveredByCount is how many tests the tool said cover the
+	// mutant, set whenever it said; the bound may drop CoveredBy and keep
+	// the count.
+	KilledBy       []string `json:"killed_by,omitempty"`
+	CoveredBy      []string `json:"covered_by,omitempty"`
+	CoveredByCount *int     `json:"covered_by_count,omitempty"`
+	DurationMS     *int     `json:"duration_ms,omitempty"`
+	// Fate is what corral did with the mutant: "graded", "dropped:<reason>"
+	// or "not-taken:<status>".
+	Fate string `json:"fate"`
 }
 
 // PushedByCertify is the ScanRow.PushedBy of a run's own entry.

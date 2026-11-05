@@ -5,6 +5,7 @@ package advpool
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/pdbethke/corralai/internal/mutantsources"
@@ -273,6 +274,51 @@ func (b MutantBudget) WithTool(tool int) string {
 		b.Total, tool, b.Total+tool, b.String())
 }
 
+// WithTools is WithTool for any number of tool sources: shares is each tool's
+// taken count by the tool label its MutantSources entries carry. One tool is
+// WithTool's line byte for byte ("5 model + 2 tool"); several name each
+// tool, sorted, so a reader can tell the shares apart ("5 model + 2
+// alpha@1 + 3 zeta@1, an exam of up to 10 ...").
+func (b MutantBudget) WithTools(shares map[string]int) string {
+	names := make([]string, 0, len(shares))
+	sum := 0
+	for k, v := range shares {
+		if v > 0 {
+			names = append(names, k)
+			sum += v
+		}
+	}
+	if len(names) <= 1 {
+		return b.WithTool(sum)
+	}
+	sort.Strings(names)
+	parts := make([]string, len(names))
+	for i, k := range names {
+		parts[i] = fmt.Sprintf("%d %s", shares[k], k)
+	}
+	return fmt.Sprintf("%d model + %s, an exam of up to %d (each tool's sample uses the same per-file cap as the model); model: %s",
+		b.Total, strings.Join(parts, " + "), b.Total+sum, b.String())
+}
+
+// ToolShares is ToolShare by tool: the taken count of each tool source
+// beside a seated generator, keyed by the tool label ("stryker@10.0.0")
+// the verdict's MutantSources carry. nil where ToolShare is 0.
+func ToolShares(v Verdict) map[string]int {
+	if v.RegionsTotal == 0 {
+		return nil
+	}
+	var out map[string]int
+	for _, s := range v.MutantSources {
+		if s.Kind == mutantsources.KindTool {
+			if out == nil {
+				out = map[string]int{}
+			}
+			out[s.Tool]++
+		}
+	}
+	return out
+}
+
 // ToolShare is how many of a verdict's exam mutants came from a tool
 // source BESIDE a seated generator: the number WithTool adds to the model's
 // budget. 0 on a tool-only run (no generator seat, RegionsTotal 0), whose
@@ -283,10 +329,8 @@ func ToolShare(v Verdict) int {
 		return 0
 	}
 	n := 0
-	for _, s := range v.MutantSources {
-		if s.Kind == mutantsources.KindTool {
-			n++
-		}
+	for _, c := range ToolShares(v) {
+		n += c
 	}
 	return n
 }

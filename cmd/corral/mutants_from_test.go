@@ -155,7 +155,7 @@ func TestMutantsFromRefusesUnknownTool(t *testing.T) {
 		want   []string
 	}{
 		"unknown tool":     {[]string{"pit:" + report}, []string{`"pit"`, "stryker"}},
-		"no tool prefix":   {[]string{report}, []string{"<tool>:<report path>", "stryker"}},
+		"no tool prefix":   {[]string{report}, []string{"<tool>[@<version>]:<report path>", "stryker"}},
 		"empty path":       {[]string{"stryker:"}, []string{"stryker:"}},
 		"one per tool":     {[]string{"stryker:" + report, "stryker:" + report}, []string{"once per tool"}},
 		"unreadable":       {[]string{"stryker:" + filepath.Join(t.TempDir(), "absent.json")}, []string{"absent.json"}},
@@ -225,8 +225,8 @@ func TestToolSampleSeedIsUsedOrDrawnAndPrinted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.seed != 42 {
-		t.Fatalf("seed = %d, want 42", s.seed)
+	if s[0].seed != 42 {
+		t.Fatalf("seed = %d, want 42", s[0].seed)
 	}
 	if !strings.Contains(out.String(), "--tool-sample-seed 42") {
 		t.Errorf("the seed in use must be printed, got %q", out.String())
@@ -236,7 +236,7 @@ func TestToolSampleSeedIsUsedOrDrawnAndPrinted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "drawn") || !strings.Contains(out.String(), "--tool-sample-seed "+formatToolSeed(s.seed)) {
+	if !strings.Contains(out.String(), "drawn") || !strings.Contains(out.String(), "--tool-sample-seed "+formatToolSeed(s[0].seed)) {
 		t.Errorf("a drawn seed must be printed with the flag that replays it, got %q", out.String())
 	}
 	if _, err := resolveMutantsFrom(mutantsFromFlags{values: []string{"stryker:" + report}, seed: "nope", mutantModel: "m"}, io.Discard); err == nil {
@@ -256,7 +256,7 @@ func TestToolSampleSeedIsUsedOrDrawnAndPrinted(t *testing.T) {
 func TestMutantsFromKeysTheVerdictCache(t *testing.T) {
 	a := writeTemp(t, string(toolFixtureReport(t, toolFixtureSrc)))
 	b := writeTemp(t, string(toolFixtureReport(t, toolFixtureSrc+"\n")))
-	src := func(path, seed string) *toolMutantSource {
+	src := func(path, seed string) toolSources {
 		s, err := resolveMutantsFrom(mutantsFromFlags{values: []string{"stryker:" + path}, seed: seed, mutantModel: "m"}, io.Discard)
 		if err != nil {
 			t.Fatal(err)
@@ -264,7 +264,7 @@ func TestMutantsFromKeysTheVerdictCache(t *testing.T) {
 		return s
 	}
 	keys := map[string]string{
-		"model only":     auditConfigKey(false, "", nil, "", "", (*toolMutantSource)(nil).cacheKey()),
+		"model only":     auditConfigKey(false, "", nil, "", "", toolSources(nil).cacheKey()),
 		"report a":       auditConfigKey(false, "", nil, "", "", src(a, "1").cacheKey()),
 		"report b":       auditConfigKey(false, "", nil, "", "", src(b, "1").cacheKey()),
 		"report a seed2": auditConfigKey(false, "", nil, "", "", src(a, "2").cacheKey()),
@@ -309,7 +309,7 @@ func TestToolMutantsForAFileWithNoSource(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			r, err := s.forFile(c.path, []byte(toolFixtureSrc), 5)
+			r, err := s[0].forFile(c.path, []byte(toolFixtureSrc), 5)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -317,7 +317,7 @@ func TestToolMutantsForAFileWithNoSource(t *testing.T) {
 				t.Errorf("%s: scan line %q does not say %q", name, r.line, c.want)
 			}
 			var rs advpool.RunSpec
-			err = r.apply(&rs)
+			err = applyAll(&rs, []toolFileMutants{r})
 			if !toolOnly {
 				if err != nil || rs.PresetMutants != nil || rs.ToolMutants != nil || rs.MutantSources != nil {
 					t.Errorf("%s with a model seat: err %v, spec %+v; want the model's exam untouched", name, err, rs)
@@ -331,7 +331,7 @@ func TestToolMutantsForAFileWithNoSource(t *testing.T) {
 			if rs.PresetMutants != nil {
 				t.Errorf("%s tool-only: an empty exam was set", name)
 			}
-			if pre, perr := s.preCheck(c.path, []byte(toolFixtureSrc)); perr != nil || !strings.Contains(pre.noneSaid, c.want) {
+			if pre, perr := s[0].preCheck(c.path, []byte(toolFixtureSrc)); perr != nil || !strings.Contains(pre.noneSaid, c.want) {
 				t.Errorf("%s: the pre-check %q does not say %q", name, pre.noneSaid, c.want)
 			}
 		}
@@ -344,15 +344,16 @@ func TestToolMutantsForAFileWithNoSource(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if pre, perr := s.preCheck("pkg/a.go", []byte(toolFixtureSrc)); pre.none != "" || perr != nil {
+		if pre, perr := s[0].preCheck("pkg/a.go", []byte(toolFixtureSrc)); pre.none != "" || perr != nil {
 			t.Fatalf("pre-check refused a usable file: %s %v", pre.none, perr)
 		}
-		r, err := s.forFile("pkg/a.go", []byte(toolFixtureSrc), 5)
+		rr, err := s.forFile("pkg/a.go", []byte(toolFixtureSrc), 5)
 		if err != nil {
 			t.Fatal(err)
 		}
+		r := rr[0]
 		var rs advpool.RunSpec
-		if err := r.apply(&rs); err != nil {
+		if err := applyAll(&rs, []toolFileMutants{r}); err != nil {
 			t.Fatal(err)
 		}
 		exam := rs.ToolMutants
@@ -367,7 +368,7 @@ func TestToolMutantsForAFileWithNoSource(t *testing.T) {
 		if len(exam) != 1 || exam[0].ID != "t/stryker/2" || rs.MutantSources["t/stryker/2"].Kind != mutantsources.KindTool {
 			t.Errorf("model %q: exam %+v sources %+v", model, exam, rs.MutantSources)
 		}
-		line := "tool mutants (stryker@10.0.0): taken 1 of 0 survivors + 1 no-coverage, 1 killed by the tool and not re-graded, 0 compile errors, 0 dropped"
+		line := "tool mutants (stryker@10.0.0): taken 1 of 0 survivors + 1 no-coverage, 1 killed by the tool and not re-graded, 0 compile errors, 0 dropped — match: embedded-source"
 		if model != "off" {
 			// Beside a model the combined exam is said (final review, Minor 1).
 			line += " — with the model's 5 under the same per-file cap: 5 model + 1 tool, an exam of up to 6"
@@ -458,9 +459,9 @@ func TestCertifyLocalAuditGradesToolMutants(t *testing.T) {
 		goal: "Max must return the larger argument", substrate: substrateWorkspace,
 		checkArgv:   []string{"go", "test", "./..."},
 		writerModel: "fakew", mutantModel: "off", criticModel: "off",
-		writerMode: advpool.WriterModeBatched,
-		toolSource: s,
-		stdout:     &out, stderr: io.Discard,
+		writerMode:  advpool.WriterModeBatched,
+		toolSources: s,
+		stdout:      &out, stderr: io.Discard,
 	})
 	if err != nil {
 		t.Fatalf("auditOneFile: %v\n%s", err, out.String())
@@ -545,17 +546,62 @@ func TestNoSourceReasonKeepsReaderErrorsApart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Swap in a report ReadStryker refuses after the flag check passed it.
-	s.report = []byte(`{"framework":{"name":"StrykerJS","version":"10.0.0"},"files":{"pkg/a.go":{"source":7}}}`)
-	pre, err := s.preCheck("pkg/a.go", []byte(toolFixtureSrc))
+	// Swap in a report the reader refuses after the flag check passed it.
+	s[0].report = []byte(`{"framework":{"name":"StrykerJS","version":"10.0.0"},"files":{"pkg/a.go":{"source":7}}}`)
+	pre, err := s[0].preCheck("pkg/a.go", []byte(toolFixtureSrc))
 	if err == nil || pre.none != "" {
 		t.Fatalf("preCheck = %q, %v; want no reason and the reader's error", pre.none, err)
 	}
 	// And the scan reports it as an executor error, not no-mutant-source.
 	root, _ := toolFixtureRepo(t, toolFixtureSrc)
-	l := &localExecutor{repoDir: root, toolSource: s}
+	l := &localExecutor{repoDir: root, toolSources: s}
 	res, err := l.Execute(context.Background(), reposcan.Job{Path: "pkg/a.go", Lang: "go"})
 	if err == nil || res.Reason == reposcan.ReasonNoMutantSource {
 		t.Fatalf("Execute = %+v, %v; want an error, not a no-mutant-source disposition", res, err)
+	}
+}
+
+// An unknown tool is refused with the registry's whole list, so the message
+// can never name a tool the registry lacks or omit one it has.
+func TestUnknownToolNamesTheRegistry(t *testing.T) {
+	defer mutantsources.Register(namedStub{"zz-stub"})()
+	_, err := resolveMutantsFrom(mutantsFromFlags{values: []string{"nope:x.json"}, mutantModel: "m"}, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), strings.Join(mutantsources.Tools(), ", ")) || !strings.Contains(err.Error(), "zz-stub") {
+		t.Fatalf("err = %v, want the registry's tools listed", err)
+	}
+}
+
+type namedStub struct{ name string }
+
+func (n namedStub) Tool() string                                     { return n.name }
+func (namedStub) Paths(mutantsources.Report) ([]string, error)       { return nil, nil }
+func (namedStub) Label(mutantsources.Report, string) (string, error) { return "", nil }
+func (namedStub) Read(mutantsources.Report, map[string][]byte, func(string) int, int64) (map[string]mutantsources.FileMutants, error) {
+	return nil, nil
+}
+
+// <tool>@<version>: is optional; one that matches the report is accepted and
+// one that contradicts it is refused naming both.
+func TestMutantsFromDeclaredVersion(t *testing.T) {
+	report := writeTemp(t, string(toolFixtureReport(t, toolFixtureSrc)))
+	s, err := resolveMutantsFrom(mutantsFromFlags{values: []string{"stryker@10.0.0:" + report}, seed: "1", mutantModel: "m"}, io.Discard)
+	if err != nil || len(s) != 1 || s[0].label != "stryker@10.0.0" || s[0].tool != "stryker" {
+		t.Fatalf("matching version: %+v, %v", s, err)
+	}
+	_, err = resolveMutantsFrom(mutantsFromFlags{values: []string{"stryker@9.9.9:" + report}, seed: "1", mutantModel: "m"}, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "9.9.9") || !strings.Contains(err.Error(), "10.0.0") {
+		t.Fatalf("contradicting version: %v", err)
+	}
+}
+
+// Ruling R10 a: an "@" with nothing after it declares no version yet looks
+// like it does. Refused, saying what to pass: a version, or no "@".
+func TestMutantsFromRefusesAnEmptyDeclaredVersion(t *testing.T) {
+	report := writeTemp(t, string(toolFixtureReport(t, toolFixtureSrc)))
+	for _, v := range []string{"stryker@:" + report, "stryker@ :" + report} {
+		_, err := resolveMutantsFrom(mutantsFromFlags{values: []string{v}, seed: "1", mutantModel: "m"}, io.Discard)
+		if err == nil || !strings.Contains(err.Error(), "stryker@<version>:") || !strings.Contains(err.Error(), "stryker:") {
+			t.Errorf("%q: err = %v, want a refusal saying to pass stryker@<version>: or stryker:", v, err)
+		}
 	}
 }

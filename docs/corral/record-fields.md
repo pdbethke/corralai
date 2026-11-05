@@ -218,6 +218,25 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `Unrun` | measured |  |
 | `Verdict` | meta | a model's opinion: advisory, signed but not verified as true |
 
+## ReportMutant
+
+| Field | Tier | Note |
+|---|---|---|
+| `ByteSpan` | measured |  |
+| `CoveredBy` | declared | the tool's own claim, read from its report |
+| `CoveredByCount` | declared | the tool's own claim, read from its report |
+| `DurationMS` | declared | the tool's own claim, read from its report |
+| `Fate` | measured |  |
+| `ID` | key |  |
+| `IDSource` | measured |  |
+| `KilledBy` | declared | the tool's own claim, read from its report |
+| `Operator` | declared | the tool's own claim, read from its report |
+| `ReplacementSHA256` | measured |  |
+| `Span` | declared | the tool's own claim, read from its report |
+| `Static` | declared | the tool's own claim, read from its report |
+| `Status` | declared | the tool's own claim, read from its report |
+| `TestsCompleted` | declared | the tool's own claim, read from its report |
+
 ## Review
 
 | Field | Tier | Note |
@@ -412,7 +431,6 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `StatementSHA256` | key |  |
 | `Substrate` | measured |  |
 | `TestCommand` | measured |  |
-| `ToolMutants` | measured | per-status counts are the tool's own claims about its mutants; Taken and Dropped are corral's; Report (the report's sha256) is a key |
 | `Toolchains` | measured |  |
 | `Top` | measured |  |
 | `TotalFiles` | measured |  |
@@ -475,3 +493,36 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `Max` | measured |  |
 | `Median` | measured |  |
 | `Min` | measured |  |
+
+## ToolMutantCounts
+
+| Field | Tier | Note |
+|---|---|---|
+| `CompileError` | declared | the tool's own claim, read from its report |
+| `Dependencies` | declared | the tool report's own value |
+| `Dropped` | measured |  |
+| `DroppedBy` | measured |  |
+| `Killed` | declared | the tool's own claim, read from its report |
+| `Language` | declared | the tool report's own value |
+| `Match` | measured |  |
+| `MutantsTruncated` | measured |  |
+| `NoCoverage` | declared | the tool's own claim, read from its report |
+| `NotRegraded` | declared | the tool's own claim, read from its report |
+| `Path` | key |  |
+| `Refused` | measured |  |
+| `Report` | key |  |
+| `SchemaVersion` | declared | the tool report's own value |
+| `Seed` | measured |  |
+| `Survived` | declared | the tool's own claim, read from its report |
+| `Taken` | measured |  |
+| `Tests` | declared | the tool's own test names, after the host-identifier filter |
+| `Tool` | declared | the tool's own claim, read from its report |
+| `Units` | measured |  |
+
+## ToolThresholds
+
+| Field | Tier | Note |
+|---|---|---|
+| `Break` | declared | the tool report's own value |
+| `High` | declared | the tool report's own value |
+| `Low` | declared | the tool report's own value |

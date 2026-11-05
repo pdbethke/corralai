@@ -108,9 +108,21 @@ func buildFieldTiers() map[[2]string]FieldTier {
 		Inventory ShadowDraw MaxTokensReached
 		PushedBy Host SourcePushed StartedAt FinishedAt TotalMillis SelectionMillis ModelCalls InputTokens OutputTokens`)
 	add("ScanRow", TierMeta, noteRunAccount, "PreflightNote")
-	// Measured as a whole (corral read the report and counted it), with what
-	// it counts said: the per-status counts are the tool's claims.
-	add("ScanRow", TierMeasured, "per-status counts are the tool's own claims about its mutants; Taken and Dropped are corral's; Report (the report's sha256) is a key", "ToolMutants")
+	// ToolMutants is JSON text of []ToolMutantCounts; the tier gate walks
+	// into it, so each field of ToolMutantCounts carries its own tier.
+	add("ToolMutantCounts", TierKey, "", "Path Report")
+	add("ToolMutantCounts", TierMeasured, "", "Match Units Taken Dropped DroppedBy Seed Refused")
+	add("ToolMutantCounts", TierDeclared, "the tool's own claim, read from its report", "Tool Survived NoCoverage Killed CompileError NotRegraded")
+	add("ToolMutantCounts", TierMeasured, "", "MutantsTruncated")
+	add("ToolMutantCounts", TierDeclared, "the tool's own test names, after the host-identifier filter", "Tests")
+	add("ToolMutantCounts", TierDeclared, "the tool report's own value", "SchemaVersion Language Dependencies")
+	add("ToolThresholds", TierDeclared, "the tool report's own value", "High Low Break")
+	// ReportMutant: one mutant of the tool's report. What the tool said
+	// about it is its claim; how corral located, hashed and used it is
+	// corral's.
+	add("ReportMutant", TierKey, "", "ID")
+	add("ReportMutant", TierMeasured, "", "IDSource ByteSpan ReplacementSHA256 Fate")
+	add("ReportMutant", TierDeclared, "the tool's own claim, read from its report", "Operator Status Span Static TestsCompleted KilledBy CoveredBy CoveredByCount DurationMS")
 
 	// Row: one per audited file.
 	add("Row", TierKey, "", "Repo Commit Path ScanID RunURL StatementSHA256 ParentSHA256 CacheKey PriorDigest ReusedFromScanID")

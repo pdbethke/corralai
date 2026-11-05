@@ -45,6 +45,26 @@ history of any release, `git log v0.3.4..v0.3.5`.
   kill recorded before this has no `KillConfirmation` and is unconfirmed,
   never "alone", and the record page marks an entry holding one.
 
+### Added
+
+- **`--mutants-from` takes `<tool>[@<version>]:<report>`, several tools per run, and records every mutant the report holds.**
+  The report reader is now a general interface with a registry; StrykerJS is the only
+  tool behind it, so this phase accepts no new tool. The version is optional and, if given,
+  must match the report's. Several `--mutants-from` flags (one per tool) join one exam, each tool capped
+  by the file's mutant budget, with each tool's share named on the scan, `mutants:` and verdict lines
+  (a single-tool run's cache key is unchanged). Each file's account records `Match`
+  (`embedded-source` for Stryker) and `Units` (`utf16`), every reported mutant (id, spans, byte span,
+  replacement hash, killed_by and covered_by as test ids, count, tests completed, static, fate) in
+  `Mutants`, and test names once per file in `Tests`, with names that could carry a host identifier
+  held as unsalted 16-hex digests (the rule, and the shapes it misses, are in
+  `docs/corral/mutant-sources.md`). The report's own `schemaVersion` and `thresholds` are recorded
+  as declared values, and so are its `files.language` and `framework.dependencies` (the tool's
+  plugin packages and versions, e.g. the TypeScript checker). `statusReason`, `description`,
+  `projectRoot`, `config`, `framework.branding` and `testFiles.source` are not recorded, each for a
+  stated reason in `docs/corral/mutant-sources.md`. The list is bounded
+  to 1<<20 bytes per file and `MutantsTruncated` says what the bound did; REA's full report measured
+  292,956 bytes raw and 25,006 gzipped. The scan line for a counted file ends in `— match: <how>`.
+
 ### Fixed
 
 - A run that hit `--timeout` while the per-survivor writer was still running

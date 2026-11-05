@@ -16,6 +16,7 @@ import (
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/hoststat"
 	"github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/ledger"
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/sandbox"
 	"github.com/pdbethke/corralai/internal/scanstore"
@@ -65,7 +66,7 @@ type localRunFacts struct {
 	seedSkipped string
 	// toolMutants is the file's account of --mutants-from's report, as the
 	// ledger's JSON text (toolMutantsJSON); "" with no tool source.
-	toolMutants string
+	toolMutants ledger.JSONText[[]ledger.ToolMutantCounts]
 	// mutantsFrom is the sha256 of the --mutants document the run replayed,
 	// "" when it generated its own exam — the same column a repo scan fills.
 	mutantsFrom string

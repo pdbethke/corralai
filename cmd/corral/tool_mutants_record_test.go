@@ -167,7 +167,7 @@ func TestToolMutantRowsNameTheirSource(t *testing.T) {
 		t.Errorf("the view holds %d tool row(s) with their source, want 1", n)
 	}
 	var tm string
-	if err := db.QueryRow(`SELECT tool_mutants FROM corral_scans`).Scan(&tm); err != nil || tm != b.Scan.ToolMutants {
+	if err := db.QueryRow(`SELECT tool_mutants FROM corral_scans`).Scan(&tm); err != nil || tm != string(b.Scan.ToolMutants) {
 		t.Errorf("the view's tool_mutants = %q (%v), want the entry's %q", tm, err, b.Scan.ToolMutants)
 	}
 	wb, err := auditpush.ReadBundleForScan(db, auditpush.ScanRow{Repo: "o/r", ScanID: 1, ScanUID: entries[0].ScanUID})
@@ -319,10 +319,10 @@ func TestLocalEntryRecordsToolMutantCounts(t *testing.T) {
 		goal: "Max must return the larger argument", substrate: substrateWorkspace,
 		checkArgv:   []string{"go", "test", "./..."},
 		writerModel: "fakew", mutantModel: "off", criticModel: "off",
-		writerMode: advpool.WriterModeBatched,
-		toolSource: s,
-		toolSink:   func(c ledger.ToolMutantCounts) { sunk = append(sunk, c) },
-		stdout:     io.Discard, stderr: io.Discard,
+		writerMode:  advpool.WriterModeBatched,
+		toolSources: s,
+		toolSink:    func(c ledger.ToolMutantCounts) { sunk = append(sunk, c) },
+		stdout:      io.Discard, stderr: io.Discard,
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -609,6 +609,23 @@ func (e errExecutor) Execute(context.Context, reposcan.Job) (reposcan.FileResult
 	return reposcan.FileResult{}, e.err
 }
 
+// failingReader is stryker's Paths and Label with a Read that always fails:
+// a reader error on a file the report covers, which no fixture reaches.
+type failingReader struct{}
+
+func (failingReader) Tool() string { return "failing" }
+func (failingReader) Paths(r mutantsources.Report) ([]string, error) {
+	s, _ := mutantsources.Lookup("stryker")
+	return s.Paths(r)
+}
+func (failingReader) Label(r mutantsources.Report, declared string) (string, error) {
+	s, _ := mutantsources.Lookup("stryker")
+	return s.Label(r, declared)
+}
+func (failingReader) Read(mutantsources.Report, map[string][]byte, func(string) int, int64) (map[string]mutantsources.FileMutants, error) {
+	return nil, errors.New("mutantsources: forced reader failure")
+}
+
 // A reader error on a covered file goes through Execute to the signed
 // entry naming the report by tool and sha256, in both shapes of run: beside
 // a model (auditOneFile's door) and tool-only (the pre-check's door). The
@@ -620,11 +637,7 @@ func TestAToolReaderErrorNeverRecordsTheReportPath(t *testing.T) {
 			withMachineLedger(t)
 			wiredAgent(t, "fakew", "", toolFixtureWriterTest)
 			wiredAgent(t, "fakem", "", "NONE")
-			prev := readStryker
-			readStryker = func([]byte, map[string][]byte, func(string) int, int64) (map[string]mutantsources.FileMutants, error) {
-				return nil, errors.New("mutantsources: forced reader failure")
-			}
-			t.Cleanup(func() { readStryker = prev })
+			t.Cleanup(mutantsources.Register(failingReader{}))
 			root, report, goals := twoFileToolRepo(t)
 			mutant := "fakem"
 			if mode == "tool-only" {
@@ -634,7 +647,7 @@ func TestAToolReaderErrorNeverRecordsTheReportPath(t *testing.T) {
 			runCertifyRepo([]string{
 				"--repo", root, "--goals", goals, "--all",
 				"--writer-model", "fakew", "--mutant-model", mutant, "--critic-model", "off",
-				"--mutants-from", "stryker:" + report, "--tool-sample-seed", "7",
+				"--mutants-from", "failing:" + report, "--tool-sample-seed", "7",
 				"--substrate", substrateWorkspace, "--whole-suite", "--no-verdict-cache",
 				"--", "go", "test", "./...",
 			}, &out, &errb)
@@ -674,11 +687,11 @@ func TestApplysNoEntryRefusalRecordsNoPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, err := s.forFile("pkg/b.go", []byte("package pkg\n"), 5)
+	r, err := s[0].forFile("pkg/b.go", []byte("package pkg\n"), 5)
 	if err != nil {
 		t.Fatal(err)
 	}
-	aerr := r.apply(&advpool.RunSpec{})
+	aerr := applyAll(&advpool.RunSpec{}, []toolFileMutants{r})
 	if aerr == nil || !strings.Contains(aerr.Error(), report) {
 		t.Fatalf("the terminal refusal %v does not name the report path", aerr)
 	}
@@ -688,7 +701,7 @@ func TestApplysNoEntryRefusalRecordsNoPath(t *testing.T) {
 			t.Errorf("recorded detail %q carries %q", d, frag)
 		}
 	}
-	if !strings.Contains(d, s.sha256) || !strings.Contains(d, "no entry for pkg/b.go") {
+	if !strings.Contains(d, s[0].sha256) || !strings.Contains(d, "no entry for pkg/b.go") {
 		t.Errorf("recorded detail %q does not name the report by sha256 and the file", d)
 	}
 }
@@ -702,7 +715,7 @@ func TestToolNoSourceOpenErrorRecordsNoRepoDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	repoDir := filepath.Join(t.TempDir(), pathMarker, "gone")
-	l := &localExecutor{repoDir: repoDir, toolSource: s}
+	l := &localExecutor{repoDir: repoDir, toolSources: s}
 	_, terr := l.toolNoSource("pkg/a.go")
 	if terr == nil || !strings.Contains(terr.Error(), repoDir) {
 		t.Fatalf("the terminal error %v does not name the checkout", terr)
@@ -730,10 +743,11 @@ func TestTheCombinedExamSizeIsSaid(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		r, err := s.forFile("pkg/a.go", []byte(toolFixtureSrc), 5)
+		rr, err := s.forFile("pkg/a.go", []byte(toolFixtureSrc), 5)
 		if err != nil {
 			t.Fatal(err)
 		}
+		r := rr[0]
 		said := strings.Contains(r.line, "5 model + 1 tool") && strings.Contains(r.line, "up to 6")
 		if model == "m" && !said {
 			t.Errorf("both sources: scan line %q does not say the combined exam size", r.line)
@@ -745,12 +759,12 @@ func TestTheCombinedExamSizeIsSaid(t *testing.T) {
 
 	budget := advpool.MutantBudget{Rule: advpool.BudgetRuleComplexity, Total: 5, Complexity: 3, Floor: 4, Ceiling: 40}
 	var b bytes.Buffer
-	printWeakFile(&b, reposcan.WeakFile{Path: "pkg/a.go", MutantBudget: budget, ToolShare: 2})
+	printWeakFile(&b, reposcan.WeakFile{Path: "pkg/a.go", MutantBudget: budget, ToolShare: 2, ToolShares: map[string]int{"stryker@10.0.0": 2}})
 	if !strings.Contains(b.String(), "mutants: 5 model + 2 tool") {
 		t.Errorf("the report line does not say the combined exam:\n%s", b.String())
 	}
 	v := advpool.Verdict{MutantBudget: budget, RegionsTotal: 1, MutantSources: map[string]mutantsources.MutantSource{
-		"t/stryker/1": {Kind: mutantsources.KindTool}, "t/stryker/2": {Kind: mutantsources.KindTool}, "m1": {Kind: mutantsources.KindModel},
+		"t/stryker/1": {Kind: mutantsources.KindTool, Tool: "stryker@10.0.0"}, "t/stryker/2": {Kind: mutantsources.KindTool, Tool: "stryker@10.0.0"}, "m1": {Kind: mutantsources.KindModel},
 	}}
 	b.Reset()
 	renderAdvVerdict(&b, "pkg/a.go", advVerdictFromPool(v))
@@ -758,7 +772,282 @@ func TestTheCombinedExamSizeIsSaid(t *testing.T) {
 		t.Errorf("the verdict block does not say the combined exam:\n%s", b.String())
 	}
 	rep := reposcan.Aggregate("o", "r", "c", 1, 1, []reposcan.FileResult{{Job: reposcan.Job{Path: "pkg/a.go"}, Gradable: true, Verdict: v}}, nil)
-	if len(rep.Weakest) == 0 || rep.Weakest[0].ToolShare != 2 {
+	if len(rep.Weakest) == 0 || rep.Weakest[0].ToolShare != 2 || rep.Weakest[0].ToolShares["stryker@10.0.0"] != 2 {
 		t.Errorf("the report's file does not carry the verdict's tool share: %+v", rep.Weakest)
+	}
+}
+
+// The scan line says how the report was tied to the file, rendered from the
+// recorded Match like every other number on it.
+func TestToolMutantsLineSaysTheMatch(t *testing.T) {
+	c := toolMutantCounts(mutantsources.FileMutants{Path: "pkg/a.ts", Tool: "stryker@10.0.0", Seed: 7,
+		Match: mutantsources.MatchEmbeddedSource, Units: mutantsources.UnitsUTF16,
+		Counts: map[string]int{"Survived": 1}})
+	if c.Match != "embedded-source" || c.Units != "utf16" {
+		t.Errorf("counts Match, Units = %q, %q", c.Match, c.Units)
+	}
+	if got := toolMutantsLine(c); !strings.HasSuffix(got, " — match: embedded-source") {
+		t.Errorf("line = %q", got)
+	}
+}
+
+// reportMutantsOf is n recorded mutants, each covered by k test names.
+func reportMutantsOf(n, k int) []ledger.ReportMutant {
+	out := make([]ledger.ReportMutant, n)
+	for i := range out {
+		names := make([]string, k)
+		for j := range names {
+			names[j] = "a test whose name is long enough to weigh something " + strings.Repeat("x", j%7)
+		}
+		c := k
+		out[i] = ledger.ReportMutant{ID: "t/stryker/" + strings.Repeat("9", 1+i%5), IDSource: "tool", Status: "Survived",
+			Span: [4]int{i + 1, 1, i + 1, 4}, CoveredBy: names, CoveredByCount: &c, Fate: "graded"}
+	}
+	return out
+}
+
+func encodedLen(t *testing.T, v any) int {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(b)
+}
+
+// A file's mutant list is bounded, and nothing is dropped silently: first
+// every covered_by list gives way to its count, then the list itself is cut,
+// and MutantsTruncated says which happened and how many mutants remain.
+func TestReportMutantsBound(t *testing.T) {
+	fm := func(rs []ledger.ReportMutant) mutantsources.FileMutants {
+		return mutantsources.FileMutants{Path: "pkg/a.ts", Tool: "stryker@10.0.0", Seed: 7, Counts: map[string]int{"Survived": len(rs)}, Reported: rs}
+	}
+
+	small := reportMutantsOf(3, 2)
+	f := fm(small)
+	f.Tests = map[string]string{small[0].CoveredBy[0]: "a named test"}
+	c := toolMutantCounts(f)
+	if len(c.Mutants) != 3 || c.MutantsTruncated != "" || len(c.Mutants[0].CoveredBy) != 2 {
+		t.Errorf("a small list was changed: %d mutants, %q", len(c.Mutants), c.MutantsTruncated)
+	}
+	if len(c.Tests) != 1 {
+		t.Errorf("Tests = %v, want the one named test the mutants refer to", c.Tests)
+	}
+
+	// Over the bound with names, under it with counts.
+	n := 50
+	k := maxReportMutantsBytes / (n * 40)
+	lists := reportMutantsOf(n, k)
+	if encodedLen(t, lists) <= maxReportMutantsBytes {
+		t.Fatalf("fixture too small: %d bytes", encodedLen(t, lists))
+	}
+	f = fm(lists)
+	f.Tests = map[string]string{lists[0].CoveredBy[0]: "only covers"}
+	c = toolMutantCounts(f)
+	if c.Tests != nil {
+		t.Errorf("Tests = %v: a test only a removed covered_by list referred to is still named", c.Tests)
+	}
+	if len(c.Mutants) != n {
+		t.Fatalf("%d of %d mutants kept, want all once the lists are counts", len(c.Mutants), n)
+	}
+	for _, m := range c.Mutants {
+		if m.CoveredBy != nil || m.CoveredByCount == nil || *m.CoveredByCount != k {
+			t.Fatalf("covered_by not replaced by its count: %d names, count %v", len(m.CoveredBy), m.CoveredByCount)
+		}
+	}
+	if want := "covered_by lists replaced by counts; 50 of 50 mutants recorded"; c.MutantsTruncated != want {
+		t.Errorf("MutantsTruncated = %q, want %q", c.MutantsTruncated, want)
+	}
+	if lists[0].CoveredBy == nil {
+		t.Error("bounding mutated the reader's own slice")
+	}
+
+	// Over the bound even with counts: the list is cut, and says so.
+	many := reportMutantsOf(maxReportMutantsBytes/40, 1)
+	c = toolMutantCounts(fm(many))
+	if got := encodedLen(t, c.Mutants); got > maxReportMutantsBytes {
+		t.Errorf("bounded list encodes to %d bytes, over %d", got, maxReportMutantsBytes)
+	}
+	if len(c.Mutants) == 0 || len(c.Mutants) >= len(many) {
+		t.Fatalf("kept %d of %d", len(c.Mutants), len(many))
+	}
+	if want := "covered_by lists replaced by counts; " + itoa(int64(len(c.Mutants))) + " of " + itoa(int64(len(many))) + " mutants recorded"; c.MutantsTruncated != want {
+		t.Errorf("MutantsTruncated = %q, want %q", c.MutantsTruncated, want)
+	}
+}
+
+// --- ruling R10, C1 --------------------------------------------------------
+
+// relabeledStryker is stryker under another tool name: the same report read
+// the same way, every id and label renamed, so two of them are two tools
+// grading one file with mutants that do not collide.
+type relabeledStryker struct{ tool string }
+
+func (r relabeledStryker) Tool() string { return r.tool }
+func (r relabeledStryker) Paths(rep mutantsources.Report) ([]string, error) {
+	s, _ := mutantsources.Lookup("stryker")
+	return s.Paths(rep)
+}
+func (r relabeledStryker) Label(mutantsources.Report, string) (string, error) {
+	return r.tool + "@1.0.0", nil
+}
+func (r relabeledStryker) Read(rep mutantsources.Report, files map[string][]byte, budget func(string) int, seed int64) (map[string]mutantsources.FileMutants, error) {
+	s, _ := mutantsources.Lookup("stryker")
+	got, err := s.Read(rep, files, budget, seed)
+	if err != nil {
+		return nil, err
+	}
+	label := r.tool + "@1.0.0"
+	rename := func(id string) string { return "t/" + r.tool + "/" + strings.TrimPrefix(id, "t/stryker/") }
+	for p, fm := range got {
+		fm.Tool = label
+		for i := range fm.Taken {
+			fm.Taken[i].ID = rename(fm.Taken[i].ID)
+		}
+		src := map[string]mutantsources.MutantSource{}
+		for id, ms := range fm.Sources {
+			ms.Tool = label
+			src[rename(id)] = ms
+		}
+		fm.Sources = src
+		for i := range fm.Reported {
+			fm.Reported[i].ID = rename(fm.Reported[i].ID)
+		}
+		got[p] = fm
+	}
+	return got, nil
+}
+
+// twoToolRunsTwice runs one file under two relabeled-stryker tools twice on
+// one checkout with the verdict cache on, so the second run is served from
+// the first's entry. It returns both entries and what each run said.
+func twoToolRunsTwice(t *testing.T) ([]auditpush.LedgerEntry, []string) {
+	t.Helper()
+	noKeys(t)
+	withMachineLedger(t)
+	wiredAgent(t, "fakew", "", toolFixtureWriterTest)
+	t.Cleanup(mutantsources.Register(relabeledStryker{"alpha"}))
+	t.Cleanup(mutantsources.Register(relabeledStryker{"zeta"}))
+	root, report := toolFixtureRepo(t, toolFixtureSrc)
+	goals := writeGoals(t, t.TempDir(), `{"pkg/a.go": "Max must return the larger argument"}`)
+	noPrior := t.TempDir()
+	run := func() string {
+		var out, errb bytes.Buffer
+		code := runCertifyRepo([]string{
+			"--repo", root, "--goals", goals,
+			"--writer-model", "fakew", "--mutant-model", "off", "--critic-model", "off",
+			"--mutants-from", "alpha:" + report, "--mutants-from", "zeta:" + report,
+			"--tool-sample-seed", "7",
+			"--substrate", substrateWorkspace, "--whole-suite", "--prior", noPrior,
+			"--", "go", "test", "./...",
+		}, &out, &errb)
+		if code != 0 {
+			t.Fatalf("exit %d\n%s%s", code, out.String(), errb.String())
+		}
+		return out.String() + errb.String()
+	}
+	said := []string{run(), run()}
+	entries, err := auditpush.ReadLedgerDir(filepath.Join(root, ".corral", "ledger"))
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("want two entries, got %d (%v)", len(entries), err)
+	}
+	return entries, said
+}
+
+// Two tools on one file, through the real --repo path: the entry's scan row
+// carries both tools' accounts for the file and its mutant rows name both
+// tools, on a fresh run and again when the verdict is served from the cache.
+// The cache leg is the one this was written for: a served file once kept
+// only the last tool's account.
+func TestTwoToolsOneFileKeepBothAccountsThroughTheCache(t *testing.T) {
+	entries, said := twoToolRunsTwice(t)
+	for i, leg := range []string{"fresh", "cache hit"} {
+		b := entries[i].Bundle
+		hit := false
+		for _, f := range b.Files {
+			hit = hit || f.CacheHit
+		}
+		if hit != (i == 1) {
+			t.Fatalf("%s: cache hit = %v\n%s", leg, hit, said[i])
+		}
+		counts, err := b.Scan.ToolMutants.Decode()
+		if err != nil {
+			t.Fatalf("%s: tool_mutants %q: %v", leg, b.Scan.ToolMutants, err)
+		}
+		tools := map[string]bool{}
+		for _, c := range counts {
+			if c.Path == "pkg/a.go" {
+				tools[c.Tool] = true
+			}
+		}
+		if len(counts) != 2 || !tools["alpha@1.0.0"] || !tools["zeta@1.0.0"] {
+			raw, _ := json.Marshal(counts)
+			t.Errorf("%s: pkg/a.go accounts = %s, want one from each of alpha@1.0.0 and zeta@1.0.0", leg, raw)
+		}
+		named := map[string]bool{}
+		for _, m := range b.Mutants {
+			named[m.SourceTool] = true
+		}
+		if !named["alpha@1.0.0"] || !named["zeta@1.0.0"] {
+			t.Errorf("%s: mutant rows name tools %v, want both", leg, named)
+		}
+	}
+}
+
+// The two-tool form of TestAVerdictCacheHitKeepsTheToolAccount: the served
+// run's scan row is the earning run's, both tools' accounts included, and
+// both tools' mutant rows are written again.
+func TestAVerdictCacheHitKeepsEveryToolsAccount(t *testing.T) {
+	entries, said := twoToolRunsTwice(t)
+	first, again := entries[0].Bundle, entries[1].Bundle
+	hit := false
+	for _, f := range again.Files {
+		hit = hit || f.CacheHit
+	}
+	if !hit {
+		t.Fatalf("the second run was not a cache hit:\n%s", said[1])
+	}
+	if first.Scan.ToolMutants == "" || again.Scan.ToolMutants != first.Scan.ToolMutants {
+		t.Errorf("cache-hit tool_mutants = %q, want the first run's %q", again.Scan.ToolMutants, first.Scan.ToolMutants)
+	}
+	if len(again.Mutants) != len(first.Mutants) || len(again.Mutants) != 2 {
+		t.Errorf("cache-hit mutant rows = %+v, want the first run's two", again.Mutants)
+	}
+}
+
+// toolAccountsByPath keeps every account a path has, in the row's order;
+// keyed to one account, a later tool's replaced an earlier one's.
+func TestToolAccountsByPathKeepsEveryTool(t *testing.T) {
+	text, err := ledger.EncodeJSONText([]ledger.ToolMutantCounts{
+		{Path: "a.ts", Tool: "alpha@1"}, {Path: "a.ts", Tool: "zeta@1"}, {Path: "b.ts", Tool: "alpha@1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := toolAccountsByPath(text)
+	if len(got["a.ts"]) != 2 || got["a.ts"][0].Tool != "alpha@1" || got["a.ts"][1].Tool != "zeta@1" || len(got["b.ts"]) != 1 {
+		t.Errorf("toolAccountsByPath = %+v", got)
+	}
+}
+
+// Ruling R10 b: the report's schemaVersion and thresholds reach the file's
+// account whether or not the file was refused, and an account read from no
+// report entry carries neither.
+func TestToolMutantCountsCarryTheReportsDeclaredValues(t *testing.T) {
+	high, low := 80.0, 60.0
+	th := &ledger.ToolThresholds{High: &high, Low: &low}
+	for _, refused := range []string{"", "source differs"} {
+		deps := map[string]string{"typescript": "7.0.2"}
+		c := toolMutantCounts(mutantsources.FileMutants{Path: "a.ts", Tool: "stryker@10.0.0", Refused: refused,
+			SchemaVersion: "1.0", Thresholds: th, Language: "typescript", Dependencies: deps})
+		if c.SchemaVersion != "1.0" || c.Thresholds != th {
+			t.Errorf("refused %q: SchemaVersion %q Thresholds %+v", refused, c.SchemaVersion, c.Thresholds)
+		}
+		if c.Language != "typescript" || c.Dependencies["typescript"] != "7.0.2" {
+			t.Errorf("refused %q: Language %q Dependencies %v", refused, c.Language, c.Dependencies)
+		}
+	}
+	if c := toolMutantCounts(mutantsources.FileMutants{Path: "a.ts", Tool: "stryker@10.0.0"}); c.SchemaVersion != "" || c.Thresholds != nil || c.Language != "" || c.Dependencies != nil {
+		t.Errorf("no declared values, yet the account = %+v", c)
 	}
 }

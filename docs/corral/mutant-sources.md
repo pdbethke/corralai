@@ -19,8 +19,10 @@ corral certify --repo . --top 3 \
   -- <your test command>
 ```
 
-- `--mutants-from <tool>:<report path>` is on `certify --repo` and `certify --local`. It is
+- `--mutants-from <tool>[@<version>]:<report path>` is on `certify --repo` and `certify --local`. It is
   repeatable, once per tool, and refused with `--mutants`, which already pins the exam.
+- The `@<version>` is optional. The report names its own version, and a version you declare
+  that contradicts it is refused. An absent version is recorded absent, never filled in.
 - With a `--mutant-model`, the tool's mutants join the model's on the same exam.
 - `--mutant-model off` is legal **only** with `--mutants-from`, and then the tool's
   mutants are the whole exam. An omitted `--mutant-model` is still refused.
@@ -29,6 +31,15 @@ corral certify --repo . --top 3 \
 
 Corral does not run the tool. You, or your CI, run it and corral reads the report it
 wrote, so no third-party tool executes in the audited checkout.
+
+## Several tools in one run
+
+`--mutants-from` may be given once per tool, and every tool's mutants join one exam. Each
+tool is capped by the file's mutant budget separately, so a file's exam can hold up to that
+budget from each tool (plus the model's). The scan, `mutants:` and verdict lines name each
+tool's share and their sum. A run with one tool has the same verdict cache key it had before
+several tools were possible. Phase 1 adds no tool: StrykerJS is still the only one accepted,
+so "several tools" is exercised by unit tests and not by a real run with two different tools.
 
 ## What corral takes from a report, and what it refuses
 
@@ -41,6 +52,10 @@ wrote, so no third-party tool executes in the audited checkout.
   Beside a `--mutant-model` the cap is the same one the model is asked for, so a file's exam can
   be up to twice its budget. The scan line and the `mutants:` line say both shares and the sum
   (`N model + T tool, an exam of up to N+T`).
+- Each file's account records how the report was tied to the audited file (`Match`) and the
+  column unit applied (`Units`). For Stryker these are `embedded-source` (the report embeds
+  the file's source, and corral compares its sha256) and `utf16`. A refused file records
+  neither, because nothing was tied. The scan line for a counted file ends in `— match: <how>`.
 - A line that occurs more than once in the file cannot be anchored to one place, so its
   mutants are dropped and counted. On REA's report that was 29 of 234 survivors.
 - A file containing a lone CR, U+2028 or U+2029 is refused, because the tool's line and
@@ -70,6 +85,44 @@ often sits under a home directory and the ledger is public. The same holds for a
 mutant, a per-source statistic (gap yield, waste, how often a mutant the tool reported
 surviving or uncovered also survives corral's run) is a query over signed entries. The
 fields and their tiers are in [record-fields.md](record-fields.md).
+
+### Every reported mutant is recorded
+
+Each file's `ToolMutantCounts.Mutants` holds every mutant the report has for the file, in the
+report's order, whatever became of it: graded, dropped (and why), or not taken under the tool's
+status. Per mutant: id (and whether the tool gave it or corral derived it), operator, status,
+the tool's span, corral's byte span into the audited file, the sha256 of the replacement text
+for a mutant corral took, `static`, `tests_completed`, `killed_by` and `covered_by` as the
+tool's test ids, `covered_by_count`, duration, and `fate`. The tool's claims (status, spans,
+which tests killed or covered) are declared; the byte span, replacement hash and fate are
+corral's. Test names are held once per file in `ToolMutantCounts.Tests` (id to name), only for
+ids some recorded mutant refers to. A name that contains a path, an email address or a control
+character, or is over 256 bytes, is recorded as a digest of it.
+
+Fields the reader parses and does not record, each for a stated reason:
+
+| Stryker field | Why it is not recorded |
+|---|---|
+| `statusReason` | the tool's free text: compiler output and assertion diffs that name values and host paths |
+| `description` | free text the tool writes about a mutant |
+| `projectRoot` | a host path on the machine that ran the tool |
+| `config` | the operator's whole configuration, paths and commands |
+| `framework.branding` | the tool's logo and homepage; describes no run |
+
+A test fails on any parsed field that is neither recorded nor on this list
+(`TestEveryParsedFieldIsRecordedOrExcluded`).
+
+### The size bound
+
+A file's `Mutants` list is bounded to 1<<20 bytes of JSON. Over the bound, every `covered_by`
+list gives way to its count first, and if that is still over, mutants are cut (the ones corral
+took or dropped are kept before those it never took). What was done is stated on the record in
+`MutantsTruncated`, for example `covered_by lists replaced by counts; <n> of <m> mutants recorded`.
+Measured on REA's full 662-mutant report (the 10.0.0 report above): the list encodes to
+292,956 bytes raw and 25,006 gzipped, so that file fits whole. Before test names were moved to
+the per-file map it was 1,801,228 raw and 47,960 gzipped. The measure is `json.Marshal` of the
+list alone, so it is approximate against the signed entry's bytes, which add the rest of the row
+and the `Tests` names.
 
 The verdict cache key includes the tool, the report's sha256 and the seed, so a
 different report or sample is a different exam.
@@ -171,8 +224,16 @@ entry 167, above).
 > `--mutants-from` had been executed, and that no number from one would appear here
 > until one existed. One now exists, and its numbers are above.
 
-Not yet executed: a real `certify --local` run with `--mutants-from`, and any tool other
-than StrykerJS.
+Executed for the reader seam (2026-11-05): `TestStrykerFullReportGolden`, run against the full
+REA 662-mutant report, passes on the branch that put Stryker behind the general reader
+interface, so a Stryker report is read to the same mutants as before. A `certify --repo
+--dry-run --mutants-from` on a scratch copy of REA did not reach tool intake: it printed the
+tool sample seed and the audit plan and nothing about the tool's mutants, so no run of the
+new per-mutant record (`Match`, `Units`, `Mutants`, `Tests`) on the CLI has been executed;
+it is covered by unit tests and the golden above.
+
+Not yet executed: a real `certify --local` run with `--mutants-from`, a real run that records
+the per-mutant account, a real run with two tools, and any tool other than StrykerJS.
 
 ## Tools
 
@@ -187,4 +248,4 @@ than StrykerJS.
 | Ruby `mutant` | planned, unverified |
 | Muter | planned, unverified |
 
-"Planned" is a list of intentions. Corral has read none of these tools' report formats, and no support is claimed.
+The reader is now a general interface with a registry, with Stryker behind it. Phase 1 adds no tool; StrykerJS is still the only accepted one. "Planned" is a list of intentions. Corral has read none of these tools' report formats, and no support is claimed.

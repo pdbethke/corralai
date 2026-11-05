@@ -119,8 +119,9 @@ list gives way to its count first, and if that is still over, mutants are cut (t
 took or dropped are kept before those it never took). What was done is stated on the record in
 `MutantsTruncated`, for example `covered_by lists replaced by counts; <n> of <m> mutants recorded`.
 Measured on REA's full 662-mutant report (the 10.0.0 report above): the list encodes to
-292,956 bytes raw and 25,006 gzipped, so that file fits whole. Before test names were moved to
-the per-file map it was 1,801,228 raw and 47,960 gzipped. The measure is `json.Marshal` of the
+292,956 bytes raw and 25,006 gzipped, so that file fits whole (`TestFullReportRecordSize`
+re-measures these). Measured earlier, on 2026-11-05, before test names were moved to a per-file
+table: 1,801,228 raw and 47,960 gzipped. The measure is `json.Marshal` of the
 list alone, so it is approximate against the signed entry's bytes, which add the rest of the row
 and the `Tests` names.
 

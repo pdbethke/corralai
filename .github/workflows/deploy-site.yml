@@ -87,8 +87,34 @@ jobs:
     needs: test
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    # One production deploy at a time, and every deploy ships main as it
+    # stands when the job starts, never the commit that triggered it.
+    #
+    # Both halves are needed. On 2026-11-05 two site PRs merged 40 seconds
+    # apart; both deploy jobs ran at once, and the OLDER commit's finished 9
+    # seconds later, so production served a build without the newer PR's
+    # field note until a manual redeploy. A queue alone does not fix that:
+    # whichever job reached the queue second would still deploy last, and that
+    # could be the older one. Building main inside the queue does: each job
+    # checks out main after every earlier deploy has finished, so the last
+    # deploy is always of the newest main. Whatever it ships is built and
+    # smoke-tested below (test:e2e) before Cloudflare sees it.
+    #
+    # cancel-in-progress is false so a deploy is never killed half way through
+    # an upload. A pending job that a newer one replaces loses nothing: the
+    # newer job builds a main that includes its commit.
+    concurrency:
+      group: deploy-site-production
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: main
+      - name: Say which commit is being deployed
+        # The run is named after the commit that triggered it, which may be
+        # older than what this job builds; this line is the record of what
+        # actually shipped.
+        run: echo "deploying main at $(git rev-parse HEAD) (run triggered by ${{ github.sha }})"
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go.mod

@@ -593,3 +593,15 @@ func TestMutantsFromDeclaredVersion(t *testing.T) {
 		t.Fatalf("contradicting version: %v", err)
 	}
 }
+
+// Ruling R10 a: an "@" with nothing after it declares no version yet looks
+// like it does. Refused, saying what to pass: a version, or no "@".
+func TestMutantsFromRefusesAnEmptyDeclaredVersion(t *testing.T) {
+	report := writeTemp(t, string(toolFixtureReport(t, toolFixtureSrc)))
+	for _, v := range []string{"stryker@:" + report, "stryker@ :" + report} {
+		_, err := resolveMutantsFrom(mutantsFromFlags{values: []string{v}, seed: "1", mutantModel: "m"}, io.Discard)
+		if err == nil || !strings.Contains(err.Error(), "stryker@<version>:") || !strings.Contains(err.Error(), "stryker:") {
+			t.Errorf("%q: err = %v, want a refusal saying to pass stryker@<version>: or stryker:", v, err)
+		}
+	}
+}

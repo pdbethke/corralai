@@ -111,9 +111,15 @@ func resolveMutantsFrom(f mutantsFromFlags, stdout io.Writer) (toolSources, erro
 		// so a path containing "@" or ":" is the path's; the version is
 		// optional because the report names its own (spec §4.5).
 		head, p, ok := strings.Cut(v, ":")
-		tool, declared, _ := strings.Cut(strings.TrimSpace(head), "@")
+		tool, declared, at := strings.Cut(strings.TrimSpace(head), "@")
+		declared = strings.TrimSpace(declared)
 		if !ok || tool == "" || strings.ContainsAny(tool, `/\.`) {
 			return nil, fmt.Errorf("--mutants-from %q: want <tool>[@<version>]:<report path>, with a known tool (%s)", v, strings.Join(mutantsources.Tools(), ", "))
+		}
+		// An "@" with no version after it declares nothing yet reads as if
+		// it did, so it is refused rather than taken as "no version".
+		if at && declared == "" {
+			return nil, fmt.Errorf("--mutants-from %q: the version after %s@ is empty; pass %s@<version>:<report path> to declare the version the report must state, or %s:<report path> to take the report's own", v, tool, tool, tool)
 		}
 		reader, known := mutantsources.Lookup(tool)
 		if !known {

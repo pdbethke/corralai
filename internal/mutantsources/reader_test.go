@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"reflect"
 	"sort"
@@ -19,10 +20,41 @@ import (
 
 var updateGolden = flag.Bool("update", false, "rewrite testdata golden files from the current reader")
 
-// fullReportEnv names the environment variable holding the absolute path of
-// the full REA StrykerJS report the golden below was captured from
-// (testdata/PROVENANCE.md). The report is 1.2 MB and is not committed.
+// fullReportGz is the full REA StrykerJS report the golden below was
+// captured from, scrubbed of its host path and configuration and gzipped
+// (testdata/PROVENANCE.md), committed so the golden and size tests run in CI.
+const fullReportGz = "testdata/stryker-rea-full.json.gz"
+
+// fullReportEnv overrides fullReportGz with the absolute path of an
+// uncompressed report, to check the golden against another capture.
 const fullReportEnv = "CORRAL_STRYKER_FULL_REPORT"
+
+// fullReport is the full report's bytes: the committed copy, or the file
+// fullReportEnv names. It never skips: a missing report is a failure.
+func fullReport(t *testing.T) []byte {
+	t.Helper()
+	if p := os.Getenv(fullReportEnv); p != "" {
+		b, err := os.ReadFile(p) // #nosec G304 -- an operator-named test input
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	f, err := os.Open(fullReportGz)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	zr, err := gzip.NewReader(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := io.ReadAll(zr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
 
 const goldenPath = "testdata/stryker-rea-full.golden.json"
 
@@ -67,14 +99,7 @@ func goldenOf(got map[string]FileMutants) map[string]goldenFile {
 // the Reader interface is provably a no-change. Run with -update on
 // unmodified code to capture it.
 func TestStrykerFullReportGolden(t *testing.T) {
-	reportPath := os.Getenv(fullReportEnv)
-	if reportPath == "" {
-		t.Skipf("%s is unset: set it to the absolute path of the full REA Stryker report (testdata/PROVENANCE.md)", fullReportEnv)
-	}
-	report, err := os.ReadFile(reportPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	report := fullReport(t)
 	var r struct {
 		Files map[string]struct {
 			Source string `json:"source"`
@@ -180,14 +205,7 @@ func TestStrykerLabelIsTheReportsVersion(t *testing.T) {
 // gzipped). cmd/corral's maxReportMutantsBytes was derived from this
 // measurement; rerun it when the record's shape changes.
 func TestFullReportRecordSize(t *testing.T) {
-	reportPath := os.Getenv(fullReportEnv)
-	if reportPath == "" {
-		t.Skipf("%s is unset: set it to the absolute path of the full REA Stryker report (testdata/PROVENANCE.md)", fullReportEnv)
-	}
-	report, err := os.ReadFile(reportPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	report := fullReport(t)
 	var r struct {
 		Files map[string]struct {
 			Source string `json:"source"`

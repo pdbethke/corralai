@@ -330,18 +330,20 @@ func TestEveryFixtureKeyIsParsedOrExcluded(t *testing.T) {
 			p = p[:i]
 		}
 	}
-	for _, name := range []string{"testdata/stryker-rea-analysisErrorProjection.json"} {
-		report, err := os.ReadFile(name) // #nosec G304 -- committed testdata
-		if err != nil {
-			t.Fatal(err)
-		}
+	trimmed, err := os.ReadFile("testdata/stryker-rea-analysisErrorProjection.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Both committed real reports: the trimmed fixture, which keeps the
+	// tool's config, and the full one, which keeps every mutant.
+	for name, report := range map[string][]byte{"trimmed fixture": trimmed, "full report": fullReport(t)} {
 		keys, err := reportLeafKeys(report)
 		if err != nil {
 			t.Fatal(err)
 		}
-		// Negative controls: the walk reached a leaf deep in a mutant and
-		// one deep in an excluded subtree.
-		if !keys["files.mutants.location.start.line"] || !keys["config.thresholds.high"] {
+		// Negative controls: the walk reached a leaf deep in a mutant, and
+		// in the trimmed fixture one deep in an excluded subtree.
+		if !keys["files.mutants.location.start.line"] || (name == "trimmed fixture" && !keys["config.thresholds.high"]) {
 			t.Fatalf("%s: the walk missed known leaves: %v", name, keys)
 		}
 		for k := range keys {

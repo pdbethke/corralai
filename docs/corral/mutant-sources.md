@@ -112,14 +112,67 @@ Caveats, all of them load-bearing:
   mutants that change nothing observable. Running corral's writer over them is how that gets sorted out, and it has not been run.
 - The two columns differ in kind (mutants, scores and wall time are not like for like).
 
+> **Correction (2026-11-02): Stryker's column understates Stryker.** StrykerJS 10.0.0's
+> vitest runner joins a test's describe and test names with a space when it builds the
+> per-test `-t` filter, and vitest 5 joins them with ` > `. So under per-test coverage, a
+> mutant covered only by tests inside a `describe` ran zero tests and was reported
+> Survived: 72 of the 159 Survived mutants above ran none. This was already known upstream
+> and is fixed in StrykerJS 10.1.0 ([stryker-js#6210](https://github.com/stryker-mutator/stryker-js/issues/6210)).
+> REA pins 10.0.0. With 10.1.1 and the same configs, the same 662 mutants give 161 killed,
+> 86 survived, 75 no coverage and 340 compile errors: a **50.0%** mutation score, not
+> 27.3%, in 1h05m. 73 mutants moved from Survived to Killed and nothing else moved. The
+> three lines where corral proved a gap and Stryker killed every compiling mutant are
+> unchanged under 10.1.1, because the defect only ever turned kills into survivals.
+> The table above is left as it was measured.
+
+## The first `--mutants-from` run (2026-11-04, one file)
+
+Corral's side is public ledger entry 167 on the `corral/ledger` branch
+(`scans/20261105T153215Z-aa48d494e972-62f5a6da58de.json.gz`). It is the same file at the
+same commit, with the model's mutants and Stryker's on one exam:
+`--mutants-from stryker:<the 10.0.0 report above> --tool-sample-seed 20261101`. Every seat
+ran on a coding-agent subscription: the goal deriver and mutant generator `claude-code:claude-sonnet-5-5`,
+the writer `codex` and the critic `claude-code:claude-haiku-5-5`.
+
+- Intake: 40 of Stryker's 234 Survived and NoCoverage mutants were taken. 194 were dropped:
+  29 whose line occurs more than once, and 165 over the file's budget. The 88 Stryker
+  killed were counted and not re-graded.
+- Graded: 71 distinct mutants, 39 from the model and 32 from Stryker. Kill rate **0.42**
+  (30 of 71, 95% 0.31-0.54). Every kill was confirmed by running the blamed test alone.
+- Survivors: 41. **30 were proven** by authored tests that pass together on the unmutated
+  code: 12 on the model's mutants and 18 on Stryker's. Of the other 11, 3 were tried and
+  missed, and 8 writer seats produced no test that graded.
+- Stryker's 18 proven mutants: 10 that Stryker reported NoCoverage and 8 it reported
+  Survived. Under Stryker 10.1.1 all 18 keep the same status.
+- Stryker reported 20 of its 32 graded mutants as Survived. Corral's run killed 10 of them,
+  and StrykerJS 10.1.1 kills those same 10, so on every one of the 32 corral's outcome
+  agrees with 10.1.1. The disagreement was the 10.0.0 runner defect in the correction above.
+- Time: 4h11m, of which 3h42m was test writing. Tokens: 8.4M in (6.8M cached), 69.8k out.
+
+An earlier run of the same command, before kills were confirmed, credited 7 kills to one
+slow REA test. Run by hand, that test catches none of the 7 mutants: it passes on the mutated and
+the unmutated code alike, so those kills were false. That run is not on the ledger. It is the reason
+a kill now counts only once the failure repeats (see the CHANGELOG). In the run above, that test
+killed nothing.
+
+The caveats on the first comparison apply here too: it is one file at one commit, and the
+Stryker survivors outside the 40 taken are still untriaged.
+
 ## What has and has not been executed
 
 Executed: unit tests, and end-to-end `certify --repo` runs on the workspace substrate
 with a Go fixture and a hand-made report in Stryker's schema, for the tool-only and
 both-sources shapes. The real `certify --local` CLI has been exercised only on its refusals.
 
-Not yet executed: a real run against REA with `--mutants-from`. No number from such a
-run is on this page, and none will be until one exists.
+A real `certify --repo` run against REA with `--mutants-from` has been executed (ledger
+entry 167, above).
+
+> **Correction (2026-11-05):** this section said that no real run against REA with
+> `--mutants-from` had been executed, and that no number from one would appear here
+> until one existed. One now exists, and its numbers are above.
+
+Not yet executed: a real `certify --local` run with `--mutants-from`, and any tool other
+than StrykerJS.
 
 ## Tools
 

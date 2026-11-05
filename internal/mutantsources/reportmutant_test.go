@@ -235,14 +235,20 @@ func TestEveryParsedFieldIsRecordedOrExcluded(t *testing.T) {
 
 func TestRecordableNameRefusesPathsAndNewlines(t *testing.T) {
 	for _, s := range []string{"a\nb", "a\tb", "/home/x/t.ts", "~/t.ts", `C:\x`, strings.Repeat("n", 300), "bad\xffutf8",
-		"loads /home/peter/x/a.json", "user alice@corp.example logs in", "reads ~/cfg", `opens D:\data`, "opens D:/data", "a\x00b"} {
+		"loads /home/peter/x/a.json", "user alice@corp.example logs in", "reads ~/cfg", `opens D:\data`, "opens D:/data", "a\x00b",
+		// Ruling R10, I2: path shapes the start-of-path rule missed.
+		"loads file:///home/alice/x.json", "reads `/home/alice/cfg`", "reads */home/alice/x", `\\server\share\x`,
+		"opens FILE:x", "glued foo/home/x/y", "rel/path/to/x is relative"} {
 		got := recordableName(s)
 		if got != "not-a-plain-name-"+sha256Hex([]byte(s))[:16] {
 			t.Errorf("recordableName(%q) = %q, want the digest", s, got)
 		}
 	}
 	for _, s := range []string{"suite > reports EACCES", strings.Repeat("n", 256), "distinguishes ünicode names", "a/b split",
-		"fetches http://example.test", "keeps @scope/pkg names", "rel/path/to/x is relative"} {
+		"fetches http://example.test", "keeps @scope/pkg names",
+		// One segment after a slash and no second slash: not caught, a
+		// disclosed limit (docs/corral/mutant-sources.md).
+		"reads /etc"} {
 		if got := recordableName(s); got != s {
 			t.Errorf("recordableName(%q) = %q, want it unchanged", s, got)
 		}

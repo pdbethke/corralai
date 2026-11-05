@@ -17,8 +17,12 @@ import (
 // source of what corral publishes and a field a reader drops cannot be
 // recovered from it later. The exceptions are written down here, per tool,
 // as the field's JSON path in the report, each with the reason the public
-// record cannot hold it. TestEveryParsedFieldIsRecordedOrExcluded fails on a
-// parsed field that is in neither the record nor this list.
+// record cannot hold it. Some are parsed and dropped (statusReason,
+// description); the rest are never parsed at all. Either way they are report
+// fields not recorded. TestEveryParsedFieldIsRecordedOrExcluded fails on a
+// parsed field that is in neither the record nor this list, and
+// TestEveryFixtureKeyIsParsedOrExcluded on a key of the committed fixture
+// report that is in neither.
 var excludedFields = map[string][]string{
 	"stryker": {
 		// statusReason: the tool's free text (compiler output, assertion
@@ -39,13 +43,20 @@ var excludedFields = map[string][]string{
 const maxNameBytes = 256
 
 // hostIdentifier matches what in a test name could name a person or a
-// machine: an email-like token; an absolute path of two or more segments
-// (/x/y) where a path could begin; a home-relative path (~/); a Windows
-// drive (C:\ or C:/) not inside a word, so "http://" is not one. A single
-// slash ("a/b split") is not a path.
+// machine: an email-like token; any two slashes around a non-space segment,
+// anywhere (/x/, which catches /home/u/..., file:///..., `/x/y`, */x/y and
+// a path glued to a word, foo/x/y); a home-relative path (~/); a backslash
+// pair (\\server\share, a UNC path); a "file:" scheme in any case; a
+// Windows drive (C:\ or C:/) not inside a word, so "http://" is not one.
+// A single slash ("a/b split") is not a path. What it does NOT catch: a
+// one-segment absolute path with no second slash ("reads /etc") and a lone
+// backslash path ("x\y"). A false positive costs only readability (the
+// name becomes a digest), so the rule errs toward digesting.
 var hostIdentifier = regexp.MustCompile(`[^\s@]+@[^\s@]+\.[^\s@]+` +
-	`|(?:^|[\s"'(\[{=,:;<>|])/[^/\s]+/[^/\s]` +
+	`|/[^/\s]+/` +
 	`|~/` +
+	`|\\\\` +
+	`|(?i:file:)` +
 	`|(?:^|[^A-Za-z])[A-Za-z]:[\\/]`)
 
 // recordableName is a test name as the record holds it: s when it is at

@@ -509,9 +509,18 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `Path` | key |  |
 | `Refused` | measured |  |
 | `Report` | key |  |
+| `SchemaVersion` | declared | the tool report's own value |
 | `Seed` | measured |  |
 | `Survived` | declared | the tool's own claim, read from its report |
 | `Taken` | measured |  |
 | `Tests` | declared | the tool's own test names, after the host-identifier filter |
 | `Tool` | declared | the tool's own claim, read from its report |
 | `Units` | measured |  |
+
+## ToolThresholds
+
+| Field | Tier | Note |
+|---|---|---|
+| `Break` | declared | the tool report's own value |
+| `High` | declared | the tool report's own value |
+| `Low` | declared | the tool report's own value |

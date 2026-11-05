@@ -36,6 +36,19 @@ var excludedFields = map[string][]string{
 		"config",
 		// framework.branding: the tool's logo and homepage; describes no run.
 		"framework.branding",
+		// framework.dependencies: the tool's plugin packages and their
+		// versions. Package names hold "/" and fail recordable, and the
+		// version that produced the mutants is already in Tool.
+		"framework.dependencies",
+		// files.language: the tool's label for the file's language. The
+		// record names the language from corral's own plugin (Row.Lang),
+		// which is what chose the runner, so a second, declared label adds
+		// nothing it can be checked against.
+		"files.language",
+		// testFiles.source: the whole text of each test file. It is the
+		// developer's code, not a fact about the run, and free text no
+		// filter makes safe; the tests are recorded by id and name.
+		"testFiles.source",
 	},
 }
 

@@ -278,7 +278,8 @@ func (s *toolMutantSource) forFile(p string, code []byte, budget int) (toolFileM
 // counted file's zeros are measured and kept. The tool's statuses are its
 // claims; Taken and the drops are corral's.
 func toolMutantCounts(fm mutantsources.FileMutants) ledger.ToolMutantCounts {
-	c := ledger.ToolMutantCounts{Path: fm.Path, Tool: fm.Tool, Refused: fm.Refused}
+	c := ledger.ToolMutantCounts{Path: fm.Path, Tool: fm.Tool, Refused: fm.Refused,
+		SchemaVersion: fm.SchemaVersion, Thresholds: fm.Thresholds}
 	if fm.Refused != "" {
 		return c
 	}

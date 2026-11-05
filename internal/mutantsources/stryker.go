@@ -97,6 +97,11 @@ type FileMutants struct {
 	// nothing was tied, so no strength is claimed.
 	Match string
 	Units string
+	// SchemaVersion and Thresholds are the report's own (recordable)
+	// schemaVersion and thresholds, set on every file the reader returns,
+	// refused ones included: they describe the report, not the file.
+	SchemaVersion string
+	Thresholds    *ledger.ToolThresholds
 }
 
 // How a report was tied to the audited file. Embedded-source: the report
@@ -167,7 +172,11 @@ func strykerMutantID(id string) string {
 // reader uses. The shape was read from a real StrykerJS 10.0.0 report
 // (testdata/PROVENANCE.md), not assumed.
 type strykerReport struct {
-	Framework *struct {
+	// SchemaVersion and Thresholds are the report's own values, recorded on
+	// each file's account (ledger.ToolMutantCounts) as declared.
+	SchemaVersion string                 `json:"schemaVersion"`
+	Thresholds    *ledger.ToolThresholds `json:"thresholds"`
+	Framework     *struct {
 		Name    string `json:"name"`
 		Version string `json:"version"`
 	} `json:"framework"`
@@ -265,7 +274,8 @@ func readStryker(reportJSON []byte, files map[string][]byte, budget func(path st
 		if n < 1 {
 			return nil, fmt.Errorf("mutantsources: the mutant budget for %s is %d; it must be at least 1", p, n)
 		}
-		fm := FileMutants{Path: p, Tool: tool, Seed: seed}
+		fm := FileMutants{Path: p, Tool: tool, Seed: seed,
+			SchemaVersion: recordable(rep.SchemaVersion), Thresholds: rep.Thresholds}
 		if refusal := refuseSource(p, rf.Source, bytes); refusal != "" {
 			fm.Refused = refusal
 			out[p] = fm

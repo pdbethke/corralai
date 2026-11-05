@@ -4,6 +4,7 @@ package mutantsources
 
 import (
 	"encoding/json"
+	"os"
 	"reflect"
 	"sort"
 	"strings"
@@ -185,15 +186,44 @@ func TestEveryParsedFieldIsRecordedOrExcluded(t *testing.T) {
 		"files.mutants.duration":              "ReportMutant.DurationMS",
 		"testFiles.tests.id":                  "ToolMutantCounts.Tests",
 		"testFiles.tests.name":                "ToolMutantCounts.Tests",
+		"schemaVersion":                       "ToolMutantCounts.SchemaVersion",
+		"thresholds.high":                     "ToolThresholds.High",
+		"thresholds.low":                      "ToolThresholds.Low",
+		"thresholds.break":                    "ToolThresholds.Break",
 	}
 	ledgerTypes := map[string]reflect.Type{
 		"ReportMutant":     reflect.TypeOf(ledger.ReportMutant{}),
 		"ToolMutantCounts": reflect.TypeOf(ledger.ToolMutantCounts{}),
+		"ToolThresholds":   reflect.TypeOf(ledger.ToolThresholds{}),
 	}
 	excluded := map[string]bool{}
 	for _, f := range excludedFields["stryker"] {
 		excluded[f] = true
 	}
+	parsed := strykerParsedFields()
+	if len(parsed) < 20 {
+		t.Fatalf("the walk found only %d parsed fields: %v", len(parsed), parsed)
+	}
+	for _, name := range parsed {
+		target, mapped := recordedAs[name]
+		switch {
+		case mapped && excluded[name]:
+			t.Errorf("%q is both recorded and excluded", name)
+		case mapped:
+			row, field, _ := strings.Cut(target, ".")
+			if _, ok := ledgerTypes[row].FieldByName(field); !ok {
+				t.Errorf("%q maps to %s, which does not exist", name, target)
+			}
+		case !excluded[name]:
+			t.Errorf("the reader parses the Stryker field %q but neither records it nor lists it in excludedFields[\"stryker\"]", name)
+		}
+	}
+}
+
+// strykerParsedFields is every leaf field of the report the Stryker reader
+// parses, as its JSON path in the report (map levels, which are keyed by a
+// file path, and slice levels add nothing to the path).
+func strykerParsedFields() []string {
 	var parsed []string
 	var walk func(prefix string, ty reflect.Type)
 	walk = func(prefix string, ty reflect.Type) {
@@ -214,21 +244,110 @@ func TestEveryParsedFieldIsRecordedOrExcluded(t *testing.T) {
 		}
 	}
 	walk("", reflect.TypeOf(strykerReport{}))
-	if len(parsed) < 20 {
-		t.Fatalf("the walk found only %d parsed fields: %v", len(parsed), parsed)
+	return parsed
+}
+
+// reportLeafKeys is every leaf key path of a report as it is, walked
+// generically: an object's keys extend the path, except where the reader's
+// own type has a map there (files, testFiles: keyed by file path), and an
+// array's elements share its path. An empty object or array is a leaf.
+func reportLeafKeys(report []byte) (map[string]bool, error) {
+	var v any
+	if err := json.Unmarshal(report, &v); err != nil {
+		return nil, err
 	}
-	for _, name := range parsed {
-		target, mapped := recordedAs[name]
-		switch {
-		case mapped && excluded[name]:
-			t.Errorf("%q is both recorded and excluded", name)
-		case mapped:
-			row, field, _ := strings.Cut(target, ".")
-			if _, ok := ledgerTypes[row].FieldByName(field); !ok {
-				t.Errorf("%q maps to %s, which does not exist", name, target)
+	out := map[string]bool{}
+	var walk func(prefix string, v any, ty reflect.Type)
+	walk = func(prefix string, v any, ty reflect.Type) {
+		for ty != nil && ty.Kind() == reflect.Pointer {
+			ty = ty.Elem()
+		}
+		switch x := v.(type) {
+		case map[string]any:
+			if len(x) == 0 {
+				out[prefix] = true
 			}
-		case !excluded[name]:
-			t.Errorf("the reader parses the Stryker field %q but neither records it nor lists it in excludedFields[\"stryker\"]", name)
+			for k, val := range x {
+				if ty != nil && ty.Kind() == reflect.Map {
+					walk(prefix, val, ty.Elem())
+					continue
+				}
+				var ft reflect.Type
+				if ty != nil && ty.Kind() == reflect.Struct {
+					for i := 0; i < ty.NumField(); i++ {
+						if name, _, _ := strings.Cut(ty.Field(i).Tag.Get("json"), ","); name == k {
+							ft = ty.Field(i).Type
+						}
+					}
+				}
+				p := k
+				if prefix != "" {
+					p = prefix + "." + k
+				}
+				walk(p, val, ft)
+			}
+		case []any:
+			if len(x) == 0 {
+				out[prefix] = true
+			}
+			var et reflect.Type
+			if ty != nil && ty.Kind() == reflect.Slice {
+				et = ty.Elem()
+			}
+			for _, e := range x {
+				walk(prefix, e, et)
+			}
+		default:
+			out[prefix] = true
+		}
+	}
+	walk("", v, reflect.TypeOf(strykerReport{}))
+	return out, nil
+}
+
+// Ruling R10 b: every key of the committed real report is parsed (and so,
+// by TestEveryParsedFieldIsRecordedOrExcluded, recorded or excluded) or is
+// excluded in writing, itself or under an excluded ancestor. The keys come
+// from the report, not from a list here, so a key the tool adds is caught.
+func TestEveryFixtureKeyIsParsedOrExcluded(t *testing.T) {
+	parsed := map[string]bool{}
+	for _, p := range strykerParsedFields() {
+		parsed[p] = true
+	}
+	excluded := map[string]bool{}
+	for _, f := range excludedFields["stryker"] {
+		excluded[f] = true
+	}
+	underExcluded := func(k string) bool {
+		for p := k; ; {
+			if excluded[p] {
+				return true
+			}
+			i := strings.LastIndex(p, ".")
+			if i < 0 {
+				return false
+			}
+			p = p[:i]
+		}
+	}
+	for _, name := range []string{"testdata/stryker-rea-analysisErrorProjection.json"} {
+		report, err := os.ReadFile(name) // #nosec G304 -- committed testdata
+		if err != nil {
+			t.Fatal(err)
+		}
+		keys, err := reportLeafKeys(report)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Negative controls: the walk reached a leaf deep in a mutant and
+		// one deep in an excluded subtree.
+		if !keys["files.mutants.location.start.line"] || !keys["config.thresholds.high"] {
+			t.Fatalf("%s: the walk missed known leaves: %v", name, keys)
+		}
+		for k := range keys {
+			if !parsed[k] && !underExcluded(k) {
+				t.Errorf("%s: the report key %q is neither parsed nor listed in excludedFields[\"stryker\"] with a reason", name, k)
+			}
 		}
 	}
 }
@@ -352,8 +471,51 @@ func TestStatusReasonNeverReachesTheRecord(t *testing.T) {
 func TestExcludedFieldsAreListed(t *testing.T) {
 	got := append([]string(nil), excludedFields["stryker"]...)
 	sort.Strings(got)
-	want := []string{"config", "files.mutants.description", "files.mutants.statusReason", "framework.branding", "projectRoot"}
+	want := []string{"config", "files.language", "files.mutants.description", "files.mutants.statusReason", "framework.branding", "framework.dependencies", "projectRoot", "testFiles.source"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("excludedFields[stryker] = %v, want %v", got, want)
+	}
+}
+
+// Ruling R10 b: the report's schemaVersion and thresholds are the tool's own
+// values and reach every file's account, the refused included (they describe
+// the report, not the file). A null break is recorded absent, never 0; a
+// schemaVersion that is not a plain token is not recorded as written.
+func TestTheReportsSchemaVersionAndThresholdsAreRead(t *testing.T) {
+	report, src, _ := loadREA(t)
+	got, err := readStryker(report, map[string][]byte{reaPath: []byte(src)}, budgetOf(5), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fm := got[reaPath]
+	th := fm.Thresholds
+	if fm.SchemaVersion != "1.0" || th == nil || th.High == nil || *th.High != 80 || th.Low == nil || *th.Low != 60 || th.Break != nil {
+		raw, _ := json.Marshal(th)
+		t.Errorf("SchemaVersion %q Thresholds %s, want 1.0 and high 80, low 60, break null", fm.SchemaVersion, raw)
+	}
+	raw, err := json.Marshal(th)
+	if err != nil || string(raw) != `{"high":80,"low":60}` {
+		t.Errorf("thresholds encode as %s (%v), want a null break absent", raw, err)
+	}
+	refused, err := readStryker(report, map[string][]byte{reaPath: []byte(src + "x")}, budgetOf(5), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := refused[reaPath]; r.Refused == "" || r.SchemaVersion != "1.0" || r.Thresholds == nil {
+		t.Errorf("a refused file's account = %+v, want the report's schemaVersion and thresholds", r)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(report, &m); err != nil {
+		t.Fatal(err)
+	}
+	m["schemaVersion"] = "1.0 /home/alice"
+	delete(m, "thresholds")
+	hostile, _ := json.Marshal(m)
+	got, err = readStryker(hostile, map[string][]byte{reaPath: []byte(src)}, budgetOf(5), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fm := got[reaPath]; fm.SchemaVersion != NotAPlainToken || fm.Thresholds != nil {
+		t.Errorf("hostile schemaVersion recorded as %q, absent thresholds as %+v", fm.SchemaVersion, fm.Thresholds)
 	}
 }

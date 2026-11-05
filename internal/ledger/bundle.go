@@ -317,13 +317,35 @@ type ToolMutantCounts struct {
 	// host identifier (a path, an email address, a control character, or
 	// over 256 bytes) is held as a digest of it.
 	Tests map[string]string `json:"tests,omitempty"`
+	// SchemaVersion is the report's own schemaVersion (the
+	// mutation-testing-report-schema version it says it follows), held as
+	// written when it is a plain token. Absent when the report gives none,
+	// and on an account corral made without reading the report's entry for
+	// the file (a report with no entry for it).
+	SchemaVersion string `json:"schema_version,omitempty"`
+	// Thresholds are the report's own mutation-score thresholds, as the
+	// tool's configuration set them. Absent when the report gives none, as
+	// SchemaVersion.
+	Thresholds *ToolThresholds `json:"thresholds,omitempty"`
+}
+
+// ToolThresholds are a mutation tool's mutation-score thresholds as its
+// report states them: the tool's values, not corral's, and they decide
+// nothing here. Each is absent when the report gives none; Stryker's break
+// may be null, which means no break threshold, and is recorded absent.
+type ToolThresholds struct {
+	High  *float64 `json:"high,omitempty"`
+	Low   *float64 `json:"low,omitempty"`
+	Break *float64 `json:"break,omitempty"`
 }
 
 // ReportMutant is one mutant of a mutation tool's report as the record holds
 // it. What the tool said (status, location, which tests covered or killed
 // it) is its claim; the byte span, the replacement hash and the fate are
-// corral's. No free text from the report is here: a test name is kept only
-// when it is a plain, pathless line, and the tool's statusReason never is.
+// corral's. No free text from the report is here: tests are referred to by
+// the tool's ids (each a plain token or a digest of one), their names are
+// held once per file in ToolMutantCounts.Tests after the host-identifier
+// filter, and the tool's statusReason and description are never recorded.
 type ReportMutant struct {
 	// ID is the mutant's id as recorded on its MutantRow: t/<tool>/<id>. A
 	// second mutant the report gives an id already used carries the same ID,

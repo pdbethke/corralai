@@ -1029,3 +1029,21 @@ func TestToolAccountsByPathKeepsEveryTool(t *testing.T) {
 		t.Errorf("toolAccountsByPath = %+v", got)
 	}
 }
+
+// Ruling R10 b: the report's schemaVersion and thresholds reach the file's
+// account whether or not the file was refused, and an account read from no
+// report entry carries neither.
+func TestToolMutantCountsCarryTheReportsDeclaredValues(t *testing.T) {
+	high, low := 80.0, 60.0
+	th := &ledger.ToolThresholds{High: &high, Low: &low}
+	for _, refused := range []string{"", "source differs"} {
+		c := toolMutantCounts(mutantsources.FileMutants{Path: "a.ts", Tool: "stryker@10.0.0", Refused: refused,
+			SchemaVersion: "1.0", Thresholds: th})
+		if c.SchemaVersion != "1.0" || c.Thresholds != th {
+			t.Errorf("refused %q: SchemaVersion %q Thresholds %+v", refused, c.SchemaVersion, c.Thresholds)
+		}
+	}
+	if c := toolMutantCounts(mutantsources.FileMutants{Path: "a.ts", Tool: "stryker@10.0.0"}); c.SchemaVersion != "" || c.Thresholds != nil {
+		t.Errorf("no declared values, yet the account = %+v", c)
+	}
+}

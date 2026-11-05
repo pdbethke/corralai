@@ -609,6 +609,23 @@ func (e errExecutor) Execute(context.Context, reposcan.Job) (reposcan.FileResult
 	return reposcan.FileResult{}, e.err
 }
 
+// failingReader is stryker's Paths and Label with a Read that always fails:
+// a reader error on a file the report covers, which no fixture reaches.
+type failingReader struct{}
+
+func (failingReader) Tool() string { return "failing" }
+func (failingReader) Paths(r mutantsources.Report) ([]string, error) {
+	s, _ := mutantsources.Lookup("stryker")
+	return s.Paths(r)
+}
+func (failingReader) Label(r mutantsources.Report, declared string) (string, error) {
+	s, _ := mutantsources.Lookup("stryker")
+	return s.Label(r, declared)
+}
+func (failingReader) Read(mutantsources.Report, map[string][]byte, func(string) int, int64) (map[string]mutantsources.FileMutants, error) {
+	return nil, errors.New("mutantsources: forced reader failure")
+}
+
 // A reader error on a covered file goes through Execute to the signed
 // entry naming the report by tool and sha256, in both shapes of run: beside
 // a model (auditOneFile's door) and tool-only (the pre-check's door). The
@@ -620,11 +637,7 @@ func TestAToolReaderErrorNeverRecordsTheReportPath(t *testing.T) {
 			withMachineLedger(t)
 			wiredAgent(t, "fakew", "", toolFixtureWriterTest)
 			wiredAgent(t, "fakem", "", "NONE")
-			prev := readStryker
-			readStryker = func([]byte, map[string][]byte, func(string) int, int64) (map[string]mutantsources.FileMutants, error) {
-				return nil, errors.New("mutantsources: forced reader failure")
-			}
-			t.Cleanup(func() { readStryker = prev })
+			t.Cleanup(mutantsources.Register(failingReader{}))
 			root, report, goals := twoFileToolRepo(t)
 			mutant := "fakem"
 			if mode == "tool-only" {
@@ -634,7 +647,7 @@ func TestAToolReaderErrorNeverRecordsTheReportPath(t *testing.T) {
 			runCertifyRepo([]string{
 				"--repo", root, "--goals", goals, "--all",
 				"--writer-model", "fakew", "--mutant-model", mutant, "--critic-model", "off",
-				"--mutants-from", "stryker:" + report, "--tool-sample-seed", "7",
+				"--mutants-from", "failing:" + report, "--tool-sample-seed", "7",
 				"--substrate", substrateWorkspace, "--whole-suite", "--no-verdict-cache",
 				"--", "go", "test", "./...",
 			}, &out, &errb)

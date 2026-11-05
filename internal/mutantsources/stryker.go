@@ -165,7 +165,7 @@ type strykerPos struct {
 // their columns come from other parsers and nobody here has checked them.
 const strykerJS = "StrykerJS"
 
-// ReadStryker reads a StrykerJS JSON report into mutants for the audited
+// readStryker reads a StrykerJS JSON report into mutants for the audited
 // files. files maps repo-relative path to the exact bytes corral audits;
 // budget gives each file's mutant cap (the run's per-file budget — there is
 // no default); seed drives the over-budget sample.
@@ -183,7 +183,7 @@ const strykerJS = "StrykerJS"
 // dist/src/mutant.js toPosition, core dist/src/utils/object-utils.js), and
 // stryker_test.go checks every taken mutant against a whole-file splice at
 // those columns on REA's real report.
-func ReadStryker(reportJSON []byte, files map[string][]byte, budget func(path string) int, seed int64) (map[string]FileMutants, error) {
+func readStryker(reportJSON []byte, files map[string][]byte, budget func(path string) int, seed int64) (map[string]FileMutants, error) {
 	if budget == nil {
 		return nil, errors.New("mutantsources: no mutant budget given; pass the run's per-file budget")
 	}
@@ -270,15 +270,15 @@ func ReadStryker(reportJSON []byte, files map[string][]byte, budget func(path st
 	return out, nil
 }
 
-// StrykerPaths returns the files a StrykerJS report covers, cleaned the way
-// ReadStryker matches them against audited paths, sorted. It refuses exactly
-// the reports ReadStryker refuses for their shape (unreadable JSON, another
+// strykerPaths returns the files a StrykerJS report covers, cleaned the way
+// readStryker matches them against audited paths, sorted. It refuses exactly
+// the reports readStryker refuses for their shape (unreadable JSON, another
 // framework, no version), so a caller auditing many files can check the
 // report once and learn which files have a tool source before reading any of
-// them: ReadStryker itself treats a report covering none of the files it is
+// them: readStryker itself treats a report covering none of the files it is
 // handed as an error, which is right for one call and wrong for a scan that
 // asks file by file.
-func StrykerPaths(reportJSON []byte) ([]string, error) {
+func strykerPaths(reportJSON []byte) ([]string, error) {
 	rep, err := parseStryker(reportJSON)
 	if err != nil {
 		return nil, err
@@ -291,14 +291,29 @@ func StrykerPaths(reportJSON []byte) ([]string, error) {
 	return out, nil
 }
 
-// StrykerTool is the tool a StrykerJS report names, as every mutant and
-// file account from it records it: "stryker@<version>".
-func StrykerTool(reportJSON []byte) (string, error) {
-	rep, err := parseStryker(reportJSON)
+// strykerReader is StrykerJS behind the Reader interface; the functions
+// above and below are its body.
+type strykerReader struct{}
+
+func init() { Register(strykerReader{}) }
+
+func (strykerReader) Tool() string { return "stryker" }
+
+func (strykerReader) Paths(r Report) ([]string, error) { return strykerPaths(r.Bytes) }
+
+func (strykerReader) Label(r Report, declared string) (string, error) {
+	rep, err := parseStryker(r.Bytes)
 	if err != nil {
 		return "", err
 	}
+	if declared != "" && declared != rep.Framework.Version {
+		return "", fmt.Errorf("mutantsources: --mutants-from declares stryker@%s but the report says StrykerJS %s; the report's version is the record's, so a contradicting one is refused rather than overridden", declared, rep.Framework.Version)
+	}
 	return strykerTool(rep), nil
+}
+
+func (strykerReader) Read(r Report, files map[string][]byte, budget func(string) int, seed int64) (map[string]FileMutants, error) {
+	return readStryker(r.Bytes, files, budget, seed)
 }
 
 func strykerTool(rep strykerReport) string { return "stryker@" + recordable(rep.Framework.Version) }

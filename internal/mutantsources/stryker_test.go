@@ -74,9 +74,9 @@ func budgetOf(n int) func(string) int { return func(string) int { return n } }
 func readREA(t *testing.T, budget int, seed int64) (FileMutants, string, map[string]strykerMutant) {
 	t.Helper()
 	report, src, ms := loadREA(t)
-	got, err := ReadStryker(report, map[string][]byte{reaPath: []byte(src)}, budgetOf(budget), seed)
+	got, err := readStryker(report, map[string][]byte{reaPath: []byte(src)}, budgetOf(budget), seed)
 	if err != nil {
-		t.Fatalf("ReadStryker: %v", err)
+		t.Fatalf("readStryker: %v", err)
 	}
 	fm, ok := got[reaPath]
 	if !ok {
@@ -207,7 +207,7 @@ func TestStrykerNonSurvivorsAreCountedNotTaken(t *testing.T) {
 		{"4", "Survived", 4, 1, 4, 4, "x()"},
 		{"4", "Survived", 3, 1, 3, 4, "y()"},
 	})
-	got, err := ReadStryker(rep, map[string][]byte{"f.js": []byte("a();\nb();\nc();\nd();\n")}, budgetOf(10), 1)
+	got, err := readStryker(rep, map[string][]byte{"f.js": []byte("a();\nb();\nc();\nd();\n")}, budgetOf(10), 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +229,7 @@ func TestStrykerNonSurvivorsAreCountedNotTaken(t *testing.T) {
 func TestStrykerReportForOtherBytesIsRefused(t *testing.T) {
 	report, src, _ := loadREA(t)
 	edited := src + "// one more line\n"
-	got, err := ReadStryker(report, map[string][]byte{reaPath: []byte(edited)}, budgetOf(1000), 1)
+	got, err := readStryker(report, map[string][]byte{reaPath: []byte(edited)}, budgetOf(1000), 1)
 	if err != nil {
 		t.Fatalf("a sha mismatch refuses the file, it is not a run error: %v", err)
 	}
@@ -304,7 +304,7 @@ func TestStrykerEmptyAndMultiLineReplacements(t *testing.T) {
 		{"8", "Survived", 1, 5, 1, 3, "x"},
 		{"9", "Survived", 5, 15, 5, 16, "x"},
 	})
-	got, err := ReadStryker(rep, map[string][]byte{"f.js": []byte(src)}, budgetOf(10), 1)
+	got, err := readStryker(rep, map[string][]byte{"f.js": []byte(src)}, budgetOf(10), 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -408,7 +408,7 @@ func TestStrykerSampleIsSeededAndSpreadsLines(t *testing.T) {
 // Review Focus 4.
 func TestStrykerReportMatchingNoAuditedFileIsAnError(t *testing.T) {
 	report, src, _ := loadREA(t)
-	_, err := ReadStryker(report, map[string][]byte{"src/other.ts": []byte("x")}, budgetOf(10), 1)
+	_, err := readStryker(report, map[string][]byte{"src/other.ts": []byte("x")}, budgetOf(10), 1)
 	if err == nil {
 		t.Fatal("a report about none of the audited files was accepted")
 	}
@@ -417,7 +417,7 @@ func TestStrykerReportMatchingNoAuditedFileIsAnError(t *testing.T) {
 	}
 
 	// An audited file the report does not mention gets no entry.
-	got, err := ReadStryker(report, map[string][]byte{reaPath: []byte(src), "src/other.ts": []byte("x")}, budgetOf(10), 1)
+	got, err := readStryker(report, map[string][]byte{reaPath: []byte(src), "src/other.ts": []byte("x")}, budgetOf(10), 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -434,13 +434,13 @@ func TestStrykerReportMatchingNoAuditedFileIsAnError(t *testing.T) {
 func TestStrykerRefusesWhatItCannotRead(t *testing.T) {
 	report, src, _ := loadREA(t)
 	files := map[string][]byte{reaPath: []byte(src)}
-	if _, err := ReadStryker(report, files, nil, 1); err == nil || !strings.Contains(err.Error(), "budget") {
+	if _, err := readStryker(report, files, nil, 1); err == nil || !strings.Contains(err.Error(), "budget") {
 		t.Errorf("nil budget: %v", err)
 	}
-	if _, err := ReadStryker(report, files, budgetOf(0), 1); err == nil || !strings.Contains(err.Error(), reaPath) {
+	if _, err := readStryker(report, files, budgetOf(0), 1); err == nil || !strings.Contains(err.Error(), reaPath) {
 		t.Errorf("zero budget: %v", err)
 	}
-	if _, err := ReadStryker([]byte("{"), files, budgetOf(5), 1); err == nil {
+	if _, err := readStryker([]byte("{"), files, budgetOf(5), 1); err == nil {
 		t.Error("malformed JSON was accepted")
 	}
 	for name, fw := range map[string]string{
@@ -449,7 +449,7 @@ func TestStrykerRefusesWhatItCannotRead(t *testing.T) {
 		"no framework": `null`,
 	} {
 		rep := []byte(`{"framework":` + fw + `,"files":{"f.js":{"source":"a\n","mutants":[]}}}`)
-		if _, err := ReadStryker(rep, map[string][]byte{"f.js": []byte("a\n")}, budgetOf(5), 1); err == nil {
+		if _, err := readStryker(rep, map[string][]byte{"f.js": []byte("a\n")}, budgetOf(5), 1); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
 	}
@@ -465,7 +465,7 @@ func TestStrykerFileWithLineBreaksCorralCannotCountIsRefused(t *testing.T) {
 		"U+2029":  "const s = \"\u2029\";\nc();\n",
 	} {
 		rep := synthReport(t, src, []synthMutant{{"1", "Survived", 2, 1, 2, 4, "x()"}})
-		got, err := ReadStryker(rep, map[string][]byte{"f.js": []byte(src)}, budgetOf(5), 1)
+		got, err := readStryker(rep, map[string][]byte{"f.js": []byte(src)}, budgetOf(5), 1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -475,7 +475,7 @@ func TestStrykerFileWithLineBreaksCorralCannotCountIsRefused(t *testing.T) {
 	}
 	const crlf = "a();\r\nb();\r\n"
 	rep := synthReport(t, crlf, []synthMutant{{"1", "Survived", 2, 1, 2, 4, "x()"}})
-	got, err := ReadStryker(rep, map[string][]byte{"f.js": []byte(crlf)}, budgetOf(5), 1)
+	got, err := readStryker(rep, map[string][]byte{"f.js": []byte(crlf)}, budgetOf(5), 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -503,7 +503,7 @@ func TestStrykerAnchorIsLineBounded(t *testing.T) {
 		// A multi-line location starting on line 4.
 		{"3", "NoCoverage", 4, 5, 5, 9, "z: 0"},
 	})
-	got, err := ReadStryker(rep, map[string][]byte{"f.js": []byte(src)}, budgetOf(10), 1)
+	got, err := readStryker(rep, map[string][]byte{"f.js": []byte(src)}, budgetOf(10), 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -551,7 +551,7 @@ func TestStrykerDuplicateIDAfterAFailedFirstIsDropped(t *testing.T) {
 		{"7", "Survived", 9, 1, 9, 2, "x"}, // out of range: fails
 		{"7", "Survived", 2, 1, 2, 4, "c()"},
 	})
-	got, err := ReadStryker(rep, map[string][]byte{"f.js": []byte(src)}, budgetOf(10), 1)
+	got, err := readStryker(rep, map[string][]byte{"f.js": []byte(src)}, budgetOf(10), 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -567,28 +567,28 @@ func TestStrykerDuplicateIDAfterAFailedFirstIsDropped(t *testing.T) {
 // TestStrykerPathsNamesTheReportedFiles: a caller auditing many files asks
 // which of them the report covers BEFORE it reads any of them, so a file the
 // report never mentions gets no tool source rather than an error. The paths
-// are the report's, cleaned the way ReadStryker matches them, sorted; and a
-// report ReadStryker would refuse is refused here for the same reason.
+// are the report's, cleaned the way readStryker matches them, sorted; and a
+// report readStryker would refuse is refused here for the same reason.
 func TestStrykerPathsNamesTheReportedFiles(t *testing.T) {
 	report, _, _ := loadREA(t)
-	got, err := StrykerPaths(report)
+	got, err := strykerPaths(report)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if want := []string{reaPath}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("StrykerPaths = %v, want %v", got, want)
+		t.Fatalf("strykerPaths = %v, want %v", got, want)
 	}
 	two := `{"framework":{"name":"StrykerJS","version":"10.0.0"},"files":{"./src/b.ts":{"source":""},"src/a.ts":{"source":""}}}`
-	if got, err := StrykerPaths([]byte(two)); err != nil || !reflect.DeepEqual(got, []string{"src/a.ts", "src/b.ts"}) {
-		t.Fatalf("StrykerPaths = %v, %v; want the cleaned, sorted paths", got, err)
+	if got, err := strykerPaths([]byte(two)); err != nil || !reflect.DeepEqual(got, []string{"src/a.ts", "src/b.ts"}) {
+		t.Fatalf("strykerPaths = %v, %v; want the cleaned, sorted paths", got, err)
 	}
 	for name, bad := range map[string]string{
 		"not JSON":        `{`,
 		"other framework": `{"framework":{"name":"Stryker.NET","version":"4"},"files":{}}`,
 		"no version":      `{"framework":{"name":"StrykerJS"},"files":{}}`,
 	} {
-		if _, err := StrykerPaths([]byte(bad)); err == nil {
-			t.Errorf("%s: StrykerPaths accepted a report ReadStryker refuses", name)
+		if _, err := strykerPaths([]byte(bad)); err == nil {
+			t.Errorf("%s: strykerPaths accepted a report readStryker refuses", name)
 		}
 	}
 }
@@ -625,7 +625,7 @@ func TestStrykerValuesReachTheRecordOnlyAsPlainTokens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := ReadStryker(rep, map[string][]byte{"f.js": []byte(src)}, budgetOf(10), 1)
+	got, err := readStryker(rep, map[string][]byte{"f.js": []byte(src)}, budgetOf(10), 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -656,7 +656,8 @@ func TestStrykerValuesReachTheRecordOnlyAsPlainTokens(t *testing.T) {
 	if fm.Counts[NotAPlainToken] != 1 {
 		t.Errorf("the hostile status is not counted under the fixed phrase: %+v", fm.Counts)
 	}
-	if tool, _ := StrykerTool(rep); tool != fm.Tool {
-		t.Errorf("StrykerTool = %q, want ReadStryker's %q", tool, fm.Tool)
+	r, _ := Lookup("stryker")
+	if tool, _ := r.Label(Report{Bytes: rep}, ""); tool != fm.Tool {
+		t.Errorf("Label = %q, want the reader's %q", tool, fm.Tool)
 	}
 }

@@ -5,8 +5,11 @@ package mutantsources
 import (
 	"encoding/json"
 	"flag"
+	"fmt"
 	"os"
+	"reflect"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -80,7 +83,8 @@ func TestStrykerFullReportGolden(t *testing.T) {
 	for p, f := range r.Files {
 		files[p] = []byte(f.Source)
 	}
-	got, err := ReadStryker(report, files, budgetOf(40), 20261101)
+	rd, _ := Lookup("stryker")
+	got, err := rd.Read(Report{Bytes: report}, files, budgetOf(40), 20261101)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,5 +105,68 @@ func TestStrykerFullReportGolden(t *testing.T) {
 	}
 	if string(want) != string(text) {
 		t.Fatalf("the Stryker reader's output over the full report differs from %s; if the change is intended run with -update and read the diff", goldenPath)
+	}
+}
+
+func TestRegistryKnowsStryker(t *testing.T) {
+	r, ok := Lookup("stryker")
+	if !ok || r.Tool() != "stryker" {
+		t.Fatalf("Lookup(stryker) = %v, %v", r, ok)
+	}
+	if got := Tools(); !reflect.DeepEqual(got, []string{"stryker"}) {
+		t.Fatalf("Tools() = %v, want [stryker]", got)
+	}
+	if _, ok := Lookup("nope"); ok {
+		t.Fatal("Lookup(nope) found a reader")
+	}
+}
+
+type fakeReader struct{ name string }
+
+func (f fakeReader) Tool() string                       { return f.name }
+func (fakeReader) Paths(Report) ([]string, error)       { return nil, nil }
+func (fakeReader) Label(Report, string) (string, error) { return "", nil }
+func (fakeReader) Read(Report, map[string][]byte, func(string) int, int64) (map[string]FileMutants, error) {
+	return nil, nil
+}
+
+func TestRegisterAddsAndRemovesAReader(t *testing.T) {
+	unregister := Register(fakeReader{"zz-fake"})
+	if _, ok := Lookup("zz-fake"); !ok {
+		t.Fatal("registered reader not found")
+	}
+	if got := Tools(); !reflect.DeepEqual(got, []string{"stryker", "zz-fake"}) {
+		t.Fatalf("Tools() = %v, want sorted keys", got)
+	}
+	unregister()
+	if _, ok := Lookup("zz-fake"); ok {
+		t.Fatal("reader still registered after unregister")
+	}
+}
+
+func TestRegisterPanicsOnADuplicateNamingIt(t *testing.T) {
+	defer func() {
+		v := recover()
+		if v == nil || !strings.Contains(fmt.Sprint(v), "stryker") {
+			t.Fatalf("recover = %v, want a panic naming stryker", v)
+		}
+	}()
+	Register(fakeReader{"stryker"})
+}
+
+func TestStrykerLabelIsTheReportsVersion(t *testing.T) {
+	report, _, _ := loadREA(t)
+	r, _ := Lookup("stryker")
+	for declared, wantErr := range map[string]bool{"": false, "10.0.0": false, "9.0.0": true} {
+		got, err := r.Label(Report{Bytes: report}, declared)
+		if wantErr {
+			if err == nil || !strings.Contains(err.Error(), "9.0.0") || !strings.Contains(err.Error(), "10.0.0") {
+				t.Errorf("declared %q: err = %v, want one naming both versions", declared, err)
+			}
+			continue
+		}
+		if err != nil || got != "stryker@10.0.0" {
+			t.Errorf("declared %q: Label = %q, %v", declared, got, err)
+		}
 	}
 }

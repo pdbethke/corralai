@@ -155,7 +155,7 @@ func TestMutantsFromRefusesUnknownTool(t *testing.T) {
 		want   []string
 	}{
 		"unknown tool":     {[]string{"pit:" + report}, []string{`"pit"`, "stryker"}},
-		"no tool prefix":   {[]string{report}, []string{"<tool>:<report path>", "stryker"}},
+		"no tool prefix":   {[]string{report}, []string{"<tool>[@<version>]:<report path>", "stryker"}},
 		"empty path":       {[]string{"stryker:"}, []string{"stryker:"}},
 		"one per tool":     {[]string{"stryker:" + report, "stryker:" + report}, []string{"once per tool"}},
 		"unreadable":       {[]string{"stryker:" + filepath.Join(t.TempDir(), "absent.json")}, []string{"absent.json"}},
@@ -545,7 +545,7 @@ func TestNoSourceReasonKeepsReaderErrorsApart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Swap in a report ReadStryker refuses after the flag check passed it.
+	// Swap in a report the reader refuses after the flag check passed it.
 	s.report = []byte(`{"framework":{"name":"StrykerJS","version":"10.0.0"},"files":{"pkg/a.go":{"source":7}}}`)
 	pre, err := s.preCheck("pkg/a.go", []byte(toolFixtureSrc))
 	if err == nil || pre.none != "" {
@@ -557,5 +557,38 @@ func TestNoSourceReasonKeepsReaderErrorsApart(t *testing.T) {
 	res, err := l.Execute(context.Background(), reposcan.Job{Path: "pkg/a.go", Lang: "go"})
 	if err == nil || res.Reason == reposcan.ReasonNoMutantSource {
 		t.Fatalf("Execute = %+v, %v; want an error, not a no-mutant-source disposition", res, err)
+	}
+}
+
+// An unknown tool is refused with the registry's whole list, so the message
+// can never name a tool the registry lacks or omit one it has.
+func TestUnknownToolNamesTheRegistry(t *testing.T) {
+	defer mutantsources.Register(namedStub{"zz-stub"})()
+	_, err := resolveMutantsFrom(mutantsFromFlags{values: []string{"nope:x.json"}, mutantModel: "m"}, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), strings.Join(mutantsources.Tools(), ", ")) || !strings.Contains(err.Error(), "zz-stub") {
+		t.Fatalf("err = %v, want the registry's tools listed", err)
+	}
+}
+
+type namedStub struct{ name string }
+
+func (n namedStub) Tool() string                                     { return n.name }
+func (namedStub) Paths(mutantsources.Report) ([]string, error)       { return nil, nil }
+func (namedStub) Label(mutantsources.Report, string) (string, error) { return "", nil }
+func (namedStub) Read(mutantsources.Report, map[string][]byte, func(string) int, int64) (map[string]mutantsources.FileMutants, error) {
+	return nil, nil
+}
+
+// <tool>@<version>: is optional; one that matches the report is accepted and
+// one that contradicts it is refused naming both.
+func TestMutantsFromDeclaredVersion(t *testing.T) {
+	report := writeTemp(t, string(toolFixtureReport(t, toolFixtureSrc)))
+	s, err := resolveMutantsFrom(mutantsFromFlags{values: []string{"stryker@10.0.0:" + report}, seed: "1", mutantModel: "m"}, io.Discard)
+	if err != nil || s.label != "stryker@10.0.0" || s.tool != "stryker" {
+		t.Fatalf("matching version: %+v, %v", s, err)
+	}
+	_, err = resolveMutantsFrom(mutantsFromFlags{values: []string{"stryker@9.9.9:" + report}, seed: "1", mutantModel: "m"}, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "9.9.9") || !strings.Contains(err.Error(), "10.0.0") {
+		t.Fatalf("contradicting version: %v", err)
 	}
 }

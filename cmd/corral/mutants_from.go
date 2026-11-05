@@ -47,9 +47,6 @@ const mutantsFromHelp = "grade a mutation TOOL's mutants too, as <tool>:<report 
 // toolSampleSeedHelp is --tool-sample-seed's text on both commands.
 const toolSampleSeedHelp = "the seed of the over-budget sample of --mutants-from's tool mutants, to replay a recorded run's sample. Absent, a seed is drawn and printed. Refused without --mutants-from"
 
-// knownMutantTools are the tools --mutants-from reads, by prefix.
-var knownMutantTools = []string{"stryker"}
-
 // mutantsFromFlags is the flags a tool source is resolved from, as typed.
 type mutantsFromFlags struct {
 	values      []string // every --mutants-from
@@ -62,6 +59,8 @@ type mutantsFromFlags struct {
 // identifies it, and whether it is the run's only mutant source.
 type toolMutantSource struct {
 	tool string // the --mutants-from prefix, e.g. "stryker"
+	// reader is the registered mutantsources.Reader for tool.
+	reader mutantsources.Reader
 	// label is the tool and version the report names, e.g.
 	// "stryker@10.0.0": what every record of its mutants says.
 	label  string
@@ -72,7 +71,7 @@ type toolMutantSource struct {
 	// toolOnly is --mutant-model off: the tool's mutants are the whole exam,
 	// so a file it gives nothing to grade has no exam at all.
 	toolOnly bool
-	// covers is the report's files, cleaned as ReadStryker matches them.
+	// covers is the report's files, cleaned as the reader matches them.
 	covers map[string]bool
 }
 
@@ -90,7 +89,7 @@ func resolveMutantsFrom(f mutantsFromFlags, stdout io.Writer) (*toolMutantSource
 	seedText := strings.TrimSpace(f.seed)
 	if len(f.values) == 0 {
 		if mutantSeatOff(f.mutantModel) {
-			return nil, fmt.Errorf("--mutant-model off leaves the run with no mutant source: name a mutant-generator model, or pass --mutants-from <tool>:<report> to grade a mutation tool's mutants instead (known tools: %s)", strings.Join(knownMutantTools, ", "))
+			return nil, fmt.Errorf("--mutant-model off leaves the run with no mutant source: name a mutant-generator model, or pass --mutants-from <tool>:<report> to grade a mutation tool's mutants instead (known tools: %s)", strings.Join(mutantsources.Tools(), ", "))
 		}
 		if seedText != "" {
 			return nil, fmt.Errorf("--tool-sample-seed is set but --mutants-from is not: there is no tool sample to seed")
@@ -102,13 +101,17 @@ func resolveMutantsFrom(f mutantsFromFlags, stdout io.Writer) (*toolMutantSource
 	}
 	var src *toolMutantSource
 	for _, v := range f.values {
-		tool, p, ok := strings.Cut(v, ":")
-		tool = strings.TrimSpace(tool)
+		// <tool>[@<version>]:<report path>. The first ":" ends the tool part,
+		// so a path containing "@" or ":" is the path's; the version is
+		// optional because the report names its own (spec §4.5).
+		head, p, ok := strings.Cut(v, ":")
+		tool, declared, _ := strings.Cut(strings.TrimSpace(head), "@")
 		if !ok || tool == "" || strings.ContainsAny(tool, `/\.`) {
-			return nil, fmt.Errorf("--mutants-from %q: want <tool>:<report path>, with a known tool (%s)", v, strings.Join(knownMutantTools, ", "))
+			return nil, fmt.Errorf("--mutants-from %q: want <tool>[@<version>]:<report path>, with a known tool (%s)", v, strings.Join(mutantsources.Tools(), ", "))
 		}
-		if !knownTool(tool) {
-			return nil, fmt.Errorf("--mutants-from %q: unknown tool %q; known tools: %s", v, tool, strings.Join(knownMutantTools, ", "))
+		reader, known := mutantsources.Lookup(tool)
+		if !known {
+			return nil, fmt.Errorf("--mutants-from %q: unknown tool %q; known tools: %s", v, tool, strings.Join(mutantsources.Tools(), ", "))
 		}
 		if strings.TrimSpace(p) == "" {
 			return nil, fmt.Errorf("--mutants-from %q: no report path after %s:", v, tool)
@@ -120,11 +123,12 @@ func resolveMutantsFrom(f mutantsFromFlags, stdout io.Writer) (*toolMutantSource
 		if err != nil {
 			return nil, fmt.Errorf("--mutants-from %s: %v", v, err)
 		}
-		paths, err := mutantsources.StrykerPaths(report)
+		rpt := mutantsources.Report{Bytes: report}
+		paths, err := reader.Paths(rpt)
 		if err != nil {
 			return nil, fmt.Errorf("--mutants-from %s: %v", v, err)
 		}
-		label, err := mutantsources.StrykerTool(report)
+		label, err := reader.Label(rpt, declared)
 		if err != nil {
 			return nil, fmt.Errorf("--mutants-from %s: %v", v, err)
 		}
@@ -132,7 +136,7 @@ func resolveMutantsFrom(f mutantsFromFlags, stdout io.Writer) (*toolMutantSource
 		for _, rp := range paths {
 			covers[rp] = true
 		}
-		src = &toolMutantSource{tool: tool, label: label, path: p, report: report, sha256: reportSHA256(report), covers: covers, toolOnly: mutantSeatOff(f.mutantModel)}
+		src = &toolMutantSource{tool: tool, reader: reader, label: label, path: p, report: report, sha256: reportSHA256(report), covers: covers, toolOnly: mutantSeatOff(f.mutantModel)}
 	}
 	if seedText != "" {
 		seed, err := strconv.ParseInt(seedText, 0, 64)
@@ -159,15 +163,6 @@ func (s *toolMutantSource) reportKey() string { return "sha256:" + s.sha256 }
 func reportSHA256(b []byte) string {
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
-}
-
-func knownTool(tool string) bool {
-	for _, k := range knownMutantTools {
-		if tool == k {
-			return true
-		}
-	}
-	return false
 }
 
 // formatToolSeed is the one spelling of a sample seed, in the print and in
@@ -204,11 +199,6 @@ func (s *toolMutantSource) checkCoversSome(paths []string) error {
 	return fmt.Errorf("--mutants-from %s:%s covers none of the %d file(s) this run audits (%s); it reports on %s", s.tool, s.path, len(paths), strings.Join(paths, ", "), strings.Join(reported, ", "))
 }
 
-// readStryker is mutantsources.ReadStryker, a variable only so a test can
-// make the reader fail on a covered file (a path no fixture reaches) and
-// follow that error to the record.
-var readStryker = mutantsources.ReadStryker
-
 // toolFileMutants is one file's tool mutants, decided before its run starts.
 type toolFileMutants struct {
 	src *toolMutantSource
@@ -241,7 +231,7 @@ func (s *toolMutantSource) forFile(p string, code []byte, budget int) (toolFileM
 		r.counts = ledger.ToolMutantCounts{Path: path.Clean(p), Tool: s.label, Report: s.reportKey(), Refused: r.none}
 		return r, nil
 	}
-	got, err := readStryker(s.report, map[string][]byte{p: code}, func(string) int { return budget }, s.seed)
+	got, err := s.reader.Read(mutantsources.Report{Bytes: s.report}, map[string][]byte{p: code}, func(string) int { return budget }, s.seed)
 	if err != nil {
 		return r, recordedError{
 			msg:      fmt.Sprintf("--mutants-from %s:%s: %v", s.tool, s.path, err),

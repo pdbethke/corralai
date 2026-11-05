@@ -433,6 +433,7 @@ var printedMetrics = map[string]printedRow{
 	"cmd/corral/mutantset.go:report":                  {Exempt: "count of files written to the --record-mutants file, an output artifact; the mutants themselves are MutantRow"},
 	"cmd/corral/mutants_from.go:toolMutantsLine":      {Fields: []string{"ToolMutantCounts.Taken", "ToolMutantCounts.Survived", "ToolMutantCounts.NoCoverage", "ToolMutantCounts.Killed", "ToolMutantCounts.CompileError", "ToolMutantCounts.Dropped", "ToolMutantCounts.DroppedBy", "ToolMutantCounts.NotRegraded"}},
 	"cmd/corral/mutants_from.go:resolveMutantsFrom":   {Fields: []string{"ToolMutantCounts.Seed"}},
+	"cmd/corral/mutants_from.go:boundReportMutants":   {Fields: []string{"ToolMutantCounts.MutantsTruncated"}},
 	"cmd/corral/mutants_from.go:formatToolSeed":       {Fields: []string{"ToolMutantCounts.Seed"}},
 	"cmd/corral/mutants_from.go:countsByName":         {Fields: []string{"ToolMutantCounts.DroppedBy", "ToolMutantCounts.NotRegraded"}},
 	"cmd/corral/mutants_from.go:forFile":              {Fields: []string{"Row.MutantBudget", "ToolMutantCounts.Taken", "ToolMutantCounts.Dropped"}, Exempt: "error message: wraps the reader's refusal, whose numbers are the report's own"},

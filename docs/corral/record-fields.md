@@ -218,6 +218,25 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `Unrun` | measured |  |
 | `Verdict` | meta | a model's opinion: advisory, signed but not verified as true |
 
+## ReportMutant
+
+| Field | Tier | Note |
+|---|---|---|
+| `ByteSpan` | measured |  |
+| `CoveredBy` | declared | the tool's own claim, read from its report |
+| `CoveredByCount` | declared | the tool's own claim, read from its report |
+| `DurationMS` | declared | the tool's own claim, read from its report |
+| `Fate` | measured |  |
+| `ID` | key |  |
+| `IDSource` | measured |  |
+| `KilledBy` | declared | the tool's own claim, read from its report |
+| `Operator` | declared | the tool's own claim, read from its report |
+| `ReplacementSHA256` | measured |  |
+| `Span` | declared | the tool's own claim, read from its report |
+| `Static` | declared | the tool's own claim, read from its report |
+| `Status` | declared | the tool's own claim, read from its report |
+| `TestsCompleted` | declared | the tool's own claim, read from its report |
+
 ## Review
 
 | Field | Tier | Note |
@@ -484,6 +503,7 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `DroppedBy` | measured |  |
 | `Killed` | declared | the tool's own claim, read from its report |
 | `Match` | measured |  |
+| `MutantsTruncated` | measured |  |
 | `NoCoverage` | declared | the tool's own claim, read from its report |
 | `NotRegraded` | declared | the tool's own claim, read from its report |
 | `Path` | key |  |

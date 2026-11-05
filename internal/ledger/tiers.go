@@ -113,6 +113,13 @@ func buildFieldTiers() map[[2]string]FieldTier {
 	add("ToolMutantCounts", TierKey, "", "Path Report")
 	add("ToolMutantCounts", TierMeasured, "", "Match Units Taken Dropped DroppedBy Seed Refused")
 	add("ToolMutantCounts", TierDeclared, "the tool's own claim, read from its report", "Tool Survived NoCoverage Killed CompileError NotRegraded")
+	add("ToolMutantCounts", TierMeasured, "", "MutantsTruncated")
+	// ReportMutant: one mutant of the tool's report. What the tool said
+	// about it is its claim; how corral located, hashed and used it is
+	// corral's.
+	add("ReportMutant", TierKey, "", "ID")
+	add("ReportMutant", TierMeasured, "", "IDSource ByteSpan ReplacementSHA256 Fate")
+	add("ReportMutant", TierDeclared, "the tool's own claim, read from its report", "Operator Status Span Static TestsCompleted KilledBy CoveredBy CoveredByCount DurationMS")
 
 	// Row: one per audited file.
 	add("Row", TierKey, "", "Repo Commit Path ScanID RunURL StatementSHA256 ParentSHA256 CacheKey PriorDigest ReusedFromScanID")

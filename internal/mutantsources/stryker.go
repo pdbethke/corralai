@@ -10,8 +10,11 @@
 // exactly one thing: choosing which mutants are worth a jail run at all
 // (Survived and NoCoverage), and the rest are counted, not re-graded.
 //
-// It sits below advpool (which will consume it) and imports only adequacy and
-// testgen, so the arrow points one way.
+// It sits below advpool (which will consume it) and imports only adequacy,
+// testgen and ledger, so the arrow points one way. It fills
+// ledger.ReportMutant directly rather than a mirrored type of its own: a
+// field-by-field converter between two copies of one record is where a
+// field gets dropped on the floor.
 package mutantsources
 
 import (
@@ -29,6 +32,7 @@ import (
 	"unicode/utf16"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
+	"github.com/pdbethke/corralai/internal/ledger"
 	"github.com/pdbethke/corralai/internal/testgen"
 )
 
@@ -81,6 +85,10 @@ type FileMutants struct {
 	// Refused is one sentence saying why none of this file's tool mutants
 	// can be used. Taken is empty whenever it is set.
 	Refused string
+	// Reported is every mutant the report holds for the file, in its order,
+	// as the record holds it (ToolMutantCounts.Mutants). Empty on a refused
+	// file: nothing was tied to the audited bytes.
+	Reported []ledger.ReportMutant
 	// Match is how strongly the report was tied to the audited file
 	// (MatchEmbeddedSource, MatchAnchored) and Units the column unit the
 	// reader applied (UnitsUTF16, ...). Both are empty on a refused file:
@@ -162,18 +170,42 @@ type strykerReport struct {
 		Version string `json:"version"`
 	} `json:"framework"`
 	Files map[string]struct {
-		Source  string `json:"source"`
-		Mutants []struct {
-			ID          string `json:"id"`
-			MutatorName string `json:"mutatorName"`
-			Replacement string `json:"replacement"`
-			Status      string `json:"status"`
-			Location    struct {
-				Start strykerPos `json:"start"`
-				End   strykerPos `json:"end"`
-			} `json:"location"`
-		} `json:"mutants"`
+		Source  string                `json:"source"`
+		Mutants []strykerReportMutant `json:"mutants"`
 	} `json:"files"`
+	// TestFiles names the tests killedBy and coveredBy refer to by id. Only
+	// each test's id and name are read; a test file's source is not.
+	TestFiles map[string]struct {
+		Tests []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"tests"`
+	} `json:"testFiles"`
+}
+
+// strykerReportMutant is one mutant as the schema states it: every field
+// the schema defines for a mutant result is parsed, so each is recorded
+// (ledger.ReportMutant) or excluded in writing (excludedFields), never
+// silently dropped. TestEveryParsedFieldIsRecordedOrExcluded holds the two
+// lists together.
+type strykerReportMutant struct {
+	ID          string `json:"id"`
+	MutatorName string `json:"mutatorName"`
+	Replacement string `json:"replacement"`
+	Status      string `json:"status"`
+	Location    struct {
+		Start strykerPos `json:"start"`
+		End   strykerPos `json:"end"`
+	} `json:"location"`
+	StatusReason   string   `json:"statusReason"`
+	Static         *bool    `json:"static"`
+	TestsCompleted *int     `json:"testsCompleted"`
+	KilledBy       []string `json:"killedBy"`
+	CoveredBy      []string `json:"coveredBy"`
+	// Duration is the schema's per-mutant time in milliseconds. StrykerJS
+	// 10 does not write it.
+	Duration    *float64 `json:"duration"`
+	Description string   `json:"description"`
 }
 
 type strykerPos struct {
@@ -213,6 +245,7 @@ func readStryker(reportJSON []byte, files map[string][]byte, budget func(path st
 		return nil, err
 	}
 	tool := strykerTool(rep)
+	names := strykerTestNames(rep)
 
 	audited := make(map[string][]byte, len(files))
 	for p, b := range files {
@@ -239,37 +272,54 @@ func readStryker(reportJSON []byte, files map[string][]byte, budget func(path st
 		fm.Match, fm.Units = MatchEmbeddedSource, UnitsUTF16
 		original := rf.Source
 		lines := strings.Split(original, "\n")
+		lineStarts := lineStartOffsets(lines)
 		fm.Counts = map[string]int{}
 		var candidates []adequacy.Mutant
 		sources := map[string]MutantSource{}
+		// fm.Reported[candidateAt[id]] is the record of candidate id, whose
+		// fate (graded or over-budget) is known only after the sample.
+		fm.Reported = make([]ledger.ReportMutant, 0, len(rf.Mutants))
+		candidateAt := map[string]int{}
 		// seen holds every taken-status id, proven or not, so the first
 		// mutant under an id is the one kept or dropped and a later one
 		// cannot stand in for a first that failed its proof.
 		seen := map[string]bool{}
 		for _, sm := range rf.Mutants {
-			status := recordable(sm.Status)
+			rm := strykerReported(sm, lines, lineStarts, names)
+			// fate records the mutant with what corral did with it; every
+			// path through the loop below calls it exactly once, so the
+			// record and Counts are the same account.
+			fate := func(f string) { rm.Fate = f; fm.Reported = append(fm.Reported, rm) }
+			status := rm.Status
 			fm.Counts[status]++
 			if !takenStatuses[status] {
+				fate("not-taken:" + status)
 				continue
 			}
-			id := strykerMutantID(sm.ID)
+			id := rm.ID
 			if seen[id] {
 				fm.Counts[dropDuplicateID]++
+				fate(dropDuplicateID)
 				continue
 			}
 			seen[id] = true
 			search, replace, ok := strykerHunk(lines, sm.Location.Start, sm.Location.End, sm.Replacement)
 			if !ok {
 				fm.Counts[dropOutOfRange]++
+				fate(dropOutOfRange)
 				continue
 			}
+			rm.ReplacementSHA256 = sha256Hex([]byte(replace))
 			m, why := testgen.ProveHunk(original, id, search, replace)
 			if why != testgen.HunkProven {
 				fm.Counts["dropped:"+string(why)]++
+				fate("dropped:" + string(why))
 				continue
 			}
 			candidates = append(candidates, m)
-			sources[id] = MutantSource{Kind: KindTool, Tool: tool, Operator: recordable(sm.MutatorName), Status: status}
+			sources[id] = MutantSource{Kind: KindTool, Tool: tool, Operator: rm.Operator, Status: status}
+			candidateAt[id] = len(fm.Reported)
+			fate(dropOverBudget) // until the sample takes it
 		}
 		fm.Taken = spreadSample(candidates, n, seed)
 		if d := len(candidates) - len(fm.Taken); d > 0 {
@@ -278,6 +328,7 @@ func readStryker(reportJSON []byte, files map[string][]byte, budget func(path st
 		fm.Sources = make(map[string]MutantSource, len(fm.Taken))
 		for _, m := range fm.Taken {
 			fm.Sources[m.ID] = sources[m.ID]
+			fm.Reported[candidateAt[m.ID]].Fate = "graded"
 		}
 		out[p] = fm
 	}

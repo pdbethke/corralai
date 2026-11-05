@@ -789,3 +789,78 @@ func TestToolMutantsLineSaysTheMatch(t *testing.T) {
 		t.Errorf("line = %q", got)
 	}
 }
+
+// reportMutantsOf is n recorded mutants, each covered by k test names.
+func reportMutantsOf(n, k int) []ledger.ReportMutant {
+	out := make([]ledger.ReportMutant, n)
+	for i := range out {
+		names := make([]string, k)
+		for j := range names {
+			names[j] = "a test whose name is long enough to weigh something " + strings.Repeat("x", j%7)
+		}
+		c := k
+		out[i] = ledger.ReportMutant{ID: "t/stryker/" + strings.Repeat("9", 1+i%5), IDSource: "tool", Status: "Survived",
+			Span: [4]int{i + 1, 1, i + 1, 4}, CoveredBy: names, CoveredByCount: &c, Fate: "graded"}
+	}
+	return out
+}
+
+func encodedLen(t *testing.T, v any) int {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(b)
+}
+
+// A file's mutant list is bounded, and nothing is dropped silently: first
+// every covered_by list gives way to its count, then the list itself is cut,
+// and MutantsTruncated says which happened and how many mutants remain.
+func TestReportMutantsBound(t *testing.T) {
+	fm := func(rs []ledger.ReportMutant) mutantsources.FileMutants {
+		return mutantsources.FileMutants{Path: "pkg/a.ts", Tool: "stryker@10.0.0", Seed: 7, Counts: map[string]int{"Survived": len(rs)}, Reported: rs}
+	}
+
+	small := reportMutantsOf(3, 2)
+	c := toolMutantCounts(fm(small))
+	if len(c.Mutants) != 3 || c.MutantsTruncated != "" || len(c.Mutants[0].CoveredBy) != 2 {
+		t.Errorf("a small list was changed: %d mutants, %q", len(c.Mutants), c.MutantsTruncated)
+	}
+
+	// Over the bound with names, under it with counts.
+	n := 50
+	k := maxReportMutantsBytes / (n * 40)
+	lists := reportMutantsOf(n, k)
+	if encodedLen(t, lists) <= maxReportMutantsBytes {
+		t.Fatalf("fixture too small: %d bytes", encodedLen(t, lists))
+	}
+	c = toolMutantCounts(fm(lists))
+	if len(c.Mutants) != n {
+		t.Fatalf("%d of %d mutants kept, want all once the lists are counts", len(c.Mutants), n)
+	}
+	for _, m := range c.Mutants {
+		if m.CoveredBy != nil || m.CoveredByCount == nil || *m.CoveredByCount != k {
+			t.Fatalf("covered_by not replaced by its count: %d names, count %v", len(m.CoveredBy), m.CoveredByCount)
+		}
+	}
+	if want := "covered_by lists replaced by counts; 50 of 50 mutants recorded"; c.MutantsTruncated != want {
+		t.Errorf("MutantsTruncated = %q, want %q", c.MutantsTruncated, want)
+	}
+	if lists[0].CoveredBy == nil {
+		t.Error("bounding mutated the reader's own slice")
+	}
+
+	// Over the bound even with counts: the list is cut, and says so.
+	many := reportMutantsOf(maxReportMutantsBytes/40, 1)
+	c = toolMutantCounts(fm(many))
+	if got := encodedLen(t, c.Mutants); got > maxReportMutantsBytes {
+		t.Errorf("bounded list encodes to %d bytes, over %d", got, maxReportMutantsBytes)
+	}
+	if len(c.Mutants) == 0 || len(c.Mutants) >= len(many) {
+		t.Fatalf("kept %d of %d", len(c.Mutants), len(many))
+	}
+	if want := "covered_by lists replaced by counts; " + itoa(int64(len(c.Mutants))) + " of " + itoa(int64(len(many))) + " mutants recorded"; c.MutantsTruncated != want {
+		t.Errorf("MutantsTruncated = %q, want %q", c.MutantsTruncated, want)
+	}
+}

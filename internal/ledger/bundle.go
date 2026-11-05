@@ -300,6 +300,53 @@ type ToolMutantCounts struct {
 	// Refused says why none of the file's tool mutants could be used: the
 	// report has no entry for it, or its source is not the audited bytes.
 	Refused string `json:"refused,omitempty"`
+	// Mutants is every mutant the report holds for the file, in the
+	// report's order, whatever happened to it: graded, dropped and why, or
+	// not taken under the tool's status. Absent on a refused account, which
+	// tied nothing to the audited bytes. Bounded per file; see
+	// MutantsTruncated.
+	Mutants []ReportMutant `json:"mutants,omitempty"`
+	// MutantsTruncated says what the per-file bound did to Mutants, as
+	// "covered_by lists replaced by counts; <n> of <m> mutants recorded".
+	// Absent when the whole list fit.
+	MutantsTruncated string `json:"mutants_truncated,omitempty"`
+}
+
+// ReportMutant is one mutant of a mutation tool's report as the record holds
+// it. What the tool said (status, location, which tests covered or killed
+// it) is its claim; the byte span, the replacement hash and the fate are
+// corral's. No free text from the report is here: a test name is kept only
+// when it is a plain, pathless line, and the tool's statusReason never is.
+type ReportMutant struct {
+	// ID is the mutant's id as recorded on its MutantRow: t/<tool>/<id>.
+	ID string `json:"id"`
+	// IDSource is "tool" when the report gave the id, "derived" when the
+	// reader made one.
+	IDSource string `json:"id_source"`
+	Operator string `json:"operator,omitempty"`
+	Status   string `json:"status"`
+	// Span is startLine, startCol, endLine, endCol exactly as the tool
+	// stated them, in the tool's own units (ToolMutantCounts.Units).
+	Span [4]int `json:"span"`
+	// ByteSpan is corral's conversion of Span to byte offsets into the
+	// audited file, start and end-exclusive; nil when it did not convert.
+	ByteSpan *[2]int `json:"byte_span,omitempty"`
+	// ReplacementSHA256 is the sha256 of the REPLACE text of the hunk corral
+	// built for a taken-status mutant; absent for any other.
+	ReplacementSHA256 string `json:"replacement_sha256,omitempty"`
+	Static            *bool  `json:"static,omitempty"`
+	TestsCompleted    *int   `json:"tests_completed,omitempty"`
+	// KilledBy and CoveredBy are test names, each a plain name or a digest
+	// of one. CoveredByCount is how many tests the tool said cover the
+	// mutant, set whenever it said; the bound may drop CoveredBy and keep
+	// the count.
+	KilledBy       []string `json:"killed_by,omitempty"`
+	CoveredBy      []string `json:"covered_by,omitempty"`
+	CoveredByCount *int     `json:"covered_by_count,omitempty"`
+	DurationMS     *int     `json:"duration_ms,omitempty"`
+	// Fate is what corral did with the mutant: "graded", "dropped:<reason>"
+	// or "not-taken:<status>".
+	Fate string `json:"fate"`
 }
 
 // PushedByCertify is the ScanRow.PushedBy of a run's own entry.

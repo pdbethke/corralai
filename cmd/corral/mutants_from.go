@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -300,7 +301,76 @@ func toolMutantCounts(fm mutantsources.FileMutants) ledger.ToolMutantCounts {
 		}
 	}
 	c.Dropped = n(dropped)
+	c.Mutants, c.MutantsTruncated = boundReportMutants(fm.Reported)
 	return c
+}
+
+// maxReportMutantsBytes bounds one file's encoded ToolMutantCounts.Mutants.
+// It is measured, not chosen: on 2026-11-05 the account of REA's
+// src/domain/analysisErrorProjection.ts from its full StrykerJS 10.0.0 report
+// (662 mutants, report sha256 8496b0c1..., testdata/PROVENANCE.md) encoded to
+// 1,801,228 bytes raw and 47,960 gzipped with every covered_by list kept
+// (171,692 raw with the lists as counts); the bound is the next power of two
+// above twice the raw size, so a file twice REA's records whole.
+// mutantsources.TestFullReportRecordSize repeats the measurement.
+const maxReportMutantsBytes = 1 << 22
+
+// boundReportMutants is the file's mutants as the record holds them, within
+// maxReportMutantsBytes, and a sentence saying what the bound did ("" when
+// the whole list fit). Nothing is dropped silently: first every covered_by
+// list gives way to its count (CoveredByCount is already set wherever the
+// tool stated a list), and if that is still over, mutants are cut, the ones
+// corral took to grade or dropped kept before those it never took, each
+// group in the report's order. The reader's slice is not modified.
+func boundReportMutants(rs []ledger.ReportMutant) ([]ledger.ReportMutant, string) {
+	if len(rs) == 0 {
+		return nil, ""
+	}
+	sizes := make([]int, len(rs))
+	total := 1 // "[" ... "]", less the comma the first element does not have
+	for i, r := range rs {
+		sizes[i] = reportMutantLen(r) + 1
+		total += sizes[i]
+	}
+	if total <= maxReportMutantsBytes {
+		return append([]ledger.ReportMutant(nil), rs...), ""
+	}
+	counted := make([]ledger.ReportMutant, len(rs))
+	for i, r := range rs {
+		r.CoveredBy = nil
+		counted[i] = r
+		sizes[i] = reportMutantLen(r) + 1
+	}
+	// Taken-status mutants first, then the rest, each in report order.
+	order := make([]int, 0, len(rs))
+	for pass := 0; pass < 2; pass++ {
+		for i, r := range counted {
+			if strings.HasPrefix(r.Fate, "not-taken:") == (pass == 1) {
+				order = append(order, i)
+			}
+		}
+	}
+	keep := make([]bool, len(rs))
+	kept, size := 0, 1
+	for _, i := range order {
+		if size+sizes[i] > maxReportMutantsBytes {
+			break
+		}
+		keep[i], size, kept = true, size+sizes[i], kept+1
+	}
+	out := make([]ledger.ReportMutant, 0, kept)
+	for i, r := range counted {
+		if keep[i] {
+			out = append(out, r)
+		}
+	}
+	return out, fmt.Sprintf("covered_by lists replaced by counts; %d of %d mutants recorded", kept, len(rs))
+}
+
+// reportMutantLen is r's encoded length in a JSON array.
+func reportMutantLen(r ledger.ReportMutant) int {
+	b, _ := json.Marshal(r) // strings, ints, bools and arrays of them: always marshals
+	return len(b)
 }
 
 // toolMutantsLine is the scan line for a counted file, rendered from the

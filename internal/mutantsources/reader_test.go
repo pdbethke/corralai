@@ -3,6 +3,8 @@
 package mutantsources
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -11,6 +13,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/pdbethke/corralai/internal/ledger"
 )
 
 var updateGolden = flag.Bool("update", false, "rewrite testdata golden files from the current reader")
@@ -168,5 +172,58 @@ func TestStrykerLabelIsTheReportsVersion(t *testing.T) {
 		if err != nil || got != "stryker@10.0.0" {
 			t.Errorf("declared %q: Label = %q, %v", declared, got, err)
 		}
+	}
+}
+
+// TestFullReportRecordSize measures what the record of every reported mutant
+// weighs on the full REA report, raw and gzipped (the ledger stores entries
+// gzipped). cmd/corral's maxReportMutantsBytes was derived from this
+// measurement; rerun it when the record's shape changes.
+func TestFullReportRecordSize(t *testing.T) {
+	reportPath := os.Getenv(fullReportEnv)
+	if reportPath == "" {
+		t.Skipf("%s is unset: set it to the absolute path of the full REA Stryker report (testdata/PROVENANCE.md)", fullReportEnv)
+	}
+	report, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var r struct {
+		Files map[string]struct {
+			Source string `json:"source"`
+		} `json:"files"`
+	}
+	if err := json.Unmarshal(report, &r); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string][]byte{}
+	for p, f := range r.Files {
+		files[p] = []byte(f.Source)
+	}
+	rd, _ := Lookup("stryker")
+	got, err := rd.Read(Report{Bytes: report}, files, budgetOf(40), 20261101)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for p, fm := range got {
+		raw, err := json.Marshal(ledger.ToolMutantCounts{Path: fm.Path, Tool: fm.Tool, Match: fm.Match, Units: fm.Units, Mutants: fm.Reported})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var gz bytes.Buffer
+		w := gzip.NewWriter(&gz)
+		if _, err := w.Write(raw); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		mutants, _ := json.Marshal(fm.Reported)
+		counted := append([]ledger.ReportMutant(nil), fm.Reported...)
+		for i := range counted {
+			counted[i].CoveredBy = nil
+		}
+		countsOnly, _ := json.Marshal(counted)
+		t.Logf("%s: %d mutants; ToolMutantCounts %d bytes raw, %d gzipped; Mutants alone %d raw, %d with covered_by as counts", p, len(fm.Reported), len(raw), gz.Len(), len(mutants), len(countsOnly))
 	}
 }

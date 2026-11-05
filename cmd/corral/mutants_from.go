@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/ledger"
 	"github.com/pdbethke/corralai/internal/mutantsources"
@@ -42,8 +43,11 @@ import (
 // never how it is graded: tool mutants go through the same dev pass, the same
 // proof and the same compile gate as the model's.
 
-// mutantsFromHelp is the flag's text on both commands.
-const mutantsFromHelp = "grade a mutation TOOL's mutants too, as <tool>:<report path> (phase 1 knows `stryker`: a StrykerJS JSON report). The tool's Survived and NoCoverage mutants for each audited file are graded by the same dev pass, proof and compile gate as the model's, capped by the file's mutant budget (a seeded sample, see --tool-sample-seed); its Killed, CompileError and other mutants are counted, not re-graded. A file whose report source is not byte-identical to the audited file has its tool mutants refused, and the scan line says so. With --mutant-model it adds to the model's exam; with --mutant-model off it IS the exam, and a file the report gives nothing to grade is not graded. Refused with --mutants, which already pins the exam. Repeatable, once per tool"
+// mutantsFromHelp is the flag's text on both commands. A function, so the
+// known tools are the registry's at the moment the flag is defined.
+func mutantsFromHelp() string {
+	return "grade a mutation TOOL's mutants too, as `<tool>[@<version>]:<report path>` (the version is optional: the report names its own, and a declared one that contradicts it is refused). Known tools: " + strings.Join(mutantsources.Tools(), ", ") + " (stryker reads a StrykerJS JSON report). The tool's Survived and NoCoverage mutants for each audited file are graded by the same dev pass, proof and compile gate as the model's, capped by the file's mutant budget (a seeded sample, see --tool-sample-seed); its Killed, CompileError and other mutants are counted, not re-graded. A file whose report source is not byte-identical to the audited file has its tool mutants refused, and the scan line says so. With --mutant-model it adds to the model's exam; with --mutant-model off it IS the exam, and a file the report gives nothing to grade is not graded. Refused with --mutants, which already pins the exam. Repeatable, once per tool: several tools' mutants join one exam"
+}
 
 // toolSampleSeedHelp is --tool-sample-seed's text on both commands.
 const toolSampleSeedHelp = "the seed of the over-budget sample of --mutants-from's tool mutants, to replay a recorded run's sample. Absent, a seed is drawn and printed. Refused without --mutants-from"
@@ -86,7 +90,7 @@ func mutantSeatOff(model string) bool {
 // mutant seat is not off: the run as it always was. Every error is a usage
 // error, refused before anything is spent. The seed in use is printed to
 // stdout, drawn or given, as --shadow-seed's draw is.
-func resolveMutantsFrom(f mutantsFromFlags, stdout io.Writer) (*toolMutantSource, error) {
+func resolveMutantsFrom(f mutantsFromFlags, stdout io.Writer) (toolSources, error) {
 	seedText := strings.TrimSpace(f.seed)
 	if len(f.values) == 0 {
 		if mutantSeatOff(f.mutantModel) {
@@ -100,7 +104,8 @@ func resolveMutantsFrom(f mutantsFromFlags, stdout io.Writer) (*toolMutantSource
 	if strings.TrimSpace(f.replay) != "" {
 		return nil, fmt.Errorf("--mutants and --mutants-from both set: --mutants replays a recorded exam whole, so a tool's mutants cannot be added to it — pass one or the other")
 	}
-	var src *toolMutantSource
+	var srcs toolSources
+	seen := map[string]bool{}
 	for _, v := range f.values {
 		// <tool>[@<version>]:<report path>. The first ":" ends the tool part,
 		// so a path containing "@" or ":" is the path's; the version is
@@ -117,7 +122,7 @@ func resolveMutantsFrom(f mutantsFromFlags, stdout io.Writer) (*toolMutantSource
 		if strings.TrimSpace(p) == "" {
 			return nil, fmt.Errorf("--mutants-from %q: no report path after %s:", v, tool)
 		}
-		if src != nil {
+		if seen[tool] {
 			return nil, fmt.Errorf("--mutants-from names %s twice: phase 1 reads one report per tool, given once per tool", tool)
 		}
 		report, err := os.ReadFile(p) // #nosec G304 -- operator-supplied report path, same contract as --mutants
@@ -137,24 +142,31 @@ func resolveMutantsFrom(f mutantsFromFlags, stdout io.Writer) (*toolMutantSource
 		for _, rp := range paths {
 			covers[rp] = true
 		}
-		src = &toolMutantSource{tool: tool, reader: reader, label: label, path: p, report: report, sha256: reportSHA256(report), covers: covers, toolOnly: mutantSeatOff(f.mutantModel)}
+		seen[tool] = true
+		srcs = append(srcs, &toolMutantSource{tool: tool, reader: reader, label: label, path: p, report: report, sha256: reportSHA256(report), covers: covers, toolOnly: mutantSeatOff(f.mutantModel)})
 	}
+	sort.Slice(srcs, func(i, j int) bool { return srcs[i].tool < srcs[j].tool })
 	if seedText != "" {
 		seed, err := strconv.ParseInt(seedText, 0, 64)
 		if err != nil {
 			return nil, fmt.Errorf("--tool-sample-seed %q is not an integer: %v", seedText, err)
 		}
-		src.seed = seed
+		for _, src := range srcs {
+			src.seed = seed
+		}
 		fmt.Fprintf(stdout, "  tool sample seed: %s (given; --tool-sample-seed %s replays the sample)\n", formatToolSeed(seed), formatToolSeed(seed))
-		return src, nil
+		return srcs, nil
 	}
 	var b [8]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		return nil, fmt.Errorf("drawing a tool sample seed: %v", err)
 	}
-	src.seed = int64(binary.LittleEndian.Uint64(b[:]) & math.MaxInt64)
-	fmt.Fprintf(stdout, "  tool sample seed: %s (drawn; --tool-sample-seed %s replays the sample)\n", formatToolSeed(src.seed), formatToolSeed(src.seed))
-	return src, nil
+	seed := int64(binary.LittleEndian.Uint64(b[:]) & math.MaxInt64)
+	for _, src := range srcs {
+		src.seed = seed
+	}
+	fmt.Fprintf(stdout, "  tool sample seed: %s (drawn; --tool-sample-seed %s replays the sample)\n", formatToolSeed(seed), formatToolSeed(seed))
+	return srcs, nil
 }
 
 // reportKey is how the record names the report: "sha256:<hex>" of its
@@ -256,12 +268,6 @@ func (s *toolMutantSource) forFile(p string, code []byte, budget int) (toolFileM
 	r.line = toolMutantsLine(r.counts)
 	if r.noneSaid != "" {
 		r.line += " — " + r.noneSaid
-	}
-	// Beside a generator the tool's sample uses the model's own per-file
-	// cap, so the exam is the two together: said here, where the tool's
-	// share is first known (advpool.MutantBudget.WithTool says it again).
-	if t := len(r.fm.Taken); t > 0 && !s.toolOnly {
-		r.line += fmt.Sprintf(" — with the model's %d under the same per-file cap: %d model + %d tool, an exam of up to %d", budget, budget, t, budget+t)
 	}
 	return r, nil
 }
@@ -488,28 +494,166 @@ func (s *toolMutantSource) preCheck(p string, code []byte) (toolFileMutants, err
 	return s.forFile(p, code, math.MaxInt32)
 }
 
-// apply puts the file's tool mutants on its RunSpec through the door TM-R1
-// names: PresetMutants when the tool is the only source (the replay door,
-// whose bytes-must-match and no-generator behaviour already exist), and
-// ToolMutants beside a generator. One MutantSources map either way. A
-// tool-only file with nothing to grade is refused as no-mutant-source,
-// never handed an empty exam to grade as a measured 1.0 or 0.0. With a
-// generator seat such a file just runs the model's exam.
-func (r toolFileMutants) apply(rs *advpool.RunSpec) error {
-	if r.none != "" {
-		if r.src.toolOnly {
+// toolSources is a run's tool sources, sorted by tool: every mutation tool
+// named by a --mutants-from, whose mutants join one exam so they can be
+// compared on it. nil is a run with no tool source.
+type toolSources []*toolMutantSource
+
+// toolOnly is whether the tools' mutants are the whole exam
+// (--mutant-model off). It is one flag for all sources, set from the one
+// --mutant-model.
+func (ts toolSources) toolOnly() bool { return len(ts) > 0 && ts[0].toolOnly }
+
+// names is the tools, sorted, joined by "+".
+func (ts toolSources) names() string {
+	n := make([]string, len(ts))
+	for i, s := range ts {
+		n[i] = s.tool
+	}
+	return strings.Join(n, "+")
+}
+
+// labels is the tools with their versions as their reports name them,
+// sorted by tool, joined by "+".
+func (ts toolSources) labels() string {
+	n := make([]string, len(ts))
+	for i, s := range ts {
+		n[i] = s.label
+	}
+	return strings.Join(n, "+")
+}
+
+// cacheKey is the sources' part of a verdict's identity: "" for none (a
+// model-only run keys as it always did), exactly the source's own key for
+// one (so cached single-tool verdicts keep being served), and for several
+// the sorted keys joined by "+", which no key contains, so the order the
+// flags were typed in does not change what a verdict is.
+func (ts toolSources) cacheKey() string {
+	keys := make([]string, len(ts))
+	for i, s := range ts {
+		keys[i] = s.cacheKey()
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, "+")
+}
+
+// checkCoversSome refuses any source whose report covers none of the files
+// the run audits: that tool would be silently ignored.
+func (ts toolSources) checkCoversSome(paths []string) error {
+	for _, s := range ts {
+		if err := s.checkCoversSome(paths); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// forFile is each source's account of the file, in tool order, under the
+// same per-file budget each. Beside a generator the exam is the model's
+// share plus every tool's, said once on the LAST source's line, where the
+// shares are all known: "with the model's B under the same per-file cap:
+// B model + T1 tool + T2 tool, an exam of up to B+T1+T2".
+func (ts toolSources) forFile(p string, code []byte, budget int) ([]toolFileMutants, error) {
+	out := make([]toolFileMutants, 0, len(ts))
+	for _, s := range ts {
+		r, err := s.forFile(p, code, budget)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	if n := len(out); n > 0 && !ts.toolOnly() {
+		parts, total := fmt.Sprintf("%d model", budget), budget
+		for _, r := range out {
+			if t := len(r.fm.Taken); t > 0 {
+				parts += fmt.Sprintf(" + %d tool", t)
+				total += t
+			}
+		}
+		if total > budget {
+			out[n-1].line += fmt.Sprintf(" — with the model's %d under the same per-file cap: %s, an exam of up to %d", budget, parts, total)
+		}
+	}
+	return out, nil
+}
+
+// preCheck is each source's pre-check of the file (toolMutantSource.preCheck).
+func (ts toolSources) preCheck(p string, code []byte) ([]toolFileMutants, error) {
+	out := make([]toolFileMutants, 0, len(ts))
+	for _, s := range ts {
+		r, err := s.preCheck(p, code)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, nil
+}
+
+// nothingToGrade is why NO source gives the file anything to grade, as the
+// record says it and as the terminal does; both "" when any source does.
+// One reason per source, joined by "; " (a lone source's reason is its own).
+func nothingToGrade(files []toolFileMutants) (none, noneSaid string) {
+	var rec, said []string
+	for _, f := range files {
+		if f.none == "" {
+			return "", ""
+		}
+		rec, said = append(rec, f.none), append(said, f.noneSaid)
+	}
+	return strings.Join(rec, "; "), strings.Join(said, "; ")
+}
+
+// applyAll puts the files' tool mutants on the file's RunSpec through the
+// door TM-R1 names: PresetMutants when the tools are the only source (the
+// replay door, whose bytes-must-match and no-generator behaviour already
+// exist), and ToolMutants beside a generator, every source's Taken
+// concatenated in tool order and one MutantSources map merged from them. A
+// tool-only file is refused as no-mutant-source only when EVERY source gives
+// it nothing, never handed an empty exam to grade as a measured 1.0 or 0.0;
+// with a generator seat such a file just runs the model's exam. A mutant id
+// taken twice is an error naming both tools: ids carry their tool's
+// "t/<tool>/" prefix, so it cannot happen, and this pins that.
+func applyAll(rs *advpool.RunSpec, files []toolFileMutants) error {
+	if len(files) == 0 {
+		return nil
+	}
+	toolOnly := files[0].src.toolOnly
+	if none, said := nothingToGrade(files); none != "" {
+		if toolOnly {
 			const why = "COULD-NOT-GRADE: --mutant-model off makes the tool the only mutant source, and "
 			return localAuditError{usage: true, scanReason: reposcan.ReasonNoMutantSource,
-				msg: why + r.noneSaid, recorded: why + r.none}
+				msg: why + said, recorded: why + none}
 		}
 		return nil
 	}
-	if r.src.toolOnly {
-		rs.PresetMutants = r.fm.Taken
-	} else {
-		rs.ToolMutants = r.fm.Taken
+	var taken []adequacy.Mutant
+	var sources map[string]mutantsources.MutantSource
+	owner := map[string]string{}
+	for _, f := range files {
+		if f.none != "" {
+			continue
+		}
+		for _, m := range f.fm.Taken {
+			if other, dup := owner[m.ID]; dup {
+				return fmt.Errorf("mutant id %q is taken from both %s and %s", m.ID, other, f.src.tool)
+			}
+			owner[m.ID] = f.src.tool
+		}
+		taken = append(taken, f.fm.Taken...)
+		for id, src := range f.fm.Sources {
+			if sources == nil {
+				sources = map[string]mutantsources.MutantSource{}
+			}
+			sources[id] = src
+		}
 	}
-	rs.MutantSources = r.fm.Sources
+	if toolOnly {
+		rs.PresetMutants = taken
+	} else {
+		rs.ToolMutants = taken
+	}
+	rs.MutantSources = sources
 	return nil
 }
 

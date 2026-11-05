@@ -319,10 +319,10 @@ func TestLocalEntryRecordsToolMutantCounts(t *testing.T) {
 		goal: "Max must return the larger argument", substrate: substrateWorkspace,
 		checkArgv:   []string{"go", "test", "./..."},
 		writerModel: "fakew", mutantModel: "off", criticModel: "off",
-		writerMode: advpool.WriterModeBatched,
-		toolSource: s,
-		toolSink:   func(c ledger.ToolMutantCounts) { sunk = append(sunk, c) },
-		stdout:     io.Discard, stderr: io.Discard,
+		writerMode:  advpool.WriterModeBatched,
+		toolSources: s,
+		toolSink:    func(c ledger.ToolMutantCounts) { sunk = append(sunk, c) },
+		stdout:      io.Discard, stderr: io.Discard,
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -687,11 +687,11 @@ func TestApplysNoEntryRefusalRecordsNoPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, err := s.forFile("pkg/b.go", []byte("package pkg\n"), 5)
+	r, err := s[0].forFile("pkg/b.go", []byte("package pkg\n"), 5)
 	if err != nil {
 		t.Fatal(err)
 	}
-	aerr := r.apply(&advpool.RunSpec{})
+	aerr := applyAll(&advpool.RunSpec{}, []toolFileMutants{r})
 	if aerr == nil || !strings.Contains(aerr.Error(), report) {
 		t.Fatalf("the terminal refusal %v does not name the report path", aerr)
 	}
@@ -701,7 +701,7 @@ func TestApplysNoEntryRefusalRecordsNoPath(t *testing.T) {
 			t.Errorf("recorded detail %q carries %q", d, frag)
 		}
 	}
-	if !strings.Contains(d, s.sha256) || !strings.Contains(d, "no entry for pkg/b.go") {
+	if !strings.Contains(d, s[0].sha256) || !strings.Contains(d, "no entry for pkg/b.go") {
 		t.Errorf("recorded detail %q does not name the report by sha256 and the file", d)
 	}
 }
@@ -715,7 +715,7 @@ func TestToolNoSourceOpenErrorRecordsNoRepoDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	repoDir := filepath.Join(t.TempDir(), pathMarker, "gone")
-	l := &localExecutor{repoDir: repoDir, toolSource: s}
+	l := &localExecutor{repoDir: repoDir, toolSources: s}
 	_, terr := l.toolNoSource("pkg/a.go")
 	if terr == nil || !strings.Contains(terr.Error(), repoDir) {
 		t.Fatalf("the terminal error %v does not name the checkout", terr)
@@ -743,10 +743,11 @@ func TestTheCombinedExamSizeIsSaid(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		r, err := s.forFile("pkg/a.go", []byte(toolFixtureSrc), 5)
+		rr, err := s.forFile("pkg/a.go", []byte(toolFixtureSrc), 5)
 		if err != nil {
 			t.Fatal(err)
 		}
+		r := rr[0]
 		said := strings.Contains(r.line, "5 model + 1 tool") && strings.Contains(r.line, "up to 6")
 		if model == "m" && !said {
 			t.Errorf("both sources: scan line %q does not say the combined exam size", r.line)

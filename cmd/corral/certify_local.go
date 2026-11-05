@@ -151,7 +151,7 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 	priorFlag := fs.String("prior", "", "what earlier runs already tried, so this run plants DIFFERENT faults: a corral-mutants document (see --record-mutants), a ledger directory (`.corral/ledger`, the record every --repo run and review writes), or a directory holding any number of corral-mutants documents — a document brings the hunks, a ledger the outcomes, merged per edit. Applied only to a file whose bytes are EXACTLY what the prior was recorded against; a file the prior knows under other bytes gets none, and the report says so. A run handed a prior sits a different exam from one without — the verdict, the ledger and the signed statement carry priorsApplied and the prior's digest, and the digest is in the cache key, so a repeat audit never reads as the tests changing when only the exam did")
 	mutantsFlag := fs.String("mutants", "", "REPLAY a recorded mutant set (see --record-mutants) instead of generating one: --code is graded against exactly the mutants recorded for it, and no mutant-generator model call is made. Refused (exit 2) if the file is absent from the set or its bytes have changed since it was recorded — a mutant is a single-point edit of specific bytes, and re-applying it to different ones grades an exam nobody wrote. Reads a corral-mutants-2 document, or an older corral-mutants-1 one, whose whole-file mutants still replay byte-for-byte.")
 	var mutantsFromFlag stringSlice
-	fs.Var(&mutantsFromFlag, "mutants-from", mutantsFromHelp)
+	fs.Var(&mutantsFromFlag, "mutants-from", mutantsFromHelp())
 	toolSeedFlag := fs.String("tool-sample-seed", "", toolSampleSeedHelp)
 	recordMutantsFlag := fs.String("record-mutants", "", "write the mutants this run actually GRADED to this file, as a replayable corral-mutants-2 document — each mutant its SEARCH/REPLACE hunk, tied to the sha256 of the source it is an edit of. Mutants are authored by a model, so an ordinary run re-draws the exam every time; pin the set and a later comparison measures the thing you changed instead of generator variance. Written even when the verdict is needs-review. A v2 document re-recorded from a --mutants replay of an older corral-mutants-1 set contains that set's WHOLE-FILE entries, not hunks — the run graded what was recorded, and re-recording it does not manufacture anchors it never had")
 	var bindDirFlag stringSlice
@@ -181,7 +181,7 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 	}
 	// --mutants-from and --mutant-model off, checked against each other and
 	// against --mutants before anything is read or spent.
-	toolSource, tsErr := resolveMutantsFrom(mutantsFromFlags{
+	toolSources, tsErr := resolveMutantsFrom(mutantsFromFlags{
 		values: mutantsFromFlag, seed: *toolSeedFlag, mutantModel: *mutantModel, replay: *mutantsFlag,
 	}, stdout)
 	if tsErr != nil {
@@ -425,25 +425,25 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 	// tool-only run must have something in it to grade. Both are refused
 	// here, before the jail, a store or a model is touched, against the same
 	// key and bytes the audit will use.
-	if toolSource != nil {
+	if len(toolSources) > 0 {
 		toolKey, toolPath := localMutantSetKey(*repoDirFlag, *codePath)
-		if err := toolSource.checkCoversSome([]string{toolKey}); err != nil {
+		if err := toolSources.checkCoversSome([]string{toolKey}); err != nil {
 			fmt.Fprintf(stderr, "corral certify --local: %v\n", err)
 			return 2
 		}
-		if toolSource.toolOnly {
+		if toolSources.toolOnly() {
 			src, rerr := os.ReadFile(toolPath) // #nosec G304 -- the file this run was asked to audit
 			if rerr != nil {
 				fmt.Fprintf(stderr, "corral certify --local: --mutants-from: reading %s: %v\n", *codePath, rerr)
 				return 2
 			}
-			pre, nerr := toolSource.preCheck(toolKey, src)
+			pre, nerr := toolSources.preCheck(toolKey, src)
 			if nerr != nil {
 				fmt.Fprintf(stderr, "corral certify --local: %v\n", nerr)
 				return 2
 			}
-			if pre.none != "" {
-				fmt.Fprintf(stderr, "corral certify --local: COULD-NOT-GRADE: --mutant-model off makes the tool the only mutant source, and %s — nothing was spent\n", pre.noneSaid)
+			if none, said := nothingToGrade(pre); none != "" {
+				fmt.Fprintf(stderr, "corral certify --local: COULD-NOT-GRADE: --mutant-model off makes the tool the only mutant source, and %s — nothing was spent\n", said)
 				return 2
 			}
 		}
@@ -552,10 +552,10 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 		repo: subjectRepo, commit: subjectCommit, subjectResolved: true,
 
 		presetMutants: presetMutants, mutantSink: mutantSink,
-		toolSource: toolSource,
-		seedSink:   func(s []seedSkip) { seedSkipped = s },
-		toolSink:   func(c ledger.ToolMutantCounts) { toolCounts = append(toolCounts, c) },
-		prior:      loadedPrior,
+		toolSources: toolSources,
+		seedSink:    func(s []seedSkip) { seedSkipped = s },
+		toolSink:    func(c ledger.ToolMutantCounts) { toolCounts = append(toolCounts, c) },
+		prior:       loadedPrior,
 
 		matrix: *matrixFlag, record: rec, bugCatchDB: bugCatchDBPath, criticScoreDB: criticScoreDBPath,
 		mutantAttemptsDB: mutantAttemptsDBPath,
@@ -750,11 +750,11 @@ type localAuditInput struct {
 	// bytes about to be audited — see adequacy.MutantSetFile.MutantsFor,
 	// which is the only thing that can prove it.
 	presetMutants []adequacy.Mutant
-	// toolSource is --mutants-from: a mutation tool's report whose mutants
+	// toolSources is --mutants-from: a mutation tool's report whose mutants
 	// for THIS file are read, under the file's own budget, once its bytes
 	// and budget are known (auditOneFile), and joined to the exam or made
 	// the exam (toolFileMutants.apply). nil is a model-only run.
-	toolSource *toolMutantSource
+	toolSources toolSources
 	// toolNote, when non-nil, is also handed the file's tool-mutants scan
 	// line: a repo scan discards each file's stdout and prints progress
 	// through its own note instead.
@@ -1683,7 +1683,7 @@ func resolveAuditRoles(in localAuditInput, stderr io.Writer) (auditRoles, error)
 	// operator override that collapses critic==writer must fail fast, not after
 	// opening stores and a jail.
 	writer, mutant, critic, shadow, shadowWriter := resolveRoleModels(in)
-	if err := herdNotConfiguredErr(in.cmdName, writer, mutant, in.criticModel, in.toolSource != nil && in.toolSource.toolOnly); err != nil {
+	if err := herdNotConfiguredErr(in.cmdName, writer, mutant, in.criticModel, in.toolSources.toolOnly()); err != nil {
 		return r, err
 	}
 	assign := advpool.RoleAssignment{
@@ -2215,25 +2215,27 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 	// calls it again on this spec, so the two cannot disagree), decided
 	// before the run starts so they join the exam the dev pass grades.
 	toolShare := 0 // the exam's tool mutants beside a generator seat
-	if in.toolSource != nil {
+	if len(in.toolSources) > 0 {
 		_, toolBudget := advpool.PlanShards(sigs, rs)
-		tm, terr := in.toolSource.forFile(codeKey, code, toolBudget.Total)
+		tms, terr := in.toolSources.forFile(codeKey, code, toolBudget.Total)
 		if terr != nil {
 			// terr's RecordedDetail (the report by sha256) rides on causes.
 			return zero, auditUsageErr("%v", terr)
 		}
-		fmt.Fprintln(stdout, tm.line)
-		if in.toolNote != nil {
-			in.toolNote(tm.line)
+		for _, tm := range tms {
+			fmt.Fprintln(stdout, tm.line)
+			if in.toolNote != nil {
+				in.toolNote(tm.line)
+			}
+			if in.toolSink != nil {
+				in.toolSink(tm.counts)
+			}
+			if !in.toolSources.toolOnly() {
+				toolShare += len(tm.fm.Taken)
+			}
 		}
-		if in.toolSink != nil {
-			in.toolSink(tm.counts)
-		}
-		if aerr := tm.apply(&rs); aerr != nil {
+		if aerr := applyAll(&rs, tms); aerr != nil {
 			return zero, aerr
-		}
-		if !in.toolSource.toolOnly {
-			toolShare = len(tm.fm.Taken)
 		}
 	}
 
@@ -2246,10 +2248,10 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 	// and the tool beside a model when both grade.
 	generatorSeat := mutant
 	switch {
-	case in.toolSource != nil && in.toolSource.toolOnly:
-		generatorSeat = "off (" + in.toolSource.tool + " mutants only)"
-	case in.toolSource != nil:
-		generatorSeat = mutant + " + " + in.toolSource.tool + " mutants"
+	case in.toolSources.toolOnly():
+		generatorSeat = "off (" + in.toolSources.names() + " mutants only)"
+	case len(in.toolSources) > 0:
+		generatorSeat = mutant + " + " + in.toolSources.names() + " mutants"
 	}
 	fmt.Fprintf(stdout, "auditing %s against its own tests — mutant-generator=%s test-writer=%s test-critic=%s\n",
 		in.codePath, generatorSeat, writer, critic)
@@ -2288,7 +2290,7 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 	}
 	// A replay grades a recorded exam, so it has no budget to disclose; a
 	// tool-only exam does, because the budget capped the tool's sample.
-	if rs.PresetMutants == nil || in.toolSource != nil {
+	if rs.PresetMutants == nil || len(in.toolSources) > 0 {
 		fmt.Fprintf(stdout, "mutants: %s\n", budget.WithTool(toolShare))
 	}
 	// len(shards) is the shadow seat count too — one challenger per PRIMARY

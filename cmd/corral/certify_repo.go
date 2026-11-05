@@ -1663,13 +1663,13 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	}
 	verdictCache := newLedgerCache(verdictCacheDir, stderr)
 	results = reposcan.Scan(auditCtx, jobs, ex, verdictCache, workers)
-	// A served file ran no audit, so its tool account comes from the entry
-	// that earned its verdict (ledgerCache.toolAccount).
+	// A served file ran no audit, so its tool accounts, one per tool, come
+	// from the entry that earned its verdict (ledgerCache.toolAccounts).
 	for _, r := range results {
 		if !r.CacheHit || ex == nil {
 			continue
 		}
-		if acc, ok := verdictCache.toolAccount(r.Job.CacheKey); ok {
+		for _, acc := range verdictCache.toolAccounts(r.Job.CacheKey) {
 			ex.toolCounts.add(acc)
 		}
 	}

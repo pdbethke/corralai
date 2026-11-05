@@ -875,3 +875,157 @@ func TestReportMutantsBound(t *testing.T) {
 		t.Errorf("MutantsTruncated = %q, want %q", c.MutantsTruncated, want)
 	}
 }
+
+// --- ruling R10, C1 --------------------------------------------------------
+
+// relabeledStryker is stryker under another tool name: the same report read
+// the same way, every id and label renamed, so two of them are two tools
+// grading one file with mutants that do not collide.
+type relabeledStryker struct{ tool string }
+
+func (r relabeledStryker) Tool() string { return r.tool }
+func (r relabeledStryker) Paths(rep mutantsources.Report) ([]string, error) {
+	s, _ := mutantsources.Lookup("stryker")
+	return s.Paths(rep)
+}
+func (r relabeledStryker) Label(mutantsources.Report, string) (string, error) {
+	return r.tool + "@1.0.0", nil
+}
+func (r relabeledStryker) Read(rep mutantsources.Report, files map[string][]byte, budget func(string) int, seed int64) (map[string]mutantsources.FileMutants, error) {
+	s, _ := mutantsources.Lookup("stryker")
+	got, err := s.Read(rep, files, budget, seed)
+	if err != nil {
+		return nil, err
+	}
+	label := r.tool + "@1.0.0"
+	rename := func(id string) string { return "t/" + r.tool + "/" + strings.TrimPrefix(id, "t/stryker/") }
+	for p, fm := range got {
+		fm.Tool = label
+		for i := range fm.Taken {
+			fm.Taken[i].ID = rename(fm.Taken[i].ID)
+		}
+		src := map[string]mutantsources.MutantSource{}
+		for id, ms := range fm.Sources {
+			ms.Tool = label
+			src[rename(id)] = ms
+		}
+		fm.Sources = src
+		for i := range fm.Reported {
+			fm.Reported[i].ID = rename(fm.Reported[i].ID)
+		}
+		got[p] = fm
+	}
+	return got, nil
+}
+
+// twoToolRunsTwice runs one file under two relabeled-stryker tools twice on
+// one checkout with the verdict cache on, so the second run is served from
+// the first's entry. It returns both entries and what each run said.
+func twoToolRunsTwice(t *testing.T) ([]auditpush.LedgerEntry, []string) {
+	t.Helper()
+	noKeys(t)
+	withMachineLedger(t)
+	wiredAgent(t, "fakew", "", toolFixtureWriterTest)
+	t.Cleanup(mutantsources.Register(relabeledStryker{"alpha"}))
+	t.Cleanup(mutantsources.Register(relabeledStryker{"zeta"}))
+	root, report := toolFixtureRepo(t, toolFixtureSrc)
+	goals := writeGoals(t, t.TempDir(), `{"pkg/a.go": "Max must return the larger argument"}`)
+	noPrior := t.TempDir()
+	run := func() string {
+		var out, errb bytes.Buffer
+		code := runCertifyRepo([]string{
+			"--repo", root, "--goals", goals,
+			"--writer-model", "fakew", "--mutant-model", "off", "--critic-model", "off",
+			"--mutants-from", "alpha:" + report, "--mutants-from", "zeta:" + report,
+			"--tool-sample-seed", "7",
+			"--substrate", substrateWorkspace, "--whole-suite", "--prior", noPrior,
+			"--", "go", "test", "./...",
+		}, &out, &errb)
+		if code != 0 {
+			t.Fatalf("exit %d\n%s%s", code, out.String(), errb.String())
+		}
+		return out.String() + errb.String()
+	}
+	said := []string{run(), run()}
+	entries, err := auditpush.ReadLedgerDir(filepath.Join(root, ".corral", "ledger"))
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("want two entries, got %d (%v)", len(entries), err)
+	}
+	return entries, said
+}
+
+// Two tools on one file, through the real --repo path: the entry's scan row
+// carries both tools' accounts for the file and its mutant rows name both
+// tools, on a fresh run and again when the verdict is served from the cache.
+// The cache leg is the one this was written for: a served file once kept
+// only the last tool's account.
+func TestTwoToolsOneFileKeepBothAccountsThroughTheCache(t *testing.T) {
+	entries, said := twoToolRunsTwice(t)
+	for i, leg := range []string{"fresh", "cache hit"} {
+		b := entries[i].Bundle
+		hit := false
+		for _, f := range b.Files {
+			hit = hit || f.CacheHit
+		}
+		if hit != (i == 1) {
+			t.Fatalf("%s: cache hit = %v\n%s", leg, hit, said[i])
+		}
+		counts, err := b.Scan.ToolMutants.Decode()
+		if err != nil {
+			t.Fatalf("%s: tool_mutants %q: %v", leg, b.Scan.ToolMutants, err)
+		}
+		tools := map[string]bool{}
+		for _, c := range counts {
+			if c.Path == "pkg/a.go" {
+				tools[c.Tool] = true
+			}
+		}
+		if len(counts) != 2 || !tools["alpha@1.0.0"] || !tools["zeta@1.0.0"] {
+			raw, _ := json.Marshal(counts)
+			t.Errorf("%s: pkg/a.go accounts = %s, want one from each of alpha@1.0.0 and zeta@1.0.0", leg, raw)
+		}
+		named := map[string]bool{}
+		for _, m := range b.Mutants {
+			named[m.SourceTool] = true
+		}
+		if !named["alpha@1.0.0"] || !named["zeta@1.0.0"] {
+			t.Errorf("%s: mutant rows name tools %v, want both", leg, named)
+		}
+	}
+}
+
+// The two-tool form of TestAVerdictCacheHitKeepsTheToolAccount: the served
+// run's scan row is the earning run's, both tools' accounts included, and
+// both tools' mutant rows are written again.
+func TestAVerdictCacheHitKeepsEveryToolsAccount(t *testing.T) {
+	entries, said := twoToolRunsTwice(t)
+	first, again := entries[0].Bundle, entries[1].Bundle
+	hit := false
+	for _, f := range again.Files {
+		hit = hit || f.CacheHit
+	}
+	if !hit {
+		t.Fatalf("the second run was not a cache hit:\n%s", said[1])
+	}
+	if first.Scan.ToolMutants == "" || again.Scan.ToolMutants != first.Scan.ToolMutants {
+		t.Errorf("cache-hit tool_mutants = %q, want the first run's %q", again.Scan.ToolMutants, first.Scan.ToolMutants)
+	}
+	if len(again.Mutants) != len(first.Mutants) || len(again.Mutants) != 2 {
+		t.Errorf("cache-hit mutant rows = %+v, want the first run's two", again.Mutants)
+	}
+}
+
+// toolAccountsByPath keeps every account a path has, in the row's order;
+// keyed to one account, a later tool's replaced an earlier one's.
+func TestToolAccountsByPathKeepsEveryTool(t *testing.T) {
+	text, err := ledger.EncodeJSONText([]ledger.ToolMutantCounts{
+		{Path: "a.ts", Tool: "alpha@1"}, {Path: "a.ts", Tool: "zeta@1"}, {Path: "b.ts", Tool: "alpha@1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := toolAccountsByPath(text)
+	if len(got["a.ts"]) != 2 || got["a.ts"][0].Tool != "alpha@1" || got["a.ts"][1].Tool != "zeta@1" || len(got["b.ts"]) != 1 {
+		t.Errorf("toolAccountsByPath = %+v", got)
+	}
+}

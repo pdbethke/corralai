@@ -43,10 +43,12 @@ type ledgerCache struct {
 type cachedVerdict struct {
 	verdict    advpool.Verdict
 	computedAt time.Time
-	// toolAccount is the file's account of the --mutants-from report, read
-	// from the SAME entry the verdict is served from (its ScanRow.
-	// ToolMutants, by path); nil when that entry recorded none.
-	toolAccount *ledger.ToolMutantCounts
+	// toolAccounts are the file's accounts of the --mutants-from reports,
+	// one per tool, read from the SAME entry the verdict is served from (its
+	// ScanRow.ToolMutants, by path), in that entry's order; none when that
+	// entry recorded none. A slice because a several-tool run records one
+	// account per tool for the same path.
+	toolAccounts []ledger.ToolMutantCounts
 }
 
 func newLedgerCache(dir string, stderr io.Writer) *ledgerCache {
@@ -78,7 +80,7 @@ func newLedgerCache(dir string, stderr io.Writer) *ledgerCache {
 			if r.ComputedAt != nil && !r.ComputedAt.IsZero() {
 				at = *r.ComputedAt
 			}
-			c.byKey[r.CacheKey] = cachedVerdict{verdict: v, computedAt: at, toolAccount: accounts[r.Path]}
+			c.byKey[r.CacheKey] = cachedVerdict{verdict: v, computedAt: at, toolAccounts: accounts[r.Path]}
 		}
 	}
 	return c
@@ -137,36 +139,34 @@ func oldestReuse(results []reposcan.FileResult) (time.Time, bool) {
 
 func (c *ledgerCache) Put(string, reposcan.FileResult) {}
 
-// toolAccount is the tool account recorded beside the verdict served under
-// cacheKey. A served file ran no audit, so nothing handed its account to the
+// toolAccounts are the tool accounts, one per tool, recorded beside the
+// verdict served under cacheKey. A served file ran no audit, so nothing handed its account to the
 // scan's sink, yet its tool-sourced mutant rows are written from the served
 // verdict; the account comes from the entry that earned that verdict, so the
 // rows and the account on one entry always describe the same exam. It is
 // carried, not recomputed: recomputing would re-derive the file's budget
 // outside the audit, a second derivation of a recorded number that could
 // drift from the first.
-func (c *ledgerCache) toolAccount(cacheKey string) (ledger.ToolMutantCounts, bool) {
+func (c *ledgerCache) toolAccounts(cacheKey string) []ledger.ToolMutantCounts {
 	if c == nil {
-		return ledger.ToolMutantCounts{}, false
+		return nil
 	}
-	hit, ok := c.byKey[cacheKey]
-	if !ok || hit.toolAccount == nil {
-		return ledger.ToolMutantCounts{}, false
-	}
-	return *hit.toolAccount, true
+	return c.byKey[cacheKey].toolAccounts
 }
 
-// toolAccountsByPath reads a scan row's ToolMutants text by path. A text
-// that does not parse yields none: the cache fails closed on what it cannot
-// read, and the served file's account is then absent, never guessed.
-func toolAccountsByPath(text ledger.JSONText[[]ledger.ToolMutantCounts]) map[string]*ledger.ToolMutantCounts {
+// toolAccountsByPath reads a scan row's ToolMutants text by path, every
+// account a path has (one per tool on a several-tool run), in the row's
+// order. A text that does not parse yields none: the cache fails closed on
+// what it cannot read, and the served file's accounts are then absent,
+// never guessed.
+func toolAccountsByPath(text ledger.JSONText[[]ledger.ToolMutantCounts]) map[string][]ledger.ToolMutantCounts {
 	counts, err := text.Decode()
 	if err != nil || len(counts) == 0 {
 		return nil
 	}
-	out := make(map[string]*ledger.ToolMutantCounts, len(counts))
-	for i := range counts {
-		out[counts[i].Path] = &counts[i]
+	out := make(map[string][]ledger.ToolMutantCounts, len(counts))
+	for _, c := range counts {
+		out[c.Path] = append(out[c.Path], c)
 	}
 	return out
 }

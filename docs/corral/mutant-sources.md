@@ -96,10 +96,23 @@ for a mutant corral took, `static`, `tests_completed`, `killed_by` and `covered_
 tool's test ids, `covered_by_count`, duration, and `fate`. The tool's claims (status, spans,
 which tests killed or covered) are declared; the byte span, replacement hash and fate are
 corral's. Test names are held once per file in `ToolMutantCounts.Tests` (id to name), only for
-ids some recorded mutant refers to. A name that contains a path, an email address or a control
-character, or is over 256 bytes, is recorded as a digest of it.
+ids some recorded mutant refers to. A name is recorded as a digest of it when it is over 256
+bytes, is not valid UTF-8, holds a newline, tab or other control character, starts with `/` or
+`~`, or contains any of: an email-like token; two slashes around a segment with no space in it
+(`/x/`, anywhere, so `/home/u/...`, `file:///...`, `` `/x/y` ``, `*/x/y` and `foo/x/y` are all
+caught); `~/`; a backslash pair (`\\server\share`, a UNC path); `file:` in any case; or a drive
+letter (`C:\`, `C:/`) not inside a word. Known shapes it still lets through: a one-segment
+absolute path with no second slash (`reads /etc`) and a path written with single backslashes
+(`dir\file`). It errs toward digesting, so some harmless names (`rel/path/to/x`, a URL with a
+path) become digests. A digest is `not-a-plain-name-` and the first 16 hex characters of the
+name's sha256, unsalted: it tells two names apart and keeps the same name the same, but anyone
+who can guess a name can confirm it by hashing their guess.
 
-Fields the reader parses and does not record, each for a stated reason:
+Each account also records the report's own `schemaVersion` and its mutation-score `thresholds`
+(`high`, `low`, `break`) as declared values; a `null` break is recorded absent.
+
+Report fields not recorded, each for a stated reason (some are parsed and dropped, the rest are
+never parsed):
 
 | Stryker field | Why it is not recorded |
 |---|---|
@@ -108,9 +121,14 @@ Fields the reader parses and does not record, each for a stated reason:
 | `projectRoot` | a host path on the machine that ran the tool |
 | `config` | the operator's whole configuration, paths and commands |
 | `framework.branding` | the tool's logo and homepage; describes no run |
+| `framework.dependencies` | the tool's plugin packages; their names hold `/`, and the version that made the mutants is in `Tool` |
+| `files.language` | the tool's language label; the record's language is corral's own (`Row.Lang`), which chose the runner |
+| `testFiles.source` | the test files' whole source text: the developer's code, and free text no filter makes safe |
 
 A test fails on any parsed field that is neither recorded nor on this list
-(`TestEveryParsedFieldIsRecordedOrExcluded`).
+(`TestEveryParsedFieldIsRecordedOrExcluded`), and on any key of the committed real reports
+(the trimmed fixture and the full REA report under `internal/mutantsources/testdata/`) that is
+neither parsed nor on it (`TestEveryFixtureKeyIsParsedOrExcluded`).
 
 ### The size bound
 
@@ -127,6 +145,11 @@ and the `Tests` names.
 
 The verdict cache key includes the tool, the report's sha256 and the seed, so a
 different report or sample is a different exam.
+
+A file whose verdict is served from the cache ran no audit, so its tool accounts (one per tool)
+are the ones recorded on the ledger entry that earned the verdict. An entry written before
+`Mutants`, `Match` and `Units` were recorded has none of them, so a verdict served from such an
+entry carries an account without them.
 
 ## The measured comparison (2026-11-01, one file)
 

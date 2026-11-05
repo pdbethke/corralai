@@ -367,9 +367,10 @@ func TestRecordableNameRefusesPathsAndNewlines(t *testing.T) {
 	}
 	for _, s := range []string{"suite > reports EACCES", strings.Repeat("n", 256), "distinguishes ünicode names", "a/b split",
 		"fetches http://example.test", "keeps @scope/pkg names",
-		// One segment after a slash and no second slash: not caught, a
-		// disclosed limit (docs/corral/mutant-sources.md).
-		"reads /etc"} {
+		// One segment after a slash and no second slash, and a path in
+		// single backslashes: not caught, disclosed limits
+		// (docs/corral/mutant-sources.md).
+		"reads /etc", `reads dir\file`} {
 		if got := recordableName(s); got != s {
 			t.Errorf("recordableName(%q) = %q, want it unchanged", s, got)
 		}

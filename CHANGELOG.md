@@ -57,6 +57,10 @@ history of any release, `git log v0.3.4..v0.3.5`.
   is ungraded, since those seats could have proven more.
 - `certify --repo` now prints the `kills confirmed` line in each file's
   block; only `certify --local` printed it.
+- The writer line said ungraded seats' survivors "were never attempted". The
+  count is of seats whose test never graded, and most of those seats tried and
+  failed: on REA (try 16) all 8 had been tried three times. The line now reads
+  `N seats ungraded — no test from those seats graded`.
 
 ## [v1.0.0-rc.30] — 2026-11-01
 

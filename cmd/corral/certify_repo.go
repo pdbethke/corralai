@@ -7096,10 +7096,16 @@ func writerModeDisclosure(mode string, calls, seatsUngraded int, attempts *advpo
 	}
 	// Partial failure, said out loud. Neither WRITER FAILED nor TEST UNSOUND
 	// fires when SOME seats graded, so without this a file where three of
-	// twenty-four survivors were never actually attempted reads exactly like
-	// one where all twenty-four were.
+	// twenty-four seats produced no grading test reads exactly like one where
+	// all twenty-four did.
+	//
+	// "Ungraded" is all the count measures: no test from the seat graded. A
+	// seat that tried three times and never compiled counts the same as one
+	// the deadline cut before it started, so the line must not say which.
+	// It said "never attempted" until REA try 16 printed that over 8 seats
+	// that had each been tried three times.
 	if seatsUngraded > 0 {
-		return fmt.Sprintf("writer: %s (%d %s, %d seats ungraded — those survivors were never attempted, so the proven count is over the rest)%s",
+		return fmt.Sprintf("writer: %s (%d %s, %d seats ungraded — no test from those seats graded, so the proven count is over the rest)%s",
 			mode, calls, unit, seatsUngraded, attemptsNote)
 	}
 	return fmt.Sprintf("writer: %s (%d %s)%s", mode, calls, unit, attemptsNote)

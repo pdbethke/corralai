@@ -89,6 +89,15 @@ test.
 > evidence handling around that loop: grading only by execution in a sandbox,
 > the hash-linked ledger, and an advisory critic from a different model.
 
+> **Correction (2026-11-05):** the line quoted above, `15 seats ungraded — never
+> attempted`, said more than corral measured, and so does "never attempted" in the
+> account of the run. The count is of writer seats whose test never graded. A seat
+> that tried and failed counts the same as one the deadline stopped before it began.
+> On this run, which hit its per-file deadline while writing tests, some of the 15 may
+> never have started, but the count cannot say how many. A later run on another
+> repository printed the same words over 8 seats that had each been tried three times.
+> Corral now prints `seats ungraded — no test from those seats graded`.
+
 **A measurement of how alike two models are, instead of an assumption.** The
 second-model-as-reviewer pattern is now everywhere; every serious agent
 pipeline runs one model as a check on another. We have not found anyone who

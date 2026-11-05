@@ -1,0 +1,131 @@
+---
+title: "Auditing REA: the proofs, and what it found in us"
+description: "Three signed audits of morluto/rea, a TypeScript project with its own Stryker setup: survivors proven by authored tests on two files, a head-to-head with Stryker on the same file, and corral grading Stryker's own mutants. Getting there found nine defects in corral, each by running it, fixed in four pull requests."
+pubDate: 2026-11-05
+draft: false
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+*Field note. Every number here comes from a signed entry on the
+[`corral/ledger`](https://github.com/pdbethke/corralai/tree/corral/ledger/scans)
+branch, or from a Stryker run whose report and configs are described where it
+appears. The fixes are named by their pull requests.*
+
+## Why REA
+
+[REA](https://github.com/morluto/rea) is an MCP server and CLI for coding agents
+to reverse-engineer apps and binaries. It is MIT-licensed TypeScript tested with
+vitest, and on 2026-11-05 the GitHub API reported 433,437 stars. Two things made
+it the audit we wanted. It is a real project that nobody wrote for us, and it
+already runs [Stryker](https://stryker-mutator.io/), the established mutation
+tool for JavaScript and TypeScript, in its own CI. That means a corral result on
+REA can be set beside a mature tool's result on the same file and the same tests,
+instead of beside nothing.
+
+## What is on the record
+
+| Ledger entry | File | REA commit | Kill rate | Survivors | Proven |
+|---|---|---|---|---|---|
+| [160](https://github.com/pdbethke/corralai/blob/corral/ledger/scans/20261026T201036Z-87a5be3000b7-64216416bf74.json.gz) (2026-10-26) | `src/application/reverse/ReverseEngineeringService.ts` | `87a5be3` | 0.71 (27 of 38) | 11 | 7 |
+| [163](https://github.com/pdbethke/corralai/blob/corral/ledger/scans/20261101T194309Z-aa48d494e972-eb54ee028a79.json.gz) (2026-11-01) | `src/domain/analysisErrorProjection.ts` | `aa48d49` | 0.46 (18 of 39) | 21 | 17 |
+| [167](https://github.com/pdbethke/corralai/blob/corral/ledger/scans/20261105T153215Z-aa48d494e972-62f5a6da58de.json.gz) (2026-11-05) | `src/domain/analysisErrorProjection.ts` | `aa48d49` | 0.42 (30 of 71) | 41 | 30 |
+
+A survivor is a planted fault that REA's own test command did not catch, run in
+corral's sandbox. **Proven** means corral's writer authored a test that compiles,
+passes on REA's unmodified code and fails on the fault. In each run the proven
+tests were also merged into one file and pass together on the unmodified code.
+
+Entries 163 and 167 audit the same file at the same commit, so their proofs
+overlap and should not be added together. Entry 167 is the larger exam: it took
+40 of its mutants from the model and 40 from Stryker's report (below).
+
+Every seat in these runs was a coding-agent CLI on a subscription rather than an
+API key: Claude Code planted the faults (and derived the goals, and read the
+suite as the critic), and Codex wrote the tests.
+
+## Beside Stryker
+
+On `analysisErrorProjection.ts` we ran Stryker ourselves, with per-test coverage
+and its TypeScript checker, from scratch configs (REA's own config targets a
+different file). Of entry 163's 17 proven gaps, 3 sit on lines where Stryker
+killed every mutant that compiled: lines 153, 335-338 and 367-368. A mutation
+score cannot point at those lines, because on those lines Stryker found nothing
+to report.
+
+Our first Stryker numbers were wrong in Stryker's disfavor, and we published
+them before we knew. StrykerJS 10.0.0's vitest runner builds its per-test filter
+with a different separator from the one vitest 5 matches, so a mutant covered
+only by tests inside a `describe` ran no tests at all and was reported Survived.
+It is a known upstream bug, fixed in 10.1.0
+([stryker-js#6210](https://github.com/stryker-mutator/stryker-js/issues/6210)).
+Under 10.1.1 the same 662 mutants score 50.0%, not the 27.3% we first printed.
+The three lines above are unchanged, since the bug only ever turned kills into
+survivals. The correction is kept in print in
+[the mutant-sources page](https://github.com/pdbethke/corralai/blob/main/docs/corral/mutant-sources.md).
+
+## Grading Stryker's mutants
+
+Entry 167 is the first run of `--mutants-from`
+([#499](https://github.com/pdbethke/corralai/pull/499)), which reads a mutation
+tool's report and grades the tool's surviving mutants the way corral grades its
+own: in the sandbox, with the project's real test command, and with the tool's
+verdict recorded as a claim, never as the outcome.
+
+Of the 32 Stryker mutants it graded, corral's run killed 10 and 22 survived.
+Stryker 10.1.1 agrees with corral's run on all 32. The 10 that corral killed are
+ones the 10.0.0 runner bug had reported as survivors. Then the writer went to
+work on the 22: 18 are now proven by tests that Stryker never writes. A mutation
+tool tells you a fault got through. On those 18, corral also hands you the test
+that would have caught it.
+
+## What REA found in corral
+
+A real repository is a better test of the auditor than our own suite, and this
+one found nine defects in corral, fixed in four pull requests. Each was found by
+running corral on REA, and no run that a defect affected went on the record
+before its fix.
+
+- **Six defects, most in the TypeScript path** ([#491](https://github.com/pdbethke/corralai/pull/491)).
+  The worst: an authored test with a type error could be excused by the compile
+  gate and counted as proven. The gate now extends the project's own
+  `tsconfig.json`, and a compiler error in the authored test is never excused.
+- **False kills** ([#502](https://github.com/pdbethke/corralai/pull/502)). An
+  unpublished run credited 7 kills to one slow REA test. Run by hand, that test
+  passes on all 7 mutants and on the unmodified code alike, so the 7 failures in
+  the sandbox came from something other than the faults. corral used to accept
+  any failing run as a kill. Now a kill counts only when it is confirmed, by the
+  blamed test failing on the fault when run alone or by the failure repeating,
+  and the way each kill was confirmed is recorded. Kill rates can fall because of
+  this, and that is the point. That run was never published. In entry 167 all 30
+  kills were confirmed by the blamed test alone, and that slow test killed
+  nothing.
+- **Proofs dropped at the deadline** ([#503](https://github.com/pdbethke/corralai/pull/503)).
+  A run that hit `--timeout` while writing tests recorded 0 proven, although its
+  log held 37 confirmed authored kills. The proofs were only added up once every
+  writer finished. A timed-out run now keeps what it earned.
+- **A sentence that claimed too much** ([#504](https://github.com/pdbethke/corralai/pull/504)).
+  The summary said 8 survivors "were never attempted", but each had been tried
+  three times without a test that graded. It now says only what the count
+  measures.
+
+None of these was found by a unit test first. Two of them, the false kills and
+the dropped proofs, are the bug shape this project keeps writing about: a real
+measurement, computed correctly, and then misread or dropped on its way to the
+record.
+
+## What this does not show
+
+- Two files of one repository. Nothing here is a statement about REA as a whole.
+- The proven tests have not been offered to REA. Whether and how to do that is a
+  conversation with REA's maintainers through their own process.
+- Stryker's survivors outside the 40 that entry 167 took are untriaged. Some are
+  real gaps, and some are equivalent mutants that no test could catch.
+- Kill confirmation's refutation path (a failure that does not repeat, recorded
+  as a survivor) has been exercised in tests but not yet on a real repository:
+  the slow test that caused the false kills did not fail again in later runs.
+- Entries 160 and 163 predate kill confirmation, so their kills were credited on
+  one failing run. Neither credits a kill to the slow test behind the false
+  kills, but they were not confirmed the way entry 167's were.
+- The time it takes is not small. Entry 167 ran for 4h11m, 3h42m of it writing
+  tests, for one file.

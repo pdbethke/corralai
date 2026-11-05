@@ -483,6 +483,7 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `Dropped` | measured |  |
 | `DroppedBy` | measured |  |
 | `Killed` | declared | the tool's own claim, read from its report |
+| `Match` | measured |  |
 | `NoCoverage` | declared | the tool's own claim, read from its report |
 | `NotRegraded` | declared | the tool's own claim, read from its report |
 | `Path` | key |  |
@@ -492,3 +493,4 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `Survived` | declared | the tool's own claim, read from its report |
 | `Taken` | measured |  |
 | `Tool` | declared | the tool's own claim, read from its report |
+| `Units` | measured |  |

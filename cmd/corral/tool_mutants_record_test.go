@@ -775,3 +775,17 @@ func TestTheCombinedExamSizeIsSaid(t *testing.T) {
 		t.Errorf("the report's file does not carry the verdict's tool share: %+v", rep.Weakest)
 	}
 }
+
+// The scan line says how the report was tied to the file, rendered from the
+// recorded Match like every other number on it.
+func TestToolMutantsLineSaysTheMatch(t *testing.T) {
+	c := toolMutantCounts(mutantsources.FileMutants{Path: "pkg/a.ts", Tool: "stryker@10.0.0", Seed: 7,
+		Match: mutantsources.MatchEmbeddedSource, Units: mutantsources.UnitsUTF16,
+		Counts: map[string]int{"Survived": 1}})
+	if c.Match != "embedded-source" || c.Units != "utf16" {
+		t.Errorf("counts Match, Units = %q, %q", c.Match, c.Units)
+	}
+	if got := toolMutantsLine(c); !strings.HasSuffix(got, " — match: embedded-source") {
+		t.Errorf("line = %q", got)
+	}
+}

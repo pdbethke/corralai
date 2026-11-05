@@ -111,7 +111,7 @@ func buildFieldTiers() map[[2]string]FieldTier {
 	// ToolMutants is JSON text of []ToolMutantCounts; the tier gate walks
 	// into it, so each field of ToolMutantCounts carries its own tier.
 	add("ToolMutantCounts", TierKey, "", "Path Report")
-	add("ToolMutantCounts", TierMeasured, "", "Taken Dropped DroppedBy Seed Refused")
+	add("ToolMutantCounts", TierMeasured, "", "Match Units Taken Dropped DroppedBy Seed Refused")
 	add("ToolMutantCounts", TierDeclared, "the tool's own claim, read from its report", "Tool Survived NoCoverage Killed CompileError NotRegraded")
 
 	// Row: one per audited file.

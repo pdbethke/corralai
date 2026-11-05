@@ -81,7 +81,28 @@ type FileMutants struct {
 	// Refused is one sentence saying why none of this file's tool mutants
 	// can be used. Taken is empty whenever it is set.
 	Refused string
+	// Match is how strongly the report was tied to the audited file
+	// (MatchEmbeddedSource, MatchAnchored) and Units the column unit the
+	// reader applied (UnitsUTF16, ...). Both are empty on a refused file:
+	// nothing was tied, so no strength is claimed.
+	Match string
+	Units string
 }
+
+// How a report was tied to the audited file. Embedded-source: the report
+// carried the whole file and it matched the audited bytes by sha256. Anchored:
+// a reader without the file's bytes tied each mutant by an anchor.
+const (
+	MatchEmbeddedSource = "embedded-source"
+	MatchAnchored       = "anchored"
+)
+
+// The column unit a reader applied to a tool's locations.
+const (
+	UnitsUTF16      = "utf16"
+	UnitsBytes      = "bytes"
+	UnitsCodepoints = "codepoints"
+)
 
 // Statuses whose mutants are taken. Survived: tests ran the mutant and none
 // failed. NoCoverage: no test even runs the line, which is often the cheapest
@@ -215,6 +236,7 @@ func readStryker(reportJSON []byte, files map[string][]byte, budget func(path st
 			out[p] = fm
 			continue
 		}
+		fm.Match, fm.Units = MatchEmbeddedSource, UnitsUTF16
 		original := rf.Source
 		lines := strings.Split(original, "\n")
 		fm.Counts = map[string]int{}

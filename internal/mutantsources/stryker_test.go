@@ -661,3 +661,27 @@ func TestStrykerValuesReachTheRecordOnlyAsPlainTokens(t *testing.T) {
 		t.Errorf("Label = %q, want the reader's %q", tool, fm.Tool)
 	}
 }
+
+// A counted file records how strongly the report was tied to the audited
+// file and the unit its columns were in, so a reader of the record knows what
+// the tie rested on.
+func TestStrykerFileRecordsEmbeddedSourceMatch(t *testing.T) {
+	fm, _, _ := readREA(t, 1000, 1)
+	if fm.Match != MatchEmbeddedSource || fm.Units != UnitsUTF16 {
+		t.Errorf("Match, Units = %q, %q; want %q, %q", fm.Match, fm.Units, MatchEmbeddedSource, UnitsUTF16)
+	}
+}
+
+// A refused file was never tied to the audited bytes, so it records no match
+// and no unit rather than a strength it did not have.
+func TestRefusedFileRecordsNoMatch(t *testing.T) {
+	report, src, _ := loadREA(t)
+	got, err := readStryker(report, map[string][]byte{reaPath: []byte(src + "\n// edited\n")}, budgetOf(5), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fm := got[reaPath]
+	if fm.Refused == "" || fm.Match != "" || fm.Units != "" {
+		t.Errorf("Refused, Match, Units = %q, %q, %q; want a refusal and no match or unit", fm.Refused, fm.Match, fm.Units)
+	}
+}

@@ -274,6 +274,11 @@ type ToolMutantCounts struct {
 	// cache-served ones included; the report's path is never recorded. A
 	// key (it measures nothing), said in the ToolMutants tier note.
 	Report string `json:"report,omitempty"`
+	// Match is how strongly the report was tied to the audited file
+	// ("embedded-source", "anchored"); Units the column unit the reader
+	// applied. Both absent on a refused account.
+	Match string `json:"match,omitempty"`
+	Units string `json:"units,omitempty"`
 	// Taken is how many of the file's mutants corral graded.
 	Taken *int `json:"taken,omitempty"`
 	// Survived, NoCoverage, Killed and CompileError are the TOOL's statuses,

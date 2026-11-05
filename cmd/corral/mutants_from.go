@@ -275,6 +275,7 @@ func toolMutantCounts(fm mutantsources.FileMutants) ledger.ToolMutantCounts {
 	if fm.Refused != "" {
 		return c
 	}
+	c.Match, c.Units = fm.Match, fm.Units
 	n := func(v int) *int { return &v }
 	seed := fm.Seed
 	c.Seed = &seed
@@ -318,6 +319,9 @@ func toolMutantsLine(c ledger.ToolMutantCounts) string {
 	}
 	if len(c.NotRegraded) > 0 {
 		s += "; not re-graded: " + countsByName(c.NotRegraded)
+	}
+	if c.Match != "" {
+		s += " — match: " + c.Match
 	}
 	return s
 }

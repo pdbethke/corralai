@@ -640,7 +640,7 @@ type Verdict struct {
 	// NOTHING compiled anywhere and PoolTestUnsound means nothing graded
 	// anywhere, so a file where twenty-one of twenty-four seats graded
 	// carries neither — and its ProvenMissed then reads like a count over all
-	// twenty-four. Three seats unattempted changes what a 5 means.
+	// twenty-four. Three seats ungraded changes what a 5 means.
 	//
 	// 0 is omitted, and is also what a BATCHED run reports: that mode has one
 	// seat for the whole file, and its total failure is already

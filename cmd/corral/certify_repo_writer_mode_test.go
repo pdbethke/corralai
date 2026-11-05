@@ -262,6 +262,16 @@ func TestWriterLineDisclosesUngradedSeatsAndSuppressesACachedCount(t *testing.T)
 	if !strings.Contains(b.String(), "writer: per-survivor (31 calls, 3 seats ungraded") {
 		t.Errorf("the ungraded seats are not disclosed: %q", b.String())
 	}
+	// An ungraded seat is one whose test never GRADED — usually a seat that
+	// tried and failed, not one that never ran. REA try 16 printed "those
+	// survivors were never attempted" over 8 seats that had each been tried
+	// three times. The line must not claim more than the count measures.
+	if strings.Contains(b.String(), "never attempted") {
+		t.Errorf("the line claims the ungraded seats were never attempted, which the count does not measure: %q", b.String())
+	}
+	if !strings.Contains(b.String(), "no test from those seats graded") {
+		t.Errorf("the line does not say what an ungraded seat is: %q", b.String())
+	}
 
 	b.Reset()
 	printWeakFile(&b, reposcan.WeakFile{

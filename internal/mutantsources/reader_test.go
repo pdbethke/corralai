@@ -1,0 +1,105 @@
+// SPDX-License-Identifier: Elastic-2.0
+
+package mutantsources
+
+import (
+	"encoding/json"
+	"flag"
+	"os"
+	"sort"
+	"testing"
+)
+
+var updateGolden = flag.Bool("update", false, "rewrite testdata golden files from the current reader")
+
+// fullReportEnv names the environment variable holding the absolute path of
+// the full REA StrykerJS report the golden below was captured from
+// (testdata/PROVENANCE.md). The report is 1.2 MB and is not committed.
+const fullReportEnv = "CORRAL_STRYKER_FULL_REPORT"
+
+const goldenPath = "testdata/stryker-rea-full.golden.json"
+
+// goldenMutant is one taken mutant as the golden holds it: identity and
+// hashes of the edit, never the edit's text.
+type goldenMutant struct {
+	ID           string `json:"id"`
+	ParentSHA256 string `json:"parent_sha256"`
+	SpanStart    int    `json:"span_start"`
+	SpanEnd      int    `json:"span_end"`
+	SearchSHA256 string `json:"search_sha256"`
+	ReplaceSHA   string `json:"replace_sha256"`
+}
+
+type goldenFile struct {
+	Tool    string                  `json:"tool"`
+	Refused string                  `json:"refused"`
+	Seed    int64                   `json:"seed"`
+	Taken   []goldenMutant          `json:"taken"`
+	Sources map[string]MutantSource `json:"sources"`
+	Counts  map[string]int          `json:"counts"`
+}
+
+// goldenOf renders what a reader returned for the full report.
+func goldenOf(got map[string]FileMutants) map[string]goldenFile {
+	out := map[string]goldenFile{}
+	for p, fm := range got {
+		g := goldenFile{Tool: fm.Tool, Refused: fm.Refused, Seed: fm.Seed, Sources: fm.Sources, Counts: fm.Counts, Taken: []goldenMutant{}}
+		for _, m := range fm.Taken {
+			g.Taken = append(g.Taken, goldenMutant{ID: m.ID, ParentSHA256: m.ParentSHA256,
+				SpanStart: m.Span.Start, SpanEnd: m.Span.End,
+				SearchSHA256: sha256Hex([]byte(m.Search)), ReplaceSHA: sha256Hex([]byte(m.Replace))})
+		}
+		sort.Slice(g.Taken, func(i, j int) bool { return g.Taken[i].ID < g.Taken[j].ID })
+		out[p] = g
+	}
+	return out
+}
+
+// TestStrykerFullReportGolden pins the Stryker reader's whole output over a
+// real 662-mutant report (budget 40, seed 20261101), so moving Stryker behind
+// the Reader interface is provably a no-change. Run with -update on
+// unmodified code to capture it.
+func TestStrykerFullReportGolden(t *testing.T) {
+	reportPath := os.Getenv(fullReportEnv)
+	if reportPath == "" {
+		t.Skipf("%s is unset: set it to the absolute path of the full REA Stryker report (testdata/PROVENANCE.md)", fullReportEnv)
+	}
+	report, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var r struct {
+		Files map[string]struct {
+			Source string `json:"source"`
+		} `json:"files"`
+	}
+	if err := json.Unmarshal(report, &r); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string][]byte{}
+	for p, f := range r.Files {
+		files[p] = []byte(f.Source)
+	}
+	got, err := ReadStryker(report, files, budgetOf(40), 20261101)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, err := json.MarshalIndent(goldenOf(got), "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text = append(text, '\n')
+	if *updateGolden {
+		if err := os.WriteFile(goldenPath, text, 0o644); err != nil { // #nosec G306 -- a test golden
+			t.Fatal(err)
+		}
+		return
+	}
+	want, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(want) != string(text) {
+		t.Fatalf("the Stryker reader's output over the full report differs from %s; if the change is intended run with -update and read the diff", goldenPath)
+	}
+}

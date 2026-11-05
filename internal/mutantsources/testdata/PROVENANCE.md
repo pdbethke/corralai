@@ -32,3 +32,13 @@ A real StrykerJS mutation report, trimmed. It is the fixture `stryker_test.go` r
 
 Everything else (`source`, `testFiles`, `config`, `framework`, `thresholds`, `schemaVersion`) is
 as captured.
+
+# stryker-rea-full.golden.json
+
+The output of `ReadStryker` over the FULL REA report (all 662 mutants of `src/domain/analysisErrorProjection.ts`,
+the report from the 2026-11-01 Stryker run, sha256
+`8496b0c19a07efa4a29090eb0156d263b17a3203751cbb0cfecbe117f394d85c`, 1.2 MB, not committed), with
+budget 40 and seed 20261101, captured 2026-11-05 on unmodified code before Stryker moved behind the `Reader`
+interface. It holds each taken mutant's id, parent sha256, span and the sha256 of its search and replace text,
+plus `Sources` and `Counts`. `TestStrykerFullReportGolden` reads the report from the absolute path in
+`CORRAL_STRYKER_FULL_REPORT` and skips when it is unset; `-update` rewrites the golden.

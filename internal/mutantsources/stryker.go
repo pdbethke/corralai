@@ -89,6 +89,8 @@ type FileMutants struct {
 	// as the record holds it (ToolMutantCounts.Mutants). Empty on a refused
 	// file: nothing was tied to the audited bytes.
 	Reported []ledger.ReportMutant
+	// Tests names the tests Reported refers to (ToolMutantCounts.Tests).
+	Tests map[string]string
 	// Match is how strongly the report was tied to the audited file
 	// (MatchEmbeddedSource, MatchAnchored) and Units the column unit the
 	// reader applied (UnitsUTF16, ...). Both are empty on a refused file:
@@ -279,13 +281,14 @@ func readStryker(reportJSON []byte, files map[string][]byte, budget func(path st
 		// fm.Reported[candidateAt[id]] is the record of candidate id, whose
 		// fate (graded or over-budget) is known only after the sample.
 		fm.Reported = make([]ledger.ReportMutant, 0, len(rf.Mutants))
+		fm.Tests = map[string]string{}
 		candidateAt := map[string]int{}
 		// seen holds every taken-status id, proven or not, so the first
 		// mutant under an id is the one kept or dropped and a later one
 		// cannot stand in for a first that failed its proof.
 		seen := map[string]bool{}
 		for _, sm := range rf.Mutants {
-			rm := strykerReported(sm, lines, lineStarts, names)
+			rm := strykerReported(sm, lines, lineStarts, names, fm.Tests)
 			// fate records the mutant with what corral did with it; every
 			// path through the loop below calls it exactly once, so the
 			// record and Counts are the same account.

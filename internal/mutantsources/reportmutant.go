@@ -4,6 +4,7 @@ package mutantsources
 
 import (
 	"math"
+	"regexp"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -11,19 +12,20 @@ import (
 	"github.com/pdbethke/corralai/internal/ledger"
 )
 
-// Every reported mutant reaches the record (ledger.ReportMutant), because
-// the record is the only source of what corral publishes and a field a reader
-// drops cannot be recovered from it later. The exceptions are written down
-// here, per tool, each with the reason the public record cannot hold it.
-// TestEveryParsedFieldIsRecordedOrExcluded fails on a parsed mutant field
-// that is in neither the record nor this list.
+// Every reported mutant reaches the record (ledger.ReportMutant, with the
+// tests it names in ToolMutantCounts.Tests), because the record is the only
+// source of what corral publishes and a field a reader drops cannot be
+// recovered from it later. The exceptions are written down here, per tool,
+// as the field's JSON path in the report, each with the reason the public
+// record cannot hold it. TestEveryParsedFieldIsRecordedOrExcluded fails on a
+// parsed field that is in neither the record nor this list.
 var excludedFields = map[string][]string{
 	"stryker": {
 		// statusReason: the tool's free text (compiler output, assertion
 		// diffs naming values and host paths); no filter makes it safe.
-		"statusReason",
+		"files.mutants.statusReason",
 		// description: free text the tool writes about a mutant.
-		"description",
+		"files.mutants.description",
 		// projectRoot: a host path on the machine that ran the tool.
 		"projectRoot",
 		// config: the operator's whole configuration, paths and commands.
@@ -36,19 +38,40 @@ var excludedFields = map[string][]string{
 // maxNameBytes bounds a recorded test name, so no name can be a page of text.
 const maxNameBytes = 256
 
-// recordableName is a test name as the record holds it: s when it is a
-// plain line (at most maxNameBytes of printable UTF-8, no newline or tab)
-// that does not look like a path (does not start with "/" or "~", contains
-// no `:\`), else a digest of it. A test's name is the developer's sentence,
-// worth keeping, but it sits in the operator's report and the record is
-// public: a digest still tells two names apart and the same name together.
+// hostIdentifier matches what in a test name could name a person or a
+// machine: an email-like token; an absolute path of two or more segments
+// (/x/y) where a path could begin; a home-relative path (~/); a Windows
+// drive (C:\ or C:/) not inside a word, so "http://" is not one. A single
+// slash ("a/b split") is not a path.
+var hostIdentifier = regexp.MustCompile(`[^\s@]+@[^\s@]+\.[^\s@]+` +
+	`|(?:^|[\s"'(\[{=,:;<>|])/[^/\s]+/[^/\s]` +
+	`|~/` +
+	`|(?:^|[^A-Za-z])[A-Za-z]:[\\/]`)
+
+// recordableName is a test name as the record holds it: s when it is at
+// most maxNameBytes of printable UTF-8 (no newline, tab or other control
+// character), does not start with "/" or "~", and holds nothing
+// hostIdentifier matches; else a digest of it. A test's name is the
+// developer's sentence, worth keeping, but it sits in the operator's report
+// and the record is public: a digest still tells two names apart and the
+// same name together.
 func recordableName(s string) string {
 	if len(s) <= maxNameBytes && utf8.ValidString(s) &&
-		!strings.HasPrefix(s, "/") && !strings.HasPrefix(s, "~") && !strings.Contains(s, `:\`) &&
+		!strings.HasPrefix(s, "/") && !strings.HasPrefix(s, "~") && !hostIdentifier.MatchString(s) &&
 		strings.IndexFunc(s, func(r rune) bool { return !unicode.IsPrint(r) }) < 0 {
 		return s
 	}
 	return "not-a-plain-name-" + sha256Hex([]byte(s))[:16]
+}
+
+// recordableTestID is a tool's test id as the record holds it: the id when
+// it is a plain token, else NotAPlainToken and a digest of it, so two
+// hostile ids stay two tests and the same one stays one.
+func recordableTestID(id string) string {
+	if plainToken.MatchString(id) {
+		return id
+	}
+	return NotAPlainToken + "-" + sha256Hex([]byte(id))[:16]
 }
 
 // strykerTestNames maps a report's test ids to their names in testFiles.
@@ -63,22 +86,18 @@ func strykerTestNames(rep strykerReport) map[string]string {
 }
 
 // recordedTests is killedBy or coveredBy as the record holds it: each id
-// replaced by its test's name through recordableName, or, for an id
-// testFiles does not name, "id:<id>" when the id is a plain token and a
-// digest otherwise.
-func recordedTests(ids []string, names map[string]string) []string {
+// through recordableTestID. Each id testFiles names is added to tests, the
+// file's ToolMutantCounts.Tests, keyed the same way, so a name is recorded
+// once per file and not once per mutant that names it.
+func recordedTests(ids []string, names, tests map[string]string) []string {
 	if len(ids) == 0 {
 		return nil
 	}
 	out := make([]string, len(ids))
 	for i, id := range ids {
-		switch name := names[id]; {
-		case name != "":
-			out[i] = recordableName(name)
-		case plainToken.MatchString(id):
-			out[i] = "id:" + id
-		default:
-			out[i] = "not-a-plain-name-" + sha256Hex([]byte(id))[:16]
+		out[i] = recordableTestID(id)
+		if name := names[id]; name != "" {
+			tests[out[i]] = recordableName(name)
 		}
 	}
 	return out
@@ -87,7 +106,7 @@ func recordedTests(ids []string, names map[string]string) []string {
 // strykerReported is a Stryker mutant as the record holds it, before corral
 // has decided its fate. Everything here is the tool's claim except the byte
 // span, which is corral's conversion of the claim's location.
-func strykerReported(sm strykerReportMutant, lines []string, lineStarts []int, names map[string]string) ledger.ReportMutant {
+func strykerReported(sm strykerReportMutant, lines []string, lineStarts []int, names, tests map[string]string) ledger.ReportMutant {
 	rm := ledger.ReportMutant{
 		ID:       strykerMutantID(sm.ID),
 		IDSource: "tool",
@@ -96,7 +115,7 @@ func strykerReported(sm strykerReportMutant, lines []string, lineStarts []int, n
 		Span:     [4]int{sm.Location.Start.Line, sm.Location.Start.Column, sm.Location.End.Line, sm.Location.End.Column},
 		ByteSpan: strykerByteSpan(lines, lineStarts, sm.Location.Start, sm.Location.End),
 		Static:   sm.Static,
-		KilledBy: recordedTests(sm.KilledBy, names),
+		KilledBy: recordedTests(sm.KilledBy, names, tests),
 	}
 	if sm.TestsCompleted != nil {
 		n := *sm.TestsCompleted
@@ -107,7 +126,7 @@ func strykerReported(sm strykerReportMutant, lines []string, lineStarts []int, n
 	if sm.CoveredBy != nil {
 		n := len(sm.CoveredBy)
 		rm.CoveredByCount = &n
-		rm.CoveredBy = recordedTests(sm.CoveredBy, names)
+		rm.CoveredBy = recordedTests(sm.CoveredBy, names, tests)
 	}
 	// A duration is recorded only as a whole number of milliseconds a
 	// clock could have measured; a negative or absurd one is no measurement.

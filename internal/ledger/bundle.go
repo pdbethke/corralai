@@ -310,6 +310,13 @@ type ToolMutantCounts struct {
 	// "covered_by lists replaced by counts; <n> of <m> mutants recorded".
 	// Absent when the whole list fit.
 	MutantsTruncated string `json:"mutants_truncated,omitempty"`
+	// Tests names the tests Mutants refer to: the tool's test id (as
+	// ReportMutant.KilledBy and CoveredBy hold it) to the test's name, once
+	// per file rather than once per mutant. Only ids some recorded mutant
+	// refers to, and only those the report names; a name that could carry a
+	// host identifier (a path, an email address, a control character, or
+	// over 256 bytes) is held as a digest of it.
+	Tests map[string]string `json:"tests,omitempty"`
 }
 
 // ReportMutant is one mutant of a mutation tool's report as the record holds
@@ -318,7 +325,9 @@ type ToolMutantCounts struct {
 // corral's. No free text from the report is here: a test name is kept only
 // when it is a plain, pathless line, and the tool's statusReason never is.
 type ReportMutant struct {
-	// ID is the mutant's id as recorded on its MutantRow: t/<tool>/<id>.
+	// ID is the mutant's id as recorded on its MutantRow: t/<tool>/<id>. A
+	// second mutant the report gives an id already used carries the same ID,
+	// with Fate dropped:duplicate-id.
 	ID string `json:"id"`
 	// IDSource is "tool" when the report gave the id, "derived" when the
 	// reader made one.
@@ -336,8 +345,8 @@ type ReportMutant struct {
 	ReplacementSHA256 string `json:"replacement_sha256,omitempty"`
 	Static            *bool  `json:"static,omitempty"`
 	TestsCompleted    *int   `json:"tests_completed,omitempty"`
-	// KilledBy and CoveredBy are test names, each a plain name or a digest
-	// of one. CoveredByCount is how many tests the tool said cover the
+	// KilledBy and CoveredBy are the tool's test ids, each a plain token or
+	// a digest of one; ToolMutantCounts.Tests names them. CoveredByCount is how many tests the tool said cover the
 	// mutant, set whenever it said; the bound may drop CoveredBy and keep
 	// the count.
 	KilledBy       []string `json:"killed_by,omitempty"`

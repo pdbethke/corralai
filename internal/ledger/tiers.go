@@ -114,6 +114,7 @@ func buildFieldTiers() map[[2]string]FieldTier {
 	add("ToolMutantCounts", TierMeasured, "", "Match Units Taken Dropped DroppedBy Seed Refused")
 	add("ToolMutantCounts", TierDeclared, "the tool's own claim, read from its report", "Tool Survived NoCoverage Killed CompileError NotRegraded")
 	add("ToolMutantCounts", TierMeasured, "", "MutantsTruncated")
+	add("ToolMutantCounts", TierDeclared, "the tool's own test names, after the host-identifier filter", "Tests")
 	// ReportMutant: one mutant of the tool's report. What the tool said
 	// about it is its claim; how corral located, hashed and used it is
 	// corral's.

@@ -200,13 +200,16 @@ func TestFullReportRecordSize(t *testing.T) {
 	for p, f := range r.Files {
 		files[p] = []byte(f.Source)
 	}
-	rd, _ := Lookup("stryker")
+	rd, ok := Lookup("stryker")
+	if !ok {
+		t.Fatal("no stryker reader registered")
+	}
 	got, err := rd.Read(Report{Bytes: report}, files, budgetOf(40), 20261101)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for p, fm := range got {
-		raw, err := json.Marshal(ledger.ToolMutantCounts{Path: fm.Path, Tool: fm.Tool, Match: fm.Match, Units: fm.Units, Mutants: fm.Reported})
+		raw, err := json.Marshal(ledger.ToolMutantCounts{Path: fm.Path, Tool: fm.Tool, Match: fm.Match, Units: fm.Units, Mutants: fm.Reported, Tests: fm.Tests})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -218,12 +221,18 @@ func TestFullReportRecordSize(t *testing.T) {
 		if err := w.Close(); err != nil {
 			t.Fatal(err)
 		}
-		mutants, _ := json.Marshal(fm.Reported)
+		mutants, err := json.Marshal(fm.Reported)
+		if err != nil {
+			t.Fatal(err)
+		}
 		counted := append([]ledger.ReportMutant(nil), fm.Reported...)
 		for i := range counted {
 			counted[i].CoveredBy = nil
 		}
-		countsOnly, _ := json.Marshal(counted)
-		t.Logf("%s: %d mutants; ToolMutantCounts %d bytes raw, %d gzipped; Mutants alone %d raw, %d with covered_by as counts", p, len(fm.Reported), len(raw), gz.Len(), len(mutants), len(countsOnly))
+		countsOnly, err := json.Marshal(counted)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("%s: %d mutants, %d tests named; ToolMutantCounts %d bytes raw, %d gzipped; Mutants alone %d raw, %d with covered_by as counts", p, len(fm.Reported), len(fm.Tests), len(raw), gz.Len(), len(mutants), len(countsOnly))
 	}
 }

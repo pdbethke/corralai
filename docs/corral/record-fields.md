@@ -512,5 +512,6 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `Seed` | measured |  |
 | `Survived` | declared | the tool's own claim, read from its report |
 | `Taken` | measured |  |
+| `Tests` | declared | the tool's own test names, after the host-identifier filter |
 | `Tool` | declared | the tool's own claim, read from its report |
 | `Units` | measured |  |

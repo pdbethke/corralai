@@ -302,18 +302,47 @@ func toolMutantCounts(fm mutantsources.FileMutants) ledger.ToolMutantCounts {
 	}
 	c.Dropped = n(dropped)
 	c.Mutants, c.MutantsTruncated = boundReportMutants(fm.Reported)
+	c.Tests = referencedTests(c.Mutants, fm.Tests)
 	return c
+}
+
+// referencedTests is the names of the tests the recorded mutants refer to:
+// the reader's names less any whose every reference the bound removed, so
+// the record names no test it does not use.
+func referencedTests(ms []ledger.ReportMutant, names map[string]string) map[string]string {
+	var out map[string]string
+	add := func(ids []string) {
+		for _, id := range ids {
+			if name, ok := names[id]; ok {
+				if out == nil {
+					out = map[string]string{}
+				}
+				out[id] = name
+			}
+		}
+	}
+	for _, m := range ms {
+		add(m.KilledBy)
+		add(m.CoveredBy)
+	}
+	return out
 }
 
 // maxReportMutantsBytes bounds one file's encoded ToolMutantCounts.Mutants.
 // It is measured, not chosen: on 2026-11-05 the account of REA's
 // src/domain/analysisErrorProjection.ts from its full StrykerJS 10.0.0 report
-// (662 mutants, report sha256 8496b0c1..., testdata/PROVENANCE.md) encoded to
-// 1,801,228 bytes raw and 47,960 gzipped with every covered_by list kept
-// (171,692 raw with the lists as counts); the bound is the next power of two
-// above twice the raw size, so a file twice REA's records whole.
-// mutantsources.TestFullReportRecordSize repeats the measurement.
-const maxReportMutantsBytes = 1 << 22
+// (662 mutants naming 118 tests, report sha256 8496b0c1...,
+// testdata/PROVENANCE.md), with mutants referring to tests by id and the
+// names held once in Tests, encoded to 292,956 bytes raw and 25,006 gzipped
+// (281,492 for Mutants alone; 165,446 with covered_by lists as counts); the
+// bound is the next power of two above twice the raw size, so a file twice
+// REA's records whole. (Under the earlier shape, names repeated on every
+// mutant, the same file was 1,801,228 raw and the bound 1<<22.)
+// mutantsources.TestFullReportRecordSize repeats the measurement. The bound
+// is measured on json.Marshal of the list alone, so it is approximate
+// relative to the signed entry's bytes, which add the rest of the row, the
+// Tests names and the entry's own encoding.
+const maxReportMutantsBytes = 1 << 20
 
 // boundReportMutants is the file's mutants as the record holds them, within
 // maxReportMutantsBytes, and a sentence saying what the bound did ("" when

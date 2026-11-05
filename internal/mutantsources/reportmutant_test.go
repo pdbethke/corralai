@@ -63,8 +63,26 @@ func TestEveryReportedMutantIsRecorded(t *testing.T) {
 	if !ok {
 		t.Fatal("mutant 1 is not recorded")
 	}
-	if want := []string{names["220"]}; !reflect.DeepEqual(one.KilledBy, want) || names["220"] == "" {
-		t.Errorf("mutant 1 KilledBy = %q, want %q", one.KilledBy, want)
+	if want := []string{"220"}; !reflect.DeepEqual(one.KilledBy, want) {
+		t.Errorf("mutant 1 KilledBy = %q, want the tool's test id %q", one.KilledBy, want)
+	}
+	if fm.Tests["220"] != names["220"] || names["220"] == "" {
+		t.Errorf("Tests[220] = %q, want testFiles' name %q", fm.Tests["220"], names["220"])
+	}
+	// Tests names exactly the ids the recorded mutants refer to.
+	referenced := map[string]bool{}
+	for _, rm := range fm.Reported {
+		for _, id := range append(append([]string(nil), rm.KilledBy...), rm.CoveredBy...) {
+			referenced[id] = true
+		}
+	}
+	if len(fm.Tests) != len(referenced) {
+		t.Errorf("Tests names %d tests, the mutants refer to %d", len(fm.Tests), len(referenced))
+	}
+	for id := range fm.Tests {
+		if !referenced[id] {
+			t.Errorf("Tests names %s, which no mutant refers to", id)
+		}
 	}
 	if one.TestsCompleted == nil || *one.TestsCompleted != 10 {
 		t.Errorf("mutant 1 TestsCompleted = %v, want 10", one.TestsCompleted)
@@ -107,10 +125,25 @@ func TestEveryReportedMutantIsRecorded(t *testing.T) {
 		}
 	}
 	// The report's order is the record's.
-	for i := 1; i < len(fm.Reported); i++ {
-		if fm.Reported[i-1].ID == fm.Reported[i].ID {
-			t.Errorf("mutant %s recorded twice", fm.Reported[i].ID)
-		}
+	var seq struct {
+		Files map[string]struct {
+			Mutants []struct {
+				ID string `json:"id"`
+			} `json:"mutants"`
+		} `json:"files"`
+	}
+	if err := json.Unmarshal(report, &seq); err != nil {
+		t.Fatal(err)
+	}
+	var want, got []string
+	for _, m := range seq.Files[reaPath].Mutants {
+		want = append(want, "t/stryker/"+m.ID)
+	}
+	for _, rm := range fm.Reported {
+		got = append(got, rm.ID)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("recorded order %v, want the report's %v", got, want)
 	}
 }
 
@@ -128,71 +161,116 @@ func TestOverBudgetMutantsAreRecordedAsDropped(t *testing.T) {
 	}
 }
 
-// Every field the reader parses from a Stryker mutant reaches the record or
+// Every field the reader parses from a Stryker report reaches the record or
 // is excluded in writing. A field in neither is the dropped-on-the-floor bug
-// shape, and this names it.
+// shape, and this names it. The walk covers every struct the reader parses,
+// by JSON path, so a field added anywhere in strykerReport is caught.
 func TestEveryParsedFieldIsRecordedOrExcluded(t *testing.T) {
 	recordedAs := map[string]string{
-		"id":             "ID",
-		"mutatorName":    "Operator",
-		"replacement":    "ReplacementSHA256",
-		"status":         "Status",
-		"location":       "Span",
-		"static":         "Static",
-		"testsCompleted": "TestsCompleted",
-		"killedBy":       "KilledBy",
-		"coveredBy":      "CoveredBy",
-		"duration":       "DurationMS",
+		"framework.name":                      "ToolMutantCounts.Tool", // only StrykerJS is read; the label says stryker
+		"framework.version":                   "ToolMutantCounts.Tool",
+		"files.source":                        "ToolMutantCounts.Match", // tied to the audited bytes by sha256
+		"files.mutants.id":                    "ReportMutant.ID",
+		"files.mutants.mutatorName":           "ReportMutant.Operator",
+		"files.mutants.replacement":           "ReportMutant.ReplacementSHA256",
+		"files.mutants.status":                "ReportMutant.Status",
+		"files.mutants.location.start.line":   "ReportMutant.Span",
+		"files.mutants.location.start.column": "ReportMutant.Span",
+		"files.mutants.location.end.line":     "ReportMutant.Span",
+		"files.mutants.location.end.column":   "ReportMutant.Span",
+		"files.mutants.static":                "ReportMutant.Static",
+		"files.mutants.testsCompleted":        "ReportMutant.TestsCompleted",
+		"files.mutants.killedBy":              "ReportMutant.KilledBy",
+		"files.mutants.coveredBy":             "ReportMutant.CoveredBy",
+		"files.mutants.duration":              "ReportMutant.DurationMS",
+		"testFiles.tests.id":                  "ToolMutantCounts.Tests",
+		"testFiles.tests.name":                "ToolMutantCounts.Tests",
+	}
+	ledgerTypes := map[string]reflect.Type{
+		"ReportMutant":     reflect.TypeOf(ledger.ReportMutant{}),
+		"ToolMutantCounts": reflect.TypeOf(ledger.ToolMutantCounts{}),
 	}
 	excluded := map[string]bool{}
 	for _, f := range excludedFields["stryker"] {
 		excluded[f] = true
 	}
-	rmType := reflect.TypeOf(ledger.ReportMutant{})
-	ty := reflect.TypeOf(strykerReportMutant{})
-	for i := 0; i < ty.NumField(); i++ {
-		name, _, _ := strings.Cut(ty.Field(i).Tag.Get("json"), ",")
-		field, mapped := recordedAs[name]
+	var parsed []string
+	var walk func(prefix string, ty reflect.Type)
+	walk = func(prefix string, ty reflect.Type) {
+		for ty.Kind() == reflect.Pointer || ty.Kind() == reflect.Slice || ty.Kind() == reflect.Map {
+			ty = ty.Elem()
+		}
+		if ty.Kind() != reflect.Struct {
+			parsed = append(parsed, prefix)
+			return
+		}
+		for i := 0; i < ty.NumField(); i++ {
+			name, _, _ := strings.Cut(ty.Field(i).Tag.Get("json"), ",")
+			p := name
+			if prefix != "" {
+				p = prefix + "." + name
+			}
+			walk(p, ty.Field(i).Type)
+		}
+	}
+	walk("", reflect.TypeOf(strykerReport{}))
+	if len(parsed) < 20 {
+		t.Fatalf("the walk found only %d parsed fields: %v", len(parsed), parsed)
+	}
+	for _, name := range parsed {
+		target, mapped := recordedAs[name]
 		switch {
 		case mapped && excluded[name]:
 			t.Errorf("%q is both recorded and excluded", name)
 		case mapped:
-			if _, ok := rmType.FieldByName(field); !ok {
-				t.Errorf("%q maps to ReportMutant.%s, which does not exist", name, field)
+			row, field, _ := strings.Cut(target, ".")
+			if _, ok := ledgerTypes[row].FieldByName(field); !ok {
+				t.Errorf("%q maps to %s, which does not exist", name, target)
 			}
 		case !excluded[name]:
-			t.Errorf("the reader parses the Stryker mutant field %q but neither records it nor lists it in excludedFields[\"stryker\"]", name)
+			t.Errorf("the reader parses the Stryker field %q but neither records it nor lists it in excludedFields[\"stryker\"]", name)
 		}
 	}
 }
 
 func TestRecordableNameRefusesPathsAndNewlines(t *testing.T) {
-	for _, s := range []string{"a\nb", "a\tb", "/home/x/t.ts", "~/t.ts", `C:\x`, strings.Repeat("n", 300), "bad\xffutf8"} {
+	for _, s := range []string{"a\nb", "a\tb", "/home/x/t.ts", "~/t.ts", `C:\x`, strings.Repeat("n", 300), "bad\xffutf8",
+		"loads /home/peter/x/a.json", "user alice@corp.example logs in", "reads ~/cfg", `opens D:\data`, "opens D:/data", "a\x00b"} {
 		got := recordableName(s)
 		if got != "not-a-plain-name-"+sha256Hex([]byte(s))[:16] {
 			t.Errorf("recordableName(%q) = %q, want the digest", s, got)
 		}
 	}
-	for _, s := range []string{"suite > reports EACCES", strings.Repeat("n", 256), "distinguishes ünicode names"} {
+	for _, s := range []string{"suite > reports EACCES", strings.Repeat("n", 256), "distinguishes ünicode names", "a/b split",
+		"fetches http://example.test", "keeps @scope/pkg names", "rel/path/to/x is relative"} {
 		if got := recordableName(s); got != s {
 			t.Errorf("recordableName(%q) = %q, want it unchanged", s, got)
 		}
 	}
 }
 
-// A test id with no name in testFiles is recorded by its id when that is a
-// plain token, and by a digest otherwise; a hostile name is digested.
+// Mutants refer to tests by the tool's id, through recordable; the file's
+// Tests names each id testFiles names, through recordableName. An id with no
+// name stays on the mutant and is absent from Tests.
 func TestTestIDsWithoutAPlainNameAreNotRecordedRaw(t *testing.T) {
 	src := "a();\n"
+	hostileID := "x\n/home/someone/zz-marker"
 	rep, err := json.Marshal(map[string]any{
 		"schemaVersion": "1.0",
 		"framework":     map[string]any{"name": "StrykerJS", "version": "10.0.0"},
 		"testFiles": map[string]any{"t.test.js": map[string]any{"tests": []map[string]string{
 			{"id": "9", "name": "/home/someone/zz-marker"},
+			{"id": "8", "name": "a plain name"},
+			{"id": "6", "name": "never referenced"},
+			{"id": hostileID, "name": "named hostile"},
 		}}},
 		"files": map[string]any{"f.js": map[string]any{"language": "javascript", "source": src, "mutants": []map[string]any{{
 			"id": "1", "mutatorName": "X", "replacement": "b()", "status": "Killed",
-			"killedBy":  []string{"9", "7", "x\n/home/someone/zz-marker"},
+			"killedBy":  []string{"9", "7", hostileID},
+			"coveredBy": []string{"8"},
+			"location":  map[string]any{"start": map[string]int{"line": 1, "column": 1}, "end": map[string]int{"line": 1, "column": 4}},
+		}, {
+			"id": "2", "mutatorName": "X", "replacement": "c()", "status": "NoCoverage",
 			"coveredBy": []string{},
 			"location":  map[string]any{"start": map[string]int{"line": 1, "column": 1}, "end": map[string]int{"line": 1, "column": 4}},
 		}}}},
@@ -204,19 +282,24 @@ func TestTestIDsWithoutAPlainNameAreNotRecordedRaw(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rm := got["f.js"].Reported[0]
-	want := []string{
-		"not-a-plain-name-" + sha256Hex([]byte("/home/someone/zz-marker"))[:16],
-		"id:7",
-		"not-a-plain-name-" + sha256Hex([]byte("x\n/home/someone/zz-marker"))[:16],
-	}
-	if !reflect.DeepEqual(rm.KilledBy, want) {
+	fm := got["f.js"]
+	rm := fm.Reported[0]
+	hostileKey := NotAPlainToken + "-" + sha256Hex([]byte(hostileID))[:16]
+	if want := []string{"9", "7", hostileKey}; !reflect.DeepEqual(rm.KilledBy, want) {
 		t.Errorf("KilledBy = %q, want %q", rm.KilledBy, want)
+	}
+	wantTests := map[string]string{
+		"9":        "not-a-plain-name-" + sha256Hex([]byte("/home/someone/zz-marker"))[:16],
+		"8":        "a plain name",
+		hostileKey: "named hostile",
+	}
+	if !reflect.DeepEqual(fm.Tests, wantTests) {
+		t.Errorf("Tests = %q, want %q (7 has no name; 6 is referenced by no mutant)", fm.Tests, wantTests)
 	}
 	// An empty coveredBy is a claim (no test covers it), kept as a 0 count;
 	// an absent one would be no count at all.
-	if rm.CoveredByCount == nil || *rm.CoveredByCount != 0 {
-		t.Errorf("CoveredByCount = %v, want a stated 0", rm.CoveredByCount)
+	if c := fm.Reported[1].CoveredByCount; c == nil || *c != 0 {
+		t.Errorf("CoveredByCount = %v, want a stated 0", c)
 	}
 	if rm.Static != nil || rm.TestsCompleted != nil {
 		t.Errorf("Static %v TestsCompleted %v: the report states neither, so neither is recorded", rm.Static, rm.TestsCompleted)
@@ -238,7 +321,7 @@ func TestStatusReasonNeverReachesTheRecord(t *testing.T) {
 	if err := json.Unmarshal(report, &r); err != nil {
 		t.Fatal(err)
 	}
-	text, err := json.Marshal(ledger.ToolMutantCounts{Path: fm.Path, Tool: fm.Tool, Mutants: fm.Reported})
+	text, err := json.Marshal(ledger.ToolMutantCounts{Path: fm.Path, Tool: fm.Tool, Mutants: fm.Reported, Tests: fm.Tests})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +346,7 @@ func TestStatusReasonNeverReachesTheRecord(t *testing.T) {
 func TestExcludedFieldsAreListed(t *testing.T) {
 	got := append([]string(nil), excludedFields["stryker"]...)
 	sort.Strings(got)
-	want := []string{"config", "description", "framework.branding", "projectRoot", "statusReason"}
+	want := []string{"config", "files.mutants.description", "files.mutants.statusReason", "framework.branding", "projectRoot"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("excludedFields[stryker] = %v, want %v", got, want)
 	}

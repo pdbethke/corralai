@@ -823,9 +823,14 @@ func TestReportMutantsBound(t *testing.T) {
 	}
 
 	small := reportMutantsOf(3, 2)
-	c := toolMutantCounts(fm(small))
+	f := fm(small)
+	f.Tests = map[string]string{small[0].CoveredBy[0]: "a named test"}
+	c := toolMutantCounts(f)
 	if len(c.Mutants) != 3 || c.MutantsTruncated != "" || len(c.Mutants[0].CoveredBy) != 2 {
 		t.Errorf("a small list was changed: %d mutants, %q", len(c.Mutants), c.MutantsTruncated)
+	}
+	if len(c.Tests) != 1 {
+		t.Errorf("Tests = %v, want the one named test the mutants refer to", c.Tests)
 	}
 
 	// Over the bound with names, under it with counts.
@@ -835,7 +840,12 @@ func TestReportMutantsBound(t *testing.T) {
 	if encodedLen(t, lists) <= maxReportMutantsBytes {
 		t.Fatalf("fixture too small: %d bytes", encodedLen(t, lists))
 	}
-	c = toolMutantCounts(fm(lists))
+	f = fm(lists)
+	f.Tests = map[string]string{lists[0].CoveredBy[0]: "only covers"}
+	c = toolMutantCounts(f)
+	if c.Tests != nil {
+		t.Errorf("Tests = %v: a test only a removed covered_by list referred to is still named", c.Tests)
+	}
 	if len(c.Mutants) != n {
 		t.Fatalf("%d of %d mutants kept, want all once the lists are counts", len(c.Mutants), n)
 	}

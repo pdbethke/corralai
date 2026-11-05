@@ -354,7 +354,7 @@ func TestToolMutantsForAFileWithNoSource(t *testing.T) {
 		r := rr[0]
 		var rs advpool.RunSpec
 		if err := applyAll(&rs, []toolFileMutants{r}); err != nil {
-			t.Fatal(err, []toolFileMutants{r})
+			t.Fatal(err)
 		}
 		exam := rs.ToolMutants
 		if model == "off" {

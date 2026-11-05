@@ -504,13 +504,13 @@ type toolSources []*toolMutantSource
 // --mutant-model.
 func (ts toolSources) toolOnly() bool { return len(ts) > 0 && ts[0].toolOnly }
 
-// names is the tools, sorted, joined by "+".
+// names is the tools, sorted, joined by " + ": "alpha + zeta".
 func (ts toolSources) names() string {
 	n := make([]string, len(ts))
 	for i, s := range ts {
 		n[i] = s.tool
 	}
-	return strings.Join(n, "+")
+	return strings.Join(n, " + ")
 }
 
 // labels is the tools with their versions as their reports name them,
@@ -550,9 +550,10 @@ func (ts toolSources) checkCoversSome(paths []string) error {
 
 // forFile is each source's account of the file, in tool order, under the
 // same per-file budget each. Beside a generator the exam is the model's
-// share plus every tool's, said once on the LAST source's line, where the
-// shares are all known: "with the model's B under the same per-file cap:
-// B model + T1 tool + T2 tool, an exam of up to B+T1+T2".
+// share plus every tool's, said once: "with the model's B under the same
+// per-file cap: B model + T1 alpha@1 + T2 zeta@1, an exam of up to B+T1+T2"
+// (a lone tool is "B model + T1 tool"). The labels match advpool.WithTools,
+// which says the same on the report surfaces.
 func (ts toolSources) forFile(p string, code []byte, budget int) ([]toolFileMutants, error) {
 	out := make([]toolFileMutants, 0, len(ts))
 	for _, s := range ts {
@@ -562,16 +563,28 @@ func (ts toolSources) forFile(p string, code []byte, budget int) ([]toolFileMuta
 		}
 		out = append(out, r)
 	}
-	if n := len(out); n > 0 && !ts.toolOnly() {
-		parts, total := fmt.Sprintf("%d model", budget), budget
-		for _, r := range out {
+	if !ts.toolOnly() {
+		// The shares are all known only now, so the sentence goes on the last
+		// line that counted something, never on a refusal's line.
+		last, total, named := -1, budget, 0
+		for i, r := range out {
 			if t := len(r.fm.Taken); t > 0 {
-				parts += fmt.Sprintf(" + %d tool", t)
-				total += t
+				last, total, named = i, total+t, named+1
 			}
 		}
-		if total > budget {
-			out[n-1].line += fmt.Sprintf(" — with the model's %d under the same per-file cap: %s, an exam of up to %d", budget, parts, total)
+		if last >= 0 {
+			parts := fmt.Sprintf("%d model", budget)
+			for _, r := range out {
+				t := len(r.fm.Taken)
+				switch {
+				case t == 0:
+				case named == 1:
+					parts += fmt.Sprintf(" + %d tool", t)
+				default:
+					parts += fmt.Sprintf(" + %d %s", t, r.src.label)
+				}
+			}
+			out[last].line += fmt.Sprintf(" — with the model's %d under the same per-file cap: %s, an exam of up to %d", budget, parts, total)
 		}
 	}
 	return out, nil
@@ -636,7 +649,8 @@ func applyAll(rs *advpool.RunSpec, files []toolFileMutants) error {
 		}
 		for _, m := range f.fm.Taken {
 			if other, dup := owner[m.ID]; dup {
-				return fmt.Errorf("mutant id %q is taken from both %s and %s", m.ID, other, f.src.tool)
+				msg := fmt.Sprintf("mutant id %q is taken from both %s and %s", m.ID, other, f.src.tool)
+				return localAuditError{usage: true, scanReason: reposcan.ReasonExecutorError, msg: msg, recorded: msg}
 			}
 			owner[m.ID] = f.src.tool
 		}

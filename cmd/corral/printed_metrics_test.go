@@ -589,6 +589,7 @@ var printedMetrics = map[string]printedRow{
 	"internal/advpool/aggregate.go:aggregate":                            {Fields: []string{"Row.MutantsDistinct", "Row.KillRate", "Row.Detail"}},
 	"internal/advpool/budget.go:String":                                  {Fields: []string{"Row.MutantBudget", "Row.MutantBudgetRule"}},
 	"internal/advpool/budget.go:WithTool":                                {Fields: []string{"Row.MutantBudget", "ToolMutantCounts.Taken", "ToolMutantCounts.Dropped"}},
+	"internal/advpool/budget.go:WithTools":                               {Fields: []string{"Row.MutantBudget", "ToolMutantCounts.Taken", "ToolMutantCounts.Dropped"}},
 	"internal/advpool/driver.go:NewDriver":                               {Exempt: "error message: builds failure text from causes, ids and paths via %v; no measured number"},
 	"internal/advpool/driver.go:StartRun":                                {Exempt: "error message: the numbers are limits, ids, exit codes, offsets and counts inside a failure text, not an audit measurement"},
 	"internal/advpool/driver.go:Tick":                                    {Exempt: "error message: the numbers are limits, ids, exit codes, offsets and counts inside a failure text, not an audit measurement"},

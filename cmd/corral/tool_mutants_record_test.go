@@ -759,12 +759,12 @@ func TestTheCombinedExamSizeIsSaid(t *testing.T) {
 
 	budget := advpool.MutantBudget{Rule: advpool.BudgetRuleComplexity, Total: 5, Complexity: 3, Floor: 4, Ceiling: 40}
 	var b bytes.Buffer
-	printWeakFile(&b, reposcan.WeakFile{Path: "pkg/a.go", MutantBudget: budget, ToolShare: 2})
+	printWeakFile(&b, reposcan.WeakFile{Path: "pkg/a.go", MutantBudget: budget, ToolShare: 2, ToolShares: map[string]int{"stryker@10.0.0": 2}})
 	if !strings.Contains(b.String(), "mutants: 5 model + 2 tool") {
 		t.Errorf("the report line does not say the combined exam:\n%s", b.String())
 	}
 	v := advpool.Verdict{MutantBudget: budget, RegionsTotal: 1, MutantSources: map[string]mutantsources.MutantSource{
-		"t/stryker/1": {Kind: mutantsources.KindTool}, "t/stryker/2": {Kind: mutantsources.KindTool}, "m1": {Kind: mutantsources.KindModel},
+		"t/stryker/1": {Kind: mutantsources.KindTool, Tool: "stryker@10.0.0"}, "t/stryker/2": {Kind: mutantsources.KindTool, Tool: "stryker@10.0.0"}, "m1": {Kind: mutantsources.KindModel},
 	}}
 	b.Reset()
 	renderAdvVerdict(&b, "pkg/a.go", advVerdictFromPool(v))
@@ -772,7 +772,7 @@ func TestTheCombinedExamSizeIsSaid(t *testing.T) {
 		t.Errorf("the verdict block does not say the combined exam:\n%s", b.String())
 	}
 	rep := reposcan.Aggregate("o", "r", "c", 1, 1, []reposcan.FileResult{{Job: reposcan.Job{Path: "pkg/a.go"}, Gradable: true, Verdict: v}}, nil)
-	if len(rep.Weakest) == 0 || rep.Weakest[0].ToolShare != 2 {
+	if len(rep.Weakest) == 0 || rep.Weakest[0].ToolShare != 2 || rep.Weakest[0].ToolShares["stryker@10.0.0"] != 2 {
 		t.Errorf("the report's file does not carry the verdict's tool share: %+v", rep.Weakest)
 	}
 }

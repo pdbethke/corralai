@@ -332,6 +332,8 @@ type WeakFile struct {
 	// model's (MutantBudget.WithTool). 0 for a tool-only run and a run with
 	// no tool source.
 	ToolShare int
+	// ToolShares is ToolShare by tool (advpool.ToolShares).
+	ToolShares map[string]int
 	// ExamCoverage mirrors advpool.Verdict.ExamCoverage: the symbols and
 	// decision points the graded mutants actually reached.
 	ExamCoverage advpool.ExamCoverage
@@ -669,6 +671,7 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 			// What the seats were asked for — see WeakFile.MutantBudget.
 			MutantBudget: r.Verdict.MutantBudget,
 			ToolShare:    advpool.ToolShare(r.Verdict),
+			ToolShares:   advpool.ToolShares(r.Verdict),
 			ExamCoverage: r.Verdict.ExamCoverage,
 			// Whether this file's goal was served from the goal cache —
 			// see WeakFile.GoalReused.

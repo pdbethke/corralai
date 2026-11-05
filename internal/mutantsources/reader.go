@@ -5,6 +5,7 @@ package mutantsources
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 )
 
@@ -45,6 +46,12 @@ var (
 // one grades a run depend on init order.
 func Register(r Reader) (unregister func()) {
 	name := r.Tool()
+	// "+" joins tools in a cache key and in a seat's text, "/" "\\" and "."
+	// are refused where a tool is named on the command line: a name holding
+	// one would make a joined key ambiguous.
+	if name == "" || strings.ContainsAny(name, "+/\\.:@") {
+		panic(fmt.Sprintf("mutantsources: tool name %q is empty or holds one of + / \\ . : @", name))
+	}
 	registryMu.Lock()
 	defer registryMu.Unlock()
 	if _, dup := registry[name]; dup {

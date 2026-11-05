@@ -251,7 +251,7 @@ type ScanRow struct {
 	// number is the one the file's "tool mutants" scan line printed, rendered
 	// from the same value. Empty on a run with no tool source and on every
 	// row written before it.
-	ToolMutants string `json:",omitempty"`
+	ToolMutants JSONText[[]ToolMutantCounts] `json:",omitempty"`
 }
 
 // ToolMutantCounts is one audited file's account of a mutation tool's

@@ -31,6 +31,7 @@ import (
 	"github.com/pdbethke/corralai/internal/hoststat"
 	"github.com/pdbethke/corralai/internal/killrate"
 	"github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/ledger"
 	"github.com/pdbethke/corralai/internal/modelcorr"
 	"github.com/pdbethke/corralai/internal/pairing"
 	"github.com/pdbethke/corralai/internal/prior"
@@ -5508,7 +5509,7 @@ func (l *localExecutor) seedSkipped() string {
 // toolMutants is every audited file's account of --mutants-from's report,
 // as the ledger's JSON text; "" for a dry run (no executor) and a scan with
 // no tool source.
-func (l *localExecutor) toolMutants() string {
+func (l *localExecutor) toolMutants() ledger.JSONText[[]ledger.ToolMutantCounts] {
 	if l == nil {
 		return ""
 	}

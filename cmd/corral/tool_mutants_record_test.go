@@ -167,7 +167,7 @@ func TestToolMutantRowsNameTheirSource(t *testing.T) {
 		t.Errorf("the view holds %d tool row(s) with their source, want 1", n)
 	}
 	var tm string
-	if err := db.QueryRow(`SELECT tool_mutants FROM corral_scans`).Scan(&tm); err != nil || tm != b.Scan.ToolMutants {
+	if err := db.QueryRow(`SELECT tool_mutants FROM corral_scans`).Scan(&tm); err != nil || tm != string(b.Scan.ToolMutants) {
 		t.Errorf("the view's tool_mutants = %q (%v), want the entry's %q", tm, err, b.Scan.ToolMutants)
 	}
 	wb, err := auditpush.ReadBundleForScan(db, auditpush.ScanRow{Repo: "o/r", ScanID: 1, ScanUID: entries[0].ScanUID})

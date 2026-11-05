@@ -55,6 +55,12 @@ func recordedFields(t *testing.T) map[string]bool {
 				continue
 			}
 			ft := f.Type
+			if et, ok := reflect.Zero(ft).Interface().(interface{ EncodedType() reflect.Type }); ok {
+				// A JSON-text field records nothing itself; its tiers live on
+				// the fields of the type it encodes.
+				walk(et.EncodedType())
+				continue
+			}
 			for ft.Kind() == reflect.Pointer || ft.Kind() == reflect.Slice || ft.Kind() == reflect.Array || ft.Kind() == reflect.Map {
 				ft = ft.Elem()
 			}
@@ -144,5 +150,17 @@ func TestPinnedTiers(t *testing.T) {
 	}
 	if _, ok := ledger.TierOf("Row", "NoSuchField"); ok {
 		t.Error("an unknown field must answer ok=false, never a default tier")
+	}
+}
+
+func TestRecordedFieldsWalkIntoJSONText(t *testing.T) {
+	got := recordedFields(t)
+	for _, want := range []string{"ToolMutantCounts.Path", "ToolMutantCounts.DroppedBy", "ToolMutantCounts.Refused"} {
+		if !got[want] {
+			t.Errorf("recordedFields lacks %q: the gate does not walk inside JSON-text fields", want)
+		}
+	}
+	if got["ScanRow.ToolMutants"] {
+		t.Errorf("ScanRow.ToolMutants is a leaf; its tier should live on the encoded type's fields")
 	}
 }

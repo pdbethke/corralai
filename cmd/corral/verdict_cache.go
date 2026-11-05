@@ -159,12 +159,9 @@ func (c *ledgerCache) toolAccount(cacheKey string) (ledger.ToolMutantCounts, boo
 // toolAccountsByPath reads a scan row's ToolMutants text by path. A text
 // that does not parse yields none: the cache fails closed on what it cannot
 // read, and the served file's account is then absent, never guessed.
-func toolAccountsByPath(text string) map[string]*ledger.ToolMutantCounts {
-	if text == "" {
-		return nil
-	}
-	var counts []ledger.ToolMutantCounts
-	if err := json.Unmarshal([]byte(text), &counts); err != nil {
+func toolAccountsByPath(text ledger.JSONText[[]ledger.ToolMutantCounts]) map[string]*ledger.ToolMutantCounts {
+	counts, err := text.Decode()
+	if err != nil || len(counts) == 0 {
 		return nil
 	}
 	out := make(map[string]*ledger.ToolMutantCounts, len(counts))

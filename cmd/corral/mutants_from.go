@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -368,14 +367,14 @@ func (c *toolCountsCollector) all() []ledger.ToolMutantCounts {
 
 // toolMutantsJSON is ScanRow.ToolMutants: every file's account, sorted by
 // path, as JSON text. "" when the run had no tool source.
-func toolMutantsJSON(counts []ledger.ToolMutantCounts) string {
+func toolMutantsJSON(counts []ledger.ToolMutantCounts) ledger.JSONText[[]ledger.ToolMutantCounts] {
 	if len(counts) == 0 {
 		return ""
 	}
 	sorted := append([]ledger.ToolMutantCounts(nil), counts...)
 	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Path < sorted[j].Path })
-	b, _ := json.Marshal(sorted) // strings, ints and string-keyed maps: always marshals
-	return string(b)
+	text, _ := ledger.EncodeJSONText(sorted) // strings, ints and string-keyed maps: always marshals
+	return text
 }
 
 // preCheck is forFile's verdict on whether the tool gives this file

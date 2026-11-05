@@ -412,7 +412,6 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `StatementSHA256` | key |  |
 | `Substrate` | measured |  |
 | `TestCommand` | measured |  |
-| `ToolMutants` | measured | per-status counts are the tool's own claims about its mutants; Taken and Dropped are corral's; Report (the report's sha256) is a key |
 | `Toolchains` | measured |  |
 | `Top` | measured |  |
 | `TotalFiles` | measured |  |
@@ -475,3 +474,21 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `Max` | measured |  |
 | `Median` | measured |  |
 | `Min` | measured |  |
+
+## ToolMutantCounts
+
+| Field | Tier | Note |
+|---|---|---|
+| `CompileError` | declared | the tool's own claim, read from its report |
+| `Dropped` | measured |  |
+| `DroppedBy` | measured |  |
+| `Killed` | declared | the tool's own claim, read from its report |
+| `NoCoverage` | declared | the tool's own claim, read from its report |
+| `NotRegraded` | declared | the tool's own claim, read from its report |
+| `Path` | key |  |
+| `Refused` | measured |  |
+| `Report` | key |  |
+| `Seed` | measured |  |
+| `Survived` | declared | the tool's own claim, read from its report |
+| `Taken` | measured |  |
+| `Tool` | declared | the tool's own claim, read from its report |

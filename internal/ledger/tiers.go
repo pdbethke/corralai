@@ -108,9 +108,11 @@ func buildFieldTiers() map[[2]string]FieldTier {
 		Inventory ShadowDraw MaxTokensReached
 		PushedBy Host SourcePushed StartedAt FinishedAt TotalMillis SelectionMillis ModelCalls InputTokens OutputTokens`)
 	add("ScanRow", TierMeta, noteRunAccount, "PreflightNote")
-	// Measured as a whole (corral read the report and counted it), with what
-	// it counts said: the per-status counts are the tool's claims.
-	add("ScanRow", TierMeasured, "per-status counts are the tool's own claims about its mutants; Taken and Dropped are corral's; Report (the report's sha256) is a key", "ToolMutants")
+	// ToolMutants is JSON text of []ToolMutantCounts; the tier gate walks
+	// into it, so each field of ToolMutantCounts carries its own tier.
+	add("ToolMutantCounts", TierKey, "", "Path Report")
+	add("ToolMutantCounts", TierMeasured, "", "Taken Dropped DroppedBy Seed Refused")
+	add("ToolMutantCounts", TierDeclared, "the tool's own claim, read from its report", "Tool Survived NoCoverage Killed CompileError NotRegraded")
 
 	// Row: one per audited file.
 	add("Row", TierKey, "", "Repo Commit Path ScanID RunURL StatementSHA256 ParentSHA256 CacheKey PriorDigest ReusedFromScanID")

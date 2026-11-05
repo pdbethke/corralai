@@ -5,7 +5,9 @@ package main
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/advpool"
@@ -137,4 +139,49 @@ func TestKillConfirmationRoundTrips(t *testing.T) {
 			KillConfirmation: m.KillConfirmation, UnrepeatedKilledBy: m.UnrepeatedKilledBy})
 	}
 	checkConfirmationRows(t, "warehouse read-back", whRows)
+}
+
+// TestRepoFileBlockPrintsHowKillsWereConfirmed: `certify --repo` is the path
+// real repositories run, and its per-file block did not print the
+// confirmation line `certify --local` prints, so REA t15's 28 confirmed kills
+// showed nowhere on screen. A reused (cached) verdict prints nothing, like the
+// timing line beside it: those confirmations are the earning run's.
+func TestRepoFileBlockPrintsHowKillsWereConfirmed(t *testing.T) {
+	f := reposcan.WeakFile{
+		Path: "a.ts", KillRate: 0.5, Survivors: 1,
+		DevKilledMutants: []advpool.MutantRef{
+			{ID: "m1", KillConfirmation: adequacy.KillConfirmedAlone},
+			{ID: "m2", KillConfirmation: adequacy.KillConfirmedRepeated},
+		},
+		DevSurvivedMutants: []advpool.MutantRef{{ID: "m3", KillConfirmation: adequacy.KillNotRepeated}},
+		ConfirmDuration:    90 * time.Second,
+	}
+	var b strings.Builder
+	printWeakFile(&b, f)
+	want := "   kills confirmed: 1 alone, 1 by repeating the run, 0 by timeout; 1 first-run failures did not repeat (now survivors) (confirmation took 1m30s)\n"
+	if !strings.Contains(b.String(), want) {
+		t.Errorf("--repo file block lacks the confirmation line %q:\n%s", want, b.String())
+	}
+	f.CacheHit = true
+	b.Reset()
+	printWeakFile(&b, f)
+	if strings.Contains(b.String(), "kills confirmed") {
+		t.Errorf("a reused verdict printed the earning run's confirmations:\n%s", b.String())
+	}
+}
+
+// TestRepoFileBlockShowsProofsATimedOutRunKept: a timed-out fan-out now keeps
+// the proofs its graded seats earned (PoolScored), so the file line must show
+// the count rather than hide it behind the TIMED OUT marker.
+func TestRepoFileBlockShowsProofsATimedOutRunKept(t *testing.T) {
+	var b strings.Builder
+	printWeakFile(&b, reposcan.WeakFile{Path: "a.ts", KillRate: 0.4, Survivors: 44, ProvenMissed: 30, TimedOut: true, PoolScored: true, WriterSeatsUngraded: 5})
+	if !strings.Contains(b.String(), "(44 survivor(s), 30 proven missed)") {
+		t.Errorf("timed-out file with kept proofs hid its count:\n%s", b.String())
+	}
+	b.Reset()
+	printWeakFile(&b, reposcan.WeakFile{Path: "a.ts", KillRate: 0.4, Survivors: 44, TimedOut: true})
+	if strings.Contains(b.String(), "proven missed") {
+		t.Errorf("timed-out file with no pool score printed a proven count:\n%s", b.String())
+	}
 }

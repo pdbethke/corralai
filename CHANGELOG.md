@@ -45,6 +45,19 @@ history of any release, `git log v0.3.4..v0.3.5`.
   kill recorded before this has no `KillConfirmation` and is unconfirmed,
   never "alone", and the record page marks an entry holding one.
 
+### Fixed
+
+- A run that hit `--timeout` while the per-survivor writer was still running
+  recorded `ProvenMissed 0` and dropped every proof its finished seats had
+  earned: the proofs were only added up once every seat finished. The timed-out
+  verdict now keeps them, with `PoolScored` set when any seat graded, and the
+  writer line still says how many seats never graded. Found on REA (try 15,
+  2026-11-03): 37 survivors killed by confirmed authored tests, recorded as
+  none. `--max-proven-missed` still fails closed on such a file while any seat
+  is ungraded, since those seats could have proven more.
+- `certify --repo` now prints the `kills confirmed` line in each file's
+  block; only `certify --local` printed it.
+
 ## [v1.0.0-rc.30] — 2026-11-01
 
 ### Added

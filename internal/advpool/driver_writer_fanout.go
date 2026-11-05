@@ -329,8 +329,25 @@ func writerAttemptSpread(run *runState) *TestsPerMutantSpread {
 // construction — there is exactly one attempt per survivor and it contributes
 // its own boolean — rather than by de-duplicating a list after the fact.
 func (d *Driver) finishWriterFanout(run *runState) {
+	compiled, measured, salvaged := d.bankWriterProofs(run)
+
+	run.primaryWriterMeasured = measured > 0
+	run.writerSalvaged = salvaged > 0
+	run.finishWriterFlags(compiled, measured)
+}
+
+// bankWriterProofs folds every seat that has PROVEN its survivor into the
+// run's proven count, its ids and the merged authored file, and returns how
+// many seats compiled, genuinely graded and were salvaged. A seat still in
+// flight has proven nothing yet and contributes nothing. It is shared by the
+// two places a fan-out ends: finishWriterFanout, when every seat is terminal,
+// and timeoutVerdict, when RunDeadline fires first. Until 2026-11-03 only the
+// first folded proofs, so a run that timed out mid-fan-out signed
+// ProvenMissed 0 over seats that had proven their survivors (REA t15: 37
+// confirmed authored kills, recorded as none).
+func (d *Driver) bankWriterProofs(run *runState) (compiled, measured, salvaged int) {
 	var parts []golang.AuthoredPart
-	compiled, measured, salvaged := 0, 0, 0
+	run.provenIDs = nil
 	for _, id := range run.writerOrder {
 		a := run.writerAttempts[id]
 		if a.compiled {
@@ -358,9 +375,15 @@ func (d *Driver) finishWriterFanout(run *runState) {
 	run.authoredTest = merged
 	d.mu.Unlock()
 	run.authoredExtra = extra
+	return compiled, measured, salvaged
+}
 
-	run.primaryWriterMeasured = measured > 0
-	run.writerSalvaged = salvaged > 0
+// finishWriterFlags sets the fan-out's end-of-run diagnosis from what its
+// seats did, and logs the result. Only finishWriterFanout calls it: a run
+// that timed out mid-fan-out has seats that never got the chance to compile
+// or grade, so "the writer failed" would be a claim about attempts that were
+// never made.
+func (run *runState) finishWriterFlags(compiled, measured int) {
 	// The two honest failures, kept apart exactly as the batched path keeps
 	// them apart: nothing ever compiled (testWriterFailed) is a different
 	// diagnosis from something compiled and never graded (poolTestUnsound),

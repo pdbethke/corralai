@@ -557,10 +557,13 @@ func TestUnmergeableProvenTestsRideTheVerdict(t *testing.T) {
 func TestTimeoutVerdictCarriesTheWriterDisclosure(t *testing.T) {
 	d := &Driver{}
 	run := &runState{
-		rs:            RunSpec{Repo: "r", Commit: "c", Lang: "go", WriterMode: WriterModePerSurvivor},
-		writerMode:    WriterModePerSurvivor,
-		devScored:     true,
-		devSurvivors:  []adequacy.Mutant{{ID: "m1"}, {ID: "m2"}, {ID: "m3"}},
+		rs:           RunSpec{Repo: "r", Commit: "c", Lang: "go", WriterMode: WriterModePerSurvivor},
+		writerMode:   WriterModePerSurvivor,
+		devScored:    true,
+		devSurvivors: []adequacy.Mutant{{ID: "m1"}, {ID: "m2"}, {ID: "m3"}},
+		// Folded already: the fan-out finished and the run stalled after it,
+		// so these are finishWriterFanout's values, not ones to re-derive.
+		poolScored:    true,
 		provenMissed:  1,
 		authoredExtra: []golang.AuthoredPart{{MutantID: "m2", Source: "x", Reason: "helper collision"}},
 		writerOrder:   []string{"m1", "m2", "m3"},
@@ -579,6 +582,65 @@ func TestTimeoutVerdictCarriesTheWriterDisclosure(t *testing.T) {
 	}
 	if v.WriterSeatsUngraded != 1 {
 		t.Errorf("WriterSeatsUngraded = %d, want 1 (m3 never graded)", v.WriterSeatsUngraded)
+	}
+}
+
+// TestTimeoutVerdictKeepsTheProofsSeatsEarnedBeforeTheDeadline: RunDeadline
+// can fire while the per-survivor fan-out is still running, before
+// finishWriterFanout ever folds the seats. A seat that already proved its
+// survivor proved it in the jail, and the verdict must keep that proof rather
+// than sign ProvenMissed 0. REA t15 (2026-11-03) timed out with 37 confirmed
+// authored kills in its log and a record that held none of them.
+func TestTimeoutVerdictKeepsTheProofsSeatsEarnedBeforeTheDeadline(t *testing.T) {
+	const testA = "package target\n\nimport \"testing\"\n\nfunc TestKillsA(t *testing.T) {}\n"
+	d := &Driver{}
+	run := &runState{
+		rs:           RunSpec{Repo: "r", Commit: "c", Lang: "go", WriterMode: WriterModePerSurvivor},
+		writerMode:   WriterModePerSurvivor,
+		devScored:    true,
+		devSurvivors: []adequacy.Mutant{{ID: "m1"}, {ID: "m2"}, {ID: "m3"}},
+		writerOrder:  []string{"m1", "m2", "m3"},
+		writerAttempts: map[string]*writerAttempt{
+			"m1": {mutant: adequacy.Mutant{ID: "m1"}, test: testA, done: true, compiled: true, measured: true, proven: true},
+			"m2": {mutant: adequacy.Mutant{ID: "m2"}, done: true, compiled: true, measured: true},
+			"m3": {mutant: adequacy.Mutant{ID: "m3"}, attempts: 1},
+		},
+	}
+	v := d.timeoutVerdict(run)
+	if !v.TimedOut || !v.PoolScored {
+		t.Fatalf("TimedOut=%v PoolScored=%v, want both: seats graded before the deadline", v.TimedOut, v.PoolScored)
+	}
+	if v.ProvenMissed != 1 || len(v.ProvenMutantIDs) != 1 || v.ProvenMutantIDs[0] != "m1" {
+		t.Errorf("ProvenMissed=%d ProvenMutantIDs=%v, want 1 and [m1]", v.ProvenMissed, v.ProvenMutantIDs)
+	}
+	if !strings.Contains(v.AuthoredTest, "TestKillsA") {
+		t.Errorf("AuthoredTest = %q, want the proven seat's test", v.AuthoredTest)
+	}
+	if v.WriterSeatsUngraded != 1 {
+		t.Errorf("WriterSeatsUngraded = %d, want 1 (m3 was still in flight)", v.WriterSeatsUngraded)
+	}
+	if v.TestWriterFailed || v.PoolTestUnsound {
+		t.Errorf("TestWriterFailed=%v PoolTestUnsound=%v, want neither on a timeout", v.TestWriterFailed, v.PoolTestUnsound)
+	}
+}
+
+// TestTimeoutVerdictBeforeAnySeatGradedHasNoPoolScore is the negative
+// control: a fan-out where no seat graded before the deadline measured
+// nothing, so its zero must stay unscored rather than read as "tried and
+// missed".
+func TestTimeoutVerdictBeforeAnySeatGradedHasNoPoolScore(t *testing.T) {
+	d := &Driver{}
+	run := &runState{
+		rs:             RunSpec{Repo: "r", Commit: "c", Lang: "go", WriterMode: WriterModePerSurvivor},
+		writerMode:     WriterModePerSurvivor,
+		devScored:      true,
+		devSurvivors:   []adequacy.Mutant{{ID: "m1"}},
+		writerOrder:    []string{"m1"},
+		writerAttempts: map[string]*writerAttempt{"m1": {mutant: adequacy.Mutant{ID: "m1"}, attempts: 1}},
+	}
+	v := d.timeoutVerdict(run)
+	if v.PoolScored || v.ProvenMissed != 0 {
+		t.Errorf("PoolScored=%v ProvenMissed=%d, want false and 0", v.PoolScored, v.ProvenMissed)
 	}
 }
 

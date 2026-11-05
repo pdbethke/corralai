@@ -102,6 +102,12 @@ type FileMutants struct {
 	// refused ones included: they describe the report, not the file.
 	SchemaVersion string
 	Thresholds    *ledger.ToolThresholds
+	// Language is the report's own label for the file's language and
+	// Dependencies the tool's declared plugin packages and versions (each
+	// name through recordableName, each version through recordable). Both
+	// are set on refused files too: they are the report's claims.
+	Language     string
+	Dependencies map[string]string
 }
 
 // How a report was tied to the audited file. Embedded-source: the report
@@ -179,10 +185,15 @@ type strykerReport struct {
 	Framework     *struct {
 		Name    string `json:"name"`
 		Version string `json:"version"`
+		// Dependencies are the tool's plugin packages and their versions
+		// (e.g. the TypeScript checker and TypeScript itself), which decide
+		// which mutants come out as CompileError.
+		Dependencies map[string]string `json:"dependencies"`
 	} `json:"framework"`
 	Files map[string]struct {
-		Source  string                `json:"source"`
-		Mutants []strykerReportMutant `json:"mutants"`
+		Source   string                `json:"source"`
+		Language string                `json:"language"`
+		Mutants  []strykerReportMutant `json:"mutants"`
 	} `json:"files"`
 	// TestFiles names the tests killedBy and coveredBy refer to by id. Only
 	// each test's id and name are read; a test file's source is not.
@@ -275,7 +286,8 @@ func readStryker(reportJSON []byte, files map[string][]byte, budget func(path st
 			return nil, fmt.Errorf("mutantsources: the mutant budget for %s is %d; it must be at least 1", p, n)
 		}
 		fm := FileMutants{Path: p, Tool: tool, Seed: seed,
-			SchemaVersion: recordable(rep.SchemaVersion), Thresholds: rep.Thresholds}
+			SchemaVersion: recordable(rep.SchemaVersion), Thresholds: rep.Thresholds,
+			Language: recordable(rf.Language), Dependencies: recordableDependencies(rep.Framework.Dependencies)}
 		if refusal := refuseSource(p, rf.Source, bytes); refusal != "" {
 			fm.Refused = refusal
 			out[p] = fm

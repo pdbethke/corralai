@@ -114,6 +114,15 @@ Each account also records the report's own `schemaVersion` and its mutation-scor
 Report fields not recorded, each for a stated reason (some are parsed and dropped, the rest are
 never parsed):
 
+The report's `files.language` and `framework.dependencies` ARE recorded, as declared values on the
+file's account (`Language`, `Dependencies`): the dependencies, such as the TypeScript checker and
+TypeScript itself, decide which of the tool's mutants come out as compile errors. Package names pass
+the same host-identifier filter as test names, and versions are held as written only when they are
+plain tokens.
+
+> **Correction (2026-11-05):** an earlier version of this page listed both as not recorded. The
+> founder ruled that they be recorded, under "all the data possible makes it into the ledger".
+
 | Stryker field | Why it is not recorded |
 |---|---|
 | `statusReason` | the tool's free text: compiler output and assertion diffs that name values and host paths |
@@ -121,8 +130,6 @@ never parsed):
 | `projectRoot` | a host path on the machine that ran the tool |
 | `config` | the operator's whole configuration, paths and commands |
 | `framework.branding` | the tool's logo and homepage; describes no run |
-| `framework.dependencies` | the tool's plugin packages; their names hold `/`, and the version that made the mutants is in `Tool` |
-| `files.language` | the tool's language label; the record's language is corral's own (`Row.Lang`), which chose the runner |
 | `testFiles.source` | the test files' whole source text: the developer's code, and free text no filter makes safe |
 
 A test fails on any parsed field that is neither recorded nor on this list

@@ -58,8 +58,9 @@ history of any release, `git log v0.3.4..v0.3.5`.
   `Mutants`, and test names once per file in `Tests`, with names that could carry a host identifier
   held as unsalted 16-hex digests (the rule, and the shapes it misses, are in
   `docs/corral/mutant-sources.md`). The report's own `schemaVersion` and `thresholds` are recorded
-  as declared values. `statusReason`, `description`, `projectRoot`, `config`, `framework.branding`,
-  `framework.dependencies`, `files.language` and `testFiles.source` are not recorded, each for a
+  as declared values, and so are its `files.language` and `framework.dependencies` (the tool's
+  plugin packages and versions, e.g. the TypeScript checker). `statusReason`, `description`,
+  `projectRoot`, `config`, `framework.branding` and `testFiles.source` are not recorded, each for a
   stated reason in `docs/corral/mutant-sources.md`. The list is bounded
   to 1<<20 bytes per file and `MutantsTruncated` says what the bound did; REA's full report measured
   292,956 bytes raw and 25,006 gzipped. The scan line for a counted file ends in `— match: <how>`.

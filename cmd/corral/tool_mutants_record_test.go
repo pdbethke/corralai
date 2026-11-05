@@ -1037,13 +1037,17 @@ func TestToolMutantCountsCarryTheReportsDeclaredValues(t *testing.T) {
 	high, low := 80.0, 60.0
 	th := &ledger.ToolThresholds{High: &high, Low: &low}
 	for _, refused := range []string{"", "source differs"} {
+		deps := map[string]string{"typescript": "7.0.2"}
 		c := toolMutantCounts(mutantsources.FileMutants{Path: "a.ts", Tool: "stryker@10.0.0", Refused: refused,
-			SchemaVersion: "1.0", Thresholds: th})
+			SchemaVersion: "1.0", Thresholds: th, Language: "typescript", Dependencies: deps})
 		if c.SchemaVersion != "1.0" || c.Thresholds != th {
 			t.Errorf("refused %q: SchemaVersion %q Thresholds %+v", refused, c.SchemaVersion, c.Thresholds)
 		}
+		if c.Language != "typescript" || c.Dependencies["typescript"] != "7.0.2" {
+			t.Errorf("refused %q: Language %q Dependencies %v", refused, c.Language, c.Dependencies)
+		}
 	}
-	if c := toolMutantCounts(mutantsources.FileMutants{Path: "a.ts", Tool: "stryker@10.0.0"}); c.SchemaVersion != "" || c.Thresholds != nil {
+	if c := toolMutantCounts(mutantsources.FileMutants{Path: "a.ts", Tool: "stryker@10.0.0"}); c.SchemaVersion != "" || c.Thresholds != nil || c.Language != "" || c.Dependencies != nil {
 		t.Errorf("no declared values, yet the account = %+v", c)
 	}
 }

@@ -327,6 +327,16 @@ type ToolMutantCounts struct {
 	// tool's configuration set them. Absent when the report gives none, as
 	// SchemaVersion.
 	Thresholds *ToolThresholds `json:"thresholds,omitempty"`
+	// Language is the report's own label for the file's language, held as
+	// written when it is a plain token. It is the tool's claim; the language
+	// corral graded the file as is its own (Row.Lang).
+	Language string `json:"language,omitempty"`
+	// Dependencies are the tool's declared plugin packages and their
+	// versions (Stryker's framework.dependencies, e.g. its TypeScript
+	// checker and TypeScript itself), which decide which of its mutants come
+	// out as compile errors. Names pass the same host-identifier filter as
+	// test names; versions are held as written when plain tokens.
+	Dependencies map[string]string `json:"dependencies,omitempty"`
 }
 
 // ToolThresholds are a mutation tool's mutation-score thresholds as its

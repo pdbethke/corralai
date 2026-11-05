@@ -499,9 +499,11 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | Field | Tier | Note |
 |---|---|---|
 | `CompileError` | declared | the tool's own claim, read from its report |
+| `Dependencies` | declared | the tool report's own value |
 | `Dropped` | measured |  |
 | `DroppedBy` | measured |  |
 | `Killed` | declared | the tool's own claim, read from its report |
+| `Language` | declared | the tool report's own value |
 | `Match` | measured |  |
 | `MutantsTruncated` | measured |  |
 | `NoCoverage` | declared | the tool's own claim, read from its report |

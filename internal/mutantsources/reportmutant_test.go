@@ -190,6 +190,8 @@ func TestEveryParsedFieldIsRecordedOrExcluded(t *testing.T) {
 		"thresholds.high":                     "ToolThresholds.High",
 		"thresholds.low":                      "ToolThresholds.Low",
 		"thresholds.break":                    "ToolThresholds.Break",
+		"files.language":                      "ToolMutantCounts.Language",
+		"framework.dependencies":              "ToolMutantCounts.Dependencies",
 	}
 	ledgerTypes := map[string]reflect.Type{
 		"ReportMutant":     reflect.TypeOf(ledger.ReportMutant{}),
@@ -474,7 +476,7 @@ func TestStatusReasonNeverReachesTheRecord(t *testing.T) {
 func TestExcludedFieldsAreListed(t *testing.T) {
 	got := append([]string(nil), excludedFields["stryker"]...)
 	sort.Strings(got)
-	want := []string{"config", "files.language", "files.mutants.description", "files.mutants.statusReason", "framework.branding", "framework.dependencies", "projectRoot", "testFiles.source"}
+	want := []string{"config", "files.mutants.description", "files.mutants.statusReason", "framework.branding", "projectRoot", "testFiles.source"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("excludedFields[stryker] = %v, want %v", got, want)
 	}
@@ -484,6 +486,54 @@ func TestExcludedFieldsAreListed(t *testing.T) {
 // values and reach every file's account, the refused included (they describe
 // the report, not the file). A null break is recorded absent, never 0; a
 // schemaVersion that is not a plain token is not recorded as written.
+// Founder, 2026-11-05: "record both language and dependencies". The
+// dependencies matter beyond the tool's own version: the TypeScript checker
+// plugin and the TypeScript version decide which mutants come out as
+// CompileError (REA ran TypeScript 7.0.2 through a bundled TypeScript 6).
+func TestTheReportsLanguageAndDependenciesAreRecorded(t *testing.T) {
+	report, src, _ := loadREA(t)
+	got, err := readStryker(report, map[string][]byte{reaPath: []byte(src)}, budgetOf(5), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fm := got[reaPath]
+	want := map[string]string{"@stryker-mutator/typescript-checker": "10.0.0", "typescript": "7.0.2"}
+	if fm.Language != "typescript" || !reflect.DeepEqual(fm.Dependencies, want) {
+		t.Errorf("Language %q Dependencies %v, want typescript and %v", fm.Language, fm.Dependencies, want)
+	}
+	refused, err := readStryker(report, map[string][]byte{reaPath: []byte(src + "x")}, budgetOf(5), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := refused[reaPath]; r.Refused == "" || r.Language != "typescript" || !reflect.DeepEqual(r.Dependencies, want) {
+		t.Errorf("a refused file's account = %+v, want the report's language and dependencies", r)
+	}
+	// Hostile values never reach the record as written.
+	var m map[string]any
+	if err := json.Unmarshal(report, &m); err != nil {
+		t.Fatal(err)
+	}
+	m["framework"].(map[string]any)["dependencies"] = map[string]any{"/home/alice/pkg/x": "1.0", "ok-pkg": "1.0 /home/alice"}
+	for _, f := range m["files"].(map[string]any) {
+		f.(map[string]any)["language"] = "type script\n/home/alice"
+	}
+	hostile, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err = readStryker(hostile, map[string][]byte{reaPath: []byte(src)}, budgetOf(5), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := got[reaPath]
+	if h.Language != NotAPlainToken {
+		t.Errorf("a hostile language is recorded as %q, want %q", h.Language, NotAPlainToken)
+	}
+	if _, raw := h.Dependencies["/home/alice/pkg/x"]; raw || h.Dependencies["ok-pkg"] != NotAPlainToken {
+		t.Errorf("hostile dependencies are recorded as %v, want a digested name and a not-a-plain-token version", h.Dependencies)
+	}
+}
+
 func TestTheReportsSchemaVersionAndThresholdsAreRead(t *testing.T) {
 	report, src, _ := loadREA(t)
 	got, err := readStryker(report, map[string][]byte{reaPath: []byte(src)}, budgetOf(5), 1)

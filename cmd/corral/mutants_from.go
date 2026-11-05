@@ -285,7 +285,8 @@ func (s *toolMutantSource) forFile(p string, code []byte, budget int) (toolFileM
 // claims; Taken and the drops are corral's.
 func toolMutantCounts(fm mutantsources.FileMutants) ledger.ToolMutantCounts {
 	c := ledger.ToolMutantCounts{Path: fm.Path, Tool: fm.Tool, Refused: fm.Refused,
-		SchemaVersion: fm.SchemaVersion, Thresholds: fm.Thresholds}
+		SchemaVersion: fm.SchemaVersion, Thresholds: fm.Thresholds,
+		Language: fm.Language, Dependencies: fm.Dependencies}
 	if fm.Refused != "" {
 		return c
 	}

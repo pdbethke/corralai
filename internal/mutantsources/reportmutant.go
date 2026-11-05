@@ -36,15 +36,6 @@ var excludedFields = map[string][]string{
 		"config",
 		// framework.branding: the tool's logo and homepage; describes no run.
 		"framework.branding",
-		// framework.dependencies: the tool's plugin packages and their
-		// versions. Package names hold "/" and fail recordable, and the
-		// version that produced the mutants is already in Tool.
-		"framework.dependencies",
-		// files.language: the tool's label for the file's language. The
-		// record names the language from corral's own plugin (Row.Lang),
-		// which is what chose the runner, so a second, declared label adds
-		// nothing it can be checked against.
-		"files.language",
 		// testFiles.source: the whole text of each test file. It is the
 		// developer's code, not a fact about the run, and free text no
 		// filter makes safe; the tests are recorded by id and name.
@@ -190,4 +181,20 @@ func strykerByteSpan(lines []string, lineStarts []int, start, end strykerPos) *[
 		return nil
 	}
 	return &b
+}
+
+// recordableDependencies is a report's declared dependencies as the record
+// holds them: each package name through recordableName (a scoped name such
+// as "@stryker-mutator/typescript-checker" is kept; one that could carry a
+// host identifier is digested) and each version through recordable. nil
+// when the report declares none, so an absent value stays absent.
+func recordableDependencies(deps map[string]string) map[string]string {
+	if len(deps) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(deps))
+	for name, version := range deps {
+		out[recordableName(name)] = recordable(version)
+	}
+	return out
 }

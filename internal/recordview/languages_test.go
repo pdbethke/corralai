@@ -4,10 +4,13 @@ package recordview
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"crypto/rand"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/ledger"
 )
 
@@ -179,5 +182,75 @@ func TestIndexLinksToLanguagesOnlyWhenBuilt(t *testing.T) {
 	}
 	if !strings.Contains(renderPage(t, base.WithLanguages(lLangs, lRunners, lSelf, "--self"), "index.html"), `href="languages.html"`) {
 		t.Fatalf("index does not link the Languages page")
+	}
+}
+
+// loadedLedger writes one signed qualifying go run to a real ledger
+// directory, so the tests below go through Load, not a hand-built Site.
+func loadedLedger(t *testing.T, gen string) (dir string, pub ed25519.PublicKey) {
+	t.Helper()
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir = t.TempDir()
+	d := false
+	e := auditpush.LedgerEntry{Bundle: auditpush.Bundle{
+		Scan: auditpush.ScanRow{Repo: "https://github.com/acme/widgets", RepoIdentity: "git", Commit: "c1",
+			Runner: "go-test", VerdictGeneration: gen, TreeDirty: &d},
+		Files: []auditpush.Row{{Lang: "go", Path: "a.go", Audited: 1, MutantsGraded: 5}},
+	}}
+	signer := auditpush.Ed25519LedgerSigner{KeyID: auditpush.KeyFingerprint(pub), Key: priv}
+	if _, err := auditpush.AppendLedgerEntry(dir, e, signer); err != nil {
+		t.Fatal(err)
+	}
+	return dir, pub
+}
+
+// The page is computed from what Load read: dropping that hand-off shows
+// "no run" for every language in production while hand-built sites pass.
+func TestLanguagesPageFromALoadedLedgerShowsItsRun(t *testing.T) {
+	dir, pub := loadedLedger(t, "40")
+	s, err := Load(dir, pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s = s.WithLanguages(lLangs, lRunners, lSelf, "--self")
+	if s.Languages[0].Local == nil {
+		t.Fatalf("a signed qualifying run on disk is not on the page: %+v", s.Languages[0])
+	}
+}
+
+func TestLanguagesPageFromALedgerLoadedWithoutAKeySaysNotChecked(t *testing.T) {
+	dir, _ := loadedLedger(t, "40")
+	s, err := Load(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s = s.WithLanguages(lLangs, lRunners, lSelf, "--self")
+	if got := s.Languages[0].Reason; got != "signatures not checked: render with the ledger's public key" {
+		t.Fatalf("reason = %q", got)
+	}
+}
+
+// A run below the floor with no signature check is unchecked, not "no run".
+func TestLanguagesPageBelowFloorUncheckedSaysNotChecked(t *testing.T) {
+	s := langSite(t, "39", false, "").WithLanguages(lLangs, lRunners, lSelf, "--self")
+	if got := s.Languages[0].Reason; got != "signatures not checked: render with the ledger's public key" {
+		t.Fatalf("reason = %q", got)
+	}
+}
+
+// A language never measured has no gap verdict to give: "—", not "no".
+func TestLanguagesPageUnmeasuredLanguageHasNoGapVerdict(t *testing.T) {
+	s := langSite(t, "40", true, "").WithLanguages(lLangs, lRunners, lSelf, "--self")
+	page := renderPage(t, s, "languages.html")
+	i := strings.Index(page, "<td class=\"mono\">python</td>")
+	if i < 0 {
+		t.Fatalf("no python row")
+	}
+	row := page[i : i+strings.Index(page[i:], "</tr>")]
+	if strings.Contains(row, "chip") {
+		t.Fatalf("an unmeasured language shows a gap chip: %s", row)
 	}
 }

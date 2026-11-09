@@ -297,9 +297,9 @@ func TestLanguageProofsNewestByTimeNotChainOrder(t *testing.T) {
 	}
 }
 
-func TestLanguageProofsBelowFloorAndUncheckedCountsNeither(t *testing.T) {
+func TestLanguageProofsUncheckedOutranksBelowFloorInTheRule(t *testing.T) {
 	g := one(t, pOpts{gen: "39", noSig: true})["go"]
-	if g.BelowFloor != 0 || g.Unchecked != 0 || g.Local != nil {
+	if g.BelowFloor != 0 || g.Unchecked != 1 || g.Local != nil {
 		t.Fatalf("got %+v", g)
 	}
 }

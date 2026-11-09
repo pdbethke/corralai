@@ -545,7 +545,7 @@ const languagesTmpl = `<!doctype html>
 <td>{{with .Local}}{{template "proofrun" .}}{{else}}&mdash;{{end}}</td>
 <td>{{with .CI}}{{template "proofrun" .}}{{else}}&mdash;{{end}}</td>
 {{else}}<td colspan="2" class="small">&mdash; {{.Reason}}</td>{{end}}
-<td>{{if .ProvedAGap}}<span class="chip ok">yes</span>{{else}}<span class="chip mute">no</span>{{end}}</td></tr>
+<td>{{if or .Local .CI}}{{if .ProvedAGap}}<span class="chip ok">yes</span>{{else}}<span class="chip mute">no</span>{{end}}{{else}}&mdash;{{end}}</td></tr>
 {{end}}
 </tbody></table></div>
 {{end}}

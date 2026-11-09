@@ -130,16 +130,17 @@ func LanguageProofs(entries []Entry, checks []ChainCheck, self []string, floor s
 			lp := out[f.Lang]
 			if !seen[f.Lang] {
 				seen[f.Lang] = true
-				// A near-miss is counted only when it fails that ONE
-				// condition; failing both is counted under neither.
+				// An unchecked signature counts as Unchecked whatever the
+				// generation: it is the reason a key could still change.
+				// BelowFloor counts only entries whose signature WAS
+				// checked and that sit below the floor.
 				if belowFloor || unchecked {
-					if belowFloor && !unchecked {
-						lp.BelowFloor++
-						out[f.Lang] = lp
-					} else if unchecked && !belowFloor {
+					if unchecked {
 						lp.Unchecked++
-						out[f.Lang] = lp
+					} else {
+						lp.BelowFloor++
 					}
+					out[f.Lang] = lp
 					continue
 				}
 			} else if belowFloor || unchecked {

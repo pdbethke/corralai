@@ -150,3 +150,34 @@ func TestWarehouseSiteHasNoLanguagesPage(t *testing.T) {
 		}
 	}
 }
+
+// Both an unchecked run and a below-floor run on the record: the unchecked
+// reason wins, because a key could still turn it into proof.
+func TestLanguagesPageUncheckedOutranksBelowFloor(t *testing.T) {
+	a := langSite(t, "40", false, "")
+	b := langSite(t, "39", true, "")
+	b.entries[0].Hash, b.checks[0].Hash = "0123456789abcdef0123456789abcdef", "0123456789abcdef0123456789abcdef"
+	a.entries = append(a.entries, b.entries...)
+	a.checks = append(a.checks, b.checks...)
+	s := a.WithLanguages(lLangs, lRunners, lSelf, "--self")
+	if got := s.Languages[0].Reason; got != "signatures not checked: render with the ledger's public key" {
+		t.Fatalf("reason = %q", got)
+	}
+}
+
+func TestLanguagesPageStatesTheCIColumnRestsOnTheRunURL(t *testing.T) {
+	s := langSite(t, "40", true, "").WithLanguages(lLangs, lRunners, lSelf, "--self")
+	if !strings.Contains(renderPage(t, s, "languages.html"), "The CI column rests on each run's linked Actions URL") {
+		t.Fatalf("the trust sentence is missing")
+	}
+}
+
+func TestIndexLinksToLanguagesOnlyWhenBuilt(t *testing.T) {
+	base := langSite(t, "40", true, "")
+	if strings.Contains(renderPage(t, base, "index.html"), "languages.html") {
+		t.Fatalf("index links a page that does not exist")
+	}
+	if !strings.Contains(renderPage(t, base.WithLanguages(lLangs, lRunners, lSelf, "--self"), "index.html"), `href="languages.html"`) {
+		t.Fatalf("index does not link the Languages page")
+	}
+}

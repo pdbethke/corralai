@@ -279,21 +279,9 @@ generated from the table the code dispatches on, not written by hand.
 
 **Where each language's support actually stands** is read from the record, not written here: the [Languages page](https://corralai.dev/ledger/languages.html) is derived from signed ledger entries, and a language with no qualifying run there shows "—".
 
-The table that used to sit in this section was runs made before the record restarted on 2026-11-09, some of them maintainer-run with no artefact behind them; those entries are kept, unedited, in the [`ledger-archive/2026-11-09`](https://github.com/pdbethke/corralai/tree/ledger-archive/2026-11-09) tag.
+The table that used to sit in this section listed runs made before the record restarted on 2026-11-09. Only the runs that were recorded on the ledger, such as the Rust entry `94d9296c5801`, are in the [`ledger-archive/2026-11-09`](https://github.com/pdbethke/corralai/tree/ledger-archive/2026-11-09) tag. The rest had no artefact in this repository: the Go row was a GitHub Actions run, the vercel/ms result is a recording, and the Python, Ruby, PHP and private-SDK figures were maintainer-run self-reports. The prose that summarised those rows has been removed with them.
 
-Go and Python are exercised hardest — Go on demand in CI, Python across
-repeated whole-repo scans. The self-audit workflow is opt-in per pull request
-(it needs the `audit` label) and is `continue-on-error`, so it is a tool the
-maintainer reaches for, not a gate that runs on every commit: as of
-2026-10-16, its last 100 runs were all skipped. **TypeScript, JavaScript, Ruby,
-PHP and Rust each rest on a single third-party repository**, which is enough
-to show the plugin works and is not evidence about the ecosystem. Treat them
-accordingly. PHP's 40/40 run gave the proving seat nothing to prove; the
-later run that left one survivor is where the PHP writer proved a gap (the
-suite tests `-123`, never `-1`, and the authored test calls
-`Assert::notNegativeInteger(-1)`; CHANGELOG, rc.22).
-
-One number in that table deserves its own warning: kill rate moves **run to
+One number deserves its own warning: kill rate moves **run to
 run on the same file with the same suite**, because the faults are generated
 afresh each time. Measured swing on one file: 0.55 to 0.80. A single run is
 evidence of specific gaps, **not a grade** — never quote one as a score.

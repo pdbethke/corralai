@@ -1227,6 +1227,8 @@ Usage of ui:
     	print the URL and exit without serving (for scripts and smoke tests)
   -repo string
     	with --write, the checkout a finding's reproduction is rechecked against (its HEAD, in the sandbox — see corral review recheck) (default ".")
+  -self value
+    	repeatable: a repository (as the ledger names it, e.g. github.com/pdbethke/corralai) whose runs are self-audit and never count as proof on the Languages page. With none the page says it needs this flag; it never means "exclude nothing"
   -write
     	let this page WRITE: adjudicate findings and recheck them, by running corral's own subcommands. Loopback only; prints a URL carrying a launch token valid until the server exits — anyone with that URL can write verdicts in your name. The URL is printed, never opened, so the token stays off every process's command line; over SSH, tunnel the same port on both ends (ssh -L 8787:127.0.0.1:8787). A click on Confirm or Refute is a verdict recorded as you
 ```

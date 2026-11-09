@@ -203,6 +203,7 @@ corral ui --addr	executed	run:2026-09-02 `--addr 0.0.0.0:8787` emitted the non-l
 corral ui --ledger-repo	executed	test:cmd/corral/verify_ledger_repo_test.go (chain page carries the Problem without it, not with it)
 corral ui --open	executed	test:cmd/corral/ui_write_test.go
 corral ui --print-url	executed	run:2026-09-02 printed the URL and exited 0 without serving
+corral ui --self	executed	test:cmd/corral/ui_self_test.go (TestUISelfFlagRendersLanguages: without it the Languages page names the flag, with it the signed run shows)
 corral ui --repo	executed	test:cmd/corral/ui_write_test.go
 corral ui --write	executed	test:cmd/corral/ui_write_test.go
 corral-recordings-import --db	executed	test:cmd/corral-recordings-import/main_test.go (binding, own-flags guard, and the required-flag report)

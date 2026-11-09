@@ -24,8 +24,10 @@ import (
 	"os"
 	"regexp"
 	"sort"
+	"strings"
 
 	"github.com/pdbethke/corralai/internal/auditpush"
+	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/ledger"
 	"github.com/pdbethke/corralai/internal/recordview"
 )
@@ -34,12 +36,31 @@ import (
 // --ledger-repo.
 var repoRE = regexp.MustCompile(`^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$`)
 
+// stringList is a repeatable string flag.
+type stringList []string
+
+func (l *stringList) String() string     { return strings.Join(*l, ",") }
+func (l *stringList) Set(v string) error { *l = append(*l, v); return nil }
+
+// runnerLanguages is the runner table's ID to languages, which the Languages
+// page needs to say which language a run exercised. Not shared with corral
+// ui: recordview must not import lang, and two lines are not worth a package.
+func runnerLanguages() map[string][]string {
+	m := map[string][]string{}
+	for _, r := range lang.Runners() {
+		m[r.ID] = r.Languages
+	}
+	return m
+}
+
 func main() {
 	ledgerDir := flag.String("ledger", "", "the ledger directory (a checkout of the ledger branch)")
 	out := flag.String("out", "", "directory to write the static site into (index.html + entry/<hash>.html)")
 	pubHex := flag.String("pubkey", "", "hex Ed25519 public key to verify signatures against; else $CORRALAI_LEDGER_PUBKEY; with neither, signatures are NOT checked and the page says so")
 	repo := flag.String("repo", "", "REQUIRED: the GitHub repository (owner/name) whose Actions identity signed the ledger's keyless entries; they are checked against exactly this one")
 	siteChrome := flag.Bool("site-chrome", false, "leave the slot at the top of every page that the corralai.dev build fills with the site's own header")
+	var self stringList
+	flag.Var(&self, "self", "REQUIRED, repeatable: a repository (as the ledger names it, e.g. github.com/pdbethke/corralai) whose runs are self-audit and never count as proof on the Languages page")
 	flag.Parse()
 
 	if *ledgerDir == "" {
@@ -48,6 +69,10 @@ func main() {
 	}
 	if !repoRE.MatchString(*repo) {
 		fmt.Fprintf(os.Stderr, "ledgersite: -repo is required and must be owner/name, got %q\n", *repo)
+		os.Exit(2)
+	}
+	if len(self) == 0 {
+		fmt.Fprintln(os.Stderr, "ledgersite: -self is required: name the repositories whose runs are self-audit (repeatable); there is no default, because an empty list would count them as proof")
 		os.Exit(2)
 	}
 	if !auditpush.IsLedgerDir(*ledgerDir) {
@@ -177,6 +202,7 @@ func main() {
 		os.Exit(1)
 	}
 	v.SiteChrome = *siteChrome
+	v = v.WithLanguages(lang.Names(), runnerLanguages(), self, "-self")
 	if err := recordview.WriteStatic(*out, v); err != nil {
 		fmt.Fprintf(os.Stderr, "ledgersite: writing site: %v\n", err)
 		os.Exit(1)

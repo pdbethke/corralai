@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/pdbethke/corralai/internal/auditpush"
+	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/recordview"
 )
 
@@ -15,7 +16,7 @@ import (
 // same reader `corral seal` uses, and whether this server may write. The
 // pages themselves are recordview's, the same ones the public record
 // page is built from.
-func uiSite(st sealReader, ledgerDir, ledgerRepo string, write bool) func() (recordview.Site, error) {
+func uiSite(st sealReader, ledgerDir, ledgerRepo string, self []string, write bool) func() (recordview.Site, error) {
 	return func() (recordview.Site, error) {
 		s := recordview.Site{}
 		if ledgerDir != "" {
@@ -32,12 +33,28 @@ func uiSite(st sealReader, ledgerDir, ledgerRepo string, write bool) func() (rec
 			if s, err = recordview.LoadTrust(ledgerDir, trust); err != nil {
 				return recordview.Site{}, err
 			}
+			// Every load, like the rest of the page: the Languages page is
+			// computed from the entries this request read. An empty self
+			// renders the page's refusal, never an unfiltered table.
+			s = s.WithLanguages(lang.Names(), runnerLanguages(), self, "--self")
 		}
 		rows, err := st.SealRows(context.Background(), "")
 		s = s.WithSeal(sealRowsForView(rows), err)
 		s.Write = write
 		return s, nil
 	}
+}
+
+// runnerLanguages is the runner table's ID to languages, which the Languages
+// page needs to say which language a run exercised. Not shared with
+// scripts/ledgersite: recordview must not import lang, and two lines are not
+// worth a package.
+func runnerLanguages() map[string][]string {
+	m := map[string][]string{}
+	for _, r := range lang.Runners() {
+		m[r.ID] = r.Languages
+	}
+	return m
 }
 
 // sealRowsForView converts the warehouse's rows to the page's. Every field

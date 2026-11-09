@@ -277,30 +277,9 @@ language's tests, runner by runner, and why each gap exists, is on
 [docs/corral/language-support.md](docs/corral/language-support.md) —
 generated from the table the code dispatches on, not written by hand.
 
-**Where each language's support actually stands.** A tool that argues for
-execution over self-report should not claim a language on the strength of a
-passing unit test, so here is what has actually been run, against what:
+**Where each language's support actually stands** is read from the record, not written here: the [Languages page](https://corralai.dev/ledger/languages.html) is derived from signed ledger entries, and a language with no qualifying run there shows "—".
 
-| language | evidence | verdict |
-|---|---|---|
-| **Go** | this repo's own entry point, audited by the GitHub Action on a real commit | 40 faults planted, 10 killed, **0.25**, 1 gap proven (that's corral's own `cmd/corral/main.go`; we published it rather than picking a flattering file) |
-| **Python** | 6 whole-repo scans of [Flask](https://github.com/pallets/flask) | 10 files audited, **48 gaps proven by execution** |
-| **TypeScript** | a private SDK, and [vercel/ms](https://github.com/vercel/ms) | 0.79 / **0.94**, 3 and 2 gaps proven |
-| **JavaScript** | [vercel/ms](https://github.com/vercel/ms) under jest | **CERTIFIED**, 33 of 35 killed, 2 gaps proven |
-| **Ruby** | [minitest](https://github.com/minitest/minitest) itself | 36 of 40 killed, **0.90** |
-| **PHP** | [webmozart/assert](https://github.com/webmozart/assert) under PHPUnit | **CERTIFIED**, 40 of 40 planted faults killed; a later run on `src/Assert.php` left 1 survivor, and the writer proved it |
-| **Rust** | [Warp](https://github.com/warpdotdev/warp)'s `crates/fuzzy_match` under `cargo nextest` | 11 of 34 killed, **0.32**, 22 gaps proven |
-
-**Which of these can you open for yourself?** Three. The Go row is GitHub
-Actions run `30846983897`, named in
-[docs/corral/github-action.md](docs/corral/github-action.md); the vercel/ms
-result is a published recording under `site/src/data/recordings/`; the Rust
-row is a signed entry on the [`corral/ledger`](https://github.com/pdbethke/corralai/tree/corral/ledger)
-branch, `94d9296c5801`. The Python,
-Ruby, PHP and private-SDK figures are maintainer-run and have no artefact in
-this repository — they are self-reports, and a project whose whole argument is
-execution over self-report should say which of its own numbers are which.
-Reproducing them is the point: every one names the repo and the runner.
+The table that used to sit in this section was runs made before the record restarted on 2026-11-09, some of them maintainer-run with no artefact behind them; those entries are kept, unedited, in the [`ledger-archive/2026-11-09`](https://github.com/pdbethke/corralai/tree/ledger-archive/2026-11-09) tag.
 
 Go and Python are exercised hardest — Go on demand in CI, Python across
 repeated whole-repo scans. The self-audit workflow is opt-in per pull request

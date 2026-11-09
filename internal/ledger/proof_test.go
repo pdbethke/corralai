@@ -256,3 +256,43 @@ func TestLanguageProofsRefusesNonNumericFloor(t *testing.T) {
 		t.Fatal("accepted")
 	}
 }
+
+func TestLanguageProofsEachCheckConditionRefuses(t *testing.T) {
+	for name, mut := range map[string]func(*ChainCheck){
+		"hash":    func(c *ChainCheck) { c.HashOK = false },
+		"link":    func(c *ChainCheck) { c.LinkOK = false },
+		"problem": func(c *ChainCheck) { c.Problem = "bad" },
+		"signer":  func(c *ChainCheck) { c.Signer = "" },
+	} {
+		e, c := proofEntry(t, pOpts{})
+		mut(&c)
+		if m := proofs(t, []Entry{e}, []ChainCheck{c}); len(m) != 0 {
+			t.Errorf("%s: %+v", name, m)
+		}
+	}
+}
+
+func TestLanguageProofsCheckMatchedByHashNotPosition(t *testing.T) {
+	e, c := proofEntry(t, pOpts{hash: "x"})
+	c.Hash = "other"
+	if m := proofs(t, []Entry{e}, []ChainCheck{c}); len(m) != 0 {
+		t.Fatalf("got %+v", m)
+	}
+}
+
+func TestLanguageProofsEmptyLangIgnored(t *testing.T) {
+	m := one(t, pOpts{files: []Row{{Lang: "", Audited: 1, MutantsGraded: 1}}})
+	if len(m) != 0 {
+		t.Fatalf("got %+v", m)
+	}
+}
+
+func TestLanguageProofsNewestByTimeNotChainOrder(t *testing.T) {
+	ts := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	e1, c1 := proofEntry(t, pOpts{hash: "newer", started: ts.Add(time.Hour)})
+	e2, c2 := proofEntry(t, pOpts{hash: "older", started: ts})
+	m := proofs(t, []Entry{e1, e2}, []ChainCheck{c1, c2})
+	if m["go"].Local.Hash != "newer" {
+		t.Fatalf("got %+v", m["go"].Local)
+	}
+}

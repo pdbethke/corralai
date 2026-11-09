@@ -438,6 +438,7 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `TreeDirty` | measured |  |
 | `TreesRequested` | measured |  |
 | `UnitPass` | measured |  |
+| `VerdictGeneration` | measured |  |
 
 ## SeatRow
 

@@ -127,13 +127,17 @@ type ScanRow struct {
 	// answer "was this a --top 3 run" — the question the retired store's
 	// `scans list` answered.
 	EngineVersion string
-	ModelSet      string
-	Top           int
-	AllCandidates bool
-	TotalFiles    int
-	PreflightRan  bool
-	PreflightNote string
-	FinishedAt    *time.Time
+	// VerdictGeneration names the grading rules that produced this entry
+	// (reposcan.VerdictGeneration at write time). Empty on entries written
+	// before it was recorded.
+	VerdictGeneration string `json:",omitempty"`
+	ModelSet          string
+	Top               int
+	AllCandidates     bool
+	TotalFiles        int
+	PreflightRan      bool
+	PreflightNote     string
+	FinishedAt        *time.Time
 	// Identity is the audited party — who made the commit (see Identity).
 	// Empty on rows written before it was recorded, or when the checkout
 	// could not say.

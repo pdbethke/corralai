@@ -154,10 +154,11 @@ func localEntryBundle(in localAuditInput, v advpool.Verdict, t advpool.RunTeleme
 	scan := scanstore.Scan{
 		Repo: repo, Commit: commit,
 		// --local has no --substrate: it always runs in the jail.
-		Substrate:     substrateJail,
-		EngineVersion: version,
-		ModelSet:      modelSetKeyWith(in.toolProbe, in.writerModel, in.mutantModel, in.criticModel, in.shadowModel, in.shadowWriterModel),
-		Candidates:    1, Audited: audited,
+		Substrate:         substrateJail,
+		EngineVersion:     version,
+		VerdictGeneration: reposcan.VerdictGeneration,
+		ModelSet:          modelSetKeyWith(in.toolProbe, in.writerModel, in.mutantModel, in.criticModel, in.shadowModel, in.shadowWriterModel),
+		Candidates:        1, Audited: audited,
 		KillRate:  killRate,
 		StartedAt: started, FinishedAt: finished,
 		Author: party.Author, Committer: party.Committer, CoAuthors: party.CoAuthors, GeneratedWith: party.GeneratedWith,

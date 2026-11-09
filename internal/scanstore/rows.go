@@ -62,6 +62,10 @@ type Scan struct {
 	// answer to "which build produced this row", and it must not change
 	// meaning because the key did.
 	CorralVersion string
+	// VerdictGeneration is reposcan.VerdictGeneration of the binary that ran
+	// this scan: which grading rules produced the verdict. CorralVersion names
+	// the release; this names the rules, which change on a different clock.
+	VerdictGeneration string
 	// Host and Cores are the box. The audit cost model is
 	// O(mutants x the target's suite runtime) and the only lever an operator
 	// has is the machine, so a wall-clock number in this ledger is

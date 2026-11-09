@@ -159,7 +159,8 @@ CREATE TABLE IF NOT EXISTS corral_scans (
   inventory        VARCHAR,
   shadow_draw      VARCHAR,
   max_tokens_reached BOOLEAN,
-  tool_mutants     VARCHAR
+  tool_mutants     VARCHAR,
+  verdict_generation VARCHAR
 );`
 
 const auditsSchema = `
@@ -551,6 +552,9 @@ var (
 		// Each file's account of a mutation tool's report (ScanRow.
 		// ToolMutants). NULL before it, and on a run with no tool source.
 		{"tool_mutants", "tool_mutants VARCHAR"},
+		// The grading rules that produced the entry (ScanRow.VerdictGeneration).
+		// NULL before it: not recorded.
+		{"verdict_generation", "verdict_generation VARCHAR"},
 		// The tools the commit's footer lines declare (Identity.
 		// GeneratedWith), one per line. NULL before it: not read.
 		{"generated_with", "generated_with VARCHAR"},
@@ -1153,8 +1157,8 @@ func insertBundle(db *sql.DB, b Bundle, now time.Time, uid string) (Counts, erro
 		    sandbox_backend, sandbox_image, seed_skipped, generated_with, unit_pass,
 		    test_command, runner, settings, toolchains,
 		    load_start, load_end, load_peak, mem_available_start_bytes, peak_rss_bytes, cpu_millis, host_not_measured,
-		    inventory, shadow_draw, max_tokens_reached, tool_mutants
-		  ) VALUES (`+placeholders(63)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+		    inventory, shadow_draw, max_tokens_reached, tool_mutants, verdict_generation
+		  ) VALUES (`+placeholders(64)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 			uid, now, b.Scan.Repo, b.Scan.RunURL, b.Scan.ScanID, b.Scan.Commit,
 			b.Scan.CorralVersion, b.Scan.Substrate, b.Scan.Host, b.Scan.Cores,
 			nullIfZeroInt(b.Scan.TreesRequested), b.Scan.DiffBase,
@@ -1176,7 +1180,7 @@ func insertBundle(db *sql.DB, b Bundle, now time.Time, uid string) (Counts, erro
 			b.Scan.LoadStart, b.Scan.LoadEnd, b.Scan.LoadPeak,
 			b.Scan.MemAvailableStartBytes, b.Scan.PeakRSSBytes, b.Scan.CPUMillis, nullIfEmpty(b.Scan.HostNotMeasured),
 			nullIfEmpty(b.Scan.Inventory), nullIfEmpty(b.Scan.ShadowDraw), b.Scan.MaxTokensReached,
-			nullIfEmpty(string(b.Scan.ToolMutants)),
+			nullIfEmpty(string(b.Scan.ToolMutants)), nullIfEmpty(b.Scan.VerdictGeneration),
 		); err != nil {
 			return Counts{}, fmt.Errorf("auditpush: insert scan row: %w", err)
 		}

@@ -142,7 +142,7 @@ func buildBundle(
 			// (--transparency was not given, or the upload failed open).
 			RekorLogIndex: scan.RekorLogIndex, RekorUUID: scan.RekorUUID,
 			PushedBy:      meta.PushedBy,
-			EngineVersion: scan.EngineVersion, ModelSet: scan.ModelSet,
+			EngineVersion: scan.EngineVersion, VerdictGeneration: scan.VerdictGeneration, ModelSet: scan.ModelSet,
 			Top: scan.Top, AllCandidates: scan.AllCandidates, TotalFiles: scan.TotalFiles,
 			PreflightRan: scan.PreflightRan, PreflightNote: scan.PreflightNote,
 			FinishedAt: nilIfZeroTime(scan.FinishedAt),

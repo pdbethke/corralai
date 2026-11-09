@@ -208,7 +208,7 @@ var scanRowColumns = []string{
 	"author", "committer", "co_authors", "scope", "tree_dirty", "repo_identity",
 	"sandbox_backend", "sandbox_image", "seed_skipped", "generated_with", "unit_pass", "test_command", "runner", "settings", "toolchains",
 	"load_start", "load_end", "load_peak", "mem_available_start_bytes", "peak_rss_bytes", "cpu_millis", "host_not_measured",
-	"inventory", "shadow_draw", "max_tokens_reached", "tool_mutants",
+	"inventory", "shadow_draw", "max_tokens_reached", "tool_mutants", "verdict_generation",
 }
 
 // scanRowSelectList is scanRowColumns as a SELECT list for the corral_scans
@@ -268,7 +268,7 @@ func readScanRow(db *sql.DB, where string, args ...any) (ScanRow, bool, error) {
 	var treeDirty sql.NullBool
 	var loadStart, loadEnd, loadPeak sql.NullFloat64
 	var memAvail, peakRSS, cpuMillis sql.NullInt64
-	var hostNotMeasured, inventory, shadowDraw, toolMutants sql.NullString
+	var hostNotMeasured, inventory, shadowDraw, toolMutants, verdictGeneration sql.NullString
 	var maxTokensReached sql.NullBool
 	var top, totalFiles sql.NullInt64
 	// NULL header tokens: a scan none of whose calls was metered
@@ -285,7 +285,7 @@ func readScanRow(db *sql.DB, where string, args ...any) (ScanRow, bool, error) {
 		&preflightRan, &preflightNote, &scanFinished, &entryHash,
 		&author, &committer, &coAuthors, &scope, &treeDirty, &repoIdentity, &sandboxBackend, &sandboxImage, &seedSkipped, &generatedWith, &unitPass, &testCommand, &runner, &settings, &toolchains,
 		&loadStart, &loadEnd, &loadPeak, &memAvail, &peakRSS, &cpuMillis, &hostNotMeasured,
-		&inventory, &shadowDraw, &maxTokensReached, &toolMutants,
+		&inventory, &shadowDraw, &maxTokensReached, &toolMutants, &verdictGeneration,
 	); err != nil {
 		if err == sql.ErrNoRows {
 			return ScanRow{}, false, nil
@@ -311,6 +311,7 @@ func readScanRow(db *sql.DB, where string, args ...any) (ScanRow, bool, error) {
 	s.PushedBy = pushedBy.String
 	s.ScanUID = scanUID.String
 	s.EngineVersion, s.ModelSet, s.PreflightNote = engineVersion.String, modelSet.String, preflightNote.String
+	s.VerdictGeneration = verdictGeneration.String
 	s.Top, s.TotalFiles = int(top.Int64), int(totalFiles.Int64)
 	s.AllCandidates, s.PreflightRan = allCandidates.Bool, preflightRan.Bool
 	s.EntryHash = entryHash.String

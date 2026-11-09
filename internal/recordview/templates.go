@@ -174,6 +174,7 @@ the verifier is never the reviewer's model. What actually ran:</p>
   {{if .Scopes}}<dt>scopes reviewed</dt><dd class="mono">{{join .Scopes}}</dd>{{end}}
 </div>
 
+{{if .LanguagesBuilt}}<p><a href="languages.html">Languages corral has been shown to grade &rarr;</a></p>{{end}}
 {{if .Awaiting}}<p><a href="verdicts.html">{{len .Awaiting}} finding(s) await a person's verdict &rarr;</a></p>{{end}}
 <h2>Reviews</h2>
 <p class="small">Newest first. {{if .First.IsZero}}{{else}}Record spans {{date .First}} to {{date .Last}}.{{end}}</p>
@@ -524,3 +525,32 @@ const verdictsTmpl = `<!doctype html>
 {{if .Write}}` + writeJS + `{{end}}
 </div></body></html>
 ` + verifyBanner + controlsTmpl
+
+const languagesTmpl = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>languages - corral/ledger</title>
+<style>` + baseCSS + `</style></head><body>
+<div data-site-chrome></div>
+<div class="wrap">
+<p class="small"><a href="index.html">&larr; the record</a></p>
+<h1>Languages</h1>
+{{if .LanguagesRefusal}}<div class="banner warn"><p>{{.LanguagesRefusal}}</p></div>{{else}}
+<p class="lede">Which languages the record shows corral grading, by signed entries only. The CI column rests on each run's linked Actions URL: follow it to see the run.</p>
+<div class="scroll"><table><thead><tr>
+<th>language</th><th>local run</th><th>CI run</th><th class="nowrap">proved a gap</th>
+</tr></thead><tbody>
+{{range .Languages}}<tr><td class="mono">{{.Lang}}</td>
+{{if or .Local .CI}}
+<td>{{with .Local}}{{template "proofrun" .}}{{else}}&mdash;{{end}}</td>
+<td>{{with .CI}}{{template "proofrun" .}}{{else}}&mdash;{{end}}</td>
+{{else}}<td colspan="2" class="small">&mdash; {{.Reason}}</td>{{end}}
+<td>{{if .ProvedAGap}}<span class="chip ok">yes</span>{{else}}<span class="chip mute">no</span>{{end}}</td></tr>
+{{end}}
+</tbody></table></div>
+{{end}}
+</div></body></html>
+{{define "proofrun"}}<a class="mono" href="{{entryURL (shortHash .Hash)}}">{{shortHash .Hash}}</a>
+<span class="small">{{.Repo}} {{.Runner}} gen {{.Generation}} {{stamp .StartedAt}}</span>
+{{if .RunURL}}<a class="small" href="{{.RunURL}}">run</a>{{end}}{{end}}
+`

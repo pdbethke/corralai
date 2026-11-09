@@ -32,6 +32,7 @@ func LoadTrust(dir string, t ledger.Trust) (Site, error) {
 		return Site{}, err
 	}
 	s := Build(entries, checks)
+	s.entries, s.checks = entries, checks
 	s.HasLedger = true
 	s.LedgerRepo = t.Repo
 	if t.RootPub != nil {

@@ -130,14 +130,16 @@ func LanguageProofs(entries []Entry, checks []ChainCheck, self []string, floor s
 			lp := out[f.Lang]
 			if !seen[f.Lang] {
 				seen[f.Lang] = true
-				if belowFloor {
-					lp.BelowFloor++
-					out[f.Lang] = lp
-					continue
-				}
-				if unchecked {
-					lp.Unchecked++
-					out[f.Lang] = lp
+				// A near-miss is counted only when it fails that ONE
+				// condition; failing both is counted under neither.
+				if belowFloor || unchecked {
+					if belowFloor && !unchecked {
+						lp.BelowFloor++
+						out[f.Lang] = lp
+					} else if unchecked && !belowFloor {
+						lp.Unchecked++
+						out[f.Lang] = lp
+					}
 					continue
 				}
 			} else if belowFloor || unchecked {

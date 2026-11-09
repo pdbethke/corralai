@@ -296,3 +296,10 @@ func TestLanguageProofsNewestByTimeNotChainOrder(t *testing.T) {
 		t.Fatalf("got %+v", m["go"].Local)
 	}
 }
+
+func TestLanguageProofsBelowFloorAndUncheckedCountsNeither(t *testing.T) {
+	g := one(t, pOpts{gen: "39", noSig: true})["go"]
+	if g.BelowFloor != 0 || g.Unchecked != 0 || g.Local != nil {
+		t.Fatalf("got %+v", g)
+	}
+}

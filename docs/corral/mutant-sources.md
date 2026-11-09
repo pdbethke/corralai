@@ -161,7 +161,7 @@ entry carries an account without them.
 ## The measured comparison (2026-11-01, one file)
 
 This is the first data point, measured on 2026-11-01. It is one file at one commit.
-Corral's side is public ledger entry 163 on the `corral/ledger` branch
+Corral's side is public ledger entry 163 on the `corral/ledger` branch (archived as the tag `ledger-archive/2026-11-09` when the record restarted at a checkpoint)
 (`scans/20261101T194309Z-aa48d494e972-eb54ee028a79.json.gz`). The Stryker run is not on the ledger.
 
 - File: REA `src/domain/analysisErrorProjection.ts` at aa48d494e, a vitest config narrowed to REA's `domain` project.
@@ -211,7 +211,7 @@ Caveats, all of them load-bearing:
 
 ## The first `--mutants-from` run (2026-11-04, one file)
 
-Corral's side is public ledger entry 167 on the `corral/ledger` branch
+Corral's side is public ledger entry 167 on the `corral/ledger` branch (archived as the tag `ledger-archive/2026-11-09` when the record restarted at a checkpoint)
 (`scans/20261105T153215Z-aa48d494e972-62f5a6da58de.json.gz`). It is the same file at the
 same commit, with the model's mutants and Stryker's on one exam:
 `--mutants-from stryker:<the 10.0.0 report above> --tool-sample-seed 20261101`. Every seat

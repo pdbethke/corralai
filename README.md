@@ -114,7 +114,7 @@ What each part is for, and the limits that apply:
   `714c51f1`, with the critic on the Codex CLI on a subscription. Of 34 planted
   faults, the crate's 33 tests caught 11 (0.32). corral wrote and ran tests
   proving 22 of the 23 survivors were real gaps. The record is signed ledger
-  entry [`94d9296c5801`](https://github.com/pdbethke/corralai/blob/corral/ledger/scans/20261014T133712Z-714c51f1e29f-8f1bc4949be5.json.gz),
+  entry [`94d9296c5801`](https://github.com/pdbethke/corralai/blob/ledger-archive/2026-11-09/scans/20261014T133712Z-714c51f1e29f-8f1bc4949be5.json.gz),
   and [the field note](https://corralai.dev/field-notes/the-first-rust-audit/)
   walks through it. A second run on the same commit, from a clean Ubuntu
   container, graded 37 and proved 29 (CHANGELOG, rc.20). Each run plants a

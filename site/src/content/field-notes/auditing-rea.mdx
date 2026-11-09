@@ -8,8 +8,8 @@ draft: false
 {/* SPDX-License-Identifier: Elastic-2.0 */}
 
 *Field note. Every number here comes from a signed entry on the
-[`corral/ledger`](https://github.com/pdbethke/corralai/tree/corral/ledger/scans)
-branch, or from a Stryker run whose report and configs are described where it
+[`corral/ledger`](https://github.com/pdbethke/corralai/tree/ledger-archive/2026-11-09/scans)
+branch (archived as the tag `ledger-archive/2026-11-09` when the record restarted at a checkpoint), or from a Stryker run whose report and configs are described where it
 appears. The fixes are named by their pull requests.*
 
 ## Why REA
@@ -27,9 +27,9 @@ instead of beside nothing.
 
 | Ledger entry | File | REA commit | Kill rate | Survivors | Proven |
 |---|---|---|---|---|---|
-| [160](https://github.com/pdbethke/corralai/blob/corral/ledger/scans/20261026T201036Z-87a5be3000b7-64216416bf74.json.gz) (2026-10-26) | `src/application/reverse/ReverseEngineeringService.ts` | `87a5be3` | 0.71 (27 of 38) | 11 | 7 |
-| [163](https://github.com/pdbethke/corralai/blob/corral/ledger/scans/20261101T194309Z-aa48d494e972-eb54ee028a79.json.gz) (2026-11-01) | `src/domain/analysisErrorProjection.ts` | `aa48d49` | 0.46 (18 of 39) | 21 | 17 |
-| [167](https://github.com/pdbethke/corralai/blob/corral/ledger/scans/20261105T153215Z-aa48d494e972-62f5a6da58de.json.gz) (2026-11-05) | `src/domain/analysisErrorProjection.ts` | `aa48d49` | 0.42 (30 of 71) | 41 | 30 |
+| [160](https://github.com/pdbethke/corralai/blob/ledger-archive/2026-11-09/scans/20261026T201036Z-87a5be3000b7-64216416bf74.json.gz) (2026-10-26) | `src/application/reverse/ReverseEngineeringService.ts` | `87a5be3` | 0.71 (27 of 38) | 11 | 7 |
+| [163](https://github.com/pdbethke/corralai/blob/ledger-archive/2026-11-09/scans/20261101T194309Z-aa48d494e972-eb54ee028a79.json.gz) (2026-11-01) | `src/domain/analysisErrorProjection.ts` | `aa48d49` | 0.46 (18 of 39) | 21 | 17 |
+| [167](https://github.com/pdbethke/corralai/blob/ledger-archive/2026-11-09/scans/20261105T153215Z-aa48d494e972-62f5a6da58de.json.gz) (2026-11-05) | `src/domain/analysisErrorProjection.ts` | `aa48d49` | 0.42 (30 of 71) | 41 | 30 |
 
 A survivor is a planted fault that REA's own test command did not catch, run in
 corral's sandbox. **Proven** means corral's writer authored a test that compiles,

@@ -544,8 +544,68 @@ func AuthoredAlone(rs RunSpec) bool {
 }
 
 func (s JailScorer) ScoreAuthoredReport(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (adequacy.Report, error) {
+	return s.scoreAuthoredReport(ctx, codePath, code, test, mutants, testCmd, nil)
+}
+
+// ScoreAuthoredDeselected is the authored pass of a SALVAGE: the same pass
+// ScoreAuthoredReport runs from the run's base command testCmd, with the
+// authored examples that failed on the unmutated code (ids) excluded from
+// every command it runs by the runner row's own DeselectCmd.
+//
+// It exists because salvage used to hand ScoreAuthoredReport the WHOLE
+// excluding command (deselectedCmd) as if it were the base. A unit row
+// refuses to narrow argv that carries a name filter (rspec's -E), so the
+// pass fell back to the whole suite while the verdict, which judges the
+// run's base, recorded "proven by the authored test alone" (hashie,
+// 2026-11-10: three files in one run, four in another). Building from the
+// base and excluding afterwards keeps the salvaged pass the pass the verdict
+// describes: alone where the unsalvaged pass is alone, beside the selection
+// where that one is, and the whole command (deselectedCmd) only where the
+// unsalvaged pass is the whole command too. Where the row cannot exclude
+// from the narrowed command it is an error, and the salvage records nothing,
+// rather than a wider run under a narrower claim.
+func (s JailScorer) ScoreAuthoredDeselected(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd, deselectedCmd string, ids []string) (adequacy.Report, error) {
+	if len(ids) == 0 {
+		return adequacy.Report{}, errors.New("advpool: a salvaged authored pass needs the failing examples it excludes")
+	}
+	return s.scoreAuthoredReport(ctx, codePath, code, test, mutants, testCmd, &exclusion{ids: ids, whole: adequacy.ShellSplit(deselectedCmd)})
+}
+
+// exclusion is a salvage's failing authored examples, and the whole command
+// with them excluded for a pass that runs the whole command.
+type exclusion struct {
+	ids   []string
+	whole []string
+}
+
+// apply excludes x's examples from argv, a command this pass built from the
+// run's base through the selection row (built) or the base itself (!built,
+// where the whole excluding command is already known). nil x is no salvage.
+func (s JailScorer) exclude(argv []string, built bool, x *exclusion) ([]string, error) {
+	if x == nil {
+		return argv, nil
+	}
+	if !built {
+		return x.whole, nil
+	}
+	r, ok := s.selectionRow()
+	if !ok || r.DeselectCmd == nil {
+		return nil, fmt.Errorf("advpool: the %s runner cannot exclude the failing examples from %v", r.ID, argv)
+	}
+	out, ok := r.DeselectCmd(argv, x.ids)
+	if !ok {
+		return nil, fmt.Errorf("advpool: the %s runner cannot exclude the failing examples from %v, so the salvage would run a wider command than the verdict describes", r.ID, argv)
+	}
+	return out, nil
+}
+
+func (s JailScorer) scoreAuthoredReport(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string, x *exclusion) (adequacy.Report, error) {
 	scoreBase, base := s.scoreWorkspace(codePath, test, testCmd)
-	cmd := s.authoredCmd(codePath, base)
+	cmd, built := s.authoredCmdBuilt(codePath, base)
+	cmd, err := s.exclude(cmd, built, x)
+	if err != nil {
+		return adequacy.Report{}, err
+	}
 	if s.BaseFiles != nil {
 		scoreBase = s.authoredWorkspace(codePath, test)
 	}
@@ -570,7 +630,10 @@ func (s JailScorer) ScoreAuthoredReport(ctx context.Context, codePath, code, tes
 	opts := s.baseScoreOpts()
 	if r, ok := s.selectionRow(); ok {
 		path := authoredTestPath(s.Landing, codePath, s.DevTestPath, s.BaseFiles)
-		if alone, ok := testmap.WithAuthoredTest(s.SelectionMap, golang.Selection{Base: s.Selection.Base}, r, base, s.RepoDir, path); ok {
+		if alone, aerr := testmap.AuthoredTestCmd(s.SelectionMap, golang.Selection{Base: s.Selection.Base}, r, base, s.RepoDir, path); aerr == nil {
+			if alone, err = s.exclude(alone, true, x); err != nil {
+				return adequacy.Report{}, err
+			}
 			cmd = alone
 			opts = append(opts, adequacy.WithCommandFor(func(adequacy.Mutant) adequacy.MutantCommand {
 				return adequacy.MutantCommand{Cmd: alone, Tests: 1, Rule: RuleAuthoredAlone}
@@ -579,7 +642,7 @@ func (s JailScorer) ScoreAuthoredReport(ctx context.Context, codePath, code, tes
 			// Disclosed on the verdict, not only here: selectionDisclosure
 			// asks the engine the same question, so AuthoredAlone is false
 			// and, when cmd is the whole command, AuthoredFallback says why.
-			log.Printf("advpool: %s: no command runs the authored test %s alone with the %s runner; the authored pass runs %v", codePath, path, r.ID, cmd)
+			log.Printf("advpool: %s: no command runs the authored test %s alone with the %s runner (%v); the authored pass runs %v", codePath, path, r.ID, aerr, cmd)
 		}
 	}
 	rep, err := adequacy.Score(ctx, s.Jail, scoreBase, codePath, code, mutants, cmd, opts...)
@@ -1025,22 +1088,29 @@ func (s JailScorer) AuthoredCommand(codePath string, base []string) []string {
 // narrowed command would never collect it and every file would read
 // TEST UNSOUND.
 func (s JailScorer) authoredCmd(codePath string, cmd []string) []string {
+	out, _ := s.authoredCmdBuilt(codePath, cmd)
+	return out
+}
+
+// authoredCmdBuilt is authoredCmd, saying whether the command was built
+// through the selection row (true) or is cmd unchanged (false).
+func (s JailScorer) authoredCmdBuilt(codePath string, cmd []string) ([]string, bool) {
 	r, ok := s.selectionRow()
 	if !ok {
-		return cmd
+		return cmd, false
 	}
 	path := authoredTestPath(s.Landing, codePath, s.DevTestPath, s.BaseFiles)
-	out, ok := testmap.WithAuthoredTest(s.SelectionMap, s.Selection, r, cmd, s.RepoDir, path)
-	if !ok {
+	out, err := testmap.AuthoredTestCmd(s.SelectionMap, s.Selection, r, cmd, s.RepoDir, path)
+	if err != nil {
 		// No command runs the selection plus the authored test exactly; the
 		// pass runs the resolved command, and the positive control
 		// (verifyAuthoredTestReaches) still decides whether it reached the
 		// authored test at all. The verdict's AuthoredFallback says so
 		// (selectionDisclosure asks the engine the same question).
-		log.Printf("advpool: %s: no command adds the authored test %s to the selection with the %s runner; the authored pass runs %v", codePath, path, r.ID, cmd)
-		return cmd
+		log.Printf("advpool: %s: no command adds the authored test %s to the selection with the %s runner (%v); the authored pass runs %v", codePath, path, r.ID, err, cmd)
+		return cmd, false
 	}
-	return out
+	return out, true
 }
 
 // scoreWorkspace builds the jail base file-map and the test command for a

@@ -369,7 +369,19 @@ package reposcan
 // survivor) and UnrepeatedKilledBy, which sit inside the Verdict's mutant
 // lists and so outside the shallow fingerprint below; Verdict gained
 // ConfirmDuration (`json:"-"`, not recorded). Behaviour bump.
-const VerdictGeneration = "40"
+// "41" (2026-11-10): a SALVAGED authored pass runs what the verdict says.
+// Salvage handed the scorer its excluding command (rspec's -E) as if it were
+// the run's base; the rspec unit row refuses to narrow argv carrying a name
+// filter, so the pass fell back to the whole suite, while the verdict,
+// judging the unsalvaged base, recorded AuthoredAlone and every mutant
+// ProvenByAuthoredAlone (hashie: 3 files in ledger entry 72574089, 4 in
+// e0e4f5ac). The pass is now built from the base and the failing examples
+// excluded after (advpool.JailScorer.ScoreAuthoredDeselected), so a salvaged
+// pass is alone wherever the unsalvaged one is, and a row that cannot
+// exclude from its narrowed command salvages nothing. A "40" verdict's
+// salvaged files may claim "alone" for a whole-suite run, so they must be
+// re-measured, not reused. Behaviour bump.
+const VerdictGeneration = "41"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

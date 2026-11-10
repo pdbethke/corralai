@@ -70,6 +70,27 @@ func scoreAuthored(ctx context.Context, scorer Scorer, codePath, code, test stri
 	return scorer.ScoreReport(ctx, codePath, code, test, mutants, testCmd)
 }
 
+// DeselectedAuthoredScorer is the optional Scorer extension for a SALVAGED
+// authored pass: built from the run's base command testCmd exactly as the
+// unsalvaged pass is, with the failing examples ids excluded, and
+// deselectedCmd (the whole command with them excluded) run only where the
+// unsalvaged pass runs the whole command too. JailScorer implements it
+// (ScoreAuthoredDeselected, whose doc says why). A Scorer without it is
+// handed deselectedCmd as before; no fake in this package narrows.
+type DeselectedAuthoredScorer interface {
+	ScoreAuthoredDeselected(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd, deselectedCmd string, ids []string) (adequacy.Report, error)
+}
+
+// scoreSalvaged grades a salvage's authored remainder through
+// DeselectedAuthoredScorer when the scorer has it, else as scoreAuthored
+// grades the excluding command.
+func scoreSalvaged(ctx context.Context, scorer Scorer, codePath, code, test string, mutants []adequacy.Mutant, testCmd, deselectedCmd string, ids []string) (adequacy.Report, error) {
+	if ds, ok := scorer.(DeselectedAuthoredScorer); ok {
+		return ds.ScoreAuthoredDeselected(ctx, codePath, code, test, mutants, testCmd, deselectedCmd, ids)
+	}
+	return scoreAuthored(ctx, scorer, codePath, code, test, mutants, deselectedCmd)
+}
+
 // PerMutantScorer is the optional RICHER contract: a Scorer that can grade
 // each mutant with its OWN command — the tests that actually reach the lines
 // that mutant changed — instead of the one command the whole file shares.
@@ -2251,7 +2272,7 @@ func (d *Driver) salvageByDeselect(ctx context.Context, run *runState, writerTes
 	}
 
 	cmd := adequacy.ShellJoin(argv)
-	salvaged, serr := scoreAuthored(ctx, d.Scorer, run.rs.CodePath, run.rs.Code, writerTest, survivors, cmd)
+	salvaged, serr := scoreSalvaged(ctx, d.Scorer, run.rs.CodePath, run.rs.Code, writerTest, survivors, run.rs.TestCmd, cmd, failing)
 	if serr != nil {
 		// A failed salvage attempt is not a failed run: fall back to the
 		// retry path rather than losing the dev-adequacy result already

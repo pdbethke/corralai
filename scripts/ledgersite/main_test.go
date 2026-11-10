@@ -3,16 +3,70 @@
 package main
 
 import (
+	"bytes"
 	"compress/gzip"
+	"crypto/ed25519"
+	"encoding/hex"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/auditpush"
+	"github.com/pdbethke/corralai/internal/ledger"
 )
+
+// TestMain lets a test run the real main() in a child process: main exits the
+// process on every refusal, so the exit status is part of what the empty-record
+// test asserts, and only a separate process can show it.
+func TestMain(m *testing.M) {
+	if os.Getenv("LEDGERSITE_TEST_RUN_MAIN") == "1" {
+		main()
+		return
+	}
+	os.Exit(m.Run())
+}
+
+// A fresh corral deployment's record is a single checkpoint entry (that is also
+// the shape of the live ledger branch after its 2026-11-09 restart). The site
+// must render it and exit 0; a deploy that fails on an empty record cannot be
+// the first deploy of anything.
+func TestSiteRendersACheckpointOnlyRecord(t *testing.T) {
+	seed := bytes.Repeat([]byte{0x44}, ed25519.SeedSize)
+	k := ed25519.NewKeyFromSeed(seed)
+	pub := k.Public().(ed25519.PublicKey)
+	signer := auditpush.Ed25519LedgerSigner{KeyID: ledger.KeyFingerprint(pub), Key: k}
+	dir := t.TempDir()
+	auditpush.SetLedgerSigner(signer)
+	t.Cleanup(func() { auditpush.SetLedgerSigner(nil) })
+	b := ledger.Bundle{Scan: ledger.ScanRow{Repo: "o/r", Commit: "abcdef123456", ScanID: 1, CorralVersion: "vtest"}}
+	if _, err := auditpush.PushBundle(dir, b); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := auditpush.WriteCheckpoint(dir, signer, pub); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := auditpush.ReadLedgerDir(dir)
+	if err != nil || len(entries) != 1 || entries[0].Kind != ledger.KindCheckpoint {
+		t.Fatalf("setup: want exactly one checkpoint entry, got %d (err %v)", len(entries), err)
+	}
+
+	out := filepath.Join(t.TempDir(), "ledger")
+	cmd := exec.Command(os.Args[0], "-ledger", dir, "-out", out, "-repo", "o/r", "-pubkey", hex.EncodeToString(pub), "-site-chrome")
+	cmd.Env = append(os.Environ(), "LEDGERSITE_TEST_RUN_MAIN=1")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("ledgersite on a checkpoint-only record: %v\n%s", err, output)
+	}
+	for _, f := range []string{"index.html", "chain-1.html", "audits-1.html", "reviews-1.html", "verdicts.html"} {
+		st, err := os.Stat(filepath.Join(out, f))
+		if err != nil || st.Size() == 0 {
+			t.Errorf("%s was not written for a checkpoint-only record (err %v)", f, err)
+		}
+	}
+}
 
 // The site must see exactly what the ledger's own reader sees: plain .json
 // entries included, and chain (Pushed) order — never file-name order. Names

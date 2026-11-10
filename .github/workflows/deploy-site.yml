@@ -144,23 +144,40 @@ jobs:
         # never gets out of the gate.
         working-directory: site
         run: npx playwright install --with-deps chromium
-      - name: Render the ledger record
+      - name: Render the fixture ledger for the tests
+        # The e2e suite must never depend on what the live record holds: every
+        # fresh corral deployment starts with an EMPTY record, and the live
+        # branch was itself restarted at a checkpoint on 2026-11-09. So the
+        # tests build against a committed prefix of the archived chain, signed
+        # by the key committed beside it.
+        run: |
+          CORRALAI_LEDGER_DIR=site/tests/fixtures/ledger-prefix \
+          CORRALAI_LEDGER_PUBKEY="$(tr -d '[:space:]' < site/tests/fixtures/ledger-prefix/LEDGER_PUBKEY)" \
+          bash scripts/gen-ledger-site.sh
+      - name: Build + smoke-test the site
+        working-directory: site
+        run: npm run test:e2e
+      - name: Render the live ledger record
         # The record lives on its own branch, which the checkout above does not
         # fetch, so pull it explicitly and render it into site/public/ledger
-        # (copied verbatim into dist by Astro). Deliberately NOT guarded with
-        # `|| true`: a site that quietly ships without the record looks
-        # identical to one whose record is empty, and this project's whole
-        # argument is that those two must never render the same.
+        # (copied verbatim into dist by Astro), replacing the fixture render.
+        # Deliberately NOT guarded with `|| true`: a site that quietly ships
+        # without the record looks identical to one whose record is empty, and
+        # this project's whole argument is that those two must never render
+        # the same.
         run: |
           git fetch --depth=1 origin corral/ledger
           # The deployed page checks corral's own record against the key the
           # repository publishes — passed EXPLICITLY, so the trust decision
           # lives here, in review, not inferred inside the renderer.
           test -s LEDGER_PUBKEY || { echo "LEDGER_PUBKEY is missing or empty — refusing to publish an unchecked ledger page" >&2; exit 1; }
+          rm -rf site/public/ledger
           CORRALAI_LEDGER_PUBKEY="$(tr -d '[:space:]' < LEDGER_PUBKEY)" bash scripts/gen-ledger-site.sh
-      - name: Build + smoke-test the site
+      - name: Build the site for deploy
+        # test:e2e built dist from the fixture render; this rebuild is what
+        # gets published, so dist carries the live record.
         working-directory: site
-        run: npm run test:e2e
+        run: npm run build
       - name: Deploy to Cloudflare Pages
         working-directory: site
         # Pinned to the wrangler 4 major (4.107.0 at authoring time) so a

@@ -10,16 +10,17 @@
 //   graded nothing (every count 0, caught share null);
 // - tampered: the same with one byte of one entry changed and re-gzipped;
 // - empty: a ledger branch whose scans/ holds no entries;
-// - real-prefix: the first 84 entries of corral's own public ledger (the
-//   corral/ledger branch, read with git as scripts/gen-ledger-site.sh does),
-//   ending at the second flask scan. A name-ordered prefix of a hash-linked
+// - real-prefix: the first 84 entries of corral's own public ledger, committed
+//   as tests/fixtures/ledger-prefix (copied from the archive tag
+//   ledger-archive/2026-11-09, the chain before the live branch restarted at a
+//   checkpoint), ending at the second flask scan. Never read from the live
+//   branch: a fresh deployment's record is empty. A name-ordered prefix of a hash-linked
 //   chain is itself an intact chain, so it verifies against the published
 //   LEDGER_PUBKEY: 2 scans, 20 proven missing tests, 80 planted, telemetry.
 import { test, expect, type Page } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
-import { execFileSync } from 'node:child_process';
 import { stripTypeScriptTypes } from 'node:module';
 
 const SITE = path.join(import.meta.dirname, '..');
@@ -31,7 +32,7 @@ const TAMPERED = path.join(FIXTURES, 'page-tampered');
 const EMPTY = path.join(FIXTURES, 'page-empty');
 const UNSIGNED = path.join(FIXTURES, 'page-unsigned');
 const PREFIX = path.join(FIXTURES, 'page-real-prefix');
-const PREFIX_LAST = '20260908T154158Z-36e4a824f340-d65faf854374.json.gz';
+const PREFIX_SOURCE = path.join(SITE, 'tests', 'fixtures', 'ledger-prefix');
 const ALLOWED_HOSTS = new Set(['localhost', 'api.github.com', 'raw.githubusercontent.com']);
 const API_HEADERS = {
   'access-control-allow-origin': '*',
@@ -41,18 +42,6 @@ const API_HEADERS = {
 const RAW_HEADERS = { 'access-control-allow-origin': '*', 'content-type': 'application/octet-stream' };
 // Words that would be commentary on a project rather than a measurement.
 const TAUNTS = /\b(worst|fail|shame|bad)/i;
-
-function ledgerRef(): string {
-  for (const ref of ['origin/corral/ledger', 'corral/ledger']) {
-    try {
-      execFileSync('git', ['rev-parse', '--verify', '--quiet', ref], { cwd: ROOT, stdio: 'ignore' });
-      return ref;
-    } catch {
-      /* try the next */
-    }
-  }
-  throw new Error('no corral/ledger ref for the real-prefix fixture (git fetch origin corral/ledger)');
-}
 
 test.beforeAll(() => {
   for (const d of [GOOD, TAMPERED, EMPTY, UNSIGNED, PREFIX]) fs.rmSync(d, { recursive: true, force: true });
@@ -78,18 +67,10 @@ test.beforeAll(() => {
     fs.writeFileSync(path.join(UNSIGNED, 'scans', n), zlib.gzipSync(Buffer.from(JSON.stringify(e), 'utf8')));
   }
 
-  const ref = ledgerRef();
-  const names = execFileSync('git', ['ls-tree', '--name-only', `${ref}:scans`], { cwd: ROOT, encoding: 'utf8' })
-    .split('\n')
-    .filter(Boolean)
-    .sort();
-  const upto = names.indexOf(PREFIX_LAST);
-  if (upto < 0) throw new Error(`${PREFIX_LAST} is not on ${ref}`);
-  fs.mkdirSync(path.join(PREFIX, 'scans'), { recursive: true });
-  for (const n of names.slice(0, upto + 1)) {
-    fs.writeFileSync(path.join(PREFIX, 'scans', n), execFileSync('git', ['show', `${ref}:scans/${n}`], { cwd: ROOT, maxBuffer: 1 << 26 }));
-  }
-  fs.writeFileSync(path.join(PREFIX, 'rootpub.hex'), execFileSync('git', ['show', `${ref}:LEDGER_PUBKEY`], { cwd: ROOT }));
+  // Byte-for-byte copy of the committed prefix; the committed LEDGER_PUBKEY
+  // is the same key the archived chain was signed with.
+  fs.cpSync(path.join(PREFIX_SOURCE, 'scans'), path.join(PREFIX, 'scans'), { recursive: true });
+  fs.copyFileSync(path.join(PREFIX_SOURCE, 'LEDGER_PUBKEY'), path.join(PREFIX, 'rootpub.hex'));
 });
 
 type Ledger = { dir: string } | { apiStatus: number };

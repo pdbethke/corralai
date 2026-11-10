@@ -54,7 +54,7 @@ mkdir -p "$OUT"
 # so a reader who arrives at an entry from a PR or issue link can find out
 # what corral is.
 if [ -n "$PUBKEY" ]; then
-  go run ./scripts/ledgersite -ledger "$SRC" -out "$OUT" -repo "$LEDGER_REPO" -pubkey "$PUBKEY" -site-chrome
+  go run ./scripts/ledgersite -ledger "$SRC" -out "$OUT" -repo "$LEDGER_REPO" -pubkey "$PUBKEY" -self github.com/pdbethke/corralai -site-chrome
 else
-  go run ./scripts/ledgersite -ledger "$SRC" -out "$OUT" -repo "$LEDGER_REPO" -site-chrome
+  go run ./scripts/ledgersite -ledger "$SRC" -out "$OUT" -repo "$LEDGER_REPO" -self github.com/pdbethke/corralai -site-chrome
 fi

@@ -7,6 +7,8 @@ description: Generated from the runner table corral dispatches on — never hand
 
 What corral does with each language's tests. This page is rendered from the same table the code dispatches on, so it cannot list a capability the code lacks, and every gap carries the reason the code gives for it.
 
+This table is what the code can do. What has been executed, and on which repositories, is the record's [Languages page](https://corralai.dev/ledger/languages.html): it is derived from signed ledger entries, and a language with no qualifying run there shows "—".
+
 ## By language
 
 | | go | javascript | php | python | ruby | rust | typescript |

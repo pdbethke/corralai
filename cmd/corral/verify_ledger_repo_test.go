@@ -74,11 +74,11 @@ func TestUILedgerRepoFlagReachesTheChainPage(t *testing.T) {
 	if _, err := pushBundle(dir+"/", b, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	without := uiGet(t, uiHandler(fakeSeal{}, dir, ""), "/chain-1.html")
+	without := uiGet(t, uiHandler(fakeSeal{}, dir, "", nil), "/chain-1.html")
 	if !strings.Contains(without.Body.String(), "repository is not named") {
 		t.Fatalf("without --ledger-repo the chain page must carry the Problem:\n%s", without.Body.String())
 	}
-	with := uiGet(t, uiHandler(fakeSeal{}, dir, testKeylessRepo), "/chain-1.html")
+	with := uiGet(t, uiHandler(fakeSeal{}, dir, testKeylessRepo, nil), "/chain-1.html")
 	if with.Code != 200 || strings.Contains(with.Body.String(), "repository is not named") {
 		t.Fatalf("with --ledger-repo the page must not carry it (code %d)", with.Code)
 	}

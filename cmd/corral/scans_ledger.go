@@ -183,7 +183,7 @@ func scanRowFromEntry(e auditpush.LedgerEntry, id int64) scanstore.ScanRow {
 	row := scanstore.ScanRow{ID: id, TS: e.Pushed}
 	row.Scan = scanstore.Scan{
 		Owner: owner, Repo: repo, Commit: sc.Commit, Substrate: sc.Substrate,
-		EngineVersion: sc.EngineVersion, ModelSet: sc.ModelSet,
+		EngineVersion: sc.EngineVersion, VerdictGeneration: sc.VerdictGeneration, ModelSet: sc.ModelSet,
 		Top: sc.Top, AllCandidates: sc.AllCandidates, DiffBase: sc.DiffBase, Scope: sc.Scope,
 		TotalFiles: sc.TotalFiles, Candidates: sc.Candidates, Audited: sc.Audited,
 		PreflightRan: sc.PreflightRan, PreflightNote: sc.PreflightNote,

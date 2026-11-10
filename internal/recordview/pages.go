@@ -28,20 +28,21 @@ var ErrNotFound = errors.New("recordview: no such page")
 
 // Pages holds the parsed templates. Parse once, render many times.
 type Pages struct {
-	index, entry, scan, list, chain, verdicts *template.Template
+	index, entry, scan, list, chain, verdicts, languages *template.Template
 }
 
 func funcs() template.FuncMap {
 	return template.FuncMap{
-		"short":    shortHash,
-		"tierNote": ledger.NoteOf,
-		"hasPre":   func(s string) bool { return strings.TrimSpace(s) != "" },
-		"date":     func(t time.Time) string { return t.UTC().Format("2006-01-02") },
-		"stamp":    func(t time.Time) string { return t.UTC().Format("2006-01-02 15:04 UTC") },
-		"join":     func(s []string) string { return strings.Join(s, ", ") },
-		"lower":    strings.ToLower,
-		"ctl":      func(f FindingView, sha string) controlsData { return controlsData{f, sha} },
-		"entryURL": func(short string) string { return "entry/" + short + ".html" },
+		"short":     shortHash,
+		"tierNote":  ledger.NoteOf,
+		"hasPre":    func(s string) bool { return strings.TrimSpace(s) != "" },
+		"date":      func(t time.Time) string { return t.UTC().Format("2006-01-02") },
+		"stamp":     func(t time.Time) string { return t.UTC().Format("2006-01-02 15:04 UTC") },
+		"join":      func(s []string) string { return strings.Join(s, ", ") },
+		"lower":     strings.ToLower,
+		"ctl":       func(f FindingView, sha string) controlsData { return controlsData{f, sha} },
+		"shortHash": shortHash,
+		"entryURL":  func(short string) string { return "entry/" + short + ".html" },
 		"thousands": func(n int64) string {
 			if n >= 1_000_000 {
 				return fmt.Sprintf("%.1fM", float64(n)/1e6)
@@ -68,6 +69,7 @@ func NewPages() (*Pages, error) {
 		{&p.list, "list", listTmpl},
 		{&p.chain, "chain", chainTmpl},
 		{&p.verdicts, "verdicts", verdictsTmpl},
+		{&p.languages, "languages", languagesTmpl},
 	} {
 		parsed, err := template.New(t.name).Funcs(funcs()).Parse(t.src)
 		if err != nil {
@@ -142,6 +144,9 @@ func (s Site) Paths() []string {
 			out = append(out, fmt.Sprintf("%s-%d.html", l.prefix, i))
 		}
 	}
+	if s.LanguagesBuilt {
+		out = append(out, "languages.html")
+	}
 	for _, r := range s.Reviews {
 		out = append(out, "entry/"+r.Short+".html")
 	}
@@ -169,6 +174,8 @@ func (p *Pages) render(w io.Writer, s Site, path string) error {
 		return p.index.Execute(w, s)
 	case path == "verdicts.html":
 		return p.verdicts.Execute(w, s)
+	case path == "languages.html" && s.LanguagesBuilt:
+		return p.languages.Execute(w, s)
 	case strings.HasPrefix(path, "entry/") && strings.HasSuffix(path, ".html"):
 		short := strings.TrimSuffix(strings.TrimPrefix(path, "entry/"), ".html")
 		if !isHex(short) {

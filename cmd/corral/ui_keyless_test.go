@@ -30,7 +30,7 @@ func TestUIShowsAVerifiedKeylessEntryAsVerified(t *testing.T) {
 	if _, err := pushBundle(dir+"/", b, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	h := uiHandler(fakeSeal{}, dir, testKeylessRepo)
+	h := uiHandler(fakeSeal{}, dir, testKeylessRepo, nil)
 	chain := uiGet(t, h, "/chain-1.html").Body.String()
 	if strings.Contains(chain, "signed, not checked") || !strings.Contains(chain, `chip warn">`+html.EscapeString(ledger.LevelSentence(ledger.LevelKeylessUnpinned))) {
 		t.Errorf("the chain page does not show the verified keyless entry as verified:\n%s", chain)

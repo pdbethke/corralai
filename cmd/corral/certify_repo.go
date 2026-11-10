@@ -1781,7 +1781,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	party := auditpush.CommitIdentity(*repoDir, *commit)
 	scan := scanstore.Scan{
 		Owner: *owner, Repo: cfg.Repo, Commit: *commit,
-		Substrate: *substrateFlag, EngineVersion: version, ModelSet: cfg.ModelSet,
+		Substrate: *substrateFlag, EngineVersion: version, VerdictGeneration: reposcan.VerdictGeneration, ModelSet: cfg.ModelSet,
 		Top: effectiveTop, AllCandidates: *allFlag, DiffBase: *diffBase, Scope: scope,
 		TotalFiles: totalFiles, Candidates: rep.Candidates, Audited: rep.Audited,
 		KillRate: killRatePtr(rep.KillRate), CacheHits: rep.CacheHits,

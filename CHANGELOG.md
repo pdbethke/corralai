@@ -9,6 +9,17 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [Unreleased]
+
+### Added
+
+- **The record's Languages page**, at `corralai.dev/ledger/languages.html` and in `corral ui`: for each language, the qualifying signed runs and the repositories they audited. `corral ui --self` (repeatable) and `scripts/ledgersite -self` name the self-audit repositories; neither has a default.
+- **`ScanRow.VerdictGeneration`**: the verdict generation a scan was made under is now a recorded field.
+
+### Changed
+
+- **The README and the front page no longer carry a hand-kept proof table or audit list.** They point at the Languages page. The old rows were runs made before the record restarted on 2026-11-09 and are kept in the `ledger-archive/2026-11-09` tag.
+
 ## [v1.0.0-rc.31] — 2026-11-05
 
 ### Breaking

@@ -176,6 +176,18 @@ type Site struct {
 	// (owner/name), printed in the same command; empty when none was named.
 	LedgerRepo string
 	Reviews    []EntryView
+
+	// Languages is the Languages page: one row per language the registry
+	// names, in its order. LanguagesBuilt says WithLanguages ran (so the page
+	// exists); LanguagesRefusal, when set, replaces the table with why there
+	// is none. entries and checks are what LoadTrust read, kept so the
+	// caller can compute the page after loading, once it knows self.
+	Languages        []LanguageRow
+	LanguagesRefusal string
+	LanguagesBuilt   bool
+	entries          []ledger.Entry
+	checks           []ledger.ChainCheck
+
 	// Chain is every entry of every kind, newest first: the chain itself,
 	// with each entry's check. Scan and review pages hold the detail.
 	Chain []ChainView

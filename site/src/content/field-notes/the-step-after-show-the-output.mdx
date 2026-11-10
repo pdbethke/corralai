@@ -1,0 +1,73 @@
+---
+title: "The step after 'show the output'"
+description: "The Claude Code team published how they review code now that agents write most of it. It's a careful pipeline, and it treats a passing test suite as evidence. Notes on where corral fits: grading the tests themselves, checking findings by running them, and keeping the result as a signed record."
+pubDate: 2026-11-10
+draft: false
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+*Field note. Same idea as our notes on Sakana's Fugu: a piece we respect, what it gets right, and the seam where corral fits. Their claims are quoted from their post; our numbers come from signed ledger entries, linked where they appear.*
+
+---
+
+On October 15 the Claude Code team published [How the Claude Code team does code review](https://claude.dev/blog/solving-code-review-at-anthropic/) (Addy Osmani, Morgan Westlee Lunt and Qing Wang). The problem is volume. Changes landing per day in Anthropic's monorepo went "from about 2,500 in May to more than 30,000 in September", and Claude "writes about 90 percent of Claude Code's own code." Nobody can read all of that, so they stopped trying to.
+
+Their framing is the best part of the piece:
+
+> We think "did a human read the code?" is an imprecise proxy for "what could go wrong with this change, and which check—automated or human—is the right one to catch it?"
+
+We agree with that completely. It's the question corral was built around. This note is about one check their pipeline leaves to faith.
+
+## What they built
+
+It's a layered pipeline, and most of it is good engineering we'd copy:
+
+- **Verify before the PR.** "We give Claude something it can run—like tests, a build or a screenshot to compare against the design—and ask it to show the output instead of saying it's done."
+- **Parallel review with a vote.** "Several agents look for bugs at the same time. Then a separate group votes on each finding, and it only gets posted if enough of them agree it's real." Style and cleanup findings are dropped, and they A/B tested those filters before keeping them.
+- **Every finding gets answered.** Fix it or resolve it with a reason. Findings are tagged Important, Nit or Pre-existing, "so a bug the PR didn't introduce doesn't look like the author's fault."
+- **Review has to converge.** A round cap at three, diff-only re-review, no repeats. They found "about 59%" of what the reviewer kept flagging had been there since the first pass.
+- **Humans by risk.** A classifier picks zero, one or two approvers. "An agent's approval never counts as a person's, either."
+- **Incidents become evals.** Past incident PRs form a daily eval set every reviewer change is scored against.
+
+And it works by their measure: from June to September merged PRs "more than doubled while the share that had to be reverted fell by more than 40 percent."
+
+## The check left to faith
+
+Tests show up twice in that pipeline: as the output Claude is asked to show before the PR, and as required CI. Both treat a green suite as evidence.
+
+Nothing in the pipeline asks whether the suite could have gone red.
+
+That matters more when the same kind of system writes the code and the tests. If an agent writes about 90 percent of the code, it writes a lot of the tests too, and a test written alongside the code can end up checking what the code does rather than what it should do. A suite like that passes. It also passes when the code is wrong in the way nobody thought to test. "Show the output" proves the output exists. It doesn't prove the output means anything.
+
+The review layer doesn't close this gap either. Findings are confirmed by other agents agreeing, and the post doesn't say the voters are different models. Agreement is a good filter for noise. It isn't evidence that the bug is real, and it says nothing about the tests at all.
+
+## Where corral fits
+
+corral is an auditing tool, and its one rule is that a claim is worth nothing until something executed it. Three places it plugs into a pipeline like theirs:
+
+**1. After "show the output": grade the tests.** corral plants faults that violate what the code is supposed to guarantee, runs the project's own test command against each one in a sandbox, and counts how many the suite catches. That count is measured, never reported by a model. For each fault the suite misses, a model writes a test that catches it, and corral runs that test too. A survivor that a compiling, passing-on-good-code test kills is a **proven** missing test, and it comes back as a test you can merge.
+
+On [REA](https://github.com/morluto/rea), a TypeScript project with its own Stryker setup, one file's suite killed 30 of 71 graded faults, and 30 of the 41 survivors came back with a test that proves them, every kill confirmed by running the killing test alone ([entry `ad790895e4ee`](https://github.com/pdbethke/corralai/blob/ledger-archive/2026-11-09/scans/20261105T153215Z-aa48d494e972-62f5a6da58de.json.gz)). On Warp's `fuzzy_match` crate the suite killed 11 of 34, and 22 survivors were proven ([entry `94d9296c5801`](https://github.com/pdbethke/corralai/blob/ledger-archive/2026-11-09/scans/20261014T133712Z-714c51f1e29f-8f1bc4949be5.json.gz)). Both suites were green before we started.
+
+**2. Instead of a vote: a reproduction.** `corral review` works the way their review does, with one change in what counts. A reviewer seat has to attach a script that reproduces the bug, and corral runs it. A second seat, on a different vendor's model, tries to refute what survives. A finding stands because something ran, not because enough reviewers agreed. Then a person rules on it, and the ruling is recorded too.
+
+**3. Incidents become evals - before they happen.** Their best idea is turning every incident into a permanent eval case. A proven missing test is that idea run early: a bug the suite would have let through, caught before it shipped, with the test that catches it attached.
+
+## The record
+
+Their review lives in PR threads. corral writes every audit, review and ruling as a signed, hash-linked entry on a branch of the audited repository, `corral/ledger`. Nothing hosts it but git. Anyone can verify the chain against a published key and query it with DuckDB.
+
+With many projects each signing their own ledger, that adds up to something we find more interesting the longer we look at it: a decentralized, signed database of what was actually executed, with no server in the middle and each reader choosing whose signatures to trust. Certificate Transparency and Sigstore's Rekor showed the pattern for certificates and signatures. We're pointing it at test evidence.
+
+## What we're taking from them
+
+Fair's fair. Three things in their post we don't do yet and should:
+
+- **Score every finding by what the author did with it**: fixed, wrong, intentional, or didn't matter. Our adjudications only say confirmed or refuted.
+- **Run the reviewer on changes known to be clean** and count the false alarms.
+- **Tag findings Pre-existing**, so a bug the change didn't introduce isn't pinned on its author.
+
+None of these needs a central server. Each is a field on a signed entry and a query.
+
+Their pipeline makes merging fast and undoing cheap. corral answers a narrower question underneath it: when the suite went green, could it have gone red? The two fit together.

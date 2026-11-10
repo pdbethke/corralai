@@ -257,13 +257,37 @@ func TestLanguageProofsReviewsOnlyLedgerIsEmpty(t *testing.T) {
 	}
 }
 
+// A mixed-language entry proves a language only through a runner that runs
+// it: the go file of a go-test entry qualifies, its python file does not.
 func TestLanguageProofsRunnerShownOnlyForItsLanguage(t *testing.T) {
 	m := one(t, pOpts{files: []Row{
 		{Lang: "go", Audited: 1, MutantsGraded: 1},
 		{Lang: "python", Audited: 1, MutantsGraded: 1},
 	}})
-	if m["go"].Local.Runner != "go-test" || m["python"].Local.Runner != "" {
-		t.Fatalf("got %+v / %+v", m["go"].Local, m["python"].Local)
+	if m["go"].Local == nil || m["go"].Local.Runner != "go-test" {
+		t.Fatalf("go: %+v", m["go"])
+	}
+	if _, ok := m["python"]; ok {
+		t.Fatalf("python proved by a go runner: %+v", m["python"])
+	}
+}
+
+func TestLanguageProofsRunnerMustRunTheLanguage(t *testing.T) {
+	langs := map[string][]string{"pytest": {"python"}}
+	run := func(lang string) map[string]LanguageProof {
+		e, c := proofEntry(t, pOpts{runner: "pytest", files: []Row{{Lang: lang, Audited: 1, MutantsGraded: 1}}})
+		m, err := LanguageProofs([]Entry{e}, []ChainCheck{c}, testSelf, "40", langs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	if _, ok := run("go")["go"]; ok {
+		t.Fatalf("go proved by pytest")
+	}
+	py := run("python")["python"]
+	if py.Local == nil || py.Local.Runner != "pytest" {
+		t.Fatalf("python: %+v", py)
 	}
 }
 

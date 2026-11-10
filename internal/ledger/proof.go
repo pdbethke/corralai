@@ -5,6 +5,7 @@ package ledger
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -153,6 +154,13 @@ func LanguageProofs(entries []Entry, checks []ChainCheck, self []string, floor s
 				f.CacheHit || f.ReusedFromScanID != nil {
 				continue
 			}
+			// A run proves a language only if its recorded runner runs that
+			// language (R11). A mixed-language entry's other-language files
+			// are counted under no reason: the entry is a near-miss, not a
+			// refusal.
+			if !slices.Contains(runnerLangs[sc.Runner], f.Lang) {
+				continue
+			}
 			lp := out[f.Lang]
 			if !seen[f.Lang] {
 				seen[f.Lang] = true
@@ -176,16 +184,10 @@ func LanguageProofs(entries []Entry, checks []ChainCheck, self []string, floor s
 				continue
 			}
 			run := &ProofRun{
-				Hash: e.Hash, Repo: sc.Repo, Commit: sc.Commit, Path: f.Path,
+				Hash: e.Hash, Repo: sc.Repo, Commit: sc.Commit, Path: f.Path, Runner: sc.Runner,
 				CorralVersion: sc.CorralVersion, Generation: sc.VerdictGeneration,
 				RunURL: sc.RunURL, KillRate: f.KillRate, ProvenMissed: f.ProvenMissed,
 				StartedAt: started,
-			}
-			for _, l := range runnerLangs[sc.Runner] {
-				if l == f.Lang {
-					run.Runner = sc.Runner
-					break
-				}
 			}
 			if f.ProvenMissed > 0 {
 				lp.ProvedAGap = true

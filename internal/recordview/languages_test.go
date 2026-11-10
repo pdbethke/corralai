@@ -316,16 +316,6 @@ func TestLanguagesPageRunCellShowsTheRelease(t *testing.T) {
 	}
 }
 
-// A run whose runner is not this language's says so, not a blank.
-func TestLanguagesPageRunCellSaysRunnerNotRecorded(t *testing.T) {
-	s := langSite(t, "40", true, "")
-	s.entries[0].Bundle.Scan.Runner = "pytest" // not a go runner: ProofRun.Runner stays blank
-	row := goRunCell(t, s)
-	if !strings.Contains(row, "runner not recorded") {
-		t.Fatalf("blank runner not stated in %s", row)
-	}
-}
-
 // A run with no start time shows no time, never 0001-01-01.
 func TestLanguagesPageRunCellOmitsAZeroTime(t *testing.T) {
 	s := langSite(t, "40", true, "")

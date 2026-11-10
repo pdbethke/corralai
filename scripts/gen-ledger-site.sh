@@ -9,6 +9,11 @@
 # explicitly, never inferred from a file. With neither the page says signatures
 # were NOT CHECKED. The environment variable is left for ledgersite to read
 # itself, so a malformed one is refused naming the true source.
+#
+# CORRALAI_LEDGER_DIR=<dir> renders a ledger DIRECTORY instead of the branch
+# (the site's e2e build renders the committed fixture this way, so the tests
+# never depend on what the live record happens to hold). Unset, the branch is
+# rendered; there is no fallback between the two.
 set -euo pipefail
 
 # The repository whose Actions identity signs the ledger's keyless entries. It
@@ -23,6 +28,11 @@ cd "$(dirname "$0")/.."
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+if [ -n "${CORRALAI_LEDGER_DIR:-}" ]; then
+  [ -d "$CORRALAI_LEDGER_DIR" ] || { echo "gen-ledger-site: CORRALAI_LEDGER_DIR '$CORRALAI_LEDGER_DIR' is not a directory" >&2; exit 1; }
+  SRC="$(cd "$CORRALAI_LEDGER_DIR" && pwd)"
+  echo "gen-ledger-site: rendering directory $SRC"
+else
 # Prefer the remote-tracking ref so a stale local copy is never rendered as
 # current; fall back to a local branch for an offline build.
 REF=""
@@ -35,6 +45,8 @@ if [ -z "$REF" ]; then
 fi
 echo "gen-ledger-site: rendering $REF ($(git rev-parse --short "$REF"))"
 git archive "$REF" | tar -x -C "$TMP"
+SRC="$TMP"
+fi
 
 mkdir -p "$OUT"
 # -site-chrome leaves a slot at the top of every record page; the site build
@@ -42,7 +54,7 @@ mkdir -p "$OUT"
 # so a reader who arrives at an entry from a PR or issue link can find out
 # what corral is.
 if [ -n "$PUBKEY" ]; then
-  go run ./scripts/ledgersite -ledger "$TMP" -out "$OUT" -repo "$LEDGER_REPO" -pubkey "$PUBKEY" -site-chrome
+  go run ./scripts/ledgersite -ledger "$SRC" -out "$OUT" -repo "$LEDGER_REPO" -pubkey "$PUBKEY" -site-chrome
 else
-  go run ./scripts/ledgersite -ledger "$TMP" -out "$OUT" -repo "$LEDGER_REPO" -site-chrome
+  go run ./scripts/ledgersite -ledger "$SRC" -out "$OUT" -repo "$LEDGER_REPO" -site-chrome
 fi

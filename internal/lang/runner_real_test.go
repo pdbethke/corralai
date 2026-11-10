@@ -278,7 +278,13 @@ func TestOK(t *testing.T) {}
 // TestRealRunnersListAndRunOne is.
 func TestRealRunnersListAndRunOneUnit(t *testing.T) {
 	root := os.Getenv("CORRALAI_RUNNER_ROOT")
-	passed := regexp.MustCompile(`(?m)^\s*Tests:?\s+(\d+) passed|^# pass (\d+)`)
+	// The pass count, as each reporter prints it: jest/vitest's "Tests: N
+	// passed", node's TAP "# pass N", and node's spec "ℹ pass N". node 23 and
+	// later print spec by default where 22 printed TAP off a TTY, so the one-unit
+	// run (which, unlike listing, keeps the command's own reporter) reads spec
+	// on node 24: measured on 24.22.2, where only the TAP form was matched and
+	// a run of exactly the file's two tests read as no count at all.
+	passed := regexp.MustCompile(`(?m)^\s*Tests:?\s+(\d+) passed|^# pass (\d+)|^ℹ pass (\d+)`)
 	for _, c := range []struct {
 		runner, lang  string
 		argv          []string
@@ -353,7 +359,7 @@ func TestRealRunnersListAndRunOneUnit(t *testing.T) {
 			}
 			_, all = run(one)
 			m := passed.FindStringSubmatch(all)
-			if m == nil || m[1]+m[2] != "2" || strings.Contains(all, "b."+strings.SplitN(filepath.Base(c.want[0]), ".", 2)[1]) {
+			if m == nil || m[1]+m[2]+m[3] != "2" || strings.Contains(all, "b."+strings.SplitN(filepath.Base(c.want[0]), ".", 2)[1]) {
 				t.Errorf("%q did not run exactly %s's two tests:\n%s", one, c.want[0], all)
 			}
 		})

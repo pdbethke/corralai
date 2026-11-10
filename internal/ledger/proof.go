@@ -32,15 +32,19 @@ type LanguageProof struct {
 	Local, CI  *ProofRun // newest qualifying of each kind; nil = none
 	ProvedAGap bool      // any qualifying entry for this language has ProvenMissed > 0
 	BelowFloor int       // entries that would qualify but for the floor
-	Unchecked  int       // entries that would qualify but whose signature was not checked
+	Unchecked  int       // signed entries that would qualify but whose signature was not checked
+	Unsigned   int       // entries that would qualify but carry no signature at all
 }
 
 // NormalizeRepo reduces the spellings of a repository (URL, ssh, .git
 // suffix, case) to "host/owner/name" in lower case.
 func NormalizeRepo(s string) string {
 	s = strings.TrimSpace(s)
+	scheme := false
 	for _, p := range []string{"https://", "http://", "ssh://", "git://"} {
-		s = strings.TrimPrefix(s, p)
+		if strings.HasPrefix(s, p) {
+			s, scheme = s[len(p):], true
+		}
 	}
 	// user@ prefix (git@github.com:..., https://token@host/...).
 	head := strings.IndexAny(s, "/:")
@@ -50,12 +54,28 @@ func NormalizeRepo(s string) string {
 	if at := strings.Index(s[:head], "@"); at >= 0 {
 		s = s[at+1:]
 	}
-	// scp-like host:owner/name
+	// After a scheme, host:port/ (ssh://git@host:22/owner/name) drops a
+	// numeric port. Without one it is scp-like host:owner/name, where an
+	// all-digit owner is an owner, not a port.
 	if c := strings.Index(s, ":"); c >= 0 && (!strings.Contains(s, "/") || c < strings.Index(s, "/")) {
-		s = s[:c] + "/" + s[c+1:]
+		rest := s[c+1:]
+		if sl := strings.Index(rest, "/"); scheme && sl > 0 && isDigits(rest[:sl]) {
+			s = s[:c] + rest[sl:]
+		} else {
+			s = s[:c] + "/" + rest
+		}
 	}
 	s = strings.TrimSuffix(strings.TrimRight(s, "/"), ".git")
 	return strings.ToLower(strings.Trim(s, "/"))
+}
+
+func isDigits(s string) bool {
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return s != ""
 }
 
 // LanguageProofs decides, in one place, which signed entries prove corral
@@ -95,7 +115,10 @@ func LanguageProofs(entries []Entry, checks []ChainCheck, self []string, floor s
 		if sc.Repo == "" || sc.RepoIdentity != "git" || sc.Runner == "" {
 			continue
 		}
-		if sc.TreeDirty != nil && *sc.TreeDirty {
+		// Cleanliness must be recorded AND clean: nil means unknown (every
+		// pull_request-triggered Action run records nil, because it grades
+		// the merge ref rather than HEAD), and unknown is not a proof.
+		if sc.TreeDirty == nil || *sc.TreeDirty {
 			continue
 		}
 		if selfSet[NormalizeRepo(sc.Repo)] {
@@ -105,9 +128,12 @@ func LanguageProofs(entries []Entry, checks []ChainCheck, self []string, floor s
 		if !ok || !chk.HashOK || !chk.LinkOK || chk.Problem != "" {
 			continue
 		}
-		// Signature: unchecked is counted; checked-and-bad is not.
+		// Signature: unsigned and unchecked are counted (apart: no key
+		// changes an unsigned entry, a key would decide an unchecked one);
+		// checked-and-bad is not counted at all.
 		sigOK := chk.SigChecked && chk.SigOK && chk.Signer != ""
-		unchecked := !chk.SigChecked
+		unsigned := !chk.Signed
+		unchecked := chk.Signed && !chk.SigChecked
 		if chk.SigChecked && !sigOK {
 			continue
 		}
@@ -130,20 +156,23 @@ func LanguageProofs(entries []Entry, checks []ChainCheck, self []string, floor s
 			lp := out[f.Lang]
 			if !seen[f.Lang] {
 				seen[f.Lang] = true
-				// An unchecked signature counts as Unchecked whatever the
-				// generation: it is the reason a key could still change.
-				// BelowFloor counts only entries whose signature WAS
-				// checked and that sit below the floor.
-				if belowFloor || unchecked {
-					if unchecked {
+				// A missing or unchecked signature is counted whatever the
+				// generation: it is the more fundamental reason the entry
+				// cannot count. BelowFloor counts only entries whose
+				// signature WAS checked and that sit below the floor.
+				if belowFloor || unchecked || unsigned {
+					switch {
+					case unsigned:
+						lp.Unsigned++
+					case unchecked:
 						lp.Unchecked++
-					} else {
+					default:
 						lp.BelowFloor++
 					}
 					out[f.Lang] = lp
 					continue
 				}
-			} else if belowFloor || unchecked {
+			} else if belowFloor || unchecked || unsigned {
 				continue
 			}
 			run := &ProofRun{

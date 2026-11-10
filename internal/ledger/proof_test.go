@@ -15,6 +15,8 @@ type pOpts struct {
 	runner     string
 	runURL     string
 	dirty      bool
+	dirtyNil   bool // TreeDirty not recorded
+	unsigned   bool // Signed=false: the entry carries no signature
 	noSig      bool // SigChecked=false
 	noCheck    bool
 	started    time.Time
@@ -51,8 +53,16 @@ func proofEntry(t *testing.T, o pOpts) (Entry, ChainCheck) {
 	e := Entry{Kind: o.kind, Hash: o.hash, Retracts: o.retractsOf}
 	e.Bundle.Scan = ScanRow{Repo: o.repo, RepoIdentity: o.identity, Commit: "c1",
 		RunURL: o.runURL, Runner: o.runner, VerdictGeneration: o.gen, TreeDirty: &d, StartedAt: &st}
+	if o.dirtyNil {
+		e.Bundle.Scan.TreeDirty = nil
+	}
 	e.Bundle.Files = o.files
-	c := ChainCheck{Hash: o.hash, HashOK: true, LinkOK: true, SigChecked: !o.noSig, SigOK: !o.noSig, Signer: "root"}
+	sigChecked := !o.noSig && !o.unsigned
+	c := ChainCheck{Hash: o.hash, HashOK: true, LinkOK: true, Signed: !o.unsigned,
+		SigChecked: sigChecked, SigOK: sigChecked, Signer: "root"}
+	if o.unsigned {
+		c.Signer = ""
+	}
 	return e, c
 }
 
@@ -127,10 +137,15 @@ func TestNormalizeRepoSpellings(t *testing.T) {
 		"git@github.com:pdbethke/corralai.git",
 		"github.com/pdbethke/corralai/",
 		"ssh://git@github.com/pdbethke/corralai.git",
+		"ssh://git@github.com:22/pdbethke/corralai.git",
 	} {
 		if got := NormalizeRepo(s); got != "github.com/pdbethke/corralai" {
 			t.Errorf("%q -> %q", s, got)
 		}
+	}
+	// scp form has no port: an all-digit owner stays an owner.
+	if got := NormalizeRepo("git@github.com:123/name.git"); got != "github.com/123/name" {
+		t.Errorf("scp numeric owner -> %q", got)
 	}
 }
 
@@ -178,6 +193,15 @@ func TestLanguageProofsDemoAndOperatorIdentityExcluded(t *testing.T) {
 
 func TestLanguageProofsDirtyTreeExcluded(t *testing.T) {
 	if m := one(t, pOpts{dirty: true}); len(m) != 0 {
+		t.Fatalf("got %+v", m)
+	}
+}
+
+// A run whose tree cleanliness was not recorded (nil: every pull_request-
+// triggered Action run, which grades the merge ref, not HEAD) is not a proof:
+// the spec requires TreeDirty recorded AND false.
+func TestLanguageProofsUnknownCleanlinessExcluded(t *testing.T) {
+	if m := one(t, pOpts{dirtyNil: true}); len(m) != 0 {
 		t.Fatalf("got %+v", m)
 	}
 }
@@ -300,6 +324,22 @@ func TestLanguageProofsNewestByTimeNotChainOrder(t *testing.T) {
 func TestLanguageProofsUncheckedOutranksBelowFloorInTheRule(t *testing.T) {
 	g := one(t, pOpts{gen: "39", noSig: true})["go"]
 	if g.BelowFloor != 0 || g.Unchecked != 1 || g.Local != nil {
+		t.Fatalf("got %+v", g)
+	}
+}
+
+// An entry that carries no signature is Unsigned, never Unchecked: no key
+// the reader could supply would change it.
+func TestLanguageProofsUnsignedCountsAsUnsignedNotUnchecked(t *testing.T) {
+	g := one(t, pOpts{unsigned: true})["go"]
+	if g.Local != nil || g.Unsigned != 1 || g.Unchecked != 0 || g.BelowFloor != 0 {
+		t.Fatalf("got %+v", g)
+	}
+}
+
+func TestLanguageProofsUnsignedOutranksBelowFloorInTheRule(t *testing.T) {
+	g := one(t, pOpts{gen: "39", unsigned: true})["go"]
+	if g.Local != nil || g.Unsigned != 1 || g.Unchecked != 0 || g.BelowFloor != 0 {
 		t.Fatalf("got %+v", g)
 	}
 }

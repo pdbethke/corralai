@@ -42,12 +42,18 @@ func (s Site) WithLanguages(langs []string, runnerLangs map[string][]string, sel
 		row := LanguageRow{Lang: l, Local: p.Local, CI: p.CI, ProvedAGap: p.ProvedAGap}
 		if p.Local == nil && p.CI == nil {
 			switch {
+			// Precedence: a key could still turn an unchecked run into
+			// proof; no key changes an unsigned one; a floor is a rule.
+			// The default says "qualifying" because runs that fail some
+			// other condition (no runner, no generation) are not counted.
 			case p.Unchecked > 0:
 				row.Reason = "signatures not checked: render with the ledger's public key"
+			case p.Unsigned > 0:
+				row.Reason = "runs on this record are unsigned"
 			case p.BelowFloor > 0:
 				row.Reason = "every run on this record predates generation " + ledger.ProofFloor
 			default:
-				row.Reason = "no run on this record"
+				row.Reason = "no qualifying run on this record"
 			}
 		}
 		s.Languages = append(s.Languages, row)

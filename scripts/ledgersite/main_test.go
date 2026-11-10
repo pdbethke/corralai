@@ -190,7 +190,7 @@ func TestLedgersiteWritesLanguagesPage(t *testing.T) {
 		t.Fatalf("no go row:\n%s", page)
 	}
 	row := page[i : i+strings.Index(page[i:], "</tr>")]
-	if strings.Contains(row, "no run on this record") {
+	if strings.Contains(row, "no qualifying run on this record") {
 		t.Fatalf("the signed qualifying go run is not shown: %s", row)
 	}
 	idx, _ := os.ReadFile(filepath.Join(site, "index.html"))

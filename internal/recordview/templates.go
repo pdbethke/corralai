@@ -551,6 +551,6 @@ const languagesTmpl = `<!doctype html>
 {{end}}
 </div></body></html>
 {{define "proofrun"}}<a class="mono" href="{{entryURL (shortHash .Hash)}}">{{shortHash .Hash}}</a>
-<span class="small">{{.Repo}} {{.Runner}} gen {{.Generation}} {{stamp .StartedAt}}</span>
+<span class="small">{{.Repo}} {{if .Runner}}{{.Runner}}{{else}}runner not recorded{{end}} {{with .CorralVersion}}{{.}} {{end}}gen {{.Generation}}{{if not .StartedAt.IsZero}} {{stamp .StartedAt}}{{end}}</span>
 {{if .RunURL}}<a class="small" href="{{.RunURL}}">run</a>{{end}}{{end}}
 `

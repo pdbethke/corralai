@@ -31,7 +31,7 @@ func langSite(t *testing.T, gen string, signed bool, runURL string) Site {
 	e.Bundle.Scan = ledger.ScanRow{Repo: "https://github.com/acme/widgets", RepoIdentity: "git", Commit: "c1",
 		RunURL: runURL, Runner: "go-test", VerdictGeneration: gen, TreeDirty: &d, StartedAt: &st}
 	e.Bundle.Files = []ledger.Row{{Lang: "go", Path: "a.go", Audited: 1, MutantsGraded: 5}}
-	c := ledger.ChainCheck{Hash: lHash, HashOK: true, LinkOK: true, SigChecked: signed, SigOK: signed, Signer: "root"}
+	c := ledger.ChainCheck{Hash: lHash, HashOK: true, LinkOK: true, Signed: true, SigChecked: signed, SigOK: signed, Signer: "root"}
 	s := Build([]ledger.Entry{e}, []ledger.ChainCheck{c})
 	s.entries, s.checks = []ledger.Entry{e}, []ledger.ChainCheck{c}
 	return s
@@ -67,7 +67,7 @@ func TestLanguagesPageRowsFollowTheRegistry(t *testing.T) {
 
 func TestLanguagesPageReasons(t *testing.T) {
 	none := langSite(t, "40", true, "").WithLanguages(lLangs, lRunners, lSelf, "--self")
-	if got := none.Languages[1].Reason; got != "no run on this record" {
+	if got := none.Languages[1].Reason; got != "no qualifying run on this record" {
 		t.Fatalf("reason = %q", got)
 	}
 	if none.Languages[0].Reason != "" {
@@ -252,5 +252,89 @@ func TestLanguagesPageUnmeasuredLanguageHasNoGapVerdict(t *testing.T) {
 	row := page[i : i+strings.Index(page[i:], "</tr>")]
 	if strings.Contains(row, "chip") {
 		t.Fatalf("an unmeasured language shows a gap chip: %s", row)
+	}
+}
+
+// unsignedSite is langSite with the entry carrying no signature at all.
+func unsignedSite(t *testing.T, gen string) Site {
+	t.Helper()
+	s := langSite(t, gen, false, "")
+	s.checks[0].Signed, s.checks[0].Signer = false, ""
+	return s
+}
+
+// An unsigned entry is "unsigned", never "render with the key": a reader who
+// already gave the key would be told to supply it.
+func TestLanguagesPageUnsignedSaysUnsigned(t *testing.T) {
+	s := unsignedSite(t, "40").WithLanguages(lLangs, lRunners, lSelf, "--self")
+	if got := s.Languages[0].Reason; got != "runs on this record are unsigned" {
+		t.Fatalf("reason = %q", got)
+	}
+	if strings.Contains(renderPage(t, s, "languages.html"), "public key") {
+		t.Fatalf("an unsigned row tells the reader to supply a key")
+	}
+}
+
+func TestLanguagesPageUnsignedOutranksBelowFloor(t *testing.T) {
+	a := unsignedSite(t, "40")
+	b := langSite(t, "39", true, "")
+	b.entries[0].Hash, b.checks[0].Hash = "0123456789abcdef0123456789abcdef", "0123456789abcdef0123456789abcdef"
+	a.entries = append(a.entries, b.entries...)
+	a.checks = append(a.checks, b.checks...)
+	if got := a.WithLanguages(lLangs, lRunners, lSelf, "--self").Languages[0].Reason; got != "runs on this record are unsigned" {
+		t.Fatalf("reason = %q", got)
+	}
+}
+
+func TestLanguagesPageUncheckedOutranksUnsigned(t *testing.T) {
+	a := langSite(t, "40", false, "")
+	b := unsignedSite(t, "40")
+	b.entries[0].Hash, b.checks[0].Hash = "0123456789abcdef0123456789abcdef", "0123456789abcdef0123456789abcdef"
+	a.entries = append(a.entries, b.entries...)
+	a.checks = append(a.checks, b.checks...)
+	if got := a.WithLanguages(lLangs, lRunners, lSelf, "--self").Languages[0].Reason; got != "signatures not checked: render with the ledger's public key" {
+		t.Fatalf("reason = %q", got)
+	}
+}
+
+func goRunCell(t *testing.T, s Site) string {
+	t.Helper()
+	page := renderPage(t, s.WithLanguages(lLangs, lRunners, lSelf, "--self"), "languages.html")
+	i := strings.Index(page, `<td class="mono">go</td>`)
+	if i < 0 {
+		t.Fatalf("no go row")
+	}
+	return page[i : i+strings.Index(page[i:], "</tr>")]
+}
+
+// The run cell names the release that graded it.
+func TestLanguagesPageRunCellShowsTheRelease(t *testing.T) {
+	s := langSite(t, "40", true, "")
+	s.entries[0].Bundle.Scan.CorralVersion = "v1.0.0-rc.31"
+	if row := goRunCell(t, s); !strings.Contains(row, "v1.0.0-rc.31") {
+		t.Fatalf("no release in %s", row)
+	}
+}
+
+// A run whose runner is not this language's says so, not a blank.
+func TestLanguagesPageRunCellSaysRunnerNotRecorded(t *testing.T) {
+	s := langSite(t, "40", true, "")
+	s.entries[0].Bundle.Scan.Runner = "pytest" // not a go runner: ProofRun.Runner stays blank
+	row := goRunCell(t, s)
+	if !strings.Contains(row, "runner not recorded") {
+		t.Fatalf("blank runner not stated in %s", row)
+	}
+}
+
+// A run with no start time shows no time, never 0001-01-01.
+func TestLanguagesPageRunCellOmitsAZeroTime(t *testing.T) {
+	s := langSite(t, "40", true, "")
+	s.entries[0].Bundle.Scan.StartedAt = nil
+	row := goRunCell(t, s)
+	if strings.Contains(row, "0001") {
+		t.Fatalf("zero time rendered in %s", row)
+	}
+	if !strings.Contains(goRunCell(t, langSite(t, "40", true, "")), "2026-11-01") {
+		t.Fatalf("a recorded time is not shown")
 	}
 }

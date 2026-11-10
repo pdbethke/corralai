@@ -56,7 +56,7 @@ func TestUISelfFlagRendersLanguages(t *testing.T) {
 	if i < 0 {
 		t.Fatalf("no go row:\n%s", page)
 	}
-	if row := page[i : i+strings.Index(page[i:], "</tr>")]; strings.Contains(row, "no run on this record") {
+	if row := page[i : i+strings.Index(page[i:], "</tr>")]; strings.Contains(row, "no qualifying run on this record") {
 		t.Fatalf("the signed qualifying run is not shown: %s", row)
 	}
 }

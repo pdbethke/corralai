@@ -601,6 +601,7 @@ var printedMetrics = map[string]printedRow{
 	"internal/advpool/driver_writer_fanout.go:advanceWriterAttempt":      {Exempt: "error message: repair counters of a per-survivor writer reissue"},
 	"internal/advpool/gate.go:Error":                                     {Exempt: "status text: names, paths, hashes and passthrough strings printed via %v or a string operand; no measured number"},
 	"internal/advpool/gate.go:SignVerdict":                               {Fields: []string{"SeatRow.ShadowDrawn", "ScanRow.ShadowDraw"}},
+	"internal/advpool/gate.go:exclude":                                   {Exempt: "error message: names the runner and the command it could not exclude from via %v; no measured number"},
 	"internal/advpool/gate.go:authoredTestPath":                          {Exempt: "file name suffix for an authored test, an index not a measurement"},
 	"internal/advpool/gate.go:selectionDisclosure":                       {Exempt: "status text: names, paths, hashes and passthrough strings printed via %v or a string operand; no measured number"},
 	"internal/advpool/gate.go:selectionRowErr":                           {Exempt: "error message: builds failure text from causes, ids and paths via %v; no measured number"},

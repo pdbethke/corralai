@@ -209,3 +209,53 @@ func TestSalvageCreditsNoKillTheDevSuiteMakesUnderTheSalvageCommand(t *testing.T
 		t.Errorf("ProvenMutantIDs = %v: m2 is the authored test's and must stay proven", v.ProvenMutantIDs)
 	}
 }
+
+// deselectingScorer is a fakeScorer that can run a salvaged authored pass
+// from the run's base (ScoreAuthoredDeselected), recording what it was given.
+type deselectingScorer struct {
+	*fakeScorer
+	base, deselected string
+	ids              []string
+}
+
+func (s *deselectingScorer) ScoreAuthoredDeselected(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd, deselectedCmd string, ids []string) (adequacy.Report, error) {
+	s.base, s.deselected, s.ids = testCmd, deselectedCmd, slices.Clone(ids)
+	return s.poolReportFn(ctx, codePath, code, test, mutants, deselectedCmd)
+}
+
+// Salvage hands a scorer that can build the authored pass itself the run's
+// BASE command and the failing examples, never the excluding command as if
+// it were the base: built from that, a unit row cannot narrow (rspec refuses
+// argv carrying -E) and the pass silently ran the whole suite under a verdict
+// saying "alone" (hashie, 2026-11-10).
+func TestSalvageBuildsTheAuthoredPassFromTheBase(t *testing.T) {
+	survivors := []adequacy.Mutant{{ID: "m1", Replace: "c1"}, {ID: "m2", Replace: "c2"}}
+	scorer := &deselectingScorer{fakeScorer: &fakeScorer{
+		devKillRate:      0.9,
+		devSurvivors:     survivors,
+		compliantFailure: "FAILED tests/test_x_corral.py::test_bad - boom\n1 failed, 3 passed",
+		poolReportFn: func(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (adequacy.Report, error) {
+			if strings.Contains(testCmd, "--deselect") {
+				return adequacy.Report{CompliantPass: true, CanaryKilled: true, Total: 2, Killed: []string{"m1"}, Survived: []string{"m2"}}, nil
+			}
+			return adequacy.Report{CompliantPass: false, Total: 0}, nil
+		},
+	}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Replace: "c0"}, survivors[0], survivors[1]}}
+	rs := pythonSalvageSpec()
+	d := newTestDriverWithSpec(t, 2, scorer, validator, 0.1, rs)
+	v := completeRunTolerantOfWriterRetries(t, d, 2, "no findings")
+
+	if scorer.base != rs.TestCmd {
+		t.Errorf("salvage gave the scorer base %q, want the run's own %q", scorer.base, rs.TestCmd)
+	}
+	if !slices.Equal(scorer.ids, []string{"tests/test_x_corral.py::test_bad"}) {
+		t.Errorf("salvage gave the scorer ids %v, want the failing example", scorer.ids)
+	}
+	if !strings.Contains(scorer.deselected, "--deselect") {
+		t.Errorf("salvage gave the scorer whole excluding command %q", scorer.deselected)
+	}
+	if v.ProvenMissed != 1 {
+		t.Errorf("ProvenMissed = %d, want 1", v.ProvenMissed)
+	}
+}

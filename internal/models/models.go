@@ -80,7 +80,9 @@ var localProviders = map[string]bool{
 // hostedProviders are the vendors corral can route to by name. An endpoint on
 // one of these is refused rather than ignored: the operator is describing a
 // placement that cannot happen, and silently dropping it would leave them
-// believing a seat runs somewhere it does not.
+// believing a seat runs somewhere it does not. The one exception is a
+// gateway that speaks the OpenAI wire (see gatewayProviders), which may name
+// its endpoint together with the env var holding its key.
 var hostedProviders = map[string]bool{
 	"anthropic":  true,
 	"google":     true,
@@ -88,9 +90,34 @@ var hostedProviders = map[string]bool{
 	"openrouter": true,
 }
 
+// gatewayProviders are the hosted providers whose wire is OpenAI-compatible,
+// so a company proxy or gateway can stand in for the vendor. They may name an
+// endpoint, but only together with key_env: a gateway has its own credential,
+// and falling back to the vendor's key would send it to the wrong party.
+var gatewayProviders = map[string]bool{
+	"openai":     true,
+	"openrouter": true,
+}
+
+// Wire names the protocol a seat speaks to its endpoint. It follows from the
+// provider, so the resolver never infers it from a URL.
+type Wire string
+
+const (
+	// WireOllama is ollama's native chat API.
+	WireOllama Wire = "ollama"
+	// WireOpenAIChat is the OpenAI-compatible chat API served by local daemons
+	// (vllm, lmstudio, llamacpp, localai, llamafile).
+	WireOpenAIChat Wire = "openai-chat"
+	// WireHosted is a vendor's own API, reached by provider name.
+	WireHosted Wire = "hosted"
+)
+
 // Entry is one declared model: the provider that serves it, the concrete model
-// name that provider knows it by, and — for a local provider only — the daemon
-// endpoint it is served from.
+// name that provider knows it by, and the endpoint it is served from — the
+// operator's daemon for a local provider, or, for the OpenAI-compatible hosted
+// providers (openai, openrouter), an optional gateway named together with
+// KeyEnv, the env var that holds the gateway's key.
 //
 // The concrete Model is what everything downstream records. The alias is a
 // label for humans; it is never authoritative and never reaches a cache key.
@@ -98,6 +125,22 @@ type Entry struct {
 	Provider string `json:"provider"`
 	Model    string `json:"model"`
 	Endpoint string `json:"endpoint,omitempty"`
+	// KeyEnv names the env var holding the credential for a hosted gateway
+	// endpoint. It is the NAME, never the key itself.
+	KeyEnv string `json:"key_env,omitempty"`
+}
+
+// Wire reports the protocol this entry's provider speaks.
+func (e Entry) Wire() Wire {
+	p := strings.ToLower(strings.TrimSpace(e.Provider))
+	switch {
+	case p == "ollama":
+		return WireOllama
+	case localProviders[p]:
+		return WireOpenAIChat
+	default:
+		return WireHosted
+	}
 }
 
 // IsLocal reports whether this entry is served by a daemon the operator runs.
@@ -312,6 +355,7 @@ func Parse(data []byte, source string) (*Registry, error) {
 		e.Provider = strings.ToLower(strings.TrimSpace(e.Provider))
 		e.Model = strings.TrimSpace(e.Model)
 		e.Endpoint = strings.TrimSpace(e.Endpoint)
+		e.KeyEnv = strings.TrimSpace(e.KeyEnv)
 		if e.Provider == "" {
 			return nil, fmt.Errorf("%s: alias %q has no \"provider\" — add one of: %s", source, alias, knownProviders())
 		}
@@ -325,10 +369,18 @@ func Parse(data []byte, source string) (*Registry, error) {
 		switch {
 		case local && e.Endpoint == "":
 			return nil, fmt.Errorf("%s: alias %q has provider %q, which is served by a daemon you run, so it needs an \"endpoint\" — add e.g. \"endpoint\": \"http://127.0.0.1:11434\"", source, alias, e.Provider)
-		case !local && e.Endpoint != "":
+		case gatewayProviders[e.Provider] && e.Endpoint != "" && e.KeyEnv == "":
+			return nil, fmt.Errorf("%s: alias %q names a gateway \"endpoint\" for provider %q but no \"key_env\" — add \"key_env\": \"<NAME_OF_ENV_VAR_HOLDING_THE_GATEWAY_KEY>\" so the gateway's own credential is used, never the vendor's", source, alias, e.Provider)
+		case !local && !gatewayProviders[e.Provider] && e.Endpoint != "":
 			return nil, fmt.Errorf("%s: alias %q has an \"endpoint\" but provider %q is hosted by its vendor, which no local endpoint can serve — drop the endpoint, or name a local provider (%s)", source, alias, e.Provider, strings.Join(sortedKeys(localProviders), ", "))
 		}
-		if local {
+		if e.KeyEnv != "" && e.Endpoint == "" {
+			return nil, fmt.Errorf("%s: alias %q has \"key_env\" but no \"endpoint\" — key_env names a gateway's credential, so add the gateway \"endpoint\" or drop key_env", source, alias)
+		}
+		if e.KeyEnv != "" && local {
+			return nil, fmt.Errorf("%s: alias %q has \"key_env\" but provider %q is a local daemon — key_env is for an openai or openrouter gateway; drop it", source, alias, e.Provider)
+		}
+		if e.Endpoint != "" {
 			u, err := url.Parse(e.Endpoint)
 			if err != nil || u.Scheme == "" || u.Host == "" {
 				return nil, fmt.Errorf("%s: alias %q: \"endpoint\" %q needs an absolute url with a scheme and host, e.g. http://127.0.0.1:11434", source, alias, e.Endpoint)

@@ -197,7 +197,7 @@ func FromEnv() Backend {
 		// "-codex" name there is left alone unless the operator points
 		// OPENAI_BASE_URL at OpenAI itself.
 		if env("MODEL_BACKEND", "") == "openai" {
-			return newOpenAIBackend(agentSecret("OPENAI_API_KEY"), model)
+			return newOpenAIBackend(openAIBase(), agentSecret("OPENAI_API_KEY"), model)
 		}
 		// MODEL_BACKEND=openrouter: the docs said "one OpenRouter key
 		// covers gemini + gpt + claude" and named OPENROUTER_API_KEY in
@@ -333,7 +333,7 @@ func ForModel(model string) (Backend, error) {
 		// are served on the Responses API only. newOpenAIBackend picks by model
 		// rather than by vendor, so naming one no longer routes to an endpoint
 		// that cannot serve it.
-		return newOpenAIBackend(key, model), nil
+		return newOpenAIBackend(openAIBase(), key, model), nil
 	default:
 		return nil, fmt.Errorf("agentbackend: ForModel: cannot infer a cloud vendor for model %q (this path is for cross-vendor cloud critics; local/ollama models use the base backend)", model)
 	}

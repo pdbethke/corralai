@@ -1036,7 +1036,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		shadowModel:       *shadow.model,
 		shadowWriterModel: *shadow.writerModel,
 	})
-	modelSet := modelSetKeyWith(scanTools, rmWriter, rmMutant, rmCritic, rmShadow, rmShadowWriter)
+	modelSet := modelSetKeyWith(scanTools, seats.providers(), rmWriter, rmMutant, rmCritic, rmShadow, rmShadowWriter)
 
 	// Evidence-first candidacy (the evidence-as-candidacy design), and the
 	// scan's one instrumented selection run underneath it (#163): collected

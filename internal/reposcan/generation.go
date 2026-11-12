@@ -390,10 +390,12 @@ package reposcan
 // say where the audited source was sent. A cached "41" document unmarshals
 // SeatProviders as nil, which reads as "not recorded" for a seat whose
 // provider this generation would have named; "41" has reached main, so this
-// is a shape bump, not a ride-along. The verdict cache key still names the
-// bare models only (modelSetKeyWith in cmd/corral), so a "42" verdict served
-// from cache carries the providers it was MEASURED with, which may differ
-// from the run that is reusing it.
+// is a shape bump, not a ride-along. The verdict cache key's model set now
+// names each seat's provider too (modelSetKeyWith in cmd/corral keys a seat
+// as provider/model), so a verdict measured on one provider is never served
+// to a run naming the same bare model on another; without it one entry could
+// carry an ollama verdict under a row saying openai. Changing the key costs
+// nothing extra: this bump already retires every "41" verdict.
 const VerdictGeneration = "42"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every

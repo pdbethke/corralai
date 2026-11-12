@@ -13,6 +13,7 @@ import (
 	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/modelrank"
+	"github.com/pdbethke/corralai/internal/reposcan"
 )
 
 // The provider each seat was served from is recorded on every signed entry
@@ -128,12 +129,104 @@ func TestRepoEntryRecordsTheSeatProviders(t *testing.T) {
 		if len(files) == 0 {
 			t.Fatalf("%s ledger: no file rows", name)
 		}
+		audited := 0
 		for _, f := range files {
 			wantProviders(t, name+" "+f.Path+" row", rowProviders(t, f.SeatProviders))
-			if f.VerdictJSON != "" {
-				wantProviders(t, name+" "+f.Path+" verdict", verdictProviders(t, f.VerdictJSON))
+			if f.Disposition != "audited" {
+				continue
+			}
+			audited++
+			// Every audited file carries its verdict; a row without one
+			// would let this check pass on nothing.
+			if f.VerdictJSON == "" {
+				t.Fatalf("%s %s: the row carries no verdict document", name, f.Path)
+			}
+			wantProviders(t, name+" "+f.Path+" verdict", verdictProviders(t, f.VerdictJSON))
+		}
+		if audited != 2 {
+			t.Fatalf("%s ledger: %d audited rows, want the fixture's two", name, audited)
+		}
+	}
+}
+
+// The verdict cache keys each seat with its provider. A second scan naming
+// the same providers is served from cache and its rows still say where the
+// cached verdict was measured; a scan naming the SAME bare model through a
+// DIFFERENT provider is not served that verdict, so no entry carries a
+// verdict from one provider under a row naming another.
+func TestRepoCacheIsNotServedAcrossProviders(t *testing.T) {
+	root, setPath, goals := telemetryRepoFixture(t)
+	providerSeats(t)
+	t.Setenv("CORRALAI_MACHINE_LEDGER", filepath.Join(t.TempDir(), "machine"))
+	ledger := filepath.Join(t.TempDir(), "ledger")
+	// One fixed, empty prior for every scan. Unset, the ledger itself is the
+	// prior, its digest is in the cache key, and a second scan sits a
+	// different exam and can never hit; that is the ledger's own rule and
+	// not what this test is about.
+	prior := t.TempDir()
+	scan := func(writer string) auditpush.LedgerEntry {
+		t.Helper()
+		code, out, errs := runTelemetryFixture(t, root, setPath, goals, "--writer-model", writer, "--mutant-model", "qwen3:8b", "--ledger", ledger, "--prior", prior)
+		if code != 0 {
+			t.Fatalf("%s: exit=%d\n%s%s", writer, code, out, errs)
+		}
+		entries, err := auditpush.ReadLedgerDir(ledger)
+		if err != nil || len(entries) == 0 {
+			t.Fatalf("ledger: %d entries, %v", len(entries), err)
+		}
+		return entries[len(entries)-1]
+	}
+	check := func(e auditpush.LedgerEntry, wantHit bool, wantWriter string) {
+		t.Helper()
+		audited := 0
+		for _, f := range e.Bundle.Files {
+			if f.Disposition != "audited" {
+				continue
+			}
+			audited++
+			if f.CacheHit != wantHit {
+				t.Errorf("%s (writer on %s): CacheHit = %v, want %v", f.Path, wantWriter, f.CacheHit, wantHit)
+			}
+			if f.VerdictJSON == "" {
+				t.Fatalf("%s: the row carries no verdict document", f.Path)
+			}
+			row, verdict := rowProviders(t, f.SeatProviders), verdictProviders(t, f.VerdictJSON)
+			if row[advpool.RoleTestWriter] != wantWriter || verdict[advpool.RoleTestWriter] != wantWriter {
+				t.Errorf("%s: writer provider row %q, verdict %q; want both %q — one entry must not disagree with itself about where the source went",
+					f.Path, row[advpool.RoleTestWriter], verdict[advpool.RoleTestWriter], wantWriter)
 			}
 		}
+		if audited != 2 {
+			t.Fatalf("writer on %s: %d audited rows, want the fixture's two", wantWriter, audited)
+		}
+	}
+	check(scan("openai/gpt-x"), false, "openai")
+	check(scan("openai/gpt-x"), true, "openai")
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+	check(scan("anthropic/gpt-x"), false, "anthropic")
+}
+
+// The cache key differs for one bare model served by two providers, and
+// stays byte-identical to the pre-provider key for a seat with none.
+func TestModelSetKeyNamesEachSeatsProvider(t *testing.T) {
+	ollama := modelSetKeyWith(nil, map[string]string{advpool.RoleTestWriter: "ollama"}, "gpt-x", "m", "off", "off", "")
+	openai := modelSetKeyWith(nil, map[string]string{advpool.RoleTestWriter: "openai"}, "gpt-x", "m", "off", "off", "")
+	if ollama == openai {
+		t.Fatalf("one key for gpt-x on ollama and on openai: %q", ollama)
+	}
+	if bare := modelSetKeyWith(nil, nil, "gpt-x", "m", "off", "off", ""); bare != modelSetKey("gpt-x", "m", "off", "off", "") {
+		t.Fatalf("a seat with no provider must key as its spec alone: %q", bare)
+	}
+	// Each key name reads its own role's provider.
+	all := modelSetKeyWith(nil, map[string]string{
+		advpool.RoleTestWriter: "pw", advpool.RoleMutantGenerator: "pm", advpool.RoleTestCritic: "pc",
+		advpool.RoleMutantGeneratorShadow: "ps", advpool.RoleTestWriterShadow: "pws",
+	}, "w", "m", "c", "s", "ws")
+	want := reposcan.CanonicalKV(map[string]string{
+		"test-writer": "pw/w", "mutant-generator": "pm/m", "critic": "pc/c", "shadow": "ps/s", "test-writer-shadow": "pws/ws",
+	})
+	if all != want {
+		t.Fatalf("key = %q, want %q", all, want)
 	}
 }
 

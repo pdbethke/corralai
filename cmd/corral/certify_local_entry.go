@@ -157,7 +157,7 @@ func localEntryBundle(in localAuditInput, v advpool.Verdict, t advpool.RunTeleme
 		Substrate:         substrateJail,
 		EngineVersion:     version,
 		VerdictGeneration: reposcan.VerdictGeneration,
-		ModelSet:          modelSetKeyWith(in.toolProbe, in.writerModel, in.mutantModel, in.criticModel, in.shadowModel, in.shadowWriterModel),
+		ModelSet:          modelSetKeyWith(in.toolProbe, in.seats.providers(), in.writerModel, in.mutantModel, in.criticModel, in.shadowModel, in.shadowWriterModel),
 		Candidates:        1, Audited: audited,
 		KillRate:  killRate,
 		StartedAt: started, FinishedAt: finished,

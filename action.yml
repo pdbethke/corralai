@@ -97,11 +97,11 @@ inputs:
     required: false
     default: ""
   writer-model:
-    description: "Model for the test-writer role — the half that authors a test to prove a survivor is a real gap. REQUIRED: corral has no default models. Any provider you supply a key for."
+    description: "Model for the test-writer role — the half that authors a test to prove a survivor is a real gap. REQUIRED: corral has no default models. A hosted model is named vendor/model (anthropic/…, google/…, openai/…) — a bare cloud name is refused, corral never guesses a vendor — with that vendor's key in the environment."
     required: false
     default: ""
   mutant-model:
-    description: "Model for the mutant-generator role. REQUIRED: corral has no default models."
+    description: "Model for the mutant-generator role. REQUIRED: corral has no default models. A hosted model is named vendor/model (anthropic/…, google/…, openai/…); a bare cloud name is refused."
     required: false
     default: ""
   shadow-model:

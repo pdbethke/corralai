@@ -115,13 +115,13 @@ Every seat value is resolved once, in this order, and the first match wins:
 
 1. a registry alias (in a strict registry, anything else is refused);
 2. a coding-agent seat (`claude-code`, `codex`, …);
-3. a seat you placed with `--local-endpoint` (`certify` only), when its name is no cloud vendor's;
-4. a pinned `MODEL_BACKEND` gateway (`ollama`, `openrouter`, or `openai` with `OPENAI_BASE_URL`), never re-routed by the model's name;
-5. a model the daemon at `OLLAMA_URL` lists (a set `OLLAMA_URL` that cannot be listed refuses the seat);
-6. a cloud vendor named by the model's prefix;
-7. otherwise the seat is refused, naming the ways to declare a source: the registry, `OLLAMA_URL`, a pinned `MODEL_BACKEND` and, on `certify`, `--local-endpoint`.
+3. a seat you placed with `--local-endpoint` (`certify` only), unless it is written `vendor/model` (that seat is hosted, and the placement is refused);
+4. a pinned `MODEL_BACKEND` gateway (`ollama`, `openrouter`, or `openai` with `OPENAI_BASE_URL`), which receives the seat verbatim, `vendor/` prefix included, never re-routed;
+5. a hosted model written `vendor/model`, the vendor exactly one of `anthropic`, `google`, `openai` (a closed set: `hf.co/…` and `library/…` are not vendors). The seat is recorded as the bare model (`anthropic/claude-sonnet-5` is recorded as `claude-sonnet-5`);
+6. a model the daemon at `OLLAMA_URL` lists (a set `OLLAMA_URL` that cannot be listed refuses the seat);
+7. otherwise the seat is refused, naming the ways to declare a source: the registry, `vendor/model`, `OLLAMA_URL`, a pinned `MODEL_BACKEND` and, on `certify`, `--local-endpoint`.
 
-A declared provider therefore always outranks what a name looks like, and corral has no default for any step. Each run prints one `models:` line saying where the seats were declared, then one line per seat with its provider, model and endpoint.
+Nothing is inferred from a model's spelling: a bare `claude-sonnet-5` or `gpt-oss:20b` with no declared source is refused, never sent to the vendor its name resembles, and corral has no default for any step. Each run prints one `models:` line saying where the seats were declared, then one line per seat with its provider, model and endpoint.
 
 ## The sandbox
 

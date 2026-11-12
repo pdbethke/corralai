@@ -22,10 +22,10 @@ steps:
   - uses: pdbethke/corralai@v1.0.0-rc.31
     with:
       test-command: "go test ./..."
-      derive-model: claude-sonnet-5
-      writer-model: claude-sonnet-5
-      mutant-model: claude-sonnet-5
-      critic-model: claude-haiku-4-5    # must differ from the writer; "off" drops it
+      derive-model: anthropic/claude-sonnet-5
+      writer-model: anthropic/claude-sonnet-5
+      mutant-model: anthropic/claude-sonnet-5
+      critic-model: anthropic/claude-haiku-4-5    # must differ from the writer; "off" drops it
       anthropic-key: $&#123;&#123; secrets.ANTHROPIC_API_KEY &#125;&#125;
       max-proven-missed: "0"  # fail on a DEMONSTRATED gap
       attest: "true"          # publish a receipt anyone can verify</code></pre>

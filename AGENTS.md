@@ -299,11 +299,17 @@ daemon you declare (`.corral/models.json`, `OLLAMA_URL`, or a pinned
 `MODEL_BACKEND` gateway), never a default: there is no default backend, model or
 address.
 
-**A key alone does not move providers.** Each role resolves its own backend from
-its own model name; a Gemini model name with only an Anthropic key configured is
-a 404 from Anthropic, not a Gemini call. Set the role models *and* the matching
-key. An explicit `MODEL_BACKEND` pointing at a gateway (OpenRouter, Ollama) is
-never re-routed — those front many vendors behind one endpoint.
+**No vendor is ever guessed from a model's name.** A hosted seat is named
+`vendor/model` (`anthropic/claude-sonnet-5`, `google/gemini-3.6-flash`,
+`openai/gpt-6`; a closed set), a registry entry, or a model a declared daemon
+serves; a bare `claude-sonnet-5` is refused. The guess used to decide where the
+audited source and a credential went: a local `gpt-oss:20b` was routed to OpenAI
+by its `gpt-` prefix (founder ruling 2026-11-12). The prefix table
+(`apiVendorOf`) survives only to LABEL recorded entries and agent seats, and
+`TestNoRoutingPathReachesTheNamePrefixTable` fails any function returning a
+Backend that reaches it. A key alone does not move providers either: set the
+seat *and* the matching key. An explicit `MODEL_BACKEND` pointing at a gateway
+(OpenRouter, Ollama) receives every seat verbatim and is never re-routed.
 
 `CheckDecorrelation` enforces only **critic ≠ writer** — a property, not a
 vendor, so any two distinct models satisfy it. It is legal to run every seat on

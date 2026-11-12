@@ -536,19 +536,16 @@ func main() {
 		}
 		// Serve the findings to a coding agent over stdio, read-only, from the
 		// same local store `certify --local` writes. See mcp_findings.go for
-		// why adjudication is deliberately absent from that surface.
-		criticPath, err := statedir.PathForWrite(statedir.CriticScoreDB)
+		// why adjudication is deliberately absent from that surface, and
+		// storeFindings for why the store is opened read-only per call rather
+		// than held: every agent session runs one of these at once. Path, not
+		// PathForWrite: a reader creates no directory.
+		criticPath, err := statedir.Path(statedir.CriticScoreDB)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "corral mcp:", err)
 			os.Exit(1)
 		}
-		cs, err := criticscore.Open(criticPath)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "corral mcp: opening the local findings store: %v\n", err)
-			os.Exit(1)
-		}
-		defer func() { _ = cs.Close() }()
-		os.Exit(runFindingsMCP(context.Background(), cs, os.Stderr))
+		os.Exit(runFindingsMCP(context.Background(), storeFindings{path: criticPath}, os.Stderr))
 	case "criticscore":
 		// -h must not open a store; see the scorecard case above.
 		if verbWantsHelp(os.Args[2:]) {

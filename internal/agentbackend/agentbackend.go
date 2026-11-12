@@ -193,7 +193,7 @@ type ModelSwitcher interface {
 func FromEnv() (Backend, error) {
 	pinned := strings.TrimSpace(os.Getenv("MODEL_BACKEND"))
 	if pinned == "" {
-		return nil, errors.New("agentbackend: MODEL_BACKEND is not set — set it to one of ollama, openai, openrouter, gemini, anthropic (there is no default backend)")
+		return nil, errors.New("agentbackend: MODEL_BACKEND is not set — set it to one of ollama, openai, openrouter, gemini, anthropic (alias claude) (there is no default backend)")
 	}
 	model := strings.TrimSpace(os.Getenv("AGENT_MODEL"))
 	if model == "" {
@@ -209,7 +209,11 @@ func FromEnv() (Backend, error) {
 		// two disagreed about what "gemini" means depending on which door you
 		// came in: a cross-vendor CRITIC worked while aiming a WHOLE run at
 		// Gemini silently did not.
-		return &openaiBackend{base: geminiBase(true), key: geminiKey(), model: model}, nil
+		key := geminiKey()
+		if key == "" {
+			return nil, fmt.Errorf("agentbackend: MODEL_BACKEND=gemini needs GEMINI_API_KEY (GOOGLE_API_KEY and OPENAI_API_KEY are not read)")
+		}
+		return &openaiBackend{base: geminiBase(), key: key, model: model}, nil
 	case "openai":
 		// Same per-model wire choice as ForModel — a Codex model named through
 		// MODEL_BACKEND=openai must reach /responses, not /chat/completions.
@@ -240,7 +244,7 @@ func FromEnv() (Backend, error) {
 		}
 		return &ollamaBackend{url: url, model: model}, nil
 	default:
-		return nil, fmt.Errorf("agentbackend: MODEL_BACKEND=%q is not a backend — use one of ollama, openai, openrouter, gemini, anthropic", pinned)
+		return nil, fmt.Errorf("agentbackend: MODEL_BACKEND=%q is not a backend — use one of ollama, openai, openrouter, gemini, anthropic (alias claude)", pinned)
 	}
 }
 
@@ -258,37 +262,21 @@ func NewOllamaBackend(url, model string) Backend {
 // came to disagree — factoring them means a future change cannot fix one door
 // and leave the other pointing at api.openai.com.
 //
-// The credential falls back through GEMINI_API_KEY, then GOOGLE_API_KEY, then
-// OPENAI_API_KEY. That last hop is deliberate BACK-COMPAT, not sloppiness: the
-// OpenAI variable was the only thing that made MODEL_BACKEND=gemini reach any
-// endpoint at all before this, so an operator already configured that way must
-// keep working.
-//
-// The OPENAI_BASE_URL hop applies to the PINNED door only (pinned true:
-// MODEL_BACKEND=gemini, where that variable was the operator's way of
-// naming Gemini's endpoint before CORRALAI_GEMINI_BASE_URL existed). On the
-// cross-vendor door it does not: an unpinned run with OPENAI_BASE_URL set
-// for its gpt seats used to send its gemini-* seat — carrying the GOOGLE
-// key — to whatever the gpt gateway does with that name.
-func geminiBase(pinned bool) string {
+// The credential is GEMINI_API_KEY and nothing else, and the endpoint is
+// CORRALAI_GEMINI_BASE_URL or Google's own. Both used to fall back: the key
+// through GOOGLE_API_KEY to OPENAI_API_KEY (so with only an OpenAI key set,
+// that OpenAI secret was sent to Google), and the pinned door's URL to
+// OPENAI_BASE_URL (often a company's OpenAI proxy, which then received the
+// Google key). A fallback from one variable to another is a default, and
+// these two each delivered one vendor's secret to another.
+func geminiBase() string {
 	if base := os.Getenv("CORRALAI_GEMINI_BASE_URL"); base != "" {
-		return base
-	}
-	if base := os.Getenv("OPENAI_BASE_URL"); pinned && base != "" {
 		return base
 	}
 	return "https://generativelanguage.googleapis.com/v1beta/openai"
 }
 
-func geminiKey() string {
-	if key := agentSecret("GEMINI_API_KEY"); key != "" {
-		return key
-	}
-	if key := agentSecret("GOOGLE_API_KEY"); key != "" {
-		return key
-	}
-	return agentSecret("OPENAI_API_KEY")
-}
+func geminiKey() string { return agentSecret("GEMINI_API_KEY") }
 
 // ForModel infers the cloud vendor from model's name prefix and builds the
 // matching backend, reading THAT vendor's base URL + key from env/keystore —
@@ -319,9 +307,9 @@ func ForModel(model string) (Backend, error) {
 	case hasAnyPrefix(model, "gemini-"):
 		key := geminiKey()
 		if key == "" {
-			return nil, fmt.Errorf("agentbackend: ForModel: model %q needs a Google key — set GEMINI_API_KEY (or GOOGLE_API_KEY)", model)
+			return nil, fmt.Errorf("agentbackend: ForModel: model %q needs a Google key — set GEMINI_API_KEY (GOOGLE_API_KEY and OPENAI_API_KEY are not read)", model)
 		}
-		return &openaiBackend{base: geminiBase(false), key: key, model: model}, nil
+		return &openaiBackend{base: geminiBase(), key: key, model: model}, nil
 	case hasAnyPrefix(model, "gpt-", "o1-", "o3-"):
 		key := agentSecret("OPENAI_API_KEY")
 		if key == "" {

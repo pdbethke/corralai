@@ -24,7 +24,7 @@ Env:
   AGENT_NAME         display name in the swarm UI (default same as AGENT_ROLE,
                      e.g. "researcher+designer" or "generalist")
   AGENT_WORKSPACE    working directory for edits (default $TMPDIR/corral-demo-ws)
-  MODEL_BACKEND      REQUIRED: ollama | openai (any OpenAI-compatible endpoint) | openrouter | gemini | anthropic
+  MODEL_BACKEND      REQUIRED: ollama | openai (any OpenAI-compatible endpoint) | openrouter | gemini | anthropic (alias claude)
   AGENT_MODEL        REQUIRED: model name passed to the backend
   OLLAMA_URL         REQUIRED with MODEL_BACKEND=ollama: the daemon's URL (no default address)
   CLOBBER            set "1" to ignore coordination conflicts and edit anyway (demo of what NOT coordinating looks like)

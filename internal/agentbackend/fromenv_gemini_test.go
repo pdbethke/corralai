@@ -54,15 +54,15 @@ func TestFromEnvGeminiUsesGoogleKeyAndEndpoint(t *testing.T) {
 	}
 }
 
-// TestFromEnvGeminiFallbackOrder pins back-compat: the ONLY configuration that
-// worked for MODEL_BACKEND=gemini before this fix was the OpenAI variable, so
-// an operator already doing that must keep working. Preference order is the
-// Gemini one, then the Google one, then the OpenAI one.
-func TestFromEnvGeminiFallbackOrder(t *testing.T) {
-	for _, c := range []struct{ name, gemini, google, openai, want string }{
-		{"google when no gemini value", "", "goog", "oai", "goog"},
-		{"openai last, for back-compat", "", "", "oai", "oai"},
-		{"gemini wins", "gm", "goog", "oai", "gm"},
+// TestGeminiReadsOnlyItsOwnKeyAndURL: a Gemini seat reads GEMINI_API_KEY and
+// nothing else. It used to fall back to GOOGLE_API_KEY and then to
+// OPENAI_API_KEY, so with only an OpenAI key set that OpenAI secret was sent
+// to Google; and a pinned gemini backend followed OPENAI_BASE_URL (often a
+// company's OpenAI proxy). Unset, the seat refuses naming GEMINI_API_KEY.
+func TestGeminiReadsOnlyItsOwnKeyAndURL(t *testing.T) {
+	for _, c := range []struct{ name, gemini, google, openai string }{
+		{"only an OpenAI key", "", "", "sk-openai"},
+		{"only GOOGLE_API_KEY", "", "goog", ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			resetCredsMemoForTest(t)
@@ -76,20 +76,37 @@ func TestFromEnvGeminiFallbackOrder(t *testing.T) {
 			t.Setenv("OPENAI_API_KEY", c.openai)
 			t.Setenv("CORRALAI_GEMINI_BASE_URL", "")
 			t.Setenv("OPENAI_BASE_URL", "")
-
-			b, err := FromEnv()
-			if err != nil {
-				t.Fatal(err)
+			if b, err := FromEnv(); err == nil || !strings.Contains(err.Error(), "GEMINI_API_KEY") {
+				t.Errorf("FromEnv = %T, %v; want a refusal naming GEMINI_API_KEY", b, err)
 			}
-			ob, ok := b.(*openaiBackend)
-			if !ok {
-				t.Fatalf("FromEnv() = %T, want *openaiBackend", b)
-			}
-			if got := ob.key; got != c.want {
-				t.Errorf("credential = %q, want %q", got, c.want)
+			if b, err := ForModel("gemini-3.6-flash"); err == nil || !strings.Contains(err.Error(), "GEMINI_API_KEY") {
+				t.Errorf("ForModel = %T, %v; want a refusal naming GEMINI_API_KEY", b, err)
 			}
 		})
 	}
+
+	t.Run("pinned gemini ignores OPENAI_BASE_URL", func(t *testing.T) {
+		resetCredsMemoForTest(t)
+		keyring.MockInit()
+		t.Setenv("CORRAL_CREDS_DIR", t.TempDir())
+		t.Setenv("CREDENTIALS_DIRECTORY", "")
+		t.Setenv("MODEL_BACKEND", "gemini")
+		t.Setenv("AGENT_MODEL", "gemini-3.6-flash")
+		t.Setenv("GEMINI_API_KEY", "gm")
+		t.Setenv("CORRALAI_GEMINI_BASE_URL", "")
+		t.Setenv("OPENAI_BASE_URL", "http://company-proxy:8080/v1")
+		b, err := FromEnv()
+		if err != nil {
+			t.Fatal(err)
+		}
+		ob, ok := b.(*openaiBackend)
+		if !ok {
+			t.Fatalf("FromEnv() = %T, want *openaiBackend", b)
+		}
+		if ob.key != "gm" || ob.base != "https://generativelanguage.googleapis.com/v1beta/openai" {
+			t.Errorf("key %q base %q; want GEMINI_API_KEY at Google's own endpoint", ob.key, ob.base)
+		}
+	})
 }
 
 // TestFromEnvOpenAIUnchanged guards against over-reach: splitting gemini out of

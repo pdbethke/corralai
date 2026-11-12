@@ -74,7 +74,7 @@ Env:
   AGENT_NAME         display name in the swarm UI (default same as AGENT_ROLE,
                      e.g. "researcher+designer" or "generalist")
   AGENT_WORKSPACE    working directory for edits (default $TMPDIR/corral-demo-ws)
-  MODEL_BACKEND      REQUIRED: ollama | openai (any OpenAI-compatible endpoint) | openrouter | gemini | anthropic
+  MODEL_BACKEND      REQUIRED: ollama | openai (any OpenAI-compatible endpoint) | openrouter | gemini | anthropic (alias claude)
   AGENT_MODEL        REQUIRED: model name passed to the backend
   OLLAMA_URL         REQUIRED with MODEL_BACKEND=ollama: the daemon's URL (no default address)
   CLOBBER            set "1" to ignore coordination conflicts and edit anyway (demo of what NOT coordinating looks like)
@@ -191,7 +191,7 @@ func main() {
 	// scrubSecretEnv caches CORRALAI_BRAIN_KEY for later on-demand reads. Scrub
 	// the env now so none of it leaks into a jailed child process this agent spawns.
 	scrubSecretEnv()
-	modelDesc := env("MODEL_BACKEND", "") + ":" + env("AGENT_MODEL", "")
+	modelDesc := strings.TrimSpace(env("MODEL_BACKEND", "")) + ":" + strings.TrimSpace(env("AGENT_MODEL", ""))
 	// clobber: the agent STILL connects to the brain (so it's visible in the swarm
 	// UI), but its prompt tells it to IGNORE conflicts and edit anyway — so you watch
 	// the agents pile onto the same files (red conflicts) and trample each other's
@@ -313,7 +313,7 @@ func main() {
 			}
 			brain("report_host", map[string]any{
 				"role": role, "host": host,
-				"model": env("AGENT_MODEL", ""), "backend": env("MODEL_BACKEND", ""),
+				"model": strings.TrimSpace(env("AGENT_MODEL", "")), "backend": strings.TrimSpace(env("MODEL_BACKEND", "")),
 				"jail": jail, "net": execRuntime.network,
 				"os": runtime.GOOS + "/" + runtime.GOARCH, "pid": os.Getpid(),
 				"local_agents": scanLocalAgents(),
@@ -379,7 +379,7 @@ func runQueueLoop(ctx context.Context, backend Backend, name, role string, rs ag
 			poll = time.Duration(n) * time.Second
 		}
 	}
-	modelDesc := env("MODEL_BACKEND", "") + ":" + env("AGENT_MODEL", "")
+	modelDesc := strings.TrimSpace(env("MODEL_BACKEND", "")) + ":" + strings.TrimSpace(env("AGENT_MODEL", ""))
 	fmt.Printf("[%s/%s] queue mode — pulling tasks\n", name, role)
 	// One mirror per agent worker: tracks per-mission snapshot dirs + written paths.
 	mir := newMirror(ws)
@@ -772,6 +772,10 @@ func handleTaskError(taskID, missionID int64, role, modelDesc string, err error,
 // model — but the mismatch is recorded in the returned summary ("ran <own>
 // not assigned <x>") rather than silently pretending it ran the assignment.
 func runTask(ctx context.Context, backend Backend, name, role, ws string, brain func(string, map[string]any) string, tools []any, missionID, taskID int64, title, system, instruction string, mir *mirror, bc brainCall, assignedModel string) (string, error) {
+	// env(k, "") is os.Getenv with no fallback. It stays instead of a direct
+	// os.Getenv because gosec's G703 taint rule flags a raw os.Getenv value
+	// that later reaches a path sink; this is a workaround for that
+	// analysis, not a default. Do not "simplify" it without re-running gosec.
 	defaultModel := env("AGENT_MODEL", "")
 	wantModel := taskModel(assignedModel, defaultModel)
 	modelMismatch := ""

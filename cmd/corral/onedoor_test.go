@@ -40,9 +40,12 @@ import (
 //
 // Residual this gate cannot see, stated plainly: a seat assembled by FIELD
 // ASSIGNMENT on a zero value (`var rs agentbackend.ResolvedSeat; rs.Endpoint =
-// "…"`), or through a type alias of ResolvedSeat, is not a composite literal
-// and is not reported. The gate raises the cost of a second door; it does not
-// make one impossible. Review catches what the syntax tree cannot.
+// "…"`), a ResolvedSeat received as a parameter and mutated, or one built
+// through a type alias, is not a composite literal and is not reported; nor
+// is a field-set seat built OUTSIDE cmd/corral (another package, another
+// binary) and returned into it, since the gate parses cmd/corral only. The
+// gate raises the cost of a second door; it does not make one impossible.
+// Review catches what the syntax tree cannot.
 const agentbackendPath = "github.com/pdbethke/corralai/internal/agentbackend"
 
 // stringKeyedConstructors are the entry points that build a Backend from a

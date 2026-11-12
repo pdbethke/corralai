@@ -70,29 +70,9 @@ func TestForModelGemini(t *testing.T) {
 	}
 }
 
-// TestForModelGeminiFallsBackToGoogleAPIKey verifies GOOGLE_API_KEY is used
-// when GEMINI_API_KEY is absent.
-func TestForModelGeminiFallsBackToGoogleAPIKey(t *testing.T) {
-	resetCredsMemoForTest(t)
-	keyring.MockInit()
-	t.Setenv("CORRAL_CREDS_DIR", t.TempDir())
-	t.Setenv("CREDENTIALS_DIRECTORY", "")
-	t.Setenv("GEMINI_API_KEY", "")
-	t.Setenv("GOOGLE_API_KEY", "goog-test")
-
-	b, err := ForModel("gemini-3.5-flash")
-	if err != nil {
-		t.Fatalf("ForModel(gemini-3.5-flash) error: %v", err)
-	}
-	ob := b.(*openaiBackend)
-	if ob.key != "goog-test" {
-		t.Errorf("key = %q, want goog-test", ob.key)
-	}
-}
-
 // TestForModelGeminiFailsClosedWithoutKey verifies ForModel refuses to build
-// a Gemini backend (and returns an actionable error) when neither
-// GEMINI_API_KEY nor GOOGLE_API_KEY is set — the fail-closed contract that
+// a Gemini backend (and returns an actionable error) when GEMINI_API_KEY is
+// unset (GOOGLE_API_KEY is no longer read: TestGeminiReadsOnlyItsOwnKeyAndURL) — the fail-closed contract that
 // keeps a cross-vendor critic from silently falling back to an unauthenticated
 // or wrong backend.
 func TestForModelGeminiFailsClosedWithoutKey(t *testing.T) {

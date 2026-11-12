@@ -79,8 +79,8 @@ func TestGeminiReadsOnlyItsOwnKeyAndURL(t *testing.T) {
 			if b, err := FromEnv(); err == nil || !strings.Contains(err.Error(), "GEMINI_API_KEY") {
 				t.Errorf("FromEnv = %T, %v; want a refusal naming GEMINI_API_KEY", b, err)
 			}
-			if b, err := ForModel("gemini-3.6-flash"); err == nil || !strings.Contains(err.Error(), "GEMINI_API_KEY") {
-				t.Errorf("ForModel = %T, %v; want a refusal naming GEMINI_API_KEY", b, err)
+			if b, err := ForVendor("google", "gemini-3.6-flash"); err == nil || !strings.Contains(err.Error(), "GEMINI_API_KEY") {
+				t.Errorf("ForVendor = %T, %v; want a refusal naming GEMINI_API_KEY", b, err)
 			}
 		})
 	}

@@ -120,20 +120,24 @@ func TestSameVendorWarningNamesAgentSeats(t *testing.T) {
 	}
 }
 
-// The verdict's "every graded seat is X" line sees agent seats too.
+// The verdict's "every graded seat is X" line sees agent seats too: the
+// resolver records an agent seat's maker as its provider.
 func TestSoleGradedVendorSeesAgentSeats(t *testing.T) {
+	in := localAuditInput{mutantModel: "codex", writerModel: "codex:gpt-6-astra", criticModel: "openai/gpt-6"}
+	set := seatsOf(t, in)
 	if got := soleGradedVendor(map[string]string{
 		advpool.RoleMutantGenerator: "codex",
 		advpool.RoleTestWriter:      "codex:gpt-6-astra",
 		advpool.RoleTestCritic:      "gpt-6",
-	}); got != "openai" {
+	}, set.providers()); got != "openai" {
 		t.Fatalf("got %q, want openai", got)
 	}
 	fakeAgent(t, "fakea", "x")
+	set = seatsOf(t, localAuditInput{mutantModel: "fakea", writerModel: "openai/gpt-6"})
 	if got := soleGradedVendor(map[string]string{
 		advpool.RoleMutantGenerator: "fakea",
 		advpool.RoleTestWriter:      "gpt-6",
-	}); got != "" {
+	}, set.providers()); got != "" {
 		t.Fatalf("an unpinned operator agent's vendor is unknown, got %q", got)
 	}
 }

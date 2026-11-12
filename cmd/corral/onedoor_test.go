@@ -28,10 +28,15 @@ import (
 // failure that design invites. So there is no allowlist. Two rules:
 //
 //  1. No string-keyed constructor — agentbackend.FromEnv, ForModel,
-//     ForModelOrLocal, NewOllamaBackend, ForSeat — appears anywhere in
-//     cmd/corral, by any spelling (aliased import, method value, dot-import).
-//     Each turns a name or the environment into a Backend without the
-//     resolver's decision.
+//     ForModelOrLocal, NewOllamaBackend, ForSeat, ForVendor — appears
+//     anywhere in cmd/corral, by any spelling (aliased import, method value,
+//     dot-import). Each turns a name or the environment into a Backend
+//     without the resolver's decision. Nor does RecordedVendorOf, which reads
+//     a vendor off a model's spelling: it labels historical ledger entries
+//     (recordview renders them), and a label on a new run comes from the
+//     provider the resolver recorded (founder ruling 2026-11-12). The other
+//     half of that rule — no function in agentbackend that returns a Backend
+//     reaches the prefix table — is TestNoRoutingPathReachesTheNamePrefixTable.
 //  2. A ResolvedSeat composite literal that SETS A FIELD appears only in the
 //     file that defines resolveSeats (found by its FuncDecl, not by name). The
 //     zero literal `agentbackend.ResolvedSeat{}` is allowed anywhere, because
@@ -49,9 +54,11 @@ import (
 const agentbackendPath = "github.com/pdbethke/corralai/internal/agentbackend"
 
 // stringKeyedConstructors are the entry points that build a Backend from a
-// name or from the process environment. None may appear in cmd/corral.
+// name or from the process environment, plus RecordedVendorOf, which guesses a
+// vendor from a name. None may appear in cmd/corral.
 var stringKeyedConstructors = map[string]bool{
 	"FromEnv": true, "ForModel": true, "ForModelOrLocal": true, "NewOllamaBackend": true, "ForSeat": true,
+	"ForVendor": true, "RecordedVendorOf": true,
 }
 
 // doorViolations parses every non-test .go file directly in dir and returns
@@ -189,19 +196,21 @@ const doorImport = "import \"" + agentbackendPath + "\"\n"
 // miss cannot hide behind another's hit.
 func TestOneDoorGateReportsEachBreach(t *testing.T) {
 	planted := map[string]string{
-		"fromenv.go":  "package main\n\n" + doorImport + "\nfunc f() { _, _ = agentbackend.FromEnv() }\n",
-		"formodel.go": "package main\n\n" + doorImport + "\nfunc f() { _, _ = agentbackend.ForModel(\"m\") }\n",
-		"local.go":    "package main\n\n" + doorImport + "\nfunc f() { _, _ = agentbackend.ForModelOrLocal(\"m\") }\n",
-		"ollama.go":   "package main\n\n" + doorImport + "\nfunc f() { _ = agentbackend.NewOllamaBackend(\"u\", \"m\") }\n",
-		"forseat.go":  "package main\n\n" + doorImport + "\nfunc f() { _, _ = agentbackend.ForSeat(\"m\", agentbackend.SeatOptions{}) }\n",
-		"alias.go":    "package main\n\nimport ab \"" + agentbackendPath + "\"\n\nfunc f() { _, _ = ab.ForModel(\"m\") }\n",
-		"value.go":    "package main\n\n" + doorImport + "\nvar x = agentbackend.ForSeat\n",
-		"dot.go":      "package main\n\nimport . \"" + agentbackendPath + "\"\n\nfunc f() { _, _ = ForModel(\"m\") }\n",
-		"literal.go":  "package main\n\n" + doorImport + "\nvar x = agentbackend.ResolvedSeat{Spec: \"x\"}\n",
-		"pointer.go":  "package main\n\n" + doorImport + "\nvar x = &agentbackend.ResolvedSeat{Endpoint: \"http://e\"}\n",
-		"slice.go":    "package main\n\n" + doorImport + "\nvar x = []agentbackend.ResolvedSeat{{Spec: \"x\"}}\n",
-		"mapped.go":   "package main\n\n" + doorImport + "\nvar x = map[string]agentbackend.ResolvedSeat{\"k\": {Kind: \"api\"}}\n",
-		"aliaslit.go": "package main\n\nimport ab \"" + agentbackendPath + "\"\n\nvar x = ab.ResolvedSeat{Spec: \"x\"}\n",
+		"fromenv.go":   "package main\n\n" + doorImport + "\nfunc f() { _, _ = agentbackend.FromEnv() }\n",
+		"formodel.go":  "package main\n\n" + doorImport + "\nfunc f() { _, _ = agentbackend.ForModel(\"m\") }\n",
+		"local.go":     "package main\n\n" + doorImport + "\nfunc f() { _, _ = agentbackend.ForModelOrLocal(\"m\") }\n",
+		"ollama.go":    "package main\n\n" + doorImport + "\nfunc f() { _ = agentbackend.NewOllamaBackend(\"u\", \"m\") }\n",
+		"forseat.go":   "package main\n\n" + doorImport + "\nfunc f() { _, _ = agentbackend.ForSeat(\"m\", agentbackend.SeatOptions{}) }\n",
+		"forvendor.go": "package main\n\n" + doorImport + "\nfunc f() { _, _ = agentbackend.ForVendor(\"openai\", \"m\") }\n",
+		"recorded.go":  "package main\n\n" + doorImport + "\nfunc f() string { return agentbackend.RecordedVendorOf(\"gpt-6\") }\n",
+		"alias.go":     "package main\n\nimport ab \"" + agentbackendPath + "\"\n\nfunc f() { _, _ = ab.ForModel(\"m\") }\n",
+		"value.go":     "package main\n\n" + doorImport + "\nvar x = agentbackend.ForSeat\n",
+		"dot.go":       "package main\n\nimport . \"" + agentbackendPath + "\"\n\nfunc f() { _, _ = ForModel(\"m\") }\n",
+		"literal.go":   "package main\n\n" + doorImport + "\nvar x = agentbackend.ResolvedSeat{Spec: \"x\"}\n",
+		"pointer.go":   "package main\n\n" + doorImport + "\nvar x = &agentbackend.ResolvedSeat{Endpoint: \"http://e\"}\n",
+		"slice.go":     "package main\n\n" + doorImport + "\nvar x = []agentbackend.ResolvedSeat{{Spec: \"x\"}}\n",
+		"mapped.go":    "package main\n\n" + doorImport + "\nvar x = map[string]agentbackend.ResolvedSeat{\"k\": {Kind: \"api\"}}\n",
+		"aliaslit.go":  "package main\n\nimport ab \"" + agentbackendPath + "\"\n\nvar x = ab.ResolvedSeat{Spec: \"x\"}\n",
 	}
 	quiet := map[string]string{
 		"prose.go":        "package main\n\n// agentbackend.FromEnv() and ResolvedSeat{Spec: \"x\"} in prose\n",

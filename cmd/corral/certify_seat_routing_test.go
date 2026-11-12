@@ -158,7 +158,7 @@ func TestLocalEndpointRefusalsNameTheSeat(t *testing.T) {
 	noKeys(t)
 	clearSeatEnv(t)
 	t.Setenv("GEMINI_API_KEY", "k")
-	_, err := resolveSeatsOf(t, localAuditInput{writerModel: "gemini-3.7-flash"},
+	_, err := resolveSeatsOf(t, localAuditInput{writerModel: "google/gemini-3.7-flash"},
 		map[string]string{advpool.RoleTestWriter: "http://localhost:11436"})
 	if err == nil || !strings.Contains(err.Error(), "CLOUD model") || !strings.Contains(err.Error(), "gemini-3.7-flash") {
 		t.Fatalf("want the cloud refusal naming the model, got %v", err)

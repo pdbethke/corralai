@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/pdbethke/corralai/internal/advpool"
-	"github.com/pdbethke/corralai/internal/agentbackend"
 )
 
 // seatFlag ties one `--*-model` flag to the pool role it staffs, so the
@@ -92,13 +91,12 @@ func untellableAgentSeats(providers map[string]string, writer, critic string) []
 	return out
 }
 
-// seatProvider prefers the DECLARED provider (registry data) over the vendor
-// inferred from a model name. The declaration is the operator's own statement;
-// the inference is a substring guess that cannot see a gateway or a local
-// runner at all.
-func seatProvider(providers map[string]string, role, model string) string {
-	if p := strings.TrimSpace(providers[role]); p != "" {
-		return p
-	}
-	return agentbackend.VendorOf(model)
+// seatProvider is the provider the seat resolver recorded for role, or "".
+// There is no fallback to a vendor read off the model's name: that guess
+// cannot see a gateway or a local runner, and a gpt-oss name it called openai
+// is how a local seat came to be routed to OpenAI. Unknown stays unknown
+// (founder ruling 2026-11-12). model is unused and kept only so the callers
+// read as the seat they ask about.
+func seatProvider(providers map[string]string, role, _ string) string {
+	return strings.TrimSpace(providers[role])
 }

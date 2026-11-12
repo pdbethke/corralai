@@ -17,7 +17,9 @@ const (
 	DeclaredAgent      DeclaredBy = "agent"
 	DeclaredPinned     DeclaredBy = "pinned"
 	DeclaredDiscovered DeclaredBy = "discovered"
-	DeclaredName       DeclaredBy = "name"
+	// DeclaredVendor is a seat named in the explicit vendor/model form
+	// (anthropic/…, google/…, openai/…): the operator named the vendor.
+	DeclaredVendor DeclaredBy = "vendor/model"
 	// DeclaredFlag is a seat the operator placed on a daemon with
 	// --local-endpoint: the most specific statement there is about one seat.
 	DeclaredFlag DeclaredBy = "--local-endpoint"
@@ -81,7 +83,9 @@ func Build(rs ResolvedSeat, opt SeatOptions) (Backend, error) {
 		return &openaiBackend{base: rs.Endpoint, key: key, model: rs.Spec}, nil
 	case models.WireHosted:
 		if rs.Endpoint == "" {
-			return ForModel(rs.Spec)
+			// The vendor the resolver recorded from a declaration, never one
+			// read off the model's name.
+			return ForVendor(rs.Provider, rs.Spec)
 		}
 		key, err := seatKey(rs)
 		if err != nil {

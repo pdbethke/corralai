@@ -22,8 +22,12 @@ import (
 // A bare local name needs a declared source (corral has no default daemon), so
 // the helper declares one the way an operator would: OLLAMA_URL, when the test
 // has not set it, pointing at a daemon whose listing is stubbed to serve
-// exactly the bare names the input uses. Cloud names, agent seats and a pinned
-// MODEL_BACKEND resolve by their own rules, untouched.
+// exactly the bare LOCAL names the input uses. vendor/model names, agent seats
+// and a pinned MODEL_BACKEND resolve by their own rules, untouched. A bare
+// name spelled like a cloud model (claude-…, gemini-…, gpt-…) is deliberately
+// NOT stubbed as served: since corral stopped inferring vendors from names
+// (2026-11-12) such a test must say vendor/model, and stubbing it as a local
+// model would quietly turn a cloud-seat test into a local-seat one.
 func seatsOf(t *testing.T, in localAuditInput) seatSet {
 	t.Helper()
 	set, err := resolveSeatsOf(t, in, nil)
@@ -53,23 +57,33 @@ func seatsForAssign(t *testing.T, assign advpool.RoleAssignment, placed map[stri
 // that expects one.
 func resolveSeatsOf(t *testing.T, in localAuditInput, placed map[string]string) (seatSet, error) {
 	t.Helper()
+	return resolveSeatsInto(t, &in, placed)
+}
+
+// resolveSeatsInto resolves in's seats through flags that point INTO in, so
+// in is left holding what a certify entry point's flags hold after
+// resolution: an alias or a vendor/model value rewritten to its concrete
+// model. A test that resolves seats and then reads the input must see that.
+func resolveSeatsInto(t *testing.T, in *localAuditInput, placed map[string]string) (seatSet, error) {
+	t.Helper()
 	models := []struct {
 		flag, role string
-		val        string
+		val        *string
 	}{
-		{"mutant-model", advpool.RoleMutantGenerator, in.mutantModel},
-		{"writer-model", advpool.RoleTestWriter, in.writerModel},
-		{"critic-model", advpool.RoleTestCritic, in.criticModel},
-		{"shadow-model", advpool.RoleMutantGeneratorShadow, in.shadowModel},
-		{"shadow-writer-model", advpool.RoleTestWriterShadow, in.shadowWriterModel},
+		{"mutant-model", advpool.RoleMutantGenerator, &in.mutantModel},
+		{"writer-model", advpool.RoleTestWriter, &in.writerModel},
+		{"critic-model", advpool.RoleTestCritic, &in.criticModel},
+		{"shadow-model", advpool.RoleMutantGeneratorShadow, &in.shadowModel},
+		{"shadow-writer-model", advpool.RoleTestWriterShadow, &in.shadowWriterModel},
 	}
 	var flags []seatFlag
 	var bare []string
 	for i := range models {
-		v := strings.TrimSpace(models[i].val)
-		models[i].val = v
-		flags = append(flags, seatFlag{flag: models[i].flag, role: models[i].role, val: &models[i].val})
-		if v != "" && !strings.EqualFold(v, "off") && !isAgentSeat(v) && agentbackend.VendorOf(v) == "" {
+		v := strings.TrimSpace(*models[i].val)
+		*models[i].val = v
+		flags = append(flags, seatFlag{flag: models[i].flag, role: models[i].role, val: models[i].val})
+		_, _, explicit := agentbackend.SplitVendorModel(v)
+		if v != "" && !strings.EqualFold(v, "off") && !isAgentSeat(v) && !explicit && !spelledLikeACloudModel(v) {
 			bare = append(bare, v)
 		}
 	}
@@ -83,12 +97,28 @@ func resolveSeatsOf(t *testing.T, in localAuditInput, placed map[string]string) 
 	return resolveSeatsPlaced(context.Background(), "test", "", flags, placed, io.Discard)
 }
 
+// spelledLikeACloudModel is a TEST-ONLY spelling check, used for nothing but
+// keeping resolveSeatsOf from declaring a cloud-looking bare name as local.
+// Routing never reads it; see the note on seatsOf.
+func spelledLikeACloudModel(v string) bool {
+	for _, p := range []string{"claude-", "opus-", "sonnet-", "haiku-", "fable-", "gemini-", "gpt-", "o1-", "o3-"} {
+		if strings.HasPrefix(v, p) {
+			return true
+		}
+	}
+	return false
+}
+
 // resolveRoles is resolveAuditRoles with the seats resolved first, unless the
 // input already carries them.
 func resolveRoles(t *testing.T, in localAuditInput, stderr io.Writer) (auditRoles, error) {
 	t.Helper()
 	if in.seats == nil {
-		in.seats = seatsOf(t, in)
+		set, err := resolveSeatsInto(t, &in, nil)
+		if err != nil {
+			t.Fatalf("resolving the input's seats: %v", err)
+		}
+		in.seats = set
 	}
 	return resolveAuditRoles(in, stderr)
 }
@@ -96,14 +126,22 @@ func resolveRoles(t *testing.T, in localAuditInput, stderr io.Writer) (auditRole
 // checkHerdFor is checkHerd with the seats resolved first, as runDoctor does.
 func checkHerdFor(t *testing.T, mutant, writer, critic, shadow, shadowWriter string) []checkResult {
 	t.Helper()
-	seats := seatsOf(t, localAuditInput{mutantModel: mutant, writerModel: writer, criticModel: critic, shadowModel: shadow, shadowWriterModel: shadowWriter})
-	return checkHerd(mutant, writer, critic, shadow, shadowWriter, seats)
+	in := localAuditInput{mutantModel: mutant, writerModel: writer, criticModel: critic, shadowModel: shadow, shadowWriterModel: shadowWriter}
+	seats, err := resolveSeatsInto(t, &in, nil)
+	if err != nil {
+		t.Fatalf("resolving the input's seats: %v", err)
+	}
+	return checkHerd(in.mutantModel, in.writerModel, in.criticModel, in.shadowModel, in.shadowWriterModel, seats)
 }
 
 // withSeats resolves the input's seats, for a test that builds the input by
 // hand and hands it straight to auditOneFile.
 func (in localAuditInput) withSeats(t *testing.T) localAuditInput {
 	t.Helper()
-	in.seats = seatsOf(t, in)
+	set, err := resolveSeatsInto(t, &in, nil)
+	if err != nil {
+		t.Fatalf("resolving the input's seats: %v", err)
+	}
+	in.seats = set
 	return in
 }

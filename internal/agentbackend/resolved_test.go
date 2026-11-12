@@ -85,9 +85,11 @@ func TestBuildHostedGatewayUsesKeyEnv(t *testing.T) {
 	}
 }
 
-func TestBuildHostedVendorDefaultsToForModel(t *testing.T) {
+// A hosted seat with no endpoint is built for its RESOLVED provider, never for
+// what its model name looks like.
+func TestBuildHostedVendorUsesTheResolvedProvider(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "")
-	_, want := ForModel("claude-x")
+	_, want := ForVendor("anthropic", "claude-x")
 	if want == nil {
 		t.Skip("an Anthropic key is resolvable on this host")
 	}

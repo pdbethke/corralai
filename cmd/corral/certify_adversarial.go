@@ -15,7 +15,6 @@ import (
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/advpool"
-	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/brainclient"
 	"github.com/pdbethke/corralai/internal/killrate"
 	"github.com/pdbethke/corralai/internal/lang"
@@ -36,6 +35,14 @@ type advFinding struct {
 // tags, so its keys are the Go-default CAPITALIZED field names — matched here
 // verbatim. Changing these breaks decoding.
 type advVerdict struct {
+	// SeatProviders is role -> the provider the seat resolver recorded for
+	// that seat (seatSet.providers), for the "every graded seat is X" line.
+	// Set by the caller that resolved the seats, never derived from
+	// ModelsByRole: a model's name is not its vendor. Nil (the daemon's
+	// --adversarial path, which resolves nothing here) prints no claim.
+	// Not recorded; the line is a disclosure on this run's output.
+	SeatProviders map[string]string `json:"-"`
+
 	Repo           string  `json:"Repo"`
 	Commit         string  `json:"Commit"`
 	Lang           string  `json:"Lang"`
@@ -637,7 +644,7 @@ func renderAdvVerdict(w io.Writer, codePath string, v advVerdict) {
 		fmt.Fprintf(w, "  critic review: %d test(s) flagged — UNVERIFIED (a second model's opinion, not execution-proven; check before acting)\n", len(v.VacuousFindings))
 	}
 	fmt.Fprintf(w, "  models:        %s\n", formatModels(v.ModelsByRole, v.SeatTools))
-	if vendor := soleGradedVendor(v.ModelsByRole); vendor != "" {
+	if vendor := soleGradedVendor(v.ModelsByRole, v.SeatProviders); vendor != "" {
 		// The fourth participant (#104). CheckDecorrelation keeps corral's own
 		// three seats apart and knows nothing about whatever WROTE the code
 		// under audit. When every graded seat is one vendor — which is the
@@ -700,15 +707,17 @@ func formatModels(m, tools map[string]string) string {
 	return strings.Join(parts, "  ")
 }
 
-// soleGradedVendor returns the vendor shared by every GRADED seat, or "" when
-// the seats span more than one vendor (or none can be recognized).
+// soleGradedVendor returns the provider shared by every GRADED seat, or ""
+// when the seats span more than one provider or any graded seat has none
+// recorded. providers is role -> the provider the seat resolver recorded; a
+// model's name is never read for a vendor (founder ruling 2026-11-12).
 //
 // The shadow challenger is excluded on purpose: it records a head-to-head
 // comparison and never gates a verdict, so its vendor says nothing about the
-// independence of the result. An unrecognized model name also yields "" —
-// silence is the honest answer when we cannot tell, and a caveat printed on a
-// guess would train readers to ignore it.
-func soleGradedVendor(models map[string]string) string {
+// independence of the result. A seat with no recorded provider also yields ""
+// — silence is the honest answer when we cannot tell, and a caveat printed on
+// a guess would train readers to ignore it.
+func soleGradedVendor(models, providers map[string]string) string {
 	graded := []string{advpool.RoleMutantGenerator, advpool.RoleTestWriter, advpool.RoleTestCritic}
 	vendor := ""
 	for _, role := range graded {
@@ -716,7 +725,7 @@ func soleGradedVendor(models map[string]string) string {
 		if m == "" || strings.EqualFold(m, "off") {
 			continue // a seat that did not run says nothing either way
 		}
-		v := agentbackend.VendorOf(m)
+		v := strings.TrimSpace(providers[role])
 		if v == "" {
 			return ""
 		}

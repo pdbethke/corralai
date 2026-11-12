@@ -528,7 +528,7 @@ func TestAgenticSeatsRunInAWorktreeWithTheBriefOnStdin(t *testing.T) {
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	var out, errb bytes.Buffer
-	if code := runReview([]string{"--repo", root, "--scope", "pkg", "--reviewer-model", "claude-code:claude-sonnet-5", "--verifier-model", "claude-sonnet-5", "--no-ledger"}, &out, &errb); code != 2 || !strings.Contains(errb.String(), "resolves to the reviewer's own model") {
+	if code := runReview([]string{"--repo", root, "--scope", "pkg", "--reviewer-model", "claude-code:claude-sonnet-5", "--verifier-model", "anthropic/claude-sonnet-5", "--no-ledger"}, &out, &errb); code != 2 || !strings.Contains(errb.String(), "resolves to the reviewer's own model") {
 		t.Fatalf("a verifier that is the agent's own model must be refused: exit %d %s", code, errb.String())
 	}
 	out.Reset()

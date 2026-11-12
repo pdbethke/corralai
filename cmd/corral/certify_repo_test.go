@@ -36,8 +36,8 @@ import (
 // corral has no default models, so every fixture that reaches role resolution
 // must name its own herd. These are the TEST's models, not product defaults.
 const (
-	testHerdWriter = "claude-sonnet-5"
-	testHerdMutant = "claude-sonnet-5"
+	testHerdWriter = "anthropic/claude-sonnet-5"
+	testHerdMutant = "anthropic/claude-sonnet-5"
 )
 
 // gitCmd returns a helper that runs a git command in dir for a test fixture,

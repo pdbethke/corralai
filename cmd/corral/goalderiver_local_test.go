@@ -29,7 +29,7 @@ func ollamaDeriveSeat(model, endpoint string) agentbackend.ResolvedSeat {
 func hostedDeriveSeat(model, provider string) agentbackend.ResolvedSeat {
 	return agentbackend.ResolvedSeat{
 		Flag: "derive-model", Spec: model, Kind: "api", Provider: provider,
-		Wire: models.WireHosted, DeclaredBy: agentbackend.DeclaredName,
+		Wire: models.WireHosted, DeclaredBy: agentbackend.DeclaredVendor,
 	}
 }
 
@@ -164,5 +164,5 @@ func TestGoalDeriverRefusesAnAgentSeatWithAnEndpoint(t *testing.T) {
 // testDeriveSeat is a derive seat for tests that only need the model's name:
 // the factory they inject never builds a backend from it.
 func testDeriveSeat(model string) agentbackend.ResolvedSeat {
-	return agentbackend.ResolvedSeat{Flag: "derive-model", Spec: model, Kind: "api", Wire: models.WireHosted, DeclaredBy: agentbackend.DeclaredName}
+	return agentbackend.ResolvedSeat{Flag: "derive-model", Spec: model, Kind: "api", Wire: models.WireHosted, DeclaredBy: agentbackend.DeclaredVendor}
 }

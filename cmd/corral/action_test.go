@@ -1333,9 +1333,9 @@ func TestActionPassesRoleModelsOnlyWhenSet(t *testing.T) {
 		flag  string // corral's own flag
 		value string
 	}{
-		{"derive-model", "DERIVE_MODEL", "--derive-model", "gemini-3.6-flash"},
-		{"writer-model", "WRITER_MODEL", "--writer-model", "gemini-3.6-flash"},
-		{"mutant-model", "MUTANT_MODEL", "--mutant-model", "gemini-3.6-flash"},
+		{"derive-model", "DERIVE_MODEL", "--derive-model", "google/gemini-3.6-flash"},
+		{"writer-model", "WRITER_MODEL", "--writer-model", "google/gemini-3.6-flash"},
+		{"mutant-model", "MUTANT_MODEL", "--mutant-model", "google/gemini-3.6-flash"},
 		{"critic-model", "CRITIC_MODEL", "--critic-model", "off"},
 		{"shadow-model", "SHADOW_MODEL", "--shadow-model", "off"},
 	}

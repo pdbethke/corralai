@@ -18,7 +18,7 @@ import (
 // testShadowModel is a concrete challenger model name for tests that need one.
 // It is NOT a product default — corral has no default models; this constant
 // exists so these tests keep asserting on a fixed name of their own choosing.
-const testShadowModel = "claude-haiku-4-5"
+const testShadowModel = "anthropic/claude-haiku-4-5"
 
 // captureServer records every request it receives (path + decoded JSON body)
 // and answers with whichever shape resShape produces — "anthropic" or
@@ -63,9 +63,9 @@ func TestLocalChatterForSameVendorCriticSharesBaseBackend(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-test")
 
 	assign := advpool.RoleAssignment{
-		advpool.RoleMutantGenerator: "claude-sonnet-5",
-		advpool.RoleTestWriter:      "claude-sonnet-5",
-		advpool.RoleTestCritic:      "claude-haiku-4-5",
+		advpool.RoleMutantGenerator: "anthropic/claude-sonnet-5",
+		advpool.RoleTestWriter:      "anthropic/claude-sonnet-5",
+		advpool.RoleTestCritic:      "anthropic/claude-haiku-4-5",
 	}
 	chatterFor, err := localChatterFor(seatsForAssign(t, assign, nil), nil, nil)
 	if err != nil {
@@ -106,9 +106,9 @@ func TestLocalChatterForCrossVendorCriticRoutesToGemini(t *testing.T) {
 	t.Setenv("GEMINI_API_KEY", "gm-test")
 
 	assign := advpool.RoleAssignment{
-		advpool.RoleMutantGenerator: "claude-sonnet-5",
-		advpool.RoleTestWriter:      "claude-sonnet-5",
-		advpool.RoleTestCritic:      "gemini-3.5-flash",
+		advpool.RoleMutantGenerator: "anthropic/claude-sonnet-5",
+		advpool.RoleTestWriter:      "anthropic/claude-sonnet-5",
+		advpool.RoleTestCritic:      "google/gemini-3.5-flash",
 	}
 	chatterFor, err := localChatterFor(seatsForAssign(t, assign, nil), nil, nil)
 	if err != nil {
@@ -153,9 +153,9 @@ func TestLocalChatterForCrossVendorCriticFailsClosedWithoutKey(t *testing.T) {
 	t.Setenv("GOOGLE_API_KEY", "")
 
 	assign := advpool.RoleAssignment{
-		advpool.RoleMutantGenerator: "claude-sonnet-5",
-		advpool.RoleTestWriter:      "claude-sonnet-5",
-		advpool.RoleTestCritic:      "gemini-3.5-flash",
+		advpool.RoleMutantGenerator: "anthropic/claude-sonnet-5",
+		advpool.RoleTestWriter:      "anthropic/claude-sonnet-5",
+		advpool.RoleTestCritic:      "google/gemini-3.5-flash",
 	}
 	_, err := localChatterFor(seatsForAssign(t, assign, nil), nil, nil)
 	if err == nil {
@@ -194,7 +194,7 @@ func TestLocalChatterForExplicitBackendNeverCrossVendorRoutes(t *testing.T) {
 	assign := advpool.RoleAssignment{
 		advpool.RoleMutantGenerator: "some-router-model",
 		advpool.RoleTestWriter:      "some-router-model",
-		advpool.RoleTestCritic:      "gemini-3.5-flash",
+		advpool.RoleTestCritic:      "gemini-3.5-flash", // bare: a pinned gateway takes the name verbatim
 	}
 	chatterFor, err := localChatterFor(seatsForAssign(t, assign, nil), nil, nil)
 	if err != nil {
@@ -233,8 +233,8 @@ func TestLocalChatterForExplicitBackendNeverCrossVendorRoutes(t *testing.T) {
 func TestResolveAuditRolesDerivesBackendFromAssignedModels(t *testing.T) {
 	geminiModels := func() localAuditInput {
 		return localAuditInput{
-			writerModel: "gemini-3.6-flash",
-			mutantModel: "gemini-3.6-flash",
+			writerModel: "google/gemini-3.6-flash",
+			mutantModel: "google/gemini-3.6-flash",
 			criticModel: "off",
 			// The challenger is OFF unless named, so this is belt-and-braces
 			// rather than load-bearing: kept explicit so these cases stay
@@ -346,7 +346,7 @@ func TestResolveAuditRolesDerivesBackendFromAssignedModels(t *testing.T) {
 		if !strings.Contains(msg, "shadow-model") {
 			t.Errorf("the error must name --shadow-model as the way out, since that is the seat that needs the key; got: %v", err)
 		}
-		if !strings.Contains(msg, testShadowModel) {
+		if !strings.Contains(msg, strings.TrimPrefix(testShadowModel, "anthropic/")) {
 			t.Errorf("the error must name the offending model so the operator can see which seat it is; got: %v", err)
 		}
 	})
@@ -413,9 +413,9 @@ func TestUnpinnedMixedVendorRunRoutesEverySeatByName(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "")
 
 	_, err := localChatterFor(seatsForAssign(t, advpool.RoleAssignment{
-		advpool.RoleMutantGenerator: "gemini-3.6-flash",
-		advpool.RoleTestWriter:      "gemini-3.6-flash",
-		advpool.RoleTestCritic:      "claude-haiku-4-5-20251001",
+		advpool.RoleMutantGenerator: "google/gemini-3.6-flash",
+		advpool.RoleTestWriter:      "google/gemini-3.6-flash",
+		advpool.RoleTestCritic:      "anthropic/claude-haiku-4-5-20251001",
 	}, nil), nil, nil)
 	if err == nil {
 		t.Fatal("an unpinned mixed-vendor run accepted a Claude critic with no Anthropic key: " +
@@ -436,7 +436,7 @@ func TestPinnedGatewayIsNeverReRoutedBehindTheOperator(t *testing.T) {
 	t.Setenv("OPENROUTER_API_KEY", "test-openrouter-key")
 
 	chatterFor, err := localChatterFor(seatsForAssign(t, advpool.RoleAssignment{
-		advpool.RoleMutantGenerator: "claude-sonnet-5",
+		advpool.RoleMutantGenerator: "anthropic/claude-sonnet-5",
 	}, nil), nil, nil)
 	if err != nil {
 		t.Fatalf("a gateway-pinned claude- name was re-routed to Anthropic behind the operator: %v", err)
@@ -463,9 +463,9 @@ func TestLocalChatterFailsClosedOnAnyRoleNotJustTheCritic(t *testing.T) {
 	t.Setenv("GOOGLE_API_KEY", "")
 
 	_, err := localChatterFor(seatsForAssign(t, advpool.RoleAssignment{
-		advpool.RoleMutantGenerator: "gemini-3.6-flash",
-		advpool.RoleTestWriter:      "claude-sonnet-5",
-		advpool.RoleTestCritic:      "claude-haiku-4-5",
+		advpool.RoleMutantGenerator: "google/gemini-3.6-flash",
+		advpool.RoleTestWriter:      "anthropic/claude-sonnet-5",
+		advpool.RoleTestCritic:      "anthropic/claude-haiku-4-5",
 	}, nil), nil, nil)
 	if err == nil {
 		t.Fatal("a Gemini generator with no Gemini key must refuse the run, not 404 mid-run")
@@ -485,9 +485,9 @@ func TestLocalChatterRoutesThreeVendorsAtOnce(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "sk-oai-test")
 
 	pick, err := localChatterFor(seatsForAssign(t, advpool.RoleAssignment{
-		advpool.RoleMutantGenerator: "gemini-3.6-flash",
-		advpool.RoleTestWriter:      "claude-sonnet-5",
-		advpool.RoleTestCritic:      "gpt-5",
+		advpool.RoleMutantGenerator: "google/gemini-3.6-flash",
+		advpool.RoleTestWriter:      "anthropic/claude-sonnet-5",
+		advpool.RoleTestCritic:      "openai/gpt-5",
 	}, nil), nil, nil)
 	if err != nil {
 		t.Fatalf("all three credentials present, want no error: %v", err)
@@ -561,8 +561,8 @@ func TestAnthropicHerdStillRefusesWithoutItsKey(t *testing.T) {
 	t.Setenv("GEMINI_API_KEY", "")
 
 	_, err := resolveRoles(t, localAuditInput{
-		writerModel: "claude-sonnet-5",
-		mutantModel: "claude-sonnet-5",
+		writerModel: "anthropic/claude-sonnet-5",
+		mutantModel: "anthropic/claude-sonnet-5",
 		criticModel: "off",
 		shadowModel: "off",
 	}, nil)

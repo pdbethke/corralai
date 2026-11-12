@@ -291,9 +291,11 @@ func RepoLocalExists(repoRoot string) bool {
 
 // looksLikeConcreteModel is the spelling test behind Parse's alias rule: a
 // vendor-prefixed name ("google/…", "anthropic/…") or one of the model
-// families the seat flags accept as concrete names. The prefixes mirror
-// agentbackend.VendorOf, restated here rather than imported so that this
-// package keeps its no-network, no-provider dependency shape.
+// families that name hosted models. The prefixes mirror
+// agentbackend's labelling prefix table, restated here rather than imported
+// so that this package keeps its no-network, no-provider dependency shape. It
+// ROUTES nothing: it only refuses an alias that a reader would mistake for a
+// model name.
 func looksLikeConcreteModel(alias string) bool {
 	a := strings.ToLower(alias)
 	if strings.Contains(a, "/") {

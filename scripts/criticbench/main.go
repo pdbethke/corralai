@@ -10,11 +10,11 @@
 // user-facing CLI page is generated for it.
 //
 //	go run ./scripts/criticbench -model qwen2.5-coder:7b -runs 5 -out report.md
-//	go run ./scripts/criticbench -model gemini-3.8-flash -runs 5 -out report.md
+//	go run ./scripts/criticbench -model google/gemini-3.8-flash -runs 5 -out report.md
 //
-// A model name agentbackend.VendorOf recognises goes to that cloud vendor
-// (and spends money, against that vendor's key); anything else is served by
-// the local ollama daemon. An AGENT seat (-model codex, -model
+// A model named vendor/model (anthropic/, google/, openai/) goes to that
+// cloud vendor (and spends money, against that vendor's key); anything else
+// is served by the local ollama daemon -url names. An AGENT seat (-model codex, -model
 // claude-code:claude-sonnet-5) is resolved through agentbackend.ForSeat and
 // runs that CLI, on the operator's own login.
 package main
@@ -151,7 +151,7 @@ func gradeFull(f fixture, findings []queue.Finding) (flagged []string, right, mi
 }
 
 func main() {
-	model := flag.String("model", "", "the critic model (required): a cloud model name goes to its vendor, anything else to the local ollama daemon")
+	model := flag.String("model", "", "the critic model (required): vendor/model (anthropic/…, google/…, openai/…) goes to that vendor, an agent seat runs its CLI, anything else goes to the local ollama daemon")
 	url := flag.String("url", os.Getenv("OLLAMA_URL"), "ollama base URL (required for a local model; $OLLAMA_URL when unset, no default address)")
 	runs := flag.Int("runs", 5, "runs per fixture per mode")
 	out := flag.String("out", "", "write the markdown report here as well as to stdout")
@@ -196,8 +196,14 @@ func main() {
 		}
 		return
 	}
+	// A hosted model is named in the vendor/model form, an agent seat by its
+	// name; anything else runs on the ollama daemon -url names. The vendor is
+	// never read off a model's spelling: that guess is what routed a local
+	// gpt-oss name to OpenAI (founder ruling 2026-11-12).
 	var backend agentbackend.Backend
-	if agentbackend.VendorOf(*model) != "" {
+	_, _, hosted := agentbackend.SplitVendorModel(*model)
+	_, _, agent := agentbackend.AgentSeat(*model)
+	if hosted || agent {
 		b, err := agentbackend.ForSeat(*model, agentbackend.SeatOptions{})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "criticbench:", err)
@@ -206,7 +212,7 @@ func main() {
 		backend = b
 	} else {
 		if *url == "" {
-			fmt.Fprintf(os.Stderr, "criticbench: %q is not a cloud model, so it runs on a local ollama daemon — pass -url or set OLLAMA_URL (there is no default address)\n", *model)
+			fmt.Fprintf(os.Stderr, "criticbench: %q is neither vendor/model (anthropic/…, google/…, openai/…) nor an agent seat, so it runs on a local ollama daemon — pass -url or set OLLAMA_URL (there is no default address)\n", *model)
 			os.Exit(2)
 		}
 		backend = agentbackend.NewOllamaBackend(*url, *model)

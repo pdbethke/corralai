@@ -82,7 +82,7 @@ func TestResolvePinnedGatewayIsNeverRerouted(t *testing.T) {
 // A VENDOR pin (MODEL_BACKEND=anthropic, claude, gemini, or openai without
 // OPENAI_BASE_URL) is not a gateway: it names one vendor, not an endpoint that
 // fronts many, so a seat for another vendor still goes to ITS vendor by name
-// rather than being forced onto the pinned one. Only a gateway pin is never
+// (its vendor/model form) rather than being forced onto the pinned one. Only a gateway pin is never
 // re-routed. (Ported from the TestBaseVendorMapsBackendLabels table, which
 // pinned this behaviour through baseVendor, a helper that no longer exists.)
 func TestResolveVendorPinIsNotAGateway(t *testing.T) {
@@ -90,15 +90,15 @@ func TestResolveVendorPinIsNotAGateway(t *testing.T) {
 		t.Run(pin, func(t *testing.T) {
 			clearSeatEnv(t)
 			t.Setenv("MODEL_BACKEND", pin)
-			s := &seatPtrs{writer: "claude-sonnet-5", mutant: "gemini-3.6-flash"}
+			s := &seatPtrs{writer: "anthropic/claude-sonnet-5", mutant: "google/gemini-3.6-flash"}
 			set, err := resolveSeats(context.Background(), "test", t.TempDir(), s.flags(), nil)
 			if err != nil {
 				t.Fatalf("resolveSeats: %v", err)
 			}
 			w, _ := set.byRole(advpool.RoleTestWriter)
 			m, _ := set.byRole(advpool.RoleMutantGenerator)
-			if w.Provider != "anthropic" || m.Provider != "google" || w.DeclaredBy != agentbackend.DeclaredName || m.DeclaredBy != agentbackend.DeclaredName {
-				t.Errorf("under MODEL_BACKEND=%s: writer %+v, mutant %+v, want each routed to its own vendor by name", pin, w, m)
+			if w.Provider != "anthropic" || m.Provider != "google" || w.DeclaredBy != agentbackend.DeclaredVendor || m.DeclaredBy != agentbackend.DeclaredVendor {
+				t.Errorf("under MODEL_BACKEND=%s: writer %+v, mutant %+v, want each routed to the vendor its vendor/model form names", pin, w, m)
 			}
 		})
 	}
@@ -135,6 +135,119 @@ func TestResolveBareLocalWithNoSourceRefuses(t *testing.T) {
 	}
 }
 
+// A name carrying an ollama-style tag (gpt-oss:20b) is a local model's name,
+// not an OpenAI API model, even though it starts with gpt-. With no declared
+// source it must be refused naming the fixes, never routed to OpenAI by its
+// prefix — the acceptance run on 2026-11-12 found it asking for OPENAI_API_KEY.
+func TestResolveTaggedGptOssWithNoSourceRefuses(t *testing.T) {
+	clearSeatEnv(t)
+	t.Setenv("OPENAI_API_KEY", "sk-test")
+	s := &seatPtrs{writer: "gpt-oss:20b"}
+	set, err := resolveSeats(context.Background(), "test", t.TempDir(), s.flags(), nil)
+	if err == nil {
+		t.Fatalf("resolved %+v; a tagged gpt-oss name with no declared source must refuse", set)
+	}
+	for _, w := range []string{".corral/models.json", "vendor/model", "OLLAMA_URL", "MODEL_BACKEND"} {
+		if !strings.Contains(err.Error(), w) {
+			t.Errorf("error %q does not name %q", err, w)
+		}
+	}
+}
+
+// No vendor is guessed from a model's name (founder ruling 2026-11-12). A bare
+// claude-sonnet-5 with the Anthropic key exported is still refused: the guess
+// would decide where the audited source and a credential go.
+func TestResolveBareCloudNameRefuses(t *testing.T) {
+	clearSeatEnv(t)
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+	s := &seatPtrs{writer: "claude-sonnet-5"}
+	set, err := resolveSeats(context.Background(), "test", t.TempDir(), s.flags(), nil)
+	if err == nil {
+		t.Fatalf("resolved %+v; a bare cloud name must refuse, never be routed by its prefix", set)
+	}
+	for _, w := range []string{".corral/models.json", "vendor/model", "OLLAMA_URL", "MODEL_BACKEND"} {
+		if !strings.Contains(err.Error(), w) {
+			t.Errorf("error %q does not name %q", err, w)
+		}
+	}
+}
+
+// The explicit vendor/model form names the vendor, and the seat value is
+// rewritten to the bare model (as an alias is) so cache keys, --prior matching
+// and the ledger's model fields keep today's spelling.
+func TestResolveExplicitVendorIsHosted(t *testing.T) {
+	clearSeatEnv(t)
+	s := &seatPtrs{writer: "anthropic/claude-sonnet-5", critic: "google/gemini-3.8-flash", mutant: "openai/gpt-6"}
+	set, err := resolveSeats(context.Background(), "test", t.TempDir(), s.flags(), nil)
+	if err != nil {
+		t.Fatalf("resolveSeats: %v", err)
+	}
+	for _, c := range []struct{ role, provider, model, val string }{
+		{advpool.RoleTestWriter, "anthropic", "claude-sonnet-5", s.writer},
+		{advpool.RoleTestCritic, "google", "gemini-3.8-flash", s.critic},
+		{advpool.RoleMutantGenerator, "openai", "gpt-6", s.mutant},
+	} {
+		rs, _ := set.byRole(c.role)
+		if rs.Provider != c.provider || rs.Spec != c.model || rs.Wire != models.WireHosted || rs.Endpoint != "" || rs.DeclaredBy != agentbackend.DeclaredVendor {
+			t.Errorf("%s resolved = %+v, want %s hosted, spec %s, declared by vendor/model", c.role, rs, c.provider, c.model)
+		}
+		if c.val != c.model {
+			t.Errorf("%s seat value = %q, want it rewritten to %q", c.role, c.val, c.model)
+		}
+	}
+}
+
+// The vendor set is closed: a slash in an ollama name (hf.co/…, library/…) is
+// not a vendor, so such a name is served by the daemon that lists it.
+func TestResolveSlashedLocalNameIsDiscovered(t *testing.T) {
+	clearSeatEnv(t)
+	t.Setenv("OLLAMA_URL", "http://daemon:11434")
+	fakeOllama(t, "hf.co/x/y:q4")
+	s := &seatPtrs{writer: "hf.co/x/y:q4"}
+	set, err := resolveSeats(context.Background(), "test", t.TempDir(), s.flags(), nil)
+	if err != nil {
+		t.Fatalf("resolveSeats: %v", err)
+	}
+	if rs, _ := set.byRole(advpool.RoleTestWriter); rs.Provider != "ollama" || rs.DeclaredBy != agentbackend.DeclaredDiscovered || rs.Spec != "hf.co/x/y:q4" {
+		t.Errorf("resolved = %+v, want ollama, discovered, spec unchanged", rs)
+	}
+}
+
+// A pinned gateway receives the seat verbatim, vendor prefix included: the
+// gateway, not corral, decides what anthropic/claude-sonnet-5 means.
+func TestResolvePinnedGatewayTakesTheVendorFormVerbatim(t *testing.T) {
+	clearSeatEnv(t)
+	t.Setenv("MODEL_BACKEND", "openrouter")
+	s := &seatPtrs{writer: "anthropic/claude-sonnet-5"}
+	set, err := resolveSeats(context.Background(), "test", t.TempDir(), s.flags(), nil)
+	if err != nil {
+		t.Fatalf("resolveSeats: %v", err)
+	}
+	rs, _ := set.byRole(advpool.RoleTestWriter)
+	if rs.Provider != "openrouter" || rs.DeclaredBy != agentbackend.DeclaredPinned || rs.Spec != "anthropic/claude-sonnet-5" {
+		t.Errorf("resolved = %+v, want openrouter, pinned, spec verbatim", rs)
+	}
+	if s.writer != "anthropic/claude-sonnet-5" {
+		t.Errorf("seat value = %q, want it unchanged under a gateway", s.writer)
+	}
+}
+
+// --local-endpoint places any name that is not the explicit vendor form. An
+// explicit vendor seat stays hosted, so a placement on it is refused as a
+// placement on a cloud seat rather than quietly sending it to the daemon.
+func TestResolvePlacementDoesNotTakeAnExplicitVendor(t *testing.T) {
+	clearSeatEnv(t)
+	s := &seatPtrs{writer: "openai/gpt-6"}
+	set, err := resolveSeatsPlaced(context.Background(), "test", t.TempDir(), s.flags(),
+		map[string]string{advpool.RoleTestWriter: "http://localhost:11436"}, nil)
+	if err == nil {
+		t.Fatalf("resolved %+v; an explicit vendor seat must not be placed on a local daemon", set)
+	}
+	if !strings.Contains(err.Error(), "CLOUD model") || !strings.Contains(err.Error(), "openai") {
+		t.Errorf("err = %v, want the cloud-seat placement refusal naming openai", err)
+	}
+}
+
 func TestResolveRegistryVllmIsOpenAIChat(t *testing.T) {
 	clearSeatEnv(t)
 	t.Setenv(models.EnvInline, `{"v":{"provider":"vllm","model":"m","endpoint":"http://h:8000/v1"}}`)
@@ -149,15 +262,15 @@ func TestResolveRegistryVllmIsOpenAIChat(t *testing.T) {
 	}
 }
 
-func TestResolveCloudNameWithoutListingIsByName(t *testing.T) {
+func TestResolveVendorFormNeedsNoListing(t *testing.T) {
 	clearSeatEnv(t)
-	s := &seatPtrs{writer: "gemini-3.8-flash"}
+	s := &seatPtrs{writer: "google/gemini-3.8-flash"}
 	set, err := resolveSeats(context.Background(), "test", t.TempDir(), s.flags(), nil)
 	if err != nil {
 		t.Fatalf("resolveSeats: %v", err)
 	}
 	rs, _ := set.byRole(advpool.RoleTestWriter)
-	if rs.Provider != "google" || rs.DeclaredBy != agentbackend.DeclaredName || rs.Wire != models.WireHosted {
+	if rs.Provider != "google" || rs.DeclaredBy != agentbackend.DeclaredVendor || rs.Wire != models.WireHosted {
 		t.Errorf("resolved = %+v", rs)
 	}
 }
@@ -244,17 +357,17 @@ func TestResolvePinnedOllamaWithoutURLRefuses(t *testing.T) {
 }
 
 // openai is a gateway only with OPENAI_BASE_URL; without it a seat is routed
-// as today (discovery/name), per the T4 ruling.
+// by the later steps (its vendor/model form here), per the T4 ruling.
 func TestResolvePinnedOpenAIIsGatewayOnlyWithBaseURL(t *testing.T) {
 	clearSeatEnv(t)
 	t.Setenv("MODEL_BACKEND", "openai")
-	s := &seatPtrs{writer: "gemini-3.8-flash"}
+	s := &seatPtrs{writer: "google/gemini-3.8-flash"}
 	set, err := resolveSeats(context.Background(), "test", t.TempDir(), s.flags(), nil)
 	if err != nil {
 		t.Fatalf("resolveSeats: %v", err)
 	}
-	if rs, _ := set.byRole(advpool.RoleTestWriter); rs.Provider != "google" || rs.DeclaredBy != agentbackend.DeclaredName {
-		t.Errorf("without OPENAI_BASE_URL: %+v, want google by name", rs)
+	if rs, _ := set.byRole(advpool.RoleTestWriter); rs.Provider != "google" || rs.DeclaredBy != agentbackend.DeclaredVendor {
+		t.Errorf("without OPENAI_BASE_URL: %+v, want google from its vendor/model form", rs)
 	}
 
 	t.Setenv("OPENAI_BASE_URL", "http://proxy:8080/v1")

@@ -574,17 +574,18 @@ type SeatOptions struct {
 }
 
 // ForSeat builds a seat from a spec that is either an agent seat (`codex`,
-// `claude-code:claude-sonnet-5`, any CORRALAI_AGENT_<NAME>) or a HOSTED model
-// name. An agent seat is driven as a CLI; anything else defers to ForModel, so
-// a claude-/gemini-/gpt- model whose key is missing returns the actionable
-// credential error and is never quietly re-served by something else (certify's
-// up-front credential check relies on that).
+// `claude-code:claude-sonnet-5`, any CORRALAI_AGENT_<NAME>) or a hosted model
+// in the explicit vendor/model form (`anthropic/claude-sonnet-5`). An agent
+// seat is driven as a CLI; a vendor/model spec goes to ForVendor, so a model
+// whose key is missing returns the actionable credential error and is never
+// quietly re-served by something else (certify's up-front credential check
+// relies on that).
 //
-// A bare local model name is REFUSED here, on purpose. It used to fall back to
-// the local daemon at a default address; whether a name is local, and where, is
-// a routing decision that belongs to the seat resolver (a registry entry, an
-// OLLAMA_URL that lists it, or a pinned gateway), not to a guess from the
-// spelling. An empty spec returns the same error ForModel("") does.
+// Anything else is REFUSED, a bare cloud name included. ForSeat used to route
+// claude-/gemini-/gpt- names by their prefix, which is how a local gpt-oss:20b
+// came to be sent toward OpenAI; whether a name is hosted, local, or behind a
+// gateway is a declaration the seat resolver reads, never a guess from the
+// spelling.
 //
 // An agent seat does not implement ModelSwitcher: it is one tool and one
 // model, and WithModel would silently change what sat in the seat.
@@ -595,7 +596,20 @@ func ForSeat(spec string, opt SeatOptions) (Backend, error) {
 		}
 		return b, nil
 	}
-	return ForModel(spec)
+	if vendor, model, ok := SplitVendorModel(spec); ok {
+		return ForVendor(vendor, model)
+	}
+	return nil, fmt.Errorf("agentbackend: %q is neither an agent seat nor a hosted model in vendor/model form (%s) — corral does not infer a vendor from a model's name", spec, vendorForms())
+}
+
+// vendorForms is "anthropic/<model>, google/<model>, openai/<model>", for
+// refusals that teach the form.
+func vendorForms() string {
+	forms := make([]string, len(HostedVendors))
+	for i, v := range HostedVendors {
+		forms[i] = v + "/<model>"
+	}
+	return strings.Join(forms, ", ")
 }
 
 // DefinedAgents lists the seat names an operator can use right now — the

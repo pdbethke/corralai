@@ -27,7 +27,7 @@ func TestDoctorReportsMissingCredentialsPerModel(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("MODEL_BACKEND", "")
 
-	got := checkHerdFor(t, "gemini-3.6-flash", "gemini-3.6-flash", "claude-haiku-4-5", "", "")
+	got := checkHerdFor(t, "google/gemini-3.6-flash", "google/gemini-3.6-flash", "anthropic/claude-haiku-4-5", "", "")
 	var joined string
 	ok := 0
 	for _, r := range got {
@@ -54,7 +54,7 @@ func TestDoctorSkipsAnOffRole(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "")
 	t.Setenv("GEMINI_API_KEY", "gm")
 	t.Setenv("MODEL_BACKEND", "")
-	got := checkHerdFor(t, "gemini-3.6-flash", "gemini-3.6-flash", "off", "", "")
+	got := checkHerdFor(t, "google/gemini-3.6-flash", "google/gemini-3.6-flash", "off", "", "")
 	for _, r := range got {
 		if !r.ok {
 			t.Fatalf("an all-Gemini herd with a Gemini key and the critic off must pass: %+v", r)
@@ -91,14 +91,14 @@ func TestDoctorAgreesWithCertifyAboutTheHerd(t *testing.T) {
 	// a claude-* seat behind MODEL_BACKEND=openrouter; doctor demanded one.
 	t.Setenv("MODEL_BACKEND", "openrouter")
 	t.Setenv("OPENROUTER_API_KEY", "test-placeholder-not-a-real-key")
-	if f := fails(checkHerdFor(t, "claude-sonnet-5", "claude-sonnet-5", "gemini-3.6-flash", "", "")); len(f) != 0 {
+	if f := fails(checkHerdFor(t, "anthropic/claude-sonnet-5", "anthropic/claude-sonnet-5", "google/gemini-3.6-flash", "", "")); len(f) != 0 {
 		t.Errorf("pinned-gateway herd refused by doctor, accepted by certify: %v", f)
 	}
 	// 3. writer == critic: certify refuses (decorrelation); doctor passed it,
 	// having de-duplicated the models first.
 	t.Setenv("MODEL_BACKEND", "")
 	t.Setenv("GEMINI_API_KEY", "gm")
-	f := fails(checkHerdFor(t, "gemini-3.6-flash", "gemini-3.6-flash", "gemini-3.6-flash", "", ""))
+	f := fails(checkHerdFor(t, "google/gemini-3.6-flash", "google/gemini-3.6-flash", "google/gemini-3.6-flash", "", ""))
 	if len(f) == 0 {
 		t.Error("writer == critic passed doctor; certify refuses it")
 	} else if !strings.Contains(strings.Join(f, "\n"), "critic") {
@@ -106,7 +106,7 @@ func TestDoctorAgreesWithCertifyAboutTheHerd(t *testing.T) {
 	}
 	// 4. The challenger seat is checked too: a Claude challenger on an
 	// all-Gemini herd with no Anthropic key is a refusal certify makes.
-	if f := fails(checkHerdFor(t, "gemini-3.6-flash", "gemini-3.6-flash", "off", "claude-sonnet-5", "")); len(f) == 0 {
+	if f := fails(checkHerdFor(t, "google/gemini-3.6-flash", "google/gemini-3.6-flash", "off", "anthropic/claude-sonnet-5", "")); len(f) == 0 {
 		t.Error("a challenger seat with no credential passed doctor; certify refuses it")
 	}
 }
@@ -289,7 +289,7 @@ func TestDoctorRehearsesTheDeriveSeatAndReadsTheRepoRegistry(t *testing.T) {
 	// --shadow-model, below its fatal sandbox check.
 	//surface: --derive-model
 	//surface: --shadow-model
-	mutant, writer, critic, shadow, derive := "fast", "gpu", "off", "", "claude-sonnet-5"
+	mutant, writer, critic, shadow, derive := "fast", "gpu", "off", "", "anthropic/claude-sonnet-5"
 	var errOut bytes.Buffer
 	reg, err := resolveSeats(context.Background(), "corral doctor", repo, certifySeats(&derive, &mutant, &writer, &critic, &shadow, nil), &errOut)
 	if err != nil {
@@ -329,7 +329,7 @@ func TestDoctorChecksTheChallengerWriterSeat(t *testing.T) {
 	t.Setenv("MODEL_BACKEND", "")
 	t.Setenv("GEMINI_API_KEY", "gm")
 	t.Setenv("ANTHROPIC_API_KEY", "")
-	res := checkHerdFor(t, "gemini-3.6-flash", "gemini-3.6-flash", "off", "", "claude-sonnet-5")
+	res := checkHerdFor(t, "google/gemini-3.6-flash", "google/gemini-3.6-flash", "off", "", "anthropic/claude-sonnet-5")
 	failed := false
 	for _, r := range res {
 		if !r.ok {
@@ -479,7 +479,7 @@ func TestDoctorAgentsNeverChangeExitCode(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	args := []string{"--repo", t.TempDir(), "--mutant-model", "gemini-3.6-pro", "--writer-model", "gemini-3.6-pro", "--critic-model", "off"}
+	args := []string{"--repo", t.TempDir(), "--mutant-model", "google/gemini-3.6-pro", "--writer-model", "google/gemini-3.6-pro", "--critic-model", "off"}
 	var base, withAgents bytes.Buffer
 	rcBase := runDoctor(args, &base, &bytes.Buffer{})
 

@@ -138,7 +138,7 @@ func TestLocalEndpointRoutesSeatToItsDaemon(t *testing.T) {
 func TestLocalEndpointRefusedForCloudSeat(t *testing.T) {
 	t.Setenv("MODEL_BACKEND", "")
 	t.Setenv("GEMINI_API_KEY", "k")
-	_, err := resolveSeatsOf(t, localAuditInput{writerModel: "gemini-3.7-flash"},
+	_, err := resolveSeatsOf(t, localAuditInput{writerModel: "google/gemini-3.7-flash"},
 		map[string]string{advpool.RoleTestWriter: "http://localhost:11436"})
 	if err == nil {
 		t.Fatal("endpoint on a cloud seat = nil error, want a refusal")

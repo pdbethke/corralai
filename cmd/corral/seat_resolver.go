@@ -51,21 +51,26 @@ func (s seatSet) providers() map[string]string {
 // listOllama is a var so tests substitute a fake daemon.
 var listOllama = modelcatalog.ListOllama
 
-// errNoSource is the refusal for a bare model name that no declared source
-// serves. A distinct type so resolveSeatsPlaced can tell it from a real
-// configuration error and offer --local-endpoint where the command takes it.
-// placeable is set where the command takes --local-endpoint, the fourth way to
-// declare a source; elsewhere the refusal must not offer a flag that is absent.
+// errNoSource is the refusal for a model name that no declaration serves. A
+// distinct type so resolveSeatsPlaced can tell it from a real configuration
+// error and offer --local-endpoint where the command takes it. placeable is
+// set where the command takes --local-endpoint, the fifth way to declare a
+// source; elsewhere the refusal must not offer a flag that is absent.
+//
+// It names every declaration, the vendor/model form among them, because a
+// bare cloud name (claude-sonnet-5) lands here too: corral does not infer a
+// vendor from a model's name (founder ruling 2026-11-12).
 type errNoSource struct {
 	flag, value string
 	placeable   bool
 }
 
 func (e errNoSource) Error() string {
+	const head = "--%s %q: no declared source serves this model, and corral does not infer a vendor from a model's name — declare it in .corral/models.json, name a hosted model as vendor/model (anthropic/…, google/…, openai/…), set OLLAMA_URL to the daemon that serves it, "
 	if e.placeable {
-		return fmt.Sprintf("--%s %q: no declared source serves this model — declare it in .corral/models.json, set OLLAMA_URL to the daemon that serves it, pin MODEL_BACKEND, or place the seat with --local-endpoint", e.flag, e.value)
+		return fmt.Sprintf(head+"pin MODEL_BACKEND, or place the seat with --local-endpoint", e.flag, e.value)
 	}
-	return fmt.Sprintf("--%s %q: no declared source serves this model — declare it in .corral/models.json, set OLLAMA_URL to the daemon that serves it, or pin MODEL_BACKEND", e.flag, e.value)
+	return fmt.Sprintf(head+"or pin MODEL_BACKEND", e.flag, e.value)
 }
 
 // resolveSeats resolves every seat flag ONCE, in one stated order, and
@@ -74,18 +79,28 @@ func (e errNoSource) Error() string {
 //
 //  1. a registry alias (strict mode refuses a miss);
 //  2. a coding-agent seat;
-//  3. a seat the operator placed on a daemon with --local-endpoint, when its
-//     name is no vendor's (a vendor-looking name needs a source that proves it
-//     is local, step 4 or 5, and a placement on a cloud seat is refused);
+//  3. a seat the operator placed on a daemon with --local-endpoint, unless it
+//     is written in the explicit vendor/model form (that seat is hosted, and
+//     the placement on it is refused as a placement on a cloud seat);
 //  4. a pinned MODEL_BACKEND gateway (ollama, openrouter, openai with
-//     OPENAI_BASE_URL) — never re-routed by the model's name;
-//  5. a model OLLAMA_URL's daemon lists (a set OLLAMA_URL that cannot be
+//     OPENAI_BASE_URL), which receives the seat VERBATIM, a vendor/ prefix
+//     included — the gateway decides what the name means, never corral;
+//  5. the explicit vendor/model form, vendor exactly one of anthropic,
+//     google, openai (a closed set: hf.co/… and library/… are not vendors).
+//     The seat value is rewritten to the bare model, as an alias is, so a
+//     cache key, --prior matching and the ledger's model fields keep their
+//     spelling; the vendor lives on ResolvedSeat.Provider;
+//  6. a model OLLAMA_URL's daemon lists (a set OLLAMA_URL that cannot be
 //     listed refuses the seat, naming the URL and the cause);
-//  6. a cloud vendor named by the model's prefix;
-//  7. otherwise refuse, naming the three ways to declare a source.
+//  7. otherwise refuse, naming every declaration.
 //
-// A declared provider therefore always outranks what a name looks like. An
-// unnamed seat and "off" are skipped: corral has no default models.
+// Nothing is inferred from a model's spelling. Step 6 of the earlier order
+// routed claude-/gemini-/gpt- names to a vendor by prefix, and so routed a
+// local gpt-oss:20b with no declared source to OpenAI — with OPENAI_API_KEY
+// exported, the audited source would have gone to api.openai.com before
+// anything failed. The guess decided where code and a credential went, so it
+// is gone (founder ruling 2026-11-12, reversing D-20). An unnamed seat and
+// "off" are skipped: corral has no default models.
 func resolveSeats(ctx context.Context, cmdName, repoRoot string, seats []seatFlag, stderr io.Writer) (seatSet, error) {
 	return resolveSeatsOpt(ctx, cmdName, repoRoot, seats, nil, stderr)
 }
@@ -171,20 +186,21 @@ func resolveSeatsListed(ctx context.Context, cmdName, repoRoot string, seats []s
 		} else if isAgentSeat(v) { // (2)
 			rs.Kind, rs.DeclaredBy = "agent", agentbackend.DeclaredAgent
 			rs.Provider = agentbackend.VendorOf(v)
-		} else if u := placed[s.role]; u != "" && agentbackend.VendorOf(v) == "" { // (3)
-			rs.Provider, rs.Wire, rs.Endpoint = "ollama", models.WireOllama, u
+		} else if _, _, explicit := agentbackend.SplitVendorModel(v); placed[s.role] != "" && !explicit { // (3)
+			rs.Provider, rs.Wire, rs.Endpoint = "ollama", models.WireOllama, placed[s.role]
 			rs.DeclaredBy = agentbackend.DeclaredFlag
 		} else if pinned, ok, err := pinnedGateway(rs); err != nil { // (4)
 			return nil, err
 		} else if ok {
 			rs = pinned
-		} else if served, u, err := servedBy(listing, v); err != nil { // (5)
+		} else if vendor, model, ok := agentbackend.SplitVendorModel(v); ok { // (5)
+			*s.val = model
+			rs.Spec, rs.Provider, rs.Wire, rs.DeclaredBy = model, vendor, models.WireHosted, agentbackend.DeclaredVendor
+		} else if served, u, err := servedBy(listing, v); err != nil { // (6)
 			return nil, fmt.Errorf("--%s %q: OLLAMA_URL is set, but corral could not list models at %s: %w — start that daemon, or unset OLLAMA_URL if no seat runs there", s.flag, v, u, err)
 		} else if served {
 			rs.Provider, rs.Wire, rs.Endpoint = "ollama", models.WireOllama, u
 			rs.DeclaredBy = agentbackend.DeclaredDiscovered
-		} else if vendor := agentbackend.VendorOf(v); vendor != "" { // (6)
-			rs.Provider, rs.Wire, rs.DeclaredBy = vendor, models.WireHosted, agentbackend.DeclaredName
 		} else { // (7)
 			return nil, errNoSource{flag: s.flag, value: v}
 		}
@@ -239,8 +255,7 @@ func applyLocalEndpoints(set seatSet, placed map[string]string) error {
 // servedBy reports whether OLLAMA_URL's daemon lists the model, and the URL
 // it asked. An unset OLLAMA_URL declares no daemon: (false, "", nil). A set
 // one that cannot be listed is an error, never "not served": falling through
-// would route a bare local name like gpt-oss:120b by what its name resembles,
-// to a vendor and its spend, and tell the operator to set the OLLAMA_URL they
+// to the no-source refusal would tell the operator to set the OLLAMA_URL they
 // already set.
 func servedBy(listing func() ([]string, error), model string) (bool, string, error) {
 	u := strings.TrimSpace(os.Getenv("OLLAMA_URL"))
@@ -274,8 +289,8 @@ func resolutionSource(reg *models.Registry) string {
 // pinnedGateway resolves a seat against an explicitly pinned MODEL_BACKEND
 // that is a GATEWAY: one endpoint fronting many models, so the model's name
 // says nothing about where it goes. A vendor pin (anthropic, gemini, openai
-// without OPENAI_BASE_URL) is not a gateway; its seats fall through to the
-// later steps, exactly as baseVendor treats it.
+// without OPENAI_BASE_URL) is not a gateway and routes nothing here; its seats
+// fall through to the later steps and need a declaration of their own.
 func pinnedGateway(rs agentbackend.ResolvedSeat) (agentbackend.ResolvedSeat, bool, error) {
 	rs.DeclaredBy = agentbackend.DeclaredPinned
 	switch strings.TrimSpace(os.Getenv("MODEL_BACKEND")) {

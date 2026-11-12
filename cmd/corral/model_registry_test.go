@@ -85,7 +85,7 @@ func TestConcreteModelNameUnchangedByRegistry(t *testing.T) {
 // With no registry the resolver declares no placement, but it still DISCLOSES
 // how each seat resolved (the plan prints whenever a seat resolved): the
 // vendor-named seats say "name", and nothing is placed on a local daemon.
-func TestNoRegistryEmitsNothing(t *testing.T) {
+func TestNoRegistryStillDisclosesResolution(t *testing.T) {
 	t.Setenv(models.EnvInline, "")
 	t.Setenv(models.EnvFile, "")
 	s := &seatPtrs{mutant: "gemini-3.6-flash", writer: "claude-sonnet-5"}

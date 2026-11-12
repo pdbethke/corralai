@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -171,4 +172,62 @@ func stripModelsDisclosure(s string) string {
 		}
 	}
 	return strings.TrimSpace(strings.Join(out, "\n"))
+}
+
+// A declared daemon that cannot be listed refuses the seat loudly. Falling
+// through would let a bare local name like gpt-oss:120b be routed by what its
+// name resembles (OpenAI, and spend), and the refusal would wrongly tell the
+// operator to set the OLLAMA_URL they already set.
+func TestResolveUnlistableOllamaRefusesLoudly(t *testing.T) {
+	clearSeatEnv(t)
+	t.Setenv("OLLAMA_URL", "http://down:11434")
+	prev := listOllama
+	listOllama = func(context.Context, *http.Client, string) ([]string, error) {
+		return nil, errors.New("connection refused")
+	}
+	t.Cleanup(func() { listOllama = prev })
+	s := &seatPtrs{writer: "gpt-oss:120b"}
+	set, err := resolveSeats(context.Background(), "test", t.TempDir(), s.flags(), nil)
+	if err == nil {
+		t.Fatalf("resolved %+v; want a refusal naming the unlistable daemon", set)
+	}
+	for _, want := range []string{"--writer-model", "could not list models at http://down:11434", "connection refused"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not contain %q", err, want)
+		}
+	}
+}
+
+// The pinned ollama gateway needs its daemon named: no default endpoint.
+func TestResolvePinnedOllamaWithoutURLRefuses(t *testing.T) {
+	clearSeatEnv(t)
+	t.Setenv("MODEL_BACKEND", "ollama")
+	s := &seatPtrs{writer: "qwen3.6:35b-a3b"}
+	if _, err := resolveSeats(context.Background(), "test", t.TempDir(), s.flags(), nil); err == nil || !strings.Contains(err.Error(), "OLLAMA_URL is not set") {
+		t.Errorf("err = %v; want a refusal saying OLLAMA_URL is not set", err)
+	}
+}
+
+// openai is a gateway only with OPENAI_BASE_URL; without it a seat is routed
+// as today (discovery/name), per the T4 ruling.
+func TestResolvePinnedOpenAIIsGatewayOnlyWithBaseURL(t *testing.T) {
+	clearSeatEnv(t)
+	t.Setenv("MODEL_BACKEND", "openai")
+	s := &seatPtrs{writer: "gemini-3.8-flash"}
+	set, err := resolveSeats(context.Background(), "test", t.TempDir(), s.flags(), nil)
+	if err != nil {
+		t.Fatalf("resolveSeats: %v", err)
+	}
+	if rs, _ := set.byRole(advpool.RoleTestWriter); rs.Provider != "google" || rs.DeclaredBy != agentbackend.DeclaredName {
+		t.Errorf("without OPENAI_BASE_URL: %+v, want google by name", rs)
+	}
+
+	t.Setenv("OPENAI_BASE_URL", "http://proxy:8080/v1")
+	set, err = resolveSeats(context.Background(), "test", t.TempDir(), s.flags(), nil)
+	if err != nil {
+		t.Fatalf("resolveSeats: %v", err)
+	}
+	if rs, _ := set.byRole(advpool.RoleTestWriter); rs.Provider != "openai" || rs.Endpoint != "http://proxy:8080/v1" || rs.KeyEnv != "OPENAI_API_KEY" {
+		t.Errorf("with OPENAI_BASE_URL: %+v, want the openai gateway at the proxy", rs)
+	}
 }

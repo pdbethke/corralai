@@ -66,7 +66,8 @@ func (e errNoSource) Error() string {
 //  2. a coding-agent seat;
 //  3. a pinned MODEL_BACKEND gateway (ollama, openrouter, openai with
 //     OPENAI_BASE_URL) — never re-routed by the model's name;
-//  4. a model OLLAMA_URL's daemon lists;
+//  4. a model OLLAMA_URL's daemon lists (a set OLLAMA_URL that cannot be
+//     listed refuses the seat, naming the URL and the cause);
 //  5. a cloud vendor named by the model's prefix;
 //  6. otherwise refuse, naming the three ways to declare a source.
 //
@@ -131,7 +132,9 @@ func resolveSeatsOpt(ctx context.Context, cmdName, repoRoot string, seats []seat
 			return nil, err
 		} else if ok {
 			rs = pinned
-		} else if u := strings.TrimSpace(os.Getenv("OLLAMA_URL")); u != "" && servedBy(listing, v) { // (4)
+		} else if served, u, err := servedBy(listing, v); err != nil { // (4)
+			return nil, fmt.Errorf("--%s %q: OLLAMA_URL is set, but corral could not list models at %s: %w — start that daemon, or unset OLLAMA_URL if no seat runs there", s.flag, v, u, err)
+		} else if served {
 			rs.Provider, rs.Wire, rs.Endpoint = "ollama", models.WireOllama, u
 			rs.DeclaredBy = agentbackend.DeclaredDiscovered
 		} else if vendor := agentbackend.VendorOf(v); vendor != "" { // (5)
@@ -153,20 +156,27 @@ func resolveSeatsOpt(ctx context.Context, cmdName, repoRoot string, seats []seat
 	return set, nil
 }
 
-// servedBy reports whether OLLAMA_URL's daemon lists the model. A daemon that
-// cannot be listed serves nothing as far as resolution knows; the seat then
-// falls through to the vendor-name and refusal steps.
-func servedBy(listing func() ([]string, error), model string) bool {
+// servedBy reports whether OLLAMA_URL's daemon lists the model, and the URL
+// it asked. An unset OLLAMA_URL declares no daemon: (false, "", nil). A set
+// one that cannot be listed is an error, never "not served": falling through
+// would route a bare local name like gpt-oss:120b by what its name resembles,
+// to a vendor and its spend, and tell the operator to set the OLLAMA_URL they
+// already set.
+func servedBy(listing func() ([]string, error), model string) (bool, string, error) {
+	u := strings.TrimSpace(os.Getenv("OLLAMA_URL"))
+	if u == "" {
+		return false, "", nil
+	}
 	names, err := listing()
 	if err != nil {
-		return false
+		return false, u, err
 	}
 	for _, n := range names {
 		if n == model {
-			return true
+			return true, u, nil
 		}
 	}
-	return false
+	return false, u, nil
 }
 
 // resolutionSource heads the disclosure: where declarations came from.

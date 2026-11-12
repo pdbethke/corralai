@@ -267,3 +267,29 @@ func TestNoSourceRefusalNamesLocalEndpointWhereItExists(t *testing.T) {
 		t.Errorf("refusal for a command without --local-endpoint = %v, must not offer it", err)
 	}
 }
+
+// OPENAI_BASE_URL names an OpenAI-compatible endpoint (often a company proxy);
+// it is never the OpenRouter gateway's URL. Reading it there would send the
+// OpenRouter key to that proxy.
+func TestPinnedOpenRouterIgnoresOpenAIBaseURL(t *testing.T) {
+	clearSeatEnv(t)
+	t.Setenv("MODEL_BACKEND", "openrouter")
+	t.Setenv("OPENAI_BASE_URL", "http://company-proxy:8080/v1")
+	s := &seatPtrs{writer: "claude-sonnet-5"}
+	set, err := resolveSeats(context.Background(), "test", t.TempDir(), s.flags(), nil)
+	if err != nil {
+		t.Fatalf("resolveSeats: %v", err)
+	}
+	if rs, _ := set.byRole(advpool.RoleTestWriter); rs.Endpoint != "https://openrouter.ai/api/v1" {
+		t.Errorf("Endpoint = %q, want OpenRouter's own URL, never OPENAI_BASE_URL", rs.Endpoint)
+	}
+
+	t.Setenv("OPENROUTER_BASE_URL", "http://or-mirror:9000/api/v1")
+	set, err = resolveSeats(context.Background(), "test", t.TempDir(), s.flags(), nil)
+	if err != nil {
+		t.Fatalf("resolveSeats: %v", err)
+	}
+	if rs, _ := set.byRole(advpool.RoleTestWriter); rs.Endpoint != "http://or-mirror:9000/api/v1" {
+		t.Errorf("Endpoint = %q, want OPENROUTER_BASE_URL", rs.Endpoint)
+	}
+}

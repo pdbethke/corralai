@@ -280,7 +280,10 @@ func pinnedGateway(rs agentbackend.ResolvedSeat) (agentbackend.ResolvedSeat, boo
 		// fell back to OPENAI_API_KEY, which with only an OpenAI key set sent
 		// that OpenAI secret to openrouter.ai. Unset, Build refuses naming it.
 		rs.Provider, rs.Wire, rs.KeyEnv = "openrouter", models.WireHosted, "OPENROUTER_API_KEY"
-		rs.Endpoint = firstSet(os.Getenv("OPENROUTER_BASE_URL"), os.Getenv("OPENAI_BASE_URL"), "https://openrouter.ai/api/v1")
+		// The URL likewise: OPENROUTER_BASE_URL or OpenRouter's own. Never
+		// OPENAI_BASE_URL, which names an OpenAI-compatible endpoint (often a
+		// company proxy) that must not receive the OpenRouter key.
+		rs.Endpoint = firstSet(os.Getenv("OPENROUTER_BASE_URL"), "https://openrouter.ai/api/v1")
 		return rs, true, nil
 	case "openai":
 		if u := strings.TrimSpace(os.Getenv("OPENAI_BASE_URL")); u != "" {

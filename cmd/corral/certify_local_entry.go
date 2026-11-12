@@ -207,6 +207,9 @@ func localEntryBundle(in localAuditInput, v advpool.Verdict, t advpool.RunTeleme
 			TreeDirty: run.treeDirty, RepoIdentity: run.repoIdentity,
 			Sandbox: run.sandbox, SeedSkipped: run.seedSkipped,
 			ToolMutants: run.toolMutants,
+			// The verdict's own providers, as its roster is: the seats this
+			// run signed, never re-read from the invocation's flags.
+			SeatProviders: seatProvidersJSON(v.SeatProviders),
 		})
 	if run.recorder != nil {
 		run.recorder.stampHunks(b.Mutants)

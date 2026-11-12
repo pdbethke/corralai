@@ -25,6 +25,7 @@ import (
 	"github.com/pdbethke/corralai/internal/certify"
 	"github.com/pdbethke/corralai/internal/clip"
 	"github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/modelrank"
 	"github.com/pdbethke/corralai/internal/review"
 	"github.com/pdbethke/corralai/internal/sandbox"
 )
@@ -305,6 +306,7 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 		ReviewerModelResolved: agentbackend.SeatNamesAModel(*model),
 		Substrate:             substrateOf(rep), StartedAt: time.Now().UTC(),
 		FilesShown: sc.Files, BytesShown: sc.Bytes, Truncated: sc.Truncated}
+	recordSeatProvider(&r, modelrank.SeatReviewer, seats["reviewer-model"])
 	userTurn := review.Brief(repoName, commit, *scope, sc)
 	if reviewerIsAgent {
 		userTurn = review.AgentBrief(repoName, commit, *scope, allFiles)
@@ -373,6 +375,7 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 			}
 			r.VerifierTool = verifierTool
 			r.VerifierModelResolved = agentbackend.SeatNamesAModel(*verifier)
+			recordSeatProvider(&r, modelrank.SeatVerifier, seats["verifier-model"])
 			review.Verify(ctx, rep, &r, *verifier, vopinion, refs)
 		}
 	}
@@ -488,6 +491,21 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 
 // newReviewerBackend is the seat's constructor; a test substitutes a fake.
 var newReviewerBackend = agentbackend.Build
+
+// recordSeatProvider records the provider the resolver decided for one of
+// the review's seats under that seat's name. A seat with no resolved
+// provider (an operator-defined agent declares no maker) records nothing:
+// absent, never a guess.
+func recordSeatProvider(r *review.Review, seat string, rs agentbackend.ResolvedSeat) {
+	p := strings.TrimSpace(rs.Provider)
+	if p == "" {
+		return
+	}
+	if r.SeatProviders == nil {
+		r.SeatProviders = map[string]string{}
+	}
+	r.SeatProviders[seat] = p
+}
 
 // reviewSeatTools are the tools an agent seat in review is granted: it reads
 // the tree, so it may read, search and list it — and nothing else. A

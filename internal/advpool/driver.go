@@ -975,6 +975,17 @@ type Verdict struct {
 	// both construction paths carry it, and JSON-tagged, so the --local
 	// signed digest covers it.
 	SeatTools map[string]string `json:"seat_tools,omitempty"`
+	// SeatProviders is WHERE each seat's model was served from: the
+	// provider the CLI's seat resolver decided for it (RunSpec.SeatProviders),
+	// keyed by role, for the seats the signed roster names. ModelsByRole
+	// holds the bare model, so without this `openai/x` and `anthropic/x`
+	// sign the same roster and the record cannot say where the audited
+	// source was sent. Absent for a seat with no resolved provider and nil
+	// on a verdict whose seats were resolved elsewhere (the brain's daemon
+	// path): not recorded, never a guess from the model's name. Set by
+	// signedSeats, so both construction paths carry it, and JSON-tagged, so
+	// the --local signed digest covers it.
+	SeatProviders map[string]string `json:"seat_providers,omitempty"`
 	// MutantSources is where each mutant of the exam came from (graded, or
 	// refused by the compile gate, or unmeasured — so waste can be counted
 	// per source too), keyed by mutant ID: Kind model (with the generator seat's model) for what this run's
@@ -3120,11 +3131,10 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	// execution-proven judgment (kill-rate + proven_missed), never an LLM's
 	// opinion, which can hallucinate. blockingFindingOpen remains for a future
 	// execution-verified finding path.
-	roster, seatedSelection, seatTools := run.signedSeats(d.Assign)
-	v := aggregate(run.rs, roster, run.devKillRate, run.mutantsTotal, len(run.devSurvivors), run.provenMissed,
+	seated := run.signedSeats(d.Assign)
+	v := aggregate(run.rs, seated.roster, run.devKillRate, run.mutantsTotal, len(run.devSurvivors), run.provenMissed,
 		criticFindings, d.Threshold, d.CertifyIntervalWidth, run.examSample, false, run.testWriterFailed, run.poolTestUnsound)
-	v.ShadowSelection = seatedSelection
-	v.SeatTools = seatTools
+	seated.stamp(&v)
 	v.CriticIncomplete = criticIncomplete
 	v.RegionsTotal = run.regionsTotal
 	v.PromptShape = run.promptShape
@@ -3768,7 +3778,7 @@ func (d *Driver) timeoutVerdict(run *runState) Verdict {
 	v.MutantSources = run.mutantSources
 	v.PromptShape = run.promptShape
 	v.MutantBudget = run.mutantBudget
-	v.ModelsByRole, v.ShadowSelection, v.SeatTools = run.signedSeats(d.Assign)
+	run.signedSeats(d.Assign).stamp(&v)
 	// A stalled run still spent everything it spent, and it is the run an
 	// operator most needs the clock for: "which phase was it sitting in when
 	// the deadline hit" is answerable only from the phases that DID close,
@@ -3877,13 +3887,34 @@ func (d *Driver) feedLeaderboard(v Verdict, testWriterMoot bool, criticObs []Cri
 	}
 }
 
-// signedSeats is the roster a verdict signs AND the pool draws it discloses,
-// returned together so the two cannot disagree. A challenger drawn and then
-// never dispatched (an unsharded run, no shardable region) is dropped from
-// the roster by modelsByRole; its selection must go with it, or the record
-// would say a seat was drawn for a run the roster says it never sat in.
-// Both verdict construction sites call this, never modelsByRole alone.
-func (r *runState) signedSeats(assign RoleAssignment) (map[string]string, []shadowpool.Selection, map[string]string) {
+// signedRoster is everything a verdict signs about its seats: the roster,
+// the pool draws it discloses, and each named seat's agent tool and
+// provider. One value, stamped by one method, so the two verdict construction
+// sites cannot carry a different subset of it — timeoutVerdict has been the
+// place a field was forgotten more than once.
+type signedRoster struct {
+	roster    map[string]string
+	selection []shadowpool.Selection
+	tools     map[string]string
+	providers map[string]string
+}
+
+// stamp writes the signed seats onto v.
+func (s signedRoster) stamp(v *Verdict) {
+	v.ModelsByRole = s.roster
+	v.ShadowSelection = s.selection
+	v.SeatTools = s.tools
+	v.SeatProviders = s.providers
+}
+
+// signedSeats is the roster a verdict signs AND the pool draws, tools and
+// providers it discloses, returned together so they cannot disagree. A
+// challenger drawn and then never dispatched (an unsharded run, no shardable
+// region) is dropped from the roster by modelsByRole; its selection, tool and
+// provider must go with it, or the record would say a seat was drawn, or
+// served, for a run the roster says it never sat in. Both verdict
+// construction sites call this, never modelsByRole alone.
+func (r *runState) signedSeats(assign RoleAssignment) signedRoster {
 	roster := r.modelsByRole(assign)
 	var sels []shadowpool.Selection
 	for _, sel := range r.rs.ShadowSelection {
@@ -3891,21 +3922,29 @@ func (r *runState) signedSeats(assign RoleAssignment) (map[string]string, []shad
 			sels = append(sels, sel)
 		}
 	}
-	// The tools of the seats the roster names, and only those: a challenger
-	// never dispatched is not in the roster, so its tool is not either. Nil
-	// when no named seat is an agent, so an all-API verdict serializes
-	// exactly as it did before the field existed.
-	var tools map[string]string
-	for role, tool := range r.rs.SeatTools {
-		if strings.TrimSpace(tool) == "" || strings.TrimSpace(roster[role]) == "" {
+	return signedRoster{
+		roster: roster, selection: sels,
+		tools:     seatedOnly(r.rs.SeatTools, roster),
+		providers: seatedOnly(r.rs.SeatProviders, roster),
+	}
+}
+
+// seatedOnly is the entries of a role-keyed map whose role the roster names
+// and whose value is set. Nil when none is, so a verdict with no agent seat
+// (or no resolved provider) serializes exactly as it did before the field
+// existed.
+func seatedOnly(byRole, roster map[string]string) map[string]string {
+	var out map[string]string
+	for role, v := range byRole {
+		if strings.TrimSpace(v) == "" || strings.TrimSpace(roster[role]) == "" {
 			continue
 		}
-		if tools == nil {
-			tools = map[string]string{}
+		if out == nil {
+			out = map[string]string{}
 		}
-		tools[role] = tool
+		out[role] = v
 	}
-	return roster, sels, tools
+	return out
 }
 
 // modelsByRole is the roster a verdict SIGNS: the assignment, minus any

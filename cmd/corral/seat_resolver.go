@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -46,6 +47,34 @@ func (s seatSet) providers() map[string]string {
 		}
 	}
 	return out
+}
+
+// providersFor is providers() narrowed to the roles roster names with a
+// model: the record's providers describe the seats its roster records, and
+// no others. Nil when none has a resolved provider.
+func (s seatSet) providersFor(roster map[string]string) map[string]string {
+	var out map[string]string
+	for role, p := range s.providers() {
+		if m := strings.TrimSpace(roster[role]); m == "" || strings.EqualFold(m, "off") {
+			continue
+		}
+		if out == nil {
+			out = map[string]string{}
+		}
+		out[role] = p
+	}
+	return out
+}
+
+// seatProvidersJSON is the ledger row's SeatProviders text: the role ->
+// provider map as JSON, "" when there is none, so an entry whose seats
+// resolved no provider records nothing rather than "{}".
+func seatProvidersJSON(providers map[string]string) string {
+	if len(providers) == 0 {
+		return ""
+	}
+	b, _ := json.Marshal(providers)
+	return string(b)
 }
 
 // listOllama is a var so tests substitute a fake daemon.

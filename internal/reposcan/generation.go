@@ -381,7 +381,20 @@ package reposcan
 // exclude from its narrowed command salvages nothing. A "40" verdict's
 // salvaged files may claim "alone" for a whole-suite run, so they must be
 // re-measured, not reused. Behaviour bump.
-const VerdictGeneration = "41"
+// "42" (2026-11-12): the Verdict gained SeatProviders, the provider each
+// seat's model was served from as the seat resolver decided it (the vendor
+// of a vendor/model seat, the registry entry's provider, the pinned gateway,
+// ollama for a discovered or placed daemon, an agent seat's vendor label).
+// Since the seat resolver (#522) a vendor/model seat is recorded as its bare model, so
+// openai/x and anthropic/x signed the same roster and the record could not
+// say where the audited source was sent. A cached "41" document unmarshals
+// SeatProviders as nil, which reads as "not recorded" for a seat whose
+// provider this generation would have named; "41" has reached main, so this
+// is a shape bump, not a ride-along. The verdict cache key still names the
+// bare models only (modelSetKeyWith in cmd/corral), so a "42" verdict served
+// from cache carries the providers it was MEASURED with, which may differ
+// from the run that is reusing it.
+const VerdictGeneration = "42"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.
@@ -403,4 +416,4 @@ const VerdictGeneration = "41"
 // Verdict's own FIELDS") and nothing wider. Nor can any fingerprint catch the
 // behaviour half: a scorer that computes a DIFFERENT number into the SAME
 // field is invisible here, and remains a review responsibility.
-const VerdictShapeSHA256 = "15d4b6d3dbcbec3b66fcbe12a8b03c6b5e73d81a07657181fd99dabcf3dfdbc8"
+const VerdictShapeSHA256 = "21a4e1eafa4589ddc215061ac93b0295fb169f384a26fbb48cf951c2234cbff0"

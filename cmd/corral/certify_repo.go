@@ -1883,6 +1883,10 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// with an empty target).
 	bundleRepo, bundleCommit, subjErr := auditSubject(*repoDir, rep)
 	rosterJSON, _ := json.Marshal(models())
+	// Where each seat of that roster was served from, as the seat resolver
+	// decided it once for the whole scan: one value for the entry and the
+	// statement, as the roster is.
+	seatProviders := seats.providersFor(models())
 	// The roster's agent tools beside it, from the helper the verdict's
 	// SeatTools and review's record use; "" when no seat is an agent.
 	seatToolsJSON := ""
@@ -1893,9 +1897,10 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	bundle := buildBundle(scan, scanID, files, mutants, modelCallRows, eventRows,
 		auditpush.Link{}, pushSource, bundleRepo, bundleCommit, githubRunURL(),
 		bundleMeta{
-			ModelsByRole: string(rosterJSON),
-			SeatTools:    seatToolsJSON,
-			MinKillRate:  minKillRate, MaxProvenMissed: maxProvenMissed,
+			ModelsByRole:  string(rosterJSON),
+			SeatTools:     seatToolsJSON,
+			SeatProviders: seatProvidersJSON(seatProviders),
+			MinKillRate:   minKillRate, MaxProvenMissed: maxProvenMissed,
 			Passed:    boolPtr(exitCode == 0),
 			PushedBy:  auditpush.PushedByCertify,
 			TreeDirty: auditedTreeDirty, RepoIdentity: repoIdentity(*repoDir),
@@ -1924,7 +1929,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// --record was not given or its write failed).
 	var statementSHA256 string
 	if strings.TrimSpace(*attestFlag) != "" {
-		sha, signErr, err := writeAuditStatement(*attestFlag, *repoDir, rep, models(), minKillRate, maxProvenMissed, exitCode == 0, scanID, bundle)
+		sha, signErr, err := writeAuditStatement(*attestFlag, *repoDir, rep, models(), seatProviders, minKillRate, maxProvenMissed, exitCode == 0, scanID, bundle)
 		if err != nil {
 			fmt.Fprintf(stderr, "corral certify --repo: writing --attest statement: %v\n", err)
 			// On a runner a failed statement is worse than a failed push:
@@ -6517,7 +6522,7 @@ func preflightWritable(path string) error {
 // its sha256. signErr is the envelope's sign error, returned and never printed here: a
 // plain --attest run has no local key by design and must stay quiet, while
 // --transparency needs the real cause (review e1608f971235#R4).
-func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map[string]string, minKillRate *float64, maxProvenMissed *int, passed bool, scanID int64, bundle auditpush.Bundle) (sha string, signErr error, err error) {
+func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models, seatProviders map[string]string, minKillRate *float64, maxProvenMissed *int, passed bool, scanID int64, bundle auditpush.Bundle) (sha string, signErr error, err error) {
 	files := make([]certify.AuditedFile, 0, len(r.Weakest))
 	for _, f := range r.Weakest {
 		// The interval is signed only where the rate is: an uncovered
@@ -6640,6 +6645,7 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 		Audited:             r.Audited,
 		Candidates:          r.Candidates,
 		ModelsByRole:        models,
+		SeatProviders:       seatProviders,
 		MinKillRate:         minKillRate,
 		MaxProvenMissed:     maxProvenMissed,
 		Passed:              passed,

@@ -1504,6 +1504,10 @@ type auditRoles struct {
 	// by role — see seatToolProbe.toolsFor. Carried to the RunSpec so the verdict's
 	// SeatTools records what sat in each seat besides its model.
 	tools map[string]string
+	// providers is each seat's provider as the seat resolver decided it
+	// (seatSet.providers), by role. Carried to the RunSpec so the verdict's
+	// SeatProviders records where each seat's model was served from.
+	providers map[string]string
 }
 
 // herdNotConfiguredErr refuses a run whose grading seats have no model, and
@@ -1770,7 +1774,7 @@ func resolveAuditRoles(in localAuditInput, stderr io.Writer) (auditRoles, error)
 		return r, auditUsageErr("%v", err)
 	}
 
-	return auditRoles{assign: assign, shadow: shadow, shadowWriter: shadowWriter, writer: writer, mutant: mutant, critic: critic, chatterFor: chatterFor, meters: meters, tools: in.toolProbe.toolsFor(assign)}, nil
+	return auditRoles{assign: assign, shadow: shadow, shadowWriter: shadowWriter, writer: writer, mutant: mutant, critic: critic, chatterFor: chatterFor, meters: meters, tools: in.toolProbe.toolsFor(assign), providers: in.seats.providers()}, nil
 }
 
 // runSubject is the FILE-and-repo half of a RunSpec: everything
@@ -1927,6 +1931,7 @@ func newAuditRunSpec(in localAuditInput, roles auditRoles, subj runSubject) advp
 		ShadowWriterModel: roles.shadowWriter,
 		ShadowSelection:   in.shadowSelection,
 		SeatTools:         roles.tools,
+		SeatProviders:     roles.providers,
 		// HOW the writer attacks. The CLI's default is per-survivor; an
 		// EMPTY value here means batched, which is what a caller outside the
 		// CLI (the brain, a test) gets — see RunSpec.WriterMode.
@@ -2322,7 +2327,6 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 	verdict.ModelCalls = modelCallsFromMeters(roles.meters)
 
 	av := advVerdictFromPool(*verdict)
-	av.SeatProviders = in.seats.providers()
 	renderAdvVerdict(stdout, in.codePath, av)
 	renderModelSpend(stdout, verdict.ModelCalls)
 	if line := budgetLine(in.tokenBudget, 0); line != "" {
@@ -3006,7 +3010,7 @@ func advVerdictFromPool(v advpool.Verdict) advVerdict {
 		DevKillRate: v.DevKillRate, MutantsTotal: v.MutantsTotal,
 		MutantsInvalid: v.MutantsInvalid, MutantsUnmeasured: v.MutantsUnmeasured,
 		Survivors: v.Survivors, ProvenMissed: v.ProvenMissed,
-		ModelsByRole: v.ModelsByRole, SeatTools: v.SeatTools, Status: v.Status,
+		ModelsByRole: v.ModelsByRole, SeatTools: v.SeatTools, SeatProviders: v.SeatProviders, Status: v.Status,
 		RecordID: v.RecordID, RecordHead: v.RecordHead,
 		RegionsTotal: v.RegionsTotal, RegionsProbed: v.RegionsProbed,
 		DroppedRegions:   v.DroppedRegions,

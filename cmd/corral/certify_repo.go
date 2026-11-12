@@ -942,14 +942,10 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// The derive seat is under the same cap, so the same refusal: a
 		// derive seat the cap cannot see is refused before it derives.
 		// Only when it will be asked at all (--goals skips it).
-		if strings.TrimSpace(*goalsPath) == "" && strings.TrimSpace(*deriveModel) != "" && isAgentSeat(*deriveModel) {
-			// The seat is built from its resolved routing, never re-guessed
-			// from the name: the same constructor every grading seat uses.
-			rs, ok := seats["derive-model"]
-			if !ok {
-				fmt.Fprintf(stderr, "corral certify --repo: --derive-model %q was never resolved to a seat\n", *deriveModel)
-				return 2
-			}
+		// Whether it is an agent seat is read from its resolved Kind, never
+		// re-guessed from the name, and it is built by the same constructor
+		// every grading seat uses.
+		if rs := seats["derive-model"]; strings.TrimSpace(*goalsPath) == "" && rs.Kind == "agent" {
 			db, err := agentbackend.Build(rs, agentbackend.SeatOptions{})
 			if err == nil {
 				err = capCanSee(scanBudget, roleGoalDeriver, *deriveModel, db)
@@ -2712,7 +2708,7 @@ func resolveGoalSource(stderr io.Writer, repoDir, goalsPath string, derive agent
 		// key would produce.
 		deriveModel := strings.TrimSpace(derive.Spec)
 		if deriveModel == "" {
-			fmt.Fprintf(stderr, "corral certify --repo: no goal source. corral has no default models, so deriving a goal per file needs --derive-model <model>; or supply --goals <file> to skip derivation entirely (that path calls no model and needs no key)\n")
+			fmt.Fprintf(stderr, "corral certify --repo: no goal source. corral has no default models, so deriving a goal per file needs --derive-model <model> (off names no model for this seat); or supply --goals <file> to skip derivation entirely (that path calls no model and needs no key)\n")
 			return nil, "", 2
 		}
 		// Constructed only when there is something to derive FOR. It fails

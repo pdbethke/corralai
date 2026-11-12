@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -365,6 +366,23 @@ func TestAttestationDisclosesAReusedVerdict(t *testing.T) {
 	for _, k := range []string{"verdictReused", "verdictComputedAt"} {
 		if _, ok := fresh[k]; ok {
 			t.Errorf("fresh.go must not sign %s at all: %+v", k, fresh)
+		}
+	}
+}
+
+// "--derive-model off" resolves to no derive seat. The refusal must say that
+// off names no model here, and point at --goals, so an operator who typed it
+// does not read "needs --derive-model" as their flag being ignored.
+func TestNoGoalSourceRefusalSaysOffNamesNoModel(t *testing.T) {
+	var errb bytes.Buffer
+	_, _, code := resolveGoalSource(&errb, t.TempDir(), "", agentbackend.ResolvedSeat{}, false, 1,
+		nil, nil, true, false)
+	if code != 2 {
+		t.Fatalf("code = %d, want 2", code)
+	}
+	for _, want := range []string{"--goals", "off"} {
+		if !strings.Contains(errb.String(), want) {
+			t.Errorf("refusal %q does not mention %q", errb.String(), want)
 		}
 	}
 }

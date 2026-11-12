@@ -4,6 +4,8 @@ package criticscore_test
 
 import (
 	"context"
+	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -18,6 +20,25 @@ func openTmp(t *testing.T) *criticscore.Store {
 	}
 	t.Cleanup(func() { s.Close() })
 	return s
+}
+
+// A read-only open must not run the schema DDL, and must not create a store
+// that does not exist: `corral mcp` is a reader, and a reader that creates
+// the file it was asked to read leaves state behind on every machine it is
+// registered on.
+func TestOpenReadOnlyDoesNotCreateAMissingStore(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "absent.duckdb")
+	s, err := criticscore.OpenReadOnly(path)
+	if err == nil {
+		_ = s.Close()
+		t.Fatal("OpenReadOnly of a missing file succeeded; want ErrNoStore")
+	}
+	if !errors.Is(err, criticscore.ErrNoStore) {
+		t.Fatalf("want ErrNoStore, got %v", err)
+	}
+	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+		t.Fatalf("OpenReadOnly created %s (stat err %v)", path, statErr)
+	}
 }
 
 func TestRecordAndPrecision(t *testing.T) {

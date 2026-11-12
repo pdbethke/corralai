@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -102,6 +103,73 @@ type getFindingIn struct {
 type findingReader interface {
 	All(ctx context.Context) ([]criticscore.Finding, error)
 	Get(ctx context.Context, id string) (criticscore.Finding, bool, error)
+}
+
+// storeFindings is the findingReader `corral mcp` serves: the local findings
+// store at path, opened READ-ONLY for each call and closed before the call
+// returns.
+//
+// Why read-only: every coding-agent session on the machine spawns its own
+// `corral mcp`. When this opened the store with criticscore.Open (read-write,
+// plus CREATE TABLE and migrations), the first session held DuckDB's exclusive
+// lock and every later session's server died at startup with "Conflicting lock
+// is held" (observed 2026-11-12). Read-only opens share the file across
+// processes.
+//
+// Why per call rather than once at startup: DuckDB does NOT let a read-only
+// open share with a read-write one, in either direction. A server holding even
+// a read-only handle for its whole life would keep `certify --local` from
+// recording findings for as long as any agent session stays open. Opening per
+// call narrows that to the milliseconds a query takes; the cost is one open
+// per tool call, which an agent makes a handful of times. What remains: a call
+// made while a run is writing the store fails, with busyWriter's explanation.
+//
+// A store that does not exist yet (nothing has run `certify --local` here) is
+// read as zero findings and is NOT created: this is a reader, and the open
+// below cannot create the file. The previous behaviour created both the state
+// directory and an empty store at server start.
+type storeFindings struct{ path string }
+
+// open returns nil, nil when there is no store yet.
+func (s storeFindings) open() (*criticscore.Store, error) {
+	cs, err := criticscore.OpenReadOnly(s.path)
+	if errors.Is(err, criticscore.ErrNoStore) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, busyWriter(err)
+	}
+	return cs, nil
+}
+
+func (s storeFindings) All(ctx context.Context) ([]criticscore.Finding, error) {
+	cs, err := s.open()
+	if cs == nil || err != nil {
+		return nil, err
+	}
+	defer func() { _ = cs.Close() }()
+	return cs.All(ctx)
+}
+
+func (s storeFindings) Get(ctx context.Context, id string) (criticscore.Finding, bool, error) {
+	cs, err := s.open()
+	if cs == nil || err != nil {
+		return criticscore.Finding{}, false, err
+	}
+	defer func() { _ = cs.Close() }()
+	return cs.Get(ctx, id)
+}
+
+// busyWriter says in plain words what DuckDB's lock error means here: some
+// corral process has the store open read-write, which no read-only open can
+// share. Any other error passes through unchanged.
+func busyWriter(err error) error {
+	msg := err.Error()
+	if strings.Contains(msg, "Could not set lock") || strings.Contains(msg, "Conflicting lock") {
+		return fmt.Errorf("another corral process is writing the findings store (a running `certify --local`, or `corral criticscore confirm|refute`); "+
+			"DuckDB lets no reader share the file with a writer, so retry when it finishes: %w", err)
+	}
+	return err
 }
 
 // registerFindingTools wires the read-only findings tools onto s.

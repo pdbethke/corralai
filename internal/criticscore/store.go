@@ -13,9 +13,14 @@ package criticscore
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
-	"github.com/pdbethke/corralai/internal/seatrecord"
+	"io/fs"
+	"os"
+	"strings"
 	"time"
+
+	"github.com/pdbethke/corralai/internal/seatrecord"
 
 	_ "github.com/marcboeker/go-duckdb/v2"
 )
@@ -73,6 +78,68 @@ func Open(dsn string) (*Store, error) {
 		return nil, err
 	}
 	return &Store{db: db}, nil
+}
+
+// ErrNoStore is OpenReadOnly's answer for a local store file that does not
+// exist yet. It is a distinct error, not an empty Store, so the caller decides
+// what "no findings recorded on this machine" means for its surface; a
+// read-only open cannot create the file, and must not.
+var ErrNoStore = errors.New("criticscore: no findings store yet")
+
+// OpenReadOnly opens an EXISTING store for reading only: DuckDB's
+// access_mode=read_only, and none of Open's CREATE TABLE or migration DDL. It
+// is the opener for readers that may run as many processes at once — `corral
+// mcp` is spawned by every coding-agent session on the machine, and when it
+// used Open the first session's server held DuckDB's exclusive read-write
+// lock and every later one failed at startup with "Conflicting lock is held".
+//
+// The DuckDB limit, stated exactly: read-only opens share the file with each
+// other across processes, but NOT with a concurrent read-write process. While
+// `certify --local` (or `corral criticscore confirm|refute`) holds the store
+// read-write, a read-only open still fails with the same lock error, and a
+// running reader still blocks that writer from opening. Only reader-vs-reader
+// contention is removed here. (cmd/corral/scorecard.go records the same
+// limit for the bugcatch store.)
+//
+// Because no migration runs, a store last written by an older corral is read
+// at its own schema; a query naming a column added since fails with DuckDB's
+// error rather than silently migrating a file a reader was never meant to
+// change. Opening it once read-write (any `certify --local`) brings it
+// forward.
+//
+// A missing local file returns ErrNoStore without touching the filesystem.
+// An `md:` DSN is passed through untouched apart from the access mode.
+func OpenReadOnly(dsn string) (*Store, error) {
+	if local, ok := localPath(dsn); ok {
+		if _, err := os.Stat(local); errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("%w at %s", ErrNoStore, local)
+		}
+	}
+	sep := "?"
+	if strings.Contains(dsn, "?") {
+		sep = "&"
+	}
+	db, err := sql.Open("duckdb", dsn+sep+"access_mode=read_only")
+	if err != nil {
+		return nil, fmt.Errorf("criticscore: open %q read-only: %w", dsn, err)
+	}
+	// sql.Open is lazy; ping so a lock conflict surfaces here, at open, with
+	// the path, rather than on the first query a client happens to send.
+	if err := db.Ping(); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("criticscore: open %q read-only: %w", dsn, err)
+	}
+	return &Store{db: db}, nil
+}
+
+// localPath reports the filesystem path a DSN names, and false for one that
+// names no local file (MotherDuck's md:, or an in-memory database).
+func localPath(dsn string) (string, bool) {
+	p, _, _ := strings.Cut(dsn, "?")
+	if p == "" || p == ":memory:" || strings.HasPrefix(p, "md:") {
+		return "", false
+	}
+	return p, true
 }
 
 // migrateCriticFindings additively brings a ledger created before a schema

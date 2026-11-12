@@ -31,6 +31,21 @@ func TestSignedSeatsCarryTheProvidersOfTheSeatsTheyName(t *testing.T) {
 	}
 }
 
+// One narrowing for every record: a seat the roster leaves empty or names
+// "off" carries no tool or provider, whichever record asks.
+func TestSeatedOnlyDropsUnseatedRoles(t *testing.T) {
+	got := SeatedOnly(
+		map[string]string{RoleTestWriter: "openai", RoleTestCritic: "anthropic", RoleMutantGenerator: "ollama", RoleTestWriterShadow: ""},
+		map[string]string{RoleTestWriter: "gpt-x", RoleTestCritic: "off", RoleTestWriterShadow: "w2"},
+	)
+	if len(got) != 1 || got[RoleTestWriter] != "openai" {
+		t.Fatalf("SeatedOnly = %v, want only the writer: an off critic, an unseated generator and an empty value carry nothing", got)
+	}
+	if SeatedOnly(nil, map[string]string{RoleTestWriter: "gpt-x"}) != nil {
+		t.Fatal("nothing to narrow must be nil, so the field is omitted")
+	}
+}
+
 // Both verdict construction sites carry the providers, and they reach the
 // serialized verdict (the document a ledger row's VerdictJSON holds) under
 // seat_providers. The timeout path is the one this package has forgotten a

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/modelcatalog"
 	"github.com/pdbethke/corralai/internal/models"
@@ -49,21 +50,12 @@ func (s seatSet) providers() map[string]string {
 	return out
 }
 
-// providersFor is providers() narrowed to the roles roster names with a
-// model: the record's providers describe the seats its roster records, and
-// no others. Nil when none has a resolved provider.
+// providersFor is providers() narrowed to the roles roster seats: the
+// record's providers describe the seats its roster records, and no others.
+// Nil when none has a resolved provider. The narrowing is advpool's, the
+// same one the verdict's providers go through.
 func (s seatSet) providersFor(roster map[string]string) map[string]string {
-	var out map[string]string
-	for role, p := range s.providers() {
-		if m := strings.TrimSpace(roster[role]); m == "" || strings.EqualFold(m, "off") {
-			continue
-		}
-		if out == nil {
-			out = map[string]string{}
-		}
-		out[role] = p
-	}
-	return out
+	return advpool.SeatedOnly(s.providers(), roster)
 }
 
 // seatProvidersJSON is the ledger row's SeatProviders text: the role ->

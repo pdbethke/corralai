@@ -3924,19 +3924,23 @@ func (r *runState) signedSeats(assign RoleAssignment) signedRoster {
 	}
 	return signedRoster{
 		roster: roster, selection: sels,
-		tools:     seatedOnly(r.rs.SeatTools, roster),
-		providers: seatedOnly(r.rs.SeatProviders, roster),
+		tools:     SeatedOnly(r.rs.SeatTools, roster),
+		providers: SeatedOnly(r.rs.SeatProviders, roster),
 	}
 }
 
-// seatedOnly is the entries of a role-keyed map whose role the roster names
-// and whose value is set. Nil when none is, so a verdict with no agent seat
-// (or no resolved provider) serializes exactly as it did before the field
-// existed.
-func seatedOnly(byRole, roster map[string]string) map[string]string {
+// SeatedOnly is the entries of a role-keyed map whose role the roster seats
+// (names a model that is not "off") and whose value is set. Nil when none
+// is, so a verdict with no agent seat (or no resolved provider) serializes
+// exactly as it did before the field existed. It is the ONE narrowing of a
+// per-seat fact to a roster: the verdict's tools and providers here, and the
+// --repo entry's providers in cmd/corral (seatSet.providersFor), so the two
+// records cannot disagree about which seats a roster names.
+func SeatedOnly(byRole, roster map[string]string) map[string]string {
 	var out map[string]string
 	for role, v := range byRole {
-		if strings.TrimSpace(v) == "" || strings.TrimSpace(roster[role]) == "" {
+		m := strings.TrimSpace(roster[role])
+		if strings.TrimSpace(v) == "" || m == "" || strings.EqualFold(m, "off") {
 			continue
 		}
 		if out == nil {

@@ -268,3 +268,29 @@ func TestReviewEntryRecordsTheSeatProviders(t *testing.T) {
 		t.Errorf("review seat providers = %v, want reviewer=openai and verifier=ollama", r.SeatProviders)
 	}
 }
+
+// A challenger DRAWN from a pool is resolved like a named one: the draw writes
+// the member as typed (vendor/model included) into the shadow seat before the
+// seats resolve, so its provider reaches the RunSpec under
+// mutant-generator-shadow, beside the primary generator's own.
+func TestADrawnShadowSeatRecordsItsProvider(t *testing.T) {
+	providerSeats(t)
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+	f := flagsWith("", "openai/gpt-a,anthropic/claude-b", "", "", "0x2a")
+	sels, err := drawShadowSeats("corral certify --local", t.TempDir(), "go", f, nil, filepath.Join(t.TempDir(), "none.duckdb"), &bytes.Buffer{})
+	if err != nil || len(sels) != 1 {
+		t.Fatalf("draw: %v, %+v", err, sels)
+	}
+	want := map[string]string{"openai/gpt-a": "openai", "anthropic/claude-b": "anthropic"}[sels[0].Chosen]
+	if want == "" {
+		t.Fatalf("the draw chose %q, not a pool member as typed", sels[0].Chosen)
+	}
+	r, err := resolveRoles(t, localAuditInput{mutantModel: "qwen3:8b", writerModel: "openai/gpt-x", criticModel: "off", shadowModel: *f.model}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := newAuditRunSpec(localAuditInput{}, r, runSubject{}).SeatProviders
+	if got[advpool.RoleMutantGeneratorShadow] != want || got[advpool.RoleMutantGenerator] != "ollama" {
+		t.Fatalf("providers = %v, want mutant-generator-shadow=%s (drawn %s) and mutant-generator=ollama", got, want, sels[0].Chosen)
+	}
+}

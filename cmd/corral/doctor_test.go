@@ -303,7 +303,7 @@ func TestDoctorRehearsesTheDeriveSeatAndReadsTheRepoRegistry(t *testing.T) {
 			t.Errorf("herd check failed: %s :: %s", r.name, r.detail)
 		}
 	}
-	dres := checkDeriveSeat(derive, deriveEndpointOf(reg))
+	dres := checkDeriveSeat(reg["derive-model"])
 	if len(dres) != 1 || dres[0].ok {
 		t.Errorf("a derive seat with no credential passed: %+v", dres)
 	}
@@ -313,10 +313,10 @@ func TestDoctorRehearsesTheDeriveSeatAndReadsTheRepoRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if deriveEndpointOf(reg2) != "http://127.0.0.1:11434" {
-		t.Errorf("derive endpoint = %q, want the registry's daemon", deriveEndpointOf(reg2))
+	if got := reg2["derive-model"].Endpoint; got != "http://127.0.0.1:11434" {
+		t.Errorf("derive endpoint = %q, want the registry's daemon", got)
 	}
-	if dres := checkDeriveSeat(derive, deriveEndpointOf(reg2)); len(dres) != 1 || !dres[0].ok {
+	if dres := checkDeriveSeat(reg2["derive-model"]); len(dres) != 1 || !dres[0].ok {
 		t.Errorf("a registry-placed local derive seat failed: %+v", dres)
 	}
 }

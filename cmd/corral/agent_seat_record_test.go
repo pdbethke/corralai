@@ -245,9 +245,9 @@ func TestCertifyRepoMaxTokensRefusesAnUnmeteredDeriveSeat(t *testing.T) {
 	derived := 0
 	prev := certifyRepoDeriver
 	t.Cleanup(func() { certifyRepoDeriver = prev })
-	certifyRepoDeriver = func(model, _ string) (reposcan.Deriver, error) {
+	certifyRepoDeriver = func(rs agentbackend.ResolvedSeat) (reposcan.Deriver, error) {
 		derived++
-		return newMeteredDeriver(&fakeBackend{reply: "NONE"}, model), nil
+		return newMeteredDeriver(&fakeBackend{reply: "NONE"}, rs.Spec), nil
 	}
 	var out, errb bytes.Buffer
 	code := runCertifyRepo([]string{
@@ -395,8 +395,8 @@ func TestACappedScanNamesTheFilesItNeverDerived(t *testing.T) {
 	fb := &countingBackend{reply: "NONE", usage: agentbackend.Usage{InputTokens: 600, OutputTokens: 600}}
 	prev := certifyRepoDeriver
 	t.Cleanup(func() { certifyRepoDeriver = prev })
-	certifyRepoDeriver = func(model, _ string) (reposcan.Deriver, error) {
-		return newMeteredDeriver(fb, model), nil
+	certifyRepoDeriver = func(rs agentbackend.ResolvedSeat) (reposcan.Deriver, error) {
+		return newMeteredDeriver(fb, rs.Spec), nil
 	}
 	var out, errb bytes.Buffer
 	runCertifyRepo([]string{

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/agentworker"
 )
 
@@ -290,7 +291,7 @@ func TestDoctorHerdPrintsEverySeatLineWhenThePreflightFails(t *testing.T) {
 func TestDoctorDeriveAgentSeatGetsABinaryLineNotACredentialLine(t *testing.T) {
 	noKeys(t)
 	t.Setenv("CORRALAI_AGENT_GHOST", "/nonexistent/corral-ghost-agent {model:--model}")
-	res := checkDeriveSeat("ghost", "")
+	res := checkDeriveSeat(agentDeriveSeat("ghost"))
 	if len(res) != 1 || res[0].ok || !strings.HasPrefix(res[0].name, "agent seat ghost") || !strings.Contains(res[0].detail, "not found") {
 		t.Fatalf("want one FAIL binary line for the derive agent seat, got %+v", res)
 	}
@@ -300,8 +301,13 @@ func TestDoctorDeriveAgentSeatGetsABinaryLineNotACredentialLine(t *testing.T) {
 		}
 	}
 	fakeAgent(t, "fakea", "x")
-	res = checkDeriveSeat("fakea", "")
+	res = checkDeriveSeat(agentDeriveSeat("fakea"))
 	if len(res) == 0 || !res[0].ok || !strings.HasPrefix(res[0].name, "agent seat fakea") || !strings.Contains(res[0].detail, "login not verified") {
 		t.Fatalf("a present derive agent: want the ok binary line, got %+v", res)
 	}
+}
+
+// agentDeriveSeat is the derive seat the resolver builds for a coding-agent spec.
+func agentDeriveSeat(spec string) agentbackend.ResolvedSeat {
+	return agentbackend.ResolvedSeat{Flag: "derive-model", Spec: spec, Kind: "agent", DeclaredBy: agentbackend.DeclaredAgent}
 }

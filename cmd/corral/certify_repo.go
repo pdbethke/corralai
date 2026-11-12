@@ -984,8 +984,8 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// the scan's record and its cost line (scanModelCallRowsWith). Keeping
 	// only the last would drop an earlier one's spend silently.
 	var scanDerivers deriverSet
-	keepDeriver := func(model, endpoint string) (reposcan.Deriver, error) {
-		d, err := certifyRepoDeriver(model, endpoint)
+	keepDeriver := func(rs agentbackend.ResolvedSeat) (reposcan.Deriver, error) {
+		d, err := certifyRepoDeriver(rs)
 		if err == nil && d != nil {
 			// The deriver draws on the scan's one budget, like every seat.
 			d = withDeriveBudget(d, scanBudget)
@@ -999,7 +999,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
 		return 2
 	}
-	gs, disclosure, code := resolveGoalSource(stderr, *repoDir, *goalsPath, *deriveModel, deriveEndpointOf(seats), *dryRun, len(selected), keepDeriver, goalStore, *noGoalCacheFlag, !*noGoalCacheFlag)
+	gs, disclosure, code := resolveGoalSource(stderr, *repoDir, *goalsPath, seats["derive-model"], *dryRun, len(selected), keepDeriver, goalStore, *noGoalCacheFlag, !*noGoalCacheFlag)
 	if code != 0 {
 		return code
 	}
@@ -1441,7 +1441,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
 			return 2
 		}
-		gs, disclosure, code = resolveGoalSource(stderr, *repoDir, *goalsPath, *deriveModel, deriveEndpointOf(seats), *dryRun, len(selected), keepDeriver, goalStore, *noGoalCacheFlag, !*noGoalCacheFlag)
+		gs, disclosure, code = resolveGoalSource(stderr, *repoDir, *goalsPath, seats["derive-model"], *dryRun, len(selected), keepDeriver, goalStore, *noGoalCacheFlag, !*noGoalCacheFlag)
 		if code != 0 {
 			return code
 		}
@@ -2610,12 +2610,12 @@ func changedFiles(root, baseRef string) ([]string, error) {
 	return changed, nil
 }
 
-// deriverFactory builds a Deriver for a model, served at endpoint when the
-// registry placed the derive seat on a local daemon ("" otherwise). Injected
+// deriverFactory builds a Deriver from the derive seat the resolver chose,
+// whatever it resolved to (a local daemon, a gateway, a vendor, an agent). Injected
 // so the goal-source wiring can be tested without a provider credential —
 // and, more importantly, without any possibility of a real model call from
 // a unit test.
-type deriverFactory func(model, endpoint string) (reposcan.Deriver, error)
+type deriverFactory func(rs agentbackend.ResolvedSeat) (reposcan.Deriver, error)
 
 // certifyRepoDeriver is the factory runCertifyRepo actually uses. A package
 // var rather than a direct call to newLLMDeriver so a test can prove a
@@ -2686,7 +2686,7 @@ func goalReceiptLine(dsn string, recordEnabled bool, fresh int) string {
 // cache already follows (see NewCachingGoalSource's doc).
 //
 // Returns the process exit code to use on failure; 0 means the source is good.
-func resolveGoalSource(stderr io.Writer, repoDir, goalsPath, deriveModel, deriveEndpoint string, dryRun bool, nSelected int, newDeriver deriverFactory, store reposcan.GoalCacheStore, noGoalCache, recordEnabled bool) (reposcan.GoalSource, string, int) {
+func resolveGoalSource(stderr io.Writer, repoDir, goalsPath string, derive agentbackend.ResolvedSeat, dryRun bool, nSelected int, newDeriver deriverFactory, store reposcan.GoalCacheStore, noGoalCache, recordEnabled bool) (reposcan.GoalSource, string, int) {
 	// --goals takes precedence when given, so hand-written goals keep working
 	// and that path needs no provider credential at all.
 	if goalsPath != "" {
@@ -2710,7 +2710,8 @@ func resolveGoalSource(stderr io.Writer, repoDir, goalsPath, deriveModel, derive
 		// refuses BEFORE the credential check below so the message names the
 		// actual problem (no model chosen) rather than the symptom a missing
 		// key would produce.
-		if strings.TrimSpace(deriveModel) == "" {
+		deriveModel := strings.TrimSpace(derive.Spec)
+		if deriveModel == "" {
 			fmt.Fprintf(stderr, "corral certify --repo: no goal source. corral has no default models, so deriving a goal per file needs --derive-model <model>; or supply --goals <file> to skip derivation entirely (that path calls no model and needs no key)\n")
 			return nil, "", 2
 		}
@@ -2718,7 +2719,7 @@ func resolveGoalSource(stderr io.Writer, repoDir, goalsPath, deriveModel, derive
 		// closed on a missing credential, which is the right answer for a real
 		// scan — but demanding a provider key to report "0 candidates" would
 		// refuse a scan that was never going to call a model.
-		d, derr := newDeriver(deriveModel, deriveEndpoint)
+		d, derr := newDeriver(derive)
 		if derr != nil {
 			fmt.Fprintf(stderr, "corral certify --repo: %v\n", derr)
 			return nil, "", 2

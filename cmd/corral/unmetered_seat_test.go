@@ -159,9 +159,9 @@ func TestCertifyRepoMaxTokensRefusesAnUnmeteredSeatBeforeDerivation(t *testing.T
 	derived := 0
 	prev := certifyRepoDeriver
 	t.Cleanup(func() { certifyRepoDeriver = prev })
-	certifyRepoDeriver = func(model, _ string) (reposcan.Deriver, error) {
+	certifyRepoDeriver = func(rs agentbackend.ResolvedSeat) (reposcan.Deriver, error) {
 		derived++
-		return newMeteredDeriver(&fakeBackend{reply: "NONE"}, model), nil
+		return newMeteredDeriver(&fakeBackend{reply: "NONE"}, rs.Spec), nil
 	}
 	ledgerDir := filepath.Join(t.TempDir(), "ledger")
 	var out, errb bytes.Buffer

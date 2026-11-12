@@ -35,8 +35,8 @@ func interruptedRepoRun(t *testing.T, mutant, writer string) {
 
 	prev := certifyRepoDeriver
 	t.Cleanup(func() { certifyRepoDeriver = prev })
-	certifyRepoDeriver = func(model, _ string) (reposcan.Deriver, error) {
-		return newMeteredDeriver(&fakeBackend{reply: "A returns 1 for positive input"}, model), nil
+	certifyRepoDeriver = func(rs agentbackend.ResolvedSeat) (reposcan.Deriver, error) {
+		return newMeteredDeriver(&fakeBackend{reply: "A returns 1 for positive input"}, rs.Spec), nil
 	}
 
 	ledgerDir := filepath.Join(t.TempDir(), "ledger")

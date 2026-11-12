@@ -19,7 +19,7 @@ import (
 )
 
 // seatSet is every seat of one invocation, resolved once, keyed by the seat's
-// flag name. It replaces the several maps (endpoints, providers, deriveURL)
+// flag name. It replaces the several maps (endpoints, providers, the derive seat's daemon)
 // that each re-derived a different slice of the same fact.
 type seatSet map[string]agentbackend.ResolvedSeat
 
@@ -324,8 +324,6 @@ func resolveSeatRegistry(cmdName, repoRoot string, seats []seatFlag, stderr io.W
 		}
 		if rs.Role != "" {
 			res.endpoints[rs.Role] = rs.Endpoint
-		} else if rs.Flag == "derive-model" {
-			res.deriveURL = rs.Endpoint
 		}
 	}
 	return res, nil

@@ -34,8 +34,8 @@ func TestARepoScanReportsWhatGoalDerivationSpent(t *testing.T) {
 
 	prev := certifyRepoDeriver
 	t.Cleanup(func() { certifyRepoDeriver = prev })
-	certifyRepoDeriver = func(model, _ string) (reposcan.Deriver, error) {
-		return newMeteredDeriver(&fakeBackend{reply: "NONE", usage: agentbackend.Usage{InputTokens: 1234, OutputTokens: 3}}, model), nil
+	certifyRepoDeriver = func(rs agentbackend.ResolvedSeat) (reposcan.Deriver, error) {
+		return newMeteredDeriver(&fakeBackend{reply: "NONE", usage: agentbackend.Usage{InputTokens: 1234, OutputTokens: 3}}, rs.Spec), nil
 	}
 
 	ledgerDir := filepath.Join(t.TempDir(), "ledger")

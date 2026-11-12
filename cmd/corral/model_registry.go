@@ -80,20 +80,6 @@ type seatResolution struct {
 	// named and from the name-based inference otherwise. A seat whose provider
 	// cannot be determined is ABSENT, never guessed.
 	providers map[string]string
-	// deriveURL is the daemon the registry placed the DERIVE seat on, which
-	// has no advpool role and so no entry in endpoints. It used to be printed
-	// on the resolution line and then discarded: the seat was served from
-	// OLLAMA_URL, not the daemon the registry declared.
-	deriveURL string
-}
-
-// deriveEndpoint is the derive seat's daemon URL, "" when none (or no
-// registry at all — r may be nil).
-func (r *seatResolution) deriveEndpoint() string {
-	if r == nil {
-		return ""
-	}
-	return r.deriveURL
 }
 
 func (r *seatResolution) localEndpoints() map[string]string {
@@ -201,19 +187,4 @@ func seatProvider(providers map[string]string, role, model string) string {
 		return p
 	}
 	return agentbackend.VendorOf(model)
-}
-
-// deriveEndpointOf is the daemon the derive seat resolved onto, "" when it is
-// not a local seat (a cloud, agent or unnamed one). The derive seat has no
-// advpool role, so it is the one seat read by flag name. Transitional: the
-// goal-deriver itself still takes a URL until it builds from the seat.
-func deriveEndpointOf(seats seatSet) string {
-	rs, ok := seats["derive-model"]
-	if !ok || rs.Kind == "agent" {
-		return ""
-	}
-	if rs.Wire == models.WireOllama || rs.Wire == models.WireOpenAIChat {
-		return rs.Endpoint
-	}
-	return ""
 }

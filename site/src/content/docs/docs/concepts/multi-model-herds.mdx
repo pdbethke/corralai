@@ -101,9 +101,10 @@ Claude Code agent running on a Claude Pro/Max subscription instead of
 per-call API billing. The herd "contract" is nothing but MCP tool calls
 against the brain (`bootstrap → claim_task → work → complete_task`);
 `corral-agent` is merely the reference implementation of that same contract,
-wired to a local Ollama model by default (`MODEL_BACKEND=ollama`,
-`AGENT_MODEL=qwen2.5-coder:7b`) or any OpenAI-compatible endpoint
-(`MODEL_BACKEND=openai`, e.g. Gemini or OpenRouter). Neither binary is
+wired to whichever backend you name: `MODEL_BACKEND` and `AGENT_MODEL` are
+both required (there is no default), and `OLLAMA_URL` too for
+`MODEL_BACKEND=ollama`. Any OpenAI-compatible endpoint works
+(`MODEL_BACKEND=openai`, e.g. OpenRouter). Neither binary is
 special-cased brain-side — both are ordinary MCP clients.
 
 ### `model_comparison` across a mission

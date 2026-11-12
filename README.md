@@ -357,7 +357,7 @@ directory, or a `pip install --user`, is invisible there.
 One key can satisfy the distinctness rule on its own — name two different models
 from the same provider (Sonnet writing and mutating, Haiku critiquing, say) — though
 two models from one lab are the WEAKEST form of it and share the most lineage. Naming
-`--critic-model gemini-3.6-flash` plus `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) routes
+`--critic-model gemini-3.6-flash` plus `GEMINI_API_KEY` routes
 the critic to Gemini via the OpenAI-compatible Google endpoint, a real cross-vendor
 critic, while the writer and mutant-generator stay on whatever you named — a missing
 key fails the run closed rather than silently falling back.

@@ -35,11 +35,11 @@ which is advisory and never gates).
 | Variable | What it is |
 | --- | --- |
 | `ANTHROPIC_API_KEY` | Claude models |
-| `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) | Gemini models |
+| `GEMINI_API_KEY` | Gemini models (`GOOGLE_API_KEY` is not read); `CORRALAI_GEMINI_BASE_URL` points a Gemini seat at another endpoint |
 | `OPENAI_API_KEY` | OpenAI models |
 | `OPENROUTER_API_KEY` | OpenRouter, one key for several vendors |
 | `MODEL_BACKEND` / `OPENAI_BASE_URL` | Pin every seat to one endpoint (OpenRouter, a local daemon) instead of routing by model name. An explicit gateway is never re-routed |
-| `OLLAMA_URL` | The local Ollama daemon (default `http://127.0.0.1:11434`); `--local-endpoint <role>=<url>` places one seat on another daemon |
+| `OLLAMA_URL` | The Ollama daemon to use. There is no default address. When set, corral asks it which models it serves and routes a bare model name it lists to it; if it cannot be listed the run is refused (unset it if no seat runs there). `--local-endpoint <role>=<url>` places one seat on another daemon |
 
 **A key alone does not move a seat to a provider.** A Gemini model name with
 only an Anthropic key configured is an error from Anthropic, not a Gemini call:
@@ -91,6 +91,37 @@ Seats can be named by alias from a registry, read from exactly one of these
 | `.corral/models.json` | The repository's own registry |
 
 A registry marked `"strict": true` requires every seat to name a declared alias.
+
+Each entry is `{"provider": …, "model": …}` plus, where the provider needs one:
+
+| Field | Meaning |
+| --- | --- |
+| `provider` | Who serves the model. Local: `ollama`, `vllm`, `lmstudio`, `llamacpp`, `localai`, `llamafile`. Hosted: `anthropic`, `google`, `openai`, `openrouter` |
+| `model` | The concrete model name that provider knows it by. This, never the alias, is what is recorded |
+| `endpoint` | Required for a local provider: the daemon you run. Optional on `openai` and `openrouter` (a proxy or gateway); refused on `anthropic` and `google` |
+| `key_env` | The *name* of the environment variable holding a gateway's key. Required with an `endpoint` on `openai` or `openrouter`, and refused without one or on a local provider, so a vendor's key is never sent to a gateway |
+
+The wire follows from the provider and is never inferred from a URL:
+
+| Provider | Wire |
+| --- | --- |
+| `ollama` | ollama's native chat API |
+| `vllm`, `lmstudio`, `llamacpp`, `localai`, `llamafile` | the OpenAI-compatible chat API at `endpoint` |
+| `anthropic`, `google`, `openai`, `openrouter` | the vendor's own API, reached by provider name |
+
+### How a seat is resolved
+
+Every seat value is resolved once, in this order, and the first match wins:
+
+1. a registry alias (in a strict registry, anything else is refused);
+2. a coding-agent seat (`claude-code`, `codex`, …);
+3. a seat you placed with `--local-endpoint` (`certify` only), when its name is no cloud vendor's;
+4. a pinned `MODEL_BACKEND` gateway (`ollama`, `openrouter`, or `openai` with `OPENAI_BASE_URL`), never re-routed by the model's name;
+5. a model the daemon at `OLLAMA_URL` lists (a set `OLLAMA_URL` that cannot be listed refuses the seat);
+6. a cloud vendor named by the model's prefix;
+7. otherwise the seat is refused, naming the ways to declare a source: the registry, `OLLAMA_URL`, a pinned `MODEL_BACKEND` and, on `certify`, `--local-endpoint`.
+
+A declared provider therefore always outranks what a name looks like, and corral has no default for any step. Each run prints one `models:` line saying where the seats were declared, then one line per seat with its provider, model and endpoint.
 
 ## The sandbox
 

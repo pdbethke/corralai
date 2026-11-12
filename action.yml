@@ -85,7 +85,7 @@ inputs:
     required: false
     default: ""
   model-key:
-    description: "Generic escape hatch for a credential the named provider inputs above do not cover (e.g. GOOGLE_API_KEY, or a gateway that reads its own variable). Use 'anthropic-key' / 'gemini-key' / 'openai-key' in preference — they are clearer and compose. Pair with 'model-key-env' to say which variable it becomes."
+    description: "Generic escape hatch for a credential the named provider inputs above do not cover (e.g. OPENROUTER_API_KEY, or a gateway that reads its own variable). Use 'anthropic-key' / 'gemini-key' / 'openai-key' in preference — they are clearer and compose. Pair with 'model-key-env' to say which variable it becomes."
     required: false
     default: ""
   model-key-env:
@@ -263,8 +263,8 @@ runs:
         set -euo pipefail
         # Provider credentials are wired in under the names corral's own
         # resolution reads (internal/agentbackend): ANTHROPIC_API_KEY,
-        # GEMINI_API_KEY (which itself falls back to GOOGLE_API_KEY then
-        # OPENAI_API_KEY), OPENAI_API_KEY.
+        # GEMINI_API_KEY (read alone: no GOOGLE_API_KEY or OPENAI_API_KEY
+        # fallback), OPENAI_API_KEY.
         #
         # SEVERAL AT ONCE, deliberately. CheckDecorrelation rejects a run whose
         # test-critic shares a model with its test-writer — a critic grading its

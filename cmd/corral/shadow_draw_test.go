@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/bugcatch"
 	"github.com/pdbethke/corralai/internal/models"
 	"github.com/pdbethke/corralai/internal/shadowpool"
@@ -26,6 +27,7 @@ func flagsWith(model, pool, wModel, wPool, seed string) *shadowSeatFlags {
 // Names with no cloud-vendor prefix resolve as local (ForModelOrLocal), so
 // these tests need no key.
 func TestDrawShadowSeatsWritesTheDrawIntoTheSeat(t *testing.T) {
+	declareLocalSeats(t, "localmodel-a:1", "localmodel-b:1")
 	f := flagsWith("", "localmodel-a:1,localmodel-b:1", "", "", "0x2a")
 	var errb bytes.Buffer
 	sels, err := drawShadowSeats("corral certify --local", t.TempDir(), "go", f, nil, filepath.Join(t.TempDir(), "none.duckdb"), &errb)
@@ -41,6 +43,7 @@ func TestDrawShadowSeatsWritesTheDrawIntoTheSeat(t *testing.T) {
 }
 
 func TestDrawShadowSeatsReadsHistoryForTheLanguage(t *testing.T) {
+	declareLocalSeats(t, "localmodel-a:1", "localmodel-b:1")
 	path := filepath.Join(t.TempDir(), "bc.duckdb")
 	s, err := bugcatch.Open(path)
 	if err != nil {
@@ -63,6 +66,7 @@ func TestDrawShadowSeatsReadsHistoryForTheLanguage(t *testing.T) {
 }
 
 func TestDrawShadowSeatsUnreadableStoreIsNotRead(t *testing.T) {
+	declareLocalSeats(t, "localmodel-a:1", "localmodel-b:1")
 	dir := t.TempDir() // a directory is not a DuckDB file
 	f := flagsWith("", "localmodel-a:1,localmodel-b:1", "", "", "0x1")
 	sels, err := drawShadowSeats("corral certify --local", t.TempDir(), "go", f, nil, dir, &bytes.Buffer{})
@@ -75,6 +79,7 @@ func TestDrawShadowSeatsUnreadableStoreIsNotRead(t *testing.T) {
 }
 
 func TestDrawShadowSeatsRefusals(t *testing.T) {
+	declareLocalSeats(t, "localmodel-a:1", "localmodel-b:1")
 	cases := []struct{ name, model, pool, wModel, wPool, seed, want string }{
 		{"both named and pooled", "a", "localmodel-a:1,localmodel-b:1", "", "", "", "--shadow-model"},
 		{"writer both", "", "", "a", "localmodel-a:1,localmodel-b:1", "", "--shadow-writer-model"},
@@ -84,8 +89,8 @@ func TestDrawShadowSeatsRefusals(t *testing.T) {
 	}
 	orig := shadowMemberRunnable
 	t.Cleanup(func() { shadowMemberRunnable = orig })
-	shadowMemberRunnable = func(m string) error {
-		if strings.HasPrefix(m, "claude-") {
+	shadowMemberRunnable = func(rs agentbackend.ResolvedSeat) error {
+		if strings.HasPrefix(rs.Spec, "claude-") {
 			return fmt.Errorf("ANTHROPIC_API_KEY is not set")
 		}
 		return nil
@@ -100,6 +105,19 @@ func TestDrawShadowSeatsRefusals(t *testing.T) {
 	}
 }
 
+// A pool member is a seat like any other: a bare local name that no declared
+// source serves is refused naming the member, the flag and the three ways to
+// declare one — not drawn and discovered at the first call it cannot make.
+func TestDrawShadowSeatsRefusesAMemberNoSourceServes(t *testing.T) {
+	clearSeatEnv(t)
+	_, err := drawShadowSeats("corral certify --local", t.TempDir(), "go", flagsWith("", "localmodel-a:1,localmodel-b:1", "", "", "0x1"), nil, filepath.Join(t.TempDir(), "x.duckdb"), &bytes.Buffer{})
+	for _, want := range []string{"--shadow-pool", "localmodel-a:1", "no declared source serves this model", "OLLAMA_URL", "MODEL_BACKEND"} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("err = %v, want it to mention %q", err, want)
+		}
+	}
+}
+
 func TestDrawShadowSeatsSeedWithoutPoolRefused(t *testing.T) {
 	_, err := drawShadowSeats("corral certify --local", t.TempDir(), "go", flagsWith("", "", "", "", "0x1"), nil, "", &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "--shadow-seed") {
@@ -108,6 +126,7 @@ func TestDrawShadowSeatsSeedWithoutPoolRefused(t *testing.T) {
 }
 
 func TestDrawShadowSeatsWarnsMemberEqualsPrimary(t *testing.T) {
+	declareLocalSeats(t, "localmodel-a:1", "localmodel-b:1")
 	var errb bytes.Buffer
 	_, err := drawShadowSeats("corral certify --local", t.TempDir(), "go", flagsWith("", "localmodel-a:1,localmodel-b:1", "", "", "0x1"),
 		map[string]string{advpool.RoleMutantGenerator: "localmodel-a:1"}, filepath.Join(t.TempDir(), "x.duckdb"), &errb)
@@ -139,6 +158,7 @@ func TestDrawShadowSeatsStrictRegistryNamesMember(t *testing.T) {
 // surface: --shadow-writer-pool
 // surface: --shadow-seed
 func TestEveryDoorDrawsFromItsPoolFlags(t *testing.T) {
+	declareLocalSeats(t, "localmodel-a:1", "localmodel-b:1", "localmodel-c:1", "localmodel-d:1")
 	t.Setenv("CORRALAI_BUGCATCH_DB", filepath.Join(t.TempDir(), "bc.duckdb"))
 	pools := []string{"--shadow-pool", "localmodel-a:1,localmodel-b:1", "--shadow-writer-pool", "localmodel-c:1,localmodel-d:1", "--shadow-seed", "0x2a"}
 	doors := []struct {
@@ -205,6 +225,7 @@ func TestDoctorValidatesShadowPools(t *testing.T) {
 // The verdict seat reaches the draw as TYPED — before the registry runs — so
 // an alias on the primary must still be recognised as the member it names.
 func TestDrawShadowSeatsWarnsMemberEqualsAliasedPrimary(t *testing.T) {
+	declareLocalSeats(t, "localmodel-a:1", "localmodel-b:1")
 	t.Setenv(models.EnvInline, `{"edge": {"provider": "ollama", "model": "localmodel-a:1", "endpoint": "http://127.0.0.1:11434"}}`)
 	t.Setenv(models.EnvFile, "")
 	var errb bytes.Buffer
@@ -220,6 +241,7 @@ func TestDrawShadowSeatsWarnsMemberEqualsAliasedPrimary(t *testing.T) {
 // roles the draw reads; counting them made two never-run members on a flat
 // prior read "history 214 row(s)".
 func TestDrawShadowSeatsHistoryRowsCountOnlyPoolMembers(t *testing.T) {
+	declareLocalSeats(t, "localmodel-a:1", "localmodel-b:1")
 	path := filepath.Join(t.TempDir(), "bc.duckdb")
 	s, err := bugcatch.Open(path)
 	if err != nil {
@@ -251,6 +273,7 @@ func TestDrawShadowSeatsHistoryRowsCountOnlyPoolMembers(t *testing.T) {
 // succeeds when its mutants survive. Draw clamps successes to trials, so a
 // swapped mapping would not crash; it would quietly invert the posterior.
 func TestDrawShadowSeatsGeneratorHistoryIsSurvivedOverPlanted(t *testing.T) {
+	declareLocalSeats(t, "localmodel-a:1", "localmodel-b:1")
 	path := filepath.Join(t.TempDir(), "bc.duckdb")
 	s, err := bugcatch.Open(path)
 	if err != nil {
@@ -277,6 +300,7 @@ func TestDrawShadowSeatsGeneratorHistoryIsSurvivedOverPlanted(t *testing.T) {
 // record, not a value in the store: passed through, it would query
 // lang = 'any', find nothing, and sign a measured zero.
 func TestDrawShadowSeatsPooledReadsEveryRecordedLanguage(t *testing.T) {
+	declareLocalSeats(t, "localmodel-a:1", "localmodel-b:1")
 	path := filepath.Join(t.TempDir(), "bc.duckdb")
 	s, err := bugcatch.Open(path)
 	if err != nil {
@@ -309,11 +333,12 @@ func TestDrawShadowSeatsPooledReadsEveryRecordedLanguage(t *testing.T) {
 // an audit that never runs, and creating the scorecard file. It is now
 // validated (a malformed pool is still refused) and nothing else.
 func TestCertifyRepoDryRunValidatesPoolsButDoesNotDraw(t *testing.T) {
+	declareLocalSeats(t, "localmodel-a:1", "localmodel-b:1", "localmodel-c:1", "localmodel-d:1")
 	db := filepath.Join(t.TempDir(), "bc.duckdb")
 	t.Setenv("CORRALAI_BUGCATCH_DB", db)
 	orig := shadowMemberRunnable
 	t.Cleanup(func() { shadowMemberRunnable = orig })
-	shadowMemberRunnable = func(m string) error { return fmt.Errorf("no credential for %s", m) }
+	shadowMemberRunnable = func(rs agentbackend.ResolvedSeat) error { return fmt.Errorf("no credential for %s", rs.Spec) }
 
 	var out, errb bytes.Buffer
 	rc := runCertifyRepo([]string{"--repo", t.TempDir(), "--dry-run",

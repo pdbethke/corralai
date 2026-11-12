@@ -16,13 +16,14 @@ import (
 	"github.com/pdbethke/corralai/internal/shadowpool"
 )
 
-// shadowMemberRunnable is the per-member check: a cloud model's credential,
-// nothing for a local one — the rule any seat that may hold a local model
-// gets. A variable so a test can pin it: the real credential store is opened
-// once per process, so no environment variable set inside a test can
-// reliably make a key absent.
-var shadowMemberRunnable = func(model string) error {
-	_, err := agentbackend.ForSeat(model, agentbackend.SeatOptions{})
+// shadowMemberRunnable is the per-member check: build the member's resolved
+// seat, which asks a cloud model for its credential and a local one for
+// nothing — the rule any seat that may hold a local model gets, and the same
+// constructor the run itself will use. A variable so a test can pin it: the
+// real credential store is opened once per process, so no environment
+// variable set inside a test can reliably make a key absent.
+var shadowMemberRunnable = func(rs agentbackend.ResolvedSeat) error {
+	_, err := agentbackend.Build(rs, agentbackend.SeatOptions{})
 	return err
 }
 
@@ -96,15 +97,20 @@ func shadowCandidates(cmdName, repoRoot string, f *shadowSeatFlags, primary map[
 		// seat's own resolution refuses it moments later.
 		primaryModel := primary[s.base]
 		if primaryModel != "" {
-			_, _ = resolveSeatRegistry(cmdName, repoRoot, []seatFlag{{flag: s.base, role: s.base, val: &primaryModel}}, io.Discard)
+			_, _ = resolveSeats(context.Background(), cmdName, repoRoot, []seatFlag{{flag: s.base, role: s.base, val: &primaryModel}}, io.Discard)
 		}
 		for _, typed := range members {
 			concrete := typed
-			if _, err := resolveSeatRegistry(cmdName, repoRoot, []seatFlag{{flag: s.poolFlag, role: s.role, val: &concrete}}, io.Discard); err != nil {
+			// context.Background(): no cancellable context exists where the
+			// pools are checked (before any audit context is installed); the
+			// one network call, listing OLLAMA_URL's daemon, has its own 10s
+			// bound.
+			set, err := resolveSeats(context.Background(), cmdName, repoRoot, []seatFlag{{flag: s.poolFlag, role: s.role, val: &concrete}}, io.Discard)
+			if err != nil {
 				return nil, fmt.Errorf("--%s member %q: %v", s.poolFlag, typed, err)
 			}
 			if checkCredentials {
-				if err := shadowMemberRunnable(concrete); err != nil {
+				if err := shadowMemberRunnable(set[s.poolFlag]); err != nil {
 					return nil, fmt.Errorf("--%s member %q cannot run: %v — every member is checked before the draw, so fix or remove it", s.poolFlag, typed, err)
 				}
 			}

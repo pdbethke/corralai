@@ -8,7 +8,6 @@ import (
 
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/agentbackend"
-	"github.com/pdbethke/corralai/internal/models"
 )
 
 // seatFlag ties one `--*-model` flag to the pool role it staffs, so the
@@ -44,91 +43,6 @@ func certifySeats(derive, mutant, writer, critic, shadow, shadowWriter *string) 
 	}
 	if shadowWriter != nil {
 		out = append(out, seatFlag{flag: "shadow-writer-model", role: advpool.RoleTestWriterShadow, val: shadowWriter})
-	}
-	return out
-}
-
-// resolveSeatRegistry loads the project's model registry and resolves every
-// seat flag through it, IN PLACE.
-//
-// THE RULE THIS KEEPS. A seat value is either a declared alias or a concrete
-// model name, and it has always been the latter — so an alias hit is rewritten
-// to its concrete model here, before any other code reads the value, and a
-// miss is left exactly as the operator typed it. Everything downstream (the
-// verdict, the ledger, the signed statement, the report lines and above all
-// the CACHE KEY) therefore sees the concrete model and can never key on an
-// alias. An alias that keyed a verdict would destroy reproducibility: two runs
-// both claiming "strong" would not be comparable, and renaming an alias would
-// silently invalidate — or worse, silently reuse — a cached result.
-//
-// A seat with NO value is untouched. corral has no default models and the
-// registry is not one: an unnamed seat still refuses the run downstream.
-//
-// Returns the local endpoints the registry implies, as the SAME role→url map
-// --local-endpoint produces. The caller merges them, with an explicit
-// --local-endpoint winning: the flag is the more specific statement.
-// seatResolution is what a run learned about its seats from the registry:
-// which local daemons to place them on, and — the new fact — WHICH PROVIDER
-// each seat runs on. Provider used to be a substring guess over a model name;
-// declared, it is data, and the decorrelation disclosure can finally say
-// "these two seats are the same vendor" out loud.
-type seatResolution struct {
-	// endpoints is role -> daemon URL, the SAME shape parseLocalEndpoints
-	// produces, because it feeds the same mechanism.
-	endpoints map[string]string
-	// providers is role -> provider, from the registry where an alias was
-	// named and from the name-based inference otherwise. A seat whose provider
-	// cannot be determined is ABSENT, never guessed.
-	providers map[string]string
-}
-
-func (r *seatResolution) localEndpoints() map[string]string {
-	if r == nil {
-		return nil
-	}
-	return r.endpoints
-}
-
-func (r *seatResolution) seatProviders() map[string]string {
-	if r == nil {
-		return nil
-	}
-	return r.providers
-}
-
-// endpointNote names the daemon a local seat will actually talk to. A local
-// model's placement is the whole point of declaring it, and a placement the
-// operator cannot see is one they cannot check.
-func endpointNote(e models.Entry) string {
-	if e.Endpoint == "" {
-		return ""
-	}
-	return " @ " + e.Endpoint
-}
-
-// inferredProvider is the vendor corral derives from a bare model name — the
-// same inference the router has always made, said out loud. A name it cannot
-// place is a local one, served by whatever daemon the environment points at.
-func inferredProvider(model string) string {
-	if v := agentbackend.VendorOf(model); v != "" {
-		return v
-	}
-	return "local daemon (no cloud vendor in the name)"
-}
-
-// mergeLocalEndpoints folds registry-implied endpoints under explicit
-// --local-endpoint placements. The flag wins: it is the operator naming one
-// seat's daemon for this run, against a declaration that covers every run.
-func mergeLocalEndpoints(fromFlag, fromRegistry map[string]string) map[string]string {
-	if len(fromRegistry) == 0 {
-		return fromFlag
-	}
-	out := map[string]string{}
-	for role, url := range fromRegistry {
-		out[role] = url
-	}
-	for role, url := range fromFlag {
-		out[role] = url
 	}
 	return out
 }

@@ -37,6 +37,16 @@ func fakeOllama(t *testing.T, served ...string) *int32 {
 	return &calls
 }
 
+// declareLocalSeats gives the bare seat names a test types a declared source,
+// as every seat now needs one: OLLAMA_URL naming a daemon whose listing serves
+// exactly these models. The URL is never dialled (listOllama is replaced).
+func declareLocalSeats(t *testing.T, names ...string) {
+	t.Helper()
+	clearSeatEnv(t)
+	t.Setenv("OLLAMA_URL", "http://ollama.test.invalid:11434")
+	fakeOllama(t, names...)
+}
+
 func TestResolveBareGptOssWithOllamaListingIsLocal(t *testing.T) {
 	clearSeatEnv(t)
 	t.Setenv("OLLAMA_URL", "http://daemon:11434")
@@ -66,6 +76,31 @@ func TestResolvePinnedGatewayIsNeverRerouted(t *testing.T) {
 	rs, _ := set.byRole(advpool.RoleTestWriter)
 	if rs.Provider != "openrouter" || rs.DeclaredBy != agentbackend.DeclaredPinned {
 		t.Errorf("resolved = %+v, want openrouter, pinned", rs)
+	}
+}
+
+// A VENDOR pin (MODEL_BACKEND=anthropic, claude, gemini, or openai without
+// OPENAI_BASE_URL) is not a gateway: it names one vendor, not an endpoint that
+// fronts many, so a seat for another vendor still goes to ITS vendor by name
+// rather than being forced onto the pinned one. Only a gateway pin is never
+// re-routed. (Ported from the TestBaseVendorMapsBackendLabels table, which
+// pinned this behaviour through baseVendor, a helper that no longer exists.)
+func TestResolveVendorPinIsNotAGateway(t *testing.T) {
+	for _, pin := range []string{"anthropic", "claude", "gemini", "openai"} {
+		t.Run(pin, func(t *testing.T) {
+			clearSeatEnv(t)
+			t.Setenv("MODEL_BACKEND", pin)
+			s := &seatPtrs{writer: "claude-sonnet-5", mutant: "gemini-3.6-flash"}
+			set, err := resolveSeats(context.Background(), "test", t.TempDir(), s.flags(), nil)
+			if err != nil {
+				t.Fatalf("resolveSeats: %v", err)
+			}
+			w, _ := set.byRole(advpool.RoleTestWriter)
+			m, _ := set.byRole(advpool.RoleMutantGenerator)
+			if w.Provider != "anthropic" || m.Provider != "google" || w.DeclaredBy != agentbackend.DeclaredName || m.DeclaredBy != agentbackend.DeclaredName {
+				t.Errorf("under MODEL_BACKEND=%s: writer %+v, mutant %+v, want each routed to its own vendor by name", pin, w, m)
+			}
+		})
 	}
 }
 

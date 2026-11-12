@@ -179,7 +179,7 @@ func TestLocalChatterForCrossVendorCriticFailsClosedWithoutKey(t *testing.T) {
 // Since the 2026-09 router review that fallback is gone from the
 // cross-vendor door, and the property is now made true on purpose:
 // MODEL_BACKEND=openai with a custom OPENAI_BASE_URL is a gateway
-// (baseVendor returns ""), so the critic is WithModel on the pinned backend
+// (the resolver treats it as a pinned gateway), so the critic is WithModel on the pinned backend
 // and no ForModel is ever attempted — which the absent Gemini key proves.
 func TestLocalChatterForExplicitBackendNeverCrossVendorRoutes(t *testing.T) {
 	srv, reqs := captureServer(t, "openai")
@@ -393,30 +393,6 @@ func TestResolveAuditRolesDerivesBackendFromAssignedModels(t *testing.T) {
 			t.Errorf("MODEL_BACKEND = %q, want it left at openrouter", got)
 		}
 	})
-}
-
-// TestBaseVendorMapsBackendLabels: the base backend's vendor is what a per-role
-// model must differ from. A pinned gateway (openrouter/ollama) returns "" —
-// those front many vendors behind one endpoint, so a "claude-" name there is
-// NOT an Anthropic call and must never be re-routed to Anthropic behind the
-// operator's back.
-func TestBaseVendorMapsBackendLabels(t *testing.T) {
-	for _, tc := range []struct{ env, want string }{
-		// UNSET is not a vendor — FromEnv answers it with ollama, and this
-		// must agree or a mixed-vendor run routes a cloud seat to ollama.
-		{"", ""},
-		{"anthropic", "anthropic"},
-		{"claude", "anthropic"},
-		{"gemini", "google"},
-		{"openai", "openai"},
-		{"openrouter", ""},
-		{"ollama", ""},
-	} {
-		t.Setenv("MODEL_BACKEND", tc.env)
-		if got := baseVendor(); got != tc.want {
-			t.Errorf("MODEL_BACKEND=%q: baseVendor()=%q want %q", tc.env, got, tc.want)
-		}
-	}
 }
 
 // TestUnpinnedMixedVendorRunRoutesEverySeatByName is the regression for a

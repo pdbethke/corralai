@@ -18,6 +18,7 @@ import (
 // finding about code nobody committed, then be demoted when the script ran
 // against the code that was. Found by an outside review (Codex, 2026-10-17).
 func TestReviewShowsTheAPISeatTheCommitNotTheWorkingCopy(t *testing.T) {
+	declareLocalSeats(t, "reviewer-x")
 	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
 	root := t.TempDir()
 	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\nfunc Add(a, b int) int { return a - b }\n")
@@ -32,7 +33,7 @@ func TestReviewShowsTheAPISeatTheCommitNotTheWorkingCopy(t *testing.T) {
 	var saw string
 	orig := newReviewerBackend
 	t.Cleanup(func() { newReviewerBackend = orig })
-	newReviewerBackend = func(string, string) (agentbackend.Backend, error) {
+	newReviewerBackend = func(agentbackend.ResolvedSeat, agentbackend.SeatOptions) (agentbackend.Backend, error) {
 		return cannedReviewer{saw: &saw, reply: `{"opinion":"It subtracts.","findings":[{"claim":"Add subtracts","tier":"REPRODUCED","file":"pkg/a.go","line":2,"severity":"low","script":"grep -q 'return a - b' pkg/a.go"}],"sound":[]}`}, nil
 	}
 	var out, errout bytes.Buffer

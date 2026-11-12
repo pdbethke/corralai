@@ -173,8 +173,13 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "corral review: --repo is not a git checkout at a commit — a review names the revision it reviewed")
 		return 2
 	}
-	if _, err := resolveSeatRegistry("corral review", root, []seatFlag{{flag: "reviewer-model", val: model}, {flag: "verifier-model", val: verifier}}, stderr); err != nil {
-		fmt.Fprintf(stderr, "corral review: %v\n", err)
+	// context.Background(): no cancellable context exists yet — the SIGINT
+	// handler (auditContext) is installed after the substrate is chosen, so an
+	// interrupt before this point has nothing to unwind. The one network call
+	// (listing OLLAMA_URL's daemon) has its own 10s bound.
+	seats, regErr := resolveSeats(context.Background(), "corral review", root, []seatFlag{{flag: "reviewer-model", val: model}, {flag: "verifier-model", val: verifier}}, stderr)
+	if regErr != nil {
+		fmt.Fprintf(stderr, "corral review: %v\n", regErr)
 		return 2
 	}
 	// The decorrelation rule, the same one the writer and the critic live
@@ -215,19 +220,23 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 	}
 	defer seatCleanup()
 	agentTimeout := 30 * time.Minute
-	seat := func(spec string) (agentbackend.Backend, string, error) {
-		if _, _, isAgent := agentbackend.AgentSeat(spec); isAgent {
-			b, err := agentbackend.ForSeat(spec, agentbackend.SeatOptions{Dir: seatTree, Timeout: agentTimeout, Tools: reviewSeatTools})
+	// A seat is built from the resolution resolveSeats already made for it: the
+	// registry's endpoint, the pinned gateway or the discovered daemon is what
+	// the call goes to, and no name is re-guessed here.
+	seat := func(flag string) (agentbackend.Backend, string, error) {
+		rs := seats[flag]
+		if rs.Kind == "agent" {
+			b, err := agentbackend.Build(rs, agentbackend.SeatOptions{Dir: seatTree, Timeout: agentTimeout, Tools: reviewSeatTools})
 			if err != nil {
 				return nil, "", err
 			}
 			// The same helper certify's Verdict.SeatTools is built with.
-			return b, agentbackend.SeatTool(spec), nil
+			return b, agentbackend.SeatTool(rs.Spec), nil
 		}
-		b, err := newReviewerBackend(spec, "")
+		b, err := newReviewerBackend(rs, agentbackend.SeatOptions{})
 		return b, "", err
 	}
-	backend, reviewerTool, err := seat(*model)
+	backend, reviewerTool, err := seat("reviewer-model")
 	if err != nil {
 		fmt.Fprintf(stderr, "corral review: reviewer seat: %v\n", err)
 		return 2
@@ -235,13 +244,14 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 	var verifierBackend agentbackend.Backend
 	verifierTool := ""
 	if strings.TrimSpace(*verifier) != "" {
-		if verifierBackend, verifierTool, err = seat(*verifier); err != nil {
+		if verifierBackend, verifierTool, err = seat("verifier-model"); err != nil {
 			fmt.Fprintf(stderr, "corral review: verifier seat: %v\n", err)
 			return 2
 		}
 	}
-	_, _, reviewerIsAgent := agentbackend.AgentSeat(*model)
-	_, _, verifierIsAgent := agentbackend.AgentSeat(*verifier)
+	// Agent-ness is what the resolver decided, never re-read from the flag.
+	reviewerIsAgent := seats["reviewer-model"].Kind == "agent"
+	verifierIsAgent := seats["verifier-model"].Kind == "agent"
 
 	// Read from seatTree, the detached worktree AT commit, never from root:
 	// the entry is recorded against commit and the reproductions run on it,
@@ -477,27 +487,7 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 }
 
 // newReviewerBackend is the seat's constructor; a test substitutes a fake.
-var newReviewerBackend = seatBackend
-
-// seatBackend resolves one seat's model to a backend the way the goal
-// deriver does: a local daemon when the registry placed it on one, the
-// pinned MODEL_BACKEND when it serves this vendor, else the model's own
-// provider.
-func seatBackend(model, endpoint string) (agentbackend.Backend, error) {
-	if endpoint != "" {
-		return agentbackend.NewOllamaBackend(endpoint, model), nil
-	}
-	if v := agentbackend.VendorOf(model); v != "" && !isAgentSeat(model) && backendPinned() && (baseVendor() == "" || baseVendor() == v) {
-		base := agentbackend.FromEnv()
-		if sw, ok := base.(agentbackend.ModelSwitcher); ok {
-			return sw.WithModel(model), nil
-		}
-		return base, nil
-	}
-	// ForSeat defers to ForModelOrLocal for a non-agent name, so the local
-	// fallback is kept; an agent spec never reaches here (seat() takes it).
-	return agentbackend.ForSeat(model, agentbackend.SeatOptions{})
-}
+var newReviewerBackend = agentbackend.Build
 
 // reviewSeatTools are the tools an agent seat in review is granted: it reads
 // the tree, so it may read, search and list it — and nothing else. A

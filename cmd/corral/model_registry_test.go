@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/agentworker"
 	"github.com/pdbethke/corralai/internal/models"
 )
@@ -40,8 +41,8 @@ func TestRegistryAliasResolvesAtEverySeatFlag(t *testing.T) {
 	t.Setenv(models.EnvFile, "")
 	s := &seatPtrs{derive: "fast", mutant: "fast", writer: "scribe", critic: "strong", shadow: "fast", shadowWriter: "strong"}
 	var errb bytes.Buffer
-	if _, err := resolveSeatRegistry("test", t.TempDir(), s.flags(), &errb); err != nil {
-		t.Fatalf("resolveSeatRegistry: %v", err)
+	if _, err := resolveSeats(context.Background(), "test", t.TempDir(), s.flags(), &errb); err != nil {
+		t.Fatalf("resolveSeats: %v", err)
 	}
 	want := seatPtrs{
 		derive: "gemini-3.6-flash", mutant: "gemini-3.6-flash",
@@ -72,8 +73,8 @@ func TestConcreteModelNameUnchangedByRegistry(t *testing.T) {
 			t.Setenv(models.EnvFile, "")
 			s := &seatPtrs{mutant: "gemini-3.6-flash", writer: "claude-sonnet-5", critic: "off"}
 			var errb bytes.Buffer
-			if _, err := resolveSeatRegistry("test", t.TempDir(), s.flags(), &errb); err != nil {
-				t.Fatalf("resolveSeatRegistry: %v", err)
+			if _, err := resolveSeats(context.Background(), "test", t.TempDir(), s.flags(), &errb); err != nil {
+				t.Fatalf("resolveSeats: %v", err)
 			}
 			want := seatPtrs{mutant: "gemini-3.6-flash", writer: "claude-sonnet-5", critic: "off"}
 			if *s != want {
@@ -91,17 +92,19 @@ func TestNoRegistryStillDisclosesResolution(t *testing.T) {
 	t.Setenv(models.EnvFile, "")
 	s := &seatPtrs{mutant: "gemini-3.6-flash", writer: "claude-sonnet-5"}
 	var errb bytes.Buffer
-	ep, err := resolveSeatRegistry("test", t.TempDir(), s.flags(), &errb)
+	set, err := resolveSeats(context.Background(), "test", t.TempDir(), s.flags(), &errb)
 	if err != nil {
-		t.Fatalf("resolveSeatRegistry: %v", err)
+		t.Fatalf("resolveSeats: %v", err)
 	}
 	for _, w := range []string{"no registry declared", "google/gemini-3.6-flash", "anthropic/claude-sonnet-5", "(name)"} {
 		if !strings.Contains(errb.String(), w) {
 			t.Errorf("stderr = %q, want it to name %q", errb.String(), w)
 		}
 	}
-	if len(ep.localEndpoints()) != 0 {
-		t.Errorf("resolution = %+v, want no local placement with no registry", ep)
+	for flag, rs := range set {
+		if rs.Endpoint != "" || rs.Wire != models.WireHosted {
+			t.Errorf("seat %s = %+v, want no local placement with no registry", flag, rs)
+		}
 	}
 }
 
@@ -111,8 +114,8 @@ func TestRegistryNeverFillsAnUnnamedSeat(t *testing.T) {
 	t.Setenv(models.EnvInline, registryJSON)
 	t.Setenv(models.EnvFile, "")
 	s := &seatPtrs{}
-	if _, err := resolveSeatRegistry("test", t.TempDir(), s.flags(), &errDiscard{}); err != nil {
-		t.Fatalf("resolveSeatRegistry: %v", err)
+	if _, err := resolveSeats(context.Background(), "test", t.TempDir(), s.flags(), &errDiscard{}); err != nil {
+		t.Fatalf("resolveSeats: %v", err)
 	}
 	if (*s != seatPtrs{}) {
 		t.Fatalf("seats = %+v, want every one still empty — a registry is not a default", *s)
@@ -133,8 +136,8 @@ func TestAliasRenameDoesNotChangeTheCacheKey(t *testing.T) {
 		t.Setenv(models.EnvInline, inline)
 		t.Setenv(models.EnvFile, "")
 		s := &seatPtrs{writer: writerAlias, mutant: mutantAlias, critic: "off"}
-		if _, err := resolveSeatRegistry("test", t.TempDir(), s.flags(), &errDiscard{}); err != nil {
-			t.Fatalf("resolveSeatRegistry: %v", err)
+		if _, err := resolveSeats(context.Background(), "test", t.TempDir(), s.flags(), &errDiscard{}); err != nil {
+			t.Fatalf("resolveSeats: %v", err)
 		}
 		w, m, c, sh, sw := resolveRoleModels(localAuditInput{
 			writerModel: s.writer, mutantModel: s.mutant, criticModel: s.critic,
@@ -251,17 +254,25 @@ func TestLocalRegistryEntryPlacesItsSeatOnItsDaemon(t *testing.T) {
 }
 
 // An explicit --local-endpoint beats the declaration: the flag names one
-// seat's daemon for THIS run against a declaration covering every run.
+// seat's daemon for THIS run against a declaration covering every run. The
+// seat the flag does not name keeps the registry's daemon.
 func TestExplicitLocalEndpointBeatsTheRegistry(t *testing.T) {
-	got := mergeLocalEndpoints(
-		map[string]string{advpool.RoleTestWriter: "http://flag:1"},
-		map[string]string{advpool.RoleTestWriter: "http://registry:2", advpool.RoleMutantGenerator: "http://registry:3"},
-	)
-	if got[advpool.RoleTestWriter] != "http://flag:1" {
-		t.Errorf("writer endpoint = %q, want the flag to win", got[advpool.RoleTestWriter])
+	clearSeatEnv(t)
+	t.Setenv(models.EnvInline, `{
+  "scribe": {"provider":"ollama","model":"qwen3.5:9b","endpoint":"http://registry:2"},
+  "edge":   {"provider":"ollama","model":"gemma4:12b","endpoint":"http://registry:3"}
+}`)
+	s := &seatPtrs{writer: "scribe", mutant: "edge"}
+	set, err := resolveSeatsPlaced(context.Background(), "test", t.TempDir(), s.flags(),
+		map[string]string{advpool.RoleTestWriter: "http://flag:1"}, &errDiscard{})
+	if err != nil {
+		t.Fatalf("resolveSeatsPlaced: %v", err)
 	}
-	if got[advpool.RoleMutantGenerator] != "http://registry:3" {
-		t.Errorf("mutant endpoint = %q, want the declared one", got[advpool.RoleMutantGenerator])
+	if rs, _ := set.byRole(advpool.RoleTestWriter); rs.Endpoint != "http://flag:1" || rs.DeclaredBy != agentbackend.DeclaredFlag {
+		t.Errorf("writer = %+v, want the flag's endpoint to win and say so", rs)
+	}
+	if rs, _ := set.byRole(advpool.RoleMutantGenerator); rs.Endpoint != "http://registry:3" {
+		t.Errorf("mutant endpoint = %q, want the declared one", rs.Endpoint)
 	}
 }
 
@@ -334,7 +345,7 @@ func TestStrictRegistryRefusesAnUnknownAlias(t *testing.T) {
 	t.Setenv(models.EnvFile, "")
 	s := &seatPtrs{writer: "nope", mutant: "fast"}
 	var errb bytes.Buffer
-	_, err := resolveSeatRegistry("test", t.TempDir(), s.flags(), &errb)
+	_, err := resolveSeats(context.Background(), "test", t.TempDir(), s.flags(), &errb)
 	if err == nil {
 		t.Fatal("strict registry accepted an unknown value, want a refusal")
 	}
@@ -366,7 +377,7 @@ func TestStrictRegistryAllowsAliasesAndOff(t *testing.T) {
 	t.Setenv(models.EnvFile, "")
 	s := &seatPtrs{writer: "scribe", mutant: "fast", critic: "off"}
 	var errb bytes.Buffer
-	if _, err := resolveSeatRegistry("test", t.TempDir(), s.flags(), &errb); err != nil {
+	if _, err := resolveSeats(context.Background(), "test", t.TempDir(), s.flags(), &errb); err != nil {
 		t.Fatalf("strict registry refused declared aliases: %v", err)
 	}
 	want := seatPtrs{writer: "claude-sonnet-5", mutant: "gemini-3.6-flash", critic: "off"}
@@ -378,7 +389,7 @@ func TestStrictRegistryAllowsAliasesAndOff(t *testing.T) {
 	}
 
 	empty := &seatPtrs{}
-	if _, err := resolveSeatRegistry("test", t.TempDir(), empty.flags(), &errDiscard{}); err != nil {
+	if _, err := resolveSeats(context.Background(), "test", t.TempDir(), empty.flags(), &errDiscard{}); err != nil {
 		t.Fatalf("strict registry refused an unnamed seat at resolution: %v", err)
 	}
 	if (*empty != seatPtrs{}) {
@@ -396,7 +407,7 @@ func TestNonStrictRegistryStillAcceptsAConcreteName(t *testing.T) {
 	t.Setenv(models.EnvFile, "")
 	s := &seatPtrs{writer: "claude-sonnet-5", mutant: "gemini-3.6-flash"}
 	var errb bytes.Buffer
-	if _, err := resolveSeatRegistry("test", t.TempDir(), s.flags(), &errb); err != nil {
+	if _, err := resolveSeats(context.Background(), "test", t.TempDir(), s.flags(), &errb); err != nil {
 		t.Fatalf("non-strict registry refused a concrete model name: %v", err)
 	}
 	want := seatPtrs{writer: "claude-sonnet-5", mutant: "gemini-3.6-flash"}

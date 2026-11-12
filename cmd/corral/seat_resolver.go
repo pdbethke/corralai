@@ -52,8 +52,8 @@ func (s seatSet) providers() map[string]string {
 var listOllama = modelcatalog.ListOllama
 
 // errNoSource is the refusal for a bare model name that no declared source
-// serves. A distinct type so the transitional resolveSeatRegistry adapter can
-// tell it from a real configuration error.
+// serves. A distinct type so resolveSeatsPlaced can tell it from a real
+// configuration error and offer --local-endpoint where the command takes it.
 // placeable is set where the command takes --local-endpoint, the fourth way to
 // declare a source; elsewhere the refusal must not offer a flag that is absent.
 type errNoSource struct {
@@ -87,7 +87,7 @@ func (e errNoSource) Error() string {
 // A declared provider therefore always outranks what a name looks like. An
 // unnamed seat and "off" are skipped: corral has no default models.
 func resolveSeats(ctx context.Context, cmdName, repoRoot string, seats []seatFlag, stderr io.Writer) (seatSet, error) {
-	return resolveSeatsOpt(ctx, cmdName, repoRoot, seats, nil, stderr, false)
+	return resolveSeatsOpt(ctx, cmdName, repoRoot, seats, nil, stderr)
 }
 
 // resolveSeatsPlaced is resolveSeats for a run that may carry --local-endpoint
@@ -98,7 +98,7 @@ func resolveSeats(ctx context.Context, cmdName, repoRoot string, seats []seatFla
 // folded in BEFORE the disclosure prints, so the lines show where each seat
 // will really talk.
 func resolveSeatsPlaced(ctx context.Context, cmdName, repoRoot string, seats []seatFlag, placed map[string]string, stderr io.Writer) (seatSet, error) {
-	set, err := resolveSeatsOpt(ctx, cmdName, repoRoot, seats, placed, stderr, false)
+	set, err := resolveSeatsOpt(ctx, cmdName, repoRoot, seats, placed, stderr)
 	var ns errNoSource
 	if errors.As(err, &ns) {
 		ns.placeable = true
@@ -107,9 +107,9 @@ func resolveSeatsPlaced(ctx context.Context, cmdName, repoRoot string, seats []s
 	return set, err
 }
 
-// resolveSeatsOpt is resolveSeats with the adapter's one concession:
-// skipNoSource leaves a seat no source declares unresolved instead of refusing.
-func resolveSeatsOpt(ctx context.Context, cmdName, repoRoot string, seats []seatFlag, placed map[string]string, stderr io.Writer, skipNoSource bool) (seatSet, error) {
+// resolveSeatsOpt is the one body behind resolveSeats and resolveSeatsPlaced;
+// placed is nil where the command takes no --local-endpoint.
+func resolveSeatsOpt(ctx context.Context, cmdName, repoRoot string, seats []seatFlag, placed map[string]string, stderr io.Writer) (seatSet, error) {
 	if stderr == nil {
 		stderr = io.Discard
 	}
@@ -172,8 +172,6 @@ func resolveSeatsOpt(ctx context.Context, cmdName, repoRoot string, seats []seat
 			rs.DeclaredBy = agentbackend.DeclaredDiscovered
 		} else if vendor := agentbackend.VendorOf(v); vendor != "" { // (6)
 			rs.Provider, rs.Wire, rs.DeclaredBy = vendor, models.WireHosted, agentbackend.DeclaredName
-		} else if skipNoSource { // (7), tolerated
-			continue
 		} else { // (7)
 			return nil, errNoSource{flag: s.flag, value: v}
 		}
@@ -301,30 +299,4 @@ func firstSet(vals ...string) string {
 		}
 	}
 	return ""
-}
-
-// resolveSeatRegistry is the transitional adapter that keeps the callers not
-// yet moved onto resolveSeats compiling. It returns the old seatResolution
-// shape derived from the resolved set.
-//
-// One concession, to be deleted with the adapter: a bare name no source
-// declares (errNoSource) is left untouched and unresolved here, as it always
-// was, because those callers still hand such names to the legacy router. The
-// caller migrations make that refusal real.
-func resolveSeatRegistry(cmdName, repoRoot string, seats []seatFlag, stderr io.Writer) (*seatResolution, error) {
-	set, err := resolveSeatsOpt(context.Background(), cmdName, repoRoot, seats, nil, stderr, true)
-	if err != nil {
-		return nil, err
-	}
-	res := &seatResolution{endpoints: map[string]string{}, providers: set.providers()}
-	for _, rs := range set {
-		local := rs.Wire == models.WireOllama || rs.Wire == models.WireOpenAIChat
-		if rs.Kind == "agent" || !local || rs.Endpoint == "" {
-			continue
-		}
-		if rs.Role != "" {
-			res.endpoints[rs.Role] = rs.Endpoint
-		}
-	}
-	return res, nil
 }

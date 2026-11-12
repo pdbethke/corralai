@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -390,5 +391,22 @@ func TestCertifyLocalRefusesUnknownLangBeforeTheDraw(t *testing.T) {
 	rc = runCertifyLocal([]string{"--shadow-pool", "localmodel-a:1,localmodel-b:1"}, &bytes.Buffer{}, &errb)
 	if rc != 2 || !strings.Contains(errb.String(), "pass --lang (or --code)") {
 		t.Fatalf("rc %d, want the undetectable-language refusal naming --lang and --code:\n%s", rc, errb.String())
+	}
+}
+
+// A pool is checked member by member, but OLLAMA_URL's daemon is listed once
+// for the whole check: a stale daemon must cost one 10s bound, not one per
+// member (Task 4's list-once property, across the calls the pool makes).
+func TestShadowPoolListsOllamaOnceForTheWholePool(t *testing.T) {
+	clearSeatEnv(t)
+	t.Setenv("OLLAMA_URL", "http://ollama.test.invalid")
+	calls := fakeOllama(t, "localmodel-a:1", "localmodel-b:1", "localmodel-c:1", "localmodel-p:1")
+	f := flagsWith("", "localmodel-a:1,localmodel-b:1,localmodel-c:1", "", "", "0x2a")
+	primary := map[string]string{"mutant-model": "localmodel-p:1"}
+	if _, err := drawShadowSeats("corral certify --local", t.TempDir(), "go", f, primary, filepath.Join(t.TempDir(), "none.duckdb"), &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if n := atomic.LoadInt32(calls); n != 1 {
+		t.Errorf("OLLAMA_URL listed %d times for one pool check, want 1", n)
 	}
 }

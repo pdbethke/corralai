@@ -79,6 +79,9 @@ func shadowSeed(text string, pooled bool) (seed uint64, given bool, err error) {
 
 func shadowCandidates(cmdName, repoRoot string, f *shadowSeatFlags, primary map[string]string, checkCredentials bool, stderr io.Writer) (map[string][]shadowpool.Candidate, error) {
 	out := map[string][]shadowpool.Candidate{}
+	// One listing of OLLAMA_URL's daemon for the whole check, both pools and
+	// every member: resolved seat by seat for per-member errors, listed once.
+	listing := &ollamaListing{}
 	for _, s := range shadowPoolSeats(f) {
 		pool := strings.TrimSpace(*s.pool)
 		if pool == "" {
@@ -97,7 +100,7 @@ func shadowCandidates(cmdName, repoRoot string, f *shadowSeatFlags, primary map[
 		// seat's own resolution refuses it moments later.
 		primaryModel := primary[s.base]
 		if primaryModel != "" {
-			_, _ = resolveSeats(context.Background(), cmdName, repoRoot, []seatFlag{{flag: s.base, role: s.base, val: &primaryModel}}, io.Discard)
+			_, _ = resolveSeatsListed(context.Background(), cmdName, repoRoot, []seatFlag{{flag: s.base, role: s.base, val: &primaryModel}}, nil, io.Discard, listing)
 		}
 		for _, typed := range members {
 			concrete := typed
@@ -105,7 +108,7 @@ func shadowCandidates(cmdName, repoRoot string, f *shadowSeatFlags, primary map[
 			// pools are checked (before any audit context is installed); the
 			// one network call, listing OLLAMA_URL's daemon, has its own 10s
 			// bound.
-			set, err := resolveSeats(context.Background(), cmdName, repoRoot, []seatFlag{{flag: s.poolFlag, role: s.role, val: &concrete}}, io.Discard)
+			set, err := resolveSeatsListed(context.Background(), cmdName, repoRoot, []seatFlag{{flag: s.poolFlag, role: s.role, val: &concrete}}, nil, io.Discard, listing)
 			if err != nil {
 				return nil, fmt.Errorf("--%s member %q: %v", s.poolFlag, typed, err)
 			}

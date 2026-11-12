@@ -110,6 +110,31 @@ func resolveSeatsPlaced(ctx context.Context, cmdName, repoRoot string, seats []s
 // resolveSeatsOpt is the one body behind resolveSeats and resolveSeatsPlaced;
 // placed is nil where the command takes no --local-endpoint.
 func resolveSeatsOpt(ctx context.Context, cmdName, repoRoot string, seats []seatFlag, placed map[string]string, stderr io.Writer) (seatSet, error) {
+	return resolveSeatsListed(ctx, cmdName, repoRoot, seats, placed, stderr, &ollamaListing{})
+}
+
+// ollamaListing lists OLLAMA_URL's daemon at most once, however many
+// resolutions share it. A caller that resolves seat by seat (the shadow pool
+// check) passes one listing to every call, so a stale daemon costs one
+// timeout, not one per seat. A failed listing is cached too: the error is the
+// answer, and asking again would only wait again.
+type ollamaListing struct {
+	names []string
+	err   error
+	done  bool
+}
+
+func (l *ollamaListing) get(ctx context.Context) ([]string, error) {
+	if !l.done {
+		hc := &http.Client{Timeout: 10 * time.Second}
+		l.names, l.err = listOllama(ctx, hc, strings.TrimSpace(os.Getenv("OLLAMA_URL")))
+		l.done = true
+	}
+	return l.names, l.err
+}
+
+// resolveSeatsListed is resolveSeatsOpt over a listing the caller may share.
+func resolveSeatsListed(ctx context.Context, cmdName, repoRoot string, seats []seatFlag, placed map[string]string, stderr io.Writer, lst *ollamaListing) (seatSet, error) {
 	if stderr == nil {
 		stderr = io.Discard
 	}
@@ -123,19 +148,7 @@ func resolveSeatsOpt(ctx context.Context, cmdName, repoRoot string, seats []seat
 		fmt.Fprintf(stderr, "%s: %s in the checkout is IGNORED on a CI runner — the checkout is the change under audit and may not choose its own auditors; declare the registry with %s or %s instead\n",
 			cmdName, models.RepoRelPath, models.EnvFile, models.EnvInline)
 	}
-	var (
-		listed    []string
-		listedOK  bool
-		listedErr error
-	)
-	listing := func() ([]string, error) {
-		if !listedOK && listedErr == nil {
-			hc := &http.Client{Timeout: 10 * time.Second}
-			listed, listedErr = listOllama(ctx, hc, strings.TrimSpace(os.Getenv("OLLAMA_URL")))
-			listedOK = listedErr == nil
-		}
-		return listed, listedErr
-	}
+	listing := func() ([]string, error) { return lst.get(ctx) }
 
 	set := seatSet{}
 	var order []string

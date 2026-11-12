@@ -323,7 +323,7 @@ runs:
             exit 1
           fi
           if ! printf '%s' "$key_env" | grep -qE '^[A-Za-z_][A-Za-z0-9_]*$'; then
-            echo "::error::model-key-env must be a plain environment variable name (letters, digits and underscore, not starting with a digit) — got something else, which will not be exported. Use one of corral's credential names: GEMINI_API_KEY, GOOGLE_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY." >&2
+            echo "::error::model-key-env must be a plain environment variable name (letters, digits and underscore, not starting with a digit) — got something else, which will not be exported. Use one of corral's credential names: GEMINI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, OPENROUTER_API_KEY." >&2
             exit 1
           fi
           declare_key "$key_env" "$MODEL_KEY"

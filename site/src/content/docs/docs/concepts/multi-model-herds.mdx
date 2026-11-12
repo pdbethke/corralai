@@ -28,7 +28,9 @@ OpenAI-compatible, or a local model through Ollama.
 **What is enforced, what is warned about, and what isn't checked.**
 `CheckDecorrelation` (`internal/advpool/driver.go`) compares exactly one pair —
 `test-critic` against `test-writer` — by name, and refuses the run if they
-match. That is the *entire* rule. Cross-vendor separation is **warned about,
+match. That is the *entire* rule. The name compared is the bare model, after
+the `vendor/model` form is resolved, so `google/m` writing and `openai/m`
+critiquing are refused as the same model `m`. Cross-vendor separation is **warned about,
 not enforced**: when the writer and critic are different models from one
 provider, the run says the critic is "an independent MODEL but not an
 independent VENDOR", and when every graded seat is one vendor the verdict says

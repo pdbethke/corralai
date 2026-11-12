@@ -441,3 +441,22 @@ func TestPinnedOpenRouterIgnoresOpenAIBaseURL(t *testing.T) {
 		t.Errorf("Endpoint = %q, want OPENROUTER_BASE_URL", rs.Endpoint)
 	}
 }
+
+// Decorrelation compares the BARE model, after the vendor/model rewrite: the
+// same model name under two vendors is refused as one model. The docs say so
+// (concepts/multi-model-herds.mdx); this is the execution behind the sentence.
+func TestDecorrelationComparesTheBareModel(t *testing.T) {
+	clearSeatEnv(t)
+	t.Setenv("GEMINI_API_KEY", "gm-test")
+	t.Setenv("OPENAI_API_KEY", "sk-test")
+	_, err := resolveRoles(t, localAuditInput{
+		writerModel: "google/shared-model", mutantModel: "google/shared-model", criticModel: "openai/shared-model",
+		shadowModel: "off", checkArgv: []string{"go", "test", "./..."},
+	}, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("google/shared-model writing and openai/shared-model critiquing were accepted; decorrelation compares the bare model and must refuse")
+	}
+	if !strings.Contains(err.Error(), "shared-model") || !strings.Contains(strings.ToLower(err.Error()), "critic") {
+		t.Errorf("err = %v, want the decorrelation refusal naming the shared model", err)
+	}
+}

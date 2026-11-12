@@ -1584,8 +1584,9 @@ func herdNotConfiguredErr(cmdName, writer, mutant, criticRaw string, toolOnly bo
 		"no model is assigned to %s.\n"+
 			"corral has no default models on purpose — it is model-agnostic, so every seat is yours to name.\n"+
 			"credentials visible here: %s\n"+
-			"assign each seat a model that provider serves, e.g.:\n"+
-			"  %s --writer-model <model> --mutant-model <model> --critic-model <model>\n"+
+			"assign each seat a model; a hosted one names its vendor (anthropic, google or openai), e.g.:\n"+
+			"  %s --writer-model <vendor>/<model> --mutant-model <vendor>/<model> --critic-model <vendor>/<model>\n"+
+			"a seat may instead be a .corral/models.json alias, a model your OLLAMA_URL daemon lists, or a coding-agent seat (see -h); corral never guesses a vendor from a bare name.\n"+
 			"the only rule is that the critic must differ from the writer (that is the decorrelation the verdict rests on);\n"+
 			"--critic-model off drops the critic entirely — it is advisory and never gates the verdict.\n"+
 			"%s"+

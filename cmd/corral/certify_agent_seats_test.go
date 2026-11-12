@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/agentworker"
 )
 
@@ -55,7 +56,7 @@ func fakeBuiltinBinaries(t *testing.T) {
 func TestAllAgentHerdNeedsNoKeyAndSetsNoBackend(t *testing.T) {
 	noKeys(t)
 	fakeBuiltinBinaries(t)
-	r, err := resolveAuditRoles(localAuditInput{
+	r, err := resolveRoles(t, localAuditInput{
 		mutantModel: "codex", writerModel: "codex", criticModel: "claude-code", shadowModel: "off",
 	}, &bytes.Buffer{})
 	if err != nil {
@@ -75,7 +76,7 @@ func TestAllAgentHerdNeedsNoKeyAndSetsNoBackend(t *testing.T) {
 func TestAgentSeatChatterRunsTheAgent(t *testing.T) {
 	noKeys(t)
 	fakeAgent(t, "fakea", "from-the-agent")
-	chatterFor, err := localChatterFor(advpool.RoleAssignment{advpool.RoleTestWriter: "fakea"}, nil, nil, nil)
+	chatterFor, err := localChatterFor(seatsForAssign(t, advpool.RoleAssignment{advpool.RoleTestWriter: "fakea"}, nil), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,25 +92,10 @@ func TestAgentSeatChatterRunsTheAgent(t *testing.T) {
 // A daemon placement cannot apply to a CLI; refusing beats ignoring it.
 func TestAgentSeatRefusesALocalEndpoint(t *testing.T) {
 	noKeys(t)
-	_, err := localChatterFor(advpool.RoleAssignment{advpool.RoleTestWriter: "codex"}, nil,
-		map[string]string{advpool.RoleTestWriter: "http://127.0.0.1:11434"}, nil)
+	_, err := resolveSeatsOf(t, localAuditInput{writerModel: "codex"},
+		map[string]string{advpool.RoleTestWriter: "http://127.0.0.1:11434"})
 	if err == nil || !strings.Contains(err.Error(), "agent seat") {
 		t.Fatalf("want a refusal naming the agent seat, got %v", err)
-	}
-}
-
-// An agent seat says nothing about which API the run needs; the API seats do.
-func TestSoleAssignedCloudModelSkipsAgentSeats(t *testing.T) {
-	v, m := soleAssignedCloudModel(advpool.RoleAssignment{
-		advpool.RoleMutantGenerator: "codex",
-		advpool.RoleTestWriter:      "claude-sonnet-5",
-		advpool.RoleTestCritic:      "claude-code",
-	})
-	if v != "anthropic" || m != "claude-sonnet-5" {
-		t.Fatalf("got (%q, %q), want the one API seat's vendor", v, m)
-	}
-	if v, m := soleAssignedCloudModel(advpool.RoleAssignment{advpool.RoleTestWriter: "codex", advpool.RoleTestCritic: "claude-code"}); v != "" || m != "" {
-		t.Fatalf("an all-agent assignment names no API vendor, got (%q, %q)", v, m)
 	}
 }
 
@@ -119,7 +105,7 @@ func TestSameVendorWarningNamesAgentSeats(t *testing.T) {
 	noKeys(t)
 	fakeBuiltinBinaries(t)
 	var warn bytes.Buffer
-	if _, err := resolveAuditRoles(localAuditInput{
+	if _, err := resolveRoles(t, localAuditInput{
 		mutantModel: "codex", writerModel: "codex:gpt-6-astra", criticModel: "codex", shadowModel: "off",
 	}, &warn); err != nil {
 		t.Fatal(err)
@@ -127,27 +113,31 @@ func TestSameVendorWarningNamesAgentSeats(t *testing.T) {
 	if !strings.Contains(warn.String(), "SAME provider (openai)") {
 		t.Fatalf("no same-vendor warning for codex + codex:gpt-6-astra:\n%s", warn.String())
 	}
-	if _, err := resolveAuditRoles(localAuditInput{
+	if _, err := resolveRoles(t, localAuditInput{
 		mutantModel: "codex", writerModel: "codex", criticModel: "codex", shadowModel: "off",
 	}, &bytes.Buffer{}); err == nil {
 		t.Fatal("codex + codex must be refused by decorrelation")
 	}
 }
 
-// The verdict's "every graded seat is X" line sees agent seats too.
+// The verdict's "every graded seat is X" line sees agent seats too: the
+// resolver records an agent seat's maker as its provider.
 func TestSoleGradedVendorSeesAgentSeats(t *testing.T) {
+	in := localAuditInput{mutantModel: "codex", writerModel: "codex:gpt-6-astra", criticModel: "openai/gpt-6"}
+	set := seatsOf(t, in)
 	if got := soleGradedVendor(map[string]string{
 		advpool.RoleMutantGenerator: "codex",
 		advpool.RoleTestWriter:      "codex:gpt-6-astra",
 		advpool.RoleTestCritic:      "gpt-6",
-	}); got != "openai" {
+	}, set.providers()); got != "openai" {
 		t.Fatalf("got %q, want openai", got)
 	}
 	fakeAgent(t, "fakea", "x")
+	set = seatsOf(t, localAuditInput{mutantModel: "fakea", writerModel: "openai/gpt-6"})
 	if got := soleGradedVendor(map[string]string{
 		advpool.RoleMutantGenerator: "fakea",
 		advpool.RoleTestWriter:      "gpt-6",
-	}); got != "" {
+	}, set.providers()); got != "" {
 		t.Fatalf("an unpinned operator agent's vendor is unknown, got %q", got)
 	}
 }
@@ -157,7 +147,7 @@ func TestDoctorAgentSeatLineDoesNotClaimALogin(t *testing.T) {
 	noKeys(t)
 	def := fakeAgent(t, "fakea", "x")
 	fakeAgent(t, "fakeb", "y")
-	res := checkHerd("fakea", "fakeb", "off", "", "", nil)
+	res := checkHerdFor(t, "fakea", "fakeb", "off", "", "")
 	var line *checkResult
 	for i := range res {
 		if !res[i].ok {
@@ -260,7 +250,7 @@ func TestSameVendorCheckSaysWhenAnOperatorAgentsVendorCannotBeTold(t *testing.T)
 	fakeBuiltinBinaries(t)
 	fakeAgent(t, "mine", "{}")
 	var warn bytes.Buffer
-	if _, err := resolveAuditRoles(localAuditInput{
+	if _, err := resolveRoles(t, localAuditInput{
 		mutantModel: "codex", writerModel: "mine", criticModel: "codex", shadowModel: "off",
 	}, &warn); err != nil {
 		t.Fatal(err)
@@ -270,7 +260,7 @@ func TestSameVendorCheckSaysWhenAnOperatorAgentsVendorCannotBeTold(t *testing.T)
 	}
 	// A pinned operator agent on a known model has a vendor: no such line.
 	warn.Reset()
-	if _, err := resolveAuditRoles(localAuditInput{
+	if _, err := resolveRoles(t, localAuditInput{
 		mutantModel: "codex", writerModel: "mine:claude-sonnet-5", criticModel: "codex", shadowModel: "off",
 	}, &warn); err != nil {
 		t.Fatal(err)
@@ -286,7 +276,7 @@ func TestDoctorHerdPrintsEverySeatLineWhenThePreflightFails(t *testing.T) {
 	noKeys(t)
 	fakeAgent(t, "fakea", "x")
 	t.Setenv("CORRALAI_AGENT_GHOST", "/nonexistent/corral-ghost-agent {model:--model}")
-	res := checkHerd("fakea", "ghost", "off", "", "", nil)
+	res := checkHerdFor(t, "fakea", "ghost", "off", "", "")
 	byName := map[string]checkResult{}
 	for _, r := range res {
 		byName[r.name] = r
@@ -305,7 +295,7 @@ func TestDoctorHerdPrintsEverySeatLineWhenThePreflightFails(t *testing.T) {
 func TestDoctorDeriveAgentSeatGetsABinaryLineNotACredentialLine(t *testing.T) {
 	noKeys(t)
 	t.Setenv("CORRALAI_AGENT_GHOST", "/nonexistent/corral-ghost-agent {model:--model}")
-	res := checkDeriveSeat("ghost", "")
+	res := checkDeriveSeat(agentDeriveSeat("ghost"))
 	if len(res) != 1 || res[0].ok || !strings.HasPrefix(res[0].name, "agent seat ghost") || !strings.Contains(res[0].detail, "not found") {
 		t.Fatalf("want one FAIL binary line for the derive agent seat, got %+v", res)
 	}
@@ -315,8 +305,13 @@ func TestDoctorDeriveAgentSeatGetsABinaryLineNotACredentialLine(t *testing.T) {
 		}
 	}
 	fakeAgent(t, "fakea", "x")
-	res = checkDeriveSeat("fakea", "")
+	res = checkDeriveSeat(agentDeriveSeat("fakea"))
 	if len(res) == 0 || !res[0].ok || !strings.HasPrefix(res[0].name, "agent seat fakea") || !strings.Contains(res[0].detail, "login not verified") {
 		t.Fatalf("a present derive agent: want the ok binary line, got %+v", res)
 	}
+}
+
+// agentDeriveSeat is the derive seat the resolver builds for a coding-agent spec.
+func agentDeriveSeat(spec string) agentbackend.ResolvedSeat {
+	return agentbackend.ResolvedSeat{Flag: "derive-model", Spec: spec, Kind: "agent", DeclaredBy: agentbackend.DeclaredAgent}
 }

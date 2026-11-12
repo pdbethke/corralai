@@ -43,8 +43,8 @@ Then audit the three highest-ranked files, with a cap on what the run may spend:
 ```bash
 export GEMINI_API_KEY=...        # and ANTHROPIC_API_KEY for the critic below
 corral certify --repo . --top 3 --max-tokens 3000000 \
-  --writer-model gemini-3.8-flash --mutant-model gemini-3.8-flash \
-  --derive-model gemini-3.8-flash --critic-model claude-haiku-4-5 \
+  --writer-model google/gemini-3.8-flash --mutant-model google/gemini-3.8-flash \
+  --derive-model google/gemini-3.8-flash --critic-model anthropic/claude-haiku-4-5 \
   -- .venv/bin/python -m pytest -q   # your own test command: npm test, go test ./..., cargo test, …
 ```
 
@@ -105,8 +105,8 @@ In a Cargo workspace, scope the scan and the command to one crate:
 
 ```bash
 corral certify --repo . --path crates/<crate> --top 3 --max-tokens 3000000 \
-  --writer-model gemini-3.8-flash --mutant-model gemini-3.8-flash \
-  --derive-model gemini-3.8-flash --critic-model claude-haiku-4-5 \
+  --writer-model google/gemini-3.8-flash --mutant-model google/gemini-3.8-flash \
+  --derive-model google/gemini-3.8-flash --critic-model anthropic/claude-haiku-4-5 \
   -- cargo test -p <crate>
 ```
 
@@ -119,7 +119,7 @@ the full table.
 One command, no setup beyond a provider key:
 
 ```bash
-corral demo --writer-model claude-sonnet-5 --mutant-model claude-sonnet-5 --critic-model claude-haiku-4-5
+corral demo --writer-model anthropic/claude-sonnet-5 --mutant-model anthropic/claude-sonnet-5 --critic-model anthropic/claude-haiku-4-5
 ```
 
 It writes a small Go package with a five-clause password rule and a test that checks
@@ -144,9 +144,9 @@ export ANTHROPIC_API_KEY=sk-ant-...   # or OPENAI_/GEMINI_/OPENROUTER_API_KEY
 corral certify --local --repo-dir . \
   --code path/to/your/file.go \
   --goal "what this code must guarantee" \
-  --writer-model claude-sonnet-5 \
-  --mutant-model claude-sonnet-5 \
-  --critic-model claude-haiku-4-5 \
+  --writer-model anthropic/claude-sonnet-5 \
+  --mutant-model anthropic/claude-sonnet-5 \
+  --critic-model anthropic/claude-haiku-4-5 \
   --out verdict.json \
   -- go test ./...
 ```
@@ -187,8 +187,8 @@ to fix:
 
 ```bash
 corral doctor --code path/to/your/file.go \
-  --writer-model claude-sonnet-5 --mutant-model claude-sonnet-5 \
-  --critic-model claude-haiku-4-5 \
+  --writer-model anthropic/claude-sonnet-5 --mutant-model anthropic/claude-sonnet-5 \
+  --critic-model anthropic/claude-haiku-4-5 \
   -- go test ./...
 ```
 
@@ -196,7 +196,7 @@ corral doctor --code path/to/your/file.go \
   [ok  ] sandbox starts
   [ok  ] toolchain reachable inside the sandbox
   [FAIL] herd accepted by certify's own preflight (mutant-generator=claude-sonnet-5, test-writer=claude-sonnet-5, test-critic=claude-haiku-4-5)
-         agentbackend: ForModel: model "claude-sonnet-5" needs an Anthropic key — set ANTHROPIC_API_KEY
+         agentbackend: model "claude-sonnet-5" at anthropic needs an Anthropic key — set ANTHROPIC_API_KEY
   [ok  ] code file pairs to a test
          found path/to/your/file_test.go by convention (sibling)
 
@@ -232,9 +232,8 @@ Corral has no default models — every seat is named by you, and a run with an
 unnamed seat is refused. One key can still satisfy the distinctness rule on its
 own: two different models from the same provider (Sonnet writing and mutating,
 Haiku critiquing, say) off that single `ANTHROPIC_API_KEY`. Naming
-`--critic-model gemini-3.6-flash` plus a Google key (`GEMINI_API_KEY` or
-`GOOGLE_API_KEY`) routes the critic to Gemini via the OpenAI-compatible Google
-endpoint — a real cross-vendor critic, writer and mutant-generator unchanged. A
+`--critic-model google/gemini-3.6-flash` plus `GEMINI_API_KEY` routes the critic to
+Gemini via the OpenAI-compatible Google endpoint — a real cross-vendor critic, writer and mutant-generator unchanged. A
 missing key fails the run closed instead of silently falling back. It supports
 seven languages — Go (`go test`, gotestsum), Python (pytest, unittest), Ruby
 (RSpec, minitest), JavaScript and TypeScript (`node --test`, jest, mocha,
@@ -326,7 +325,9 @@ nothing in it is read by an audit. If you want it, start with
 ## Common knobs
 
 - `MODEL_BACKEND` / `OPENAI_BASE_URL` — pin every seat to one gateway endpoint
-  (OpenRouter, a local daemon); without it each seat routes by the model you name
+  (OpenRouter, a local daemon); without it each hosted seat names its vendor as
+  `vendor/model` (`anthropic/…`, `google/…`, `openai/…`) — a bare cloud name is
+  refused, never routed by a guess
 - `CORRALAI_MODELS_FILE` / `CORRALAI_MODELS` — the model registry, so seats can be
   named by alias
 - `CORRAL_LEDGER` — where `certify --repo` writes its entry and reads its prior

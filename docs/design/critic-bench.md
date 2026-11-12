@@ -31,9 +31,9 @@ them, so every number quoted elsewhere traces to a committed file.
 To reproduce a run:
 
 ```sh
-go run ./scripts/criticbench -model gemini-3.8-flash -runs 5
-go run ./scripts/criticbench -model gemini-3.8-flash -runs 3 -files <src.go,...>
-go run ./scripts/criticbench -model gemini-3.8-flash -runs 3 -plant 3 -files <src.go,...>
+go run ./scripts/criticbench -model google/gemini-3.8-flash -runs 5
+go run ./scripts/criticbench -model google/gemini-3.8-flash -runs 3 -files <src.go,...>
+go run ./scripts/criticbench -model google/gemini-3.8-flash -runs 3 -plant 3 -files <src.go,...>
 go run ./scripts/criticbench -plant 3 -show <dir> -files <src.go,...>   # write the planted files, call no model
 ```
 

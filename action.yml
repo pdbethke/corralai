@@ -85,7 +85,7 @@ inputs:
     required: false
     default: ""
   model-key:
-    description: "Generic escape hatch for a credential the named provider inputs above do not cover (e.g. GOOGLE_API_KEY, or a gateway that reads its own variable). Use 'anthropic-key' / 'gemini-key' / 'openai-key' in preference — they are clearer and compose. Pair with 'model-key-env' to say which variable it becomes."
+    description: "Generic escape hatch for a credential the named provider inputs above do not cover (e.g. OPENROUTER_API_KEY, or a gateway that reads its own variable). Use 'anthropic-key' / 'gemini-key' / 'openai-key' in preference — they are clearer and compose. Pair with 'model-key-env' to say which variable it becomes."
     required: false
     default: ""
   model-key-env:
@@ -93,31 +93,31 @@ inputs:
     required: false
     default: ""
   derive-model:
-    description: "Model that derives a goal per file. REQUIRED unless 'goals' is supplied — corral has no default models, and 'goals' skips derivation entirely (that path calls no model and needs no key)."
+    description: "Model that derives a goal per file. REQUIRED unless 'goals' is supplied — corral has no default models, and 'goals' skips derivation entirely (that path calls no model and needs no key). A hosted model is named vendor/model (anthropic/…, google/…, openai/…); a bare cloud name is refused."
     required: false
     default: ""
   writer-model:
-    description: "Model for the test-writer role — the half that authors a test to prove a survivor is a real gap. REQUIRED: corral has no default models. Any provider you supply a key for."
+    description: "Model for the test-writer role — the half that authors a test to prove a survivor is a real gap. REQUIRED: corral has no default models. A hosted model is named vendor/model (anthropic/…, google/…, openai/…) — a bare cloud name is refused, corral never guesses a vendor — with that vendor's key in the environment."
     required: false
     default: ""
   mutant-model:
-    description: "Model for the mutant-generator role. REQUIRED: corral has no default models."
+    description: "Model for the mutant-generator role. REQUIRED: corral has no default models. A hosted model is named vendor/model (anthropic/…, google/…, openai/…); a bare cloud name is refused."
     required: false
     default: ""
   shadow-model:
-    description: "Challenger model that attacks every region a SECOND time, recorded for comparison and NEVER gating the verdict. OFF unless named — it used to default to a Claude model that stayed on through an otherwise all-Gemini run and silently demanded an Anthropic key. Name a model on the same vendor as the rest of the run to turn it on."
+    description: "Challenger model that attacks every region a SECOND time, recorded for comparison and NEVER gating the verdict. OFF unless named — it used to default to a Claude model that stayed on through an otherwise all-Gemini run and silently demanded an Anthropic key. Name a model on the same vendor as the rest of the run to turn it on. A hosted model is named vendor/model (anthropic/…, google/…, openai/…); a bare cloud name is refused."
     required: false
     default: ""
   critic-model:
-    description: "Model for the test-critic role, which must DIFFER from the writer's. 'off' disables the critic entirely — it is advisory and never gates the verdict, so a single-vendor run with only one usable model can drop it. No default: name a model or 'off'."
+    description: "Model for the test-critic role, which must DIFFER from the writer's. 'off' disables the critic entirely — it is advisory and never gates the verdict, so a single-vendor run with only one usable model can drop it. No default: name a model or 'off'. A hosted model is named vendor/model (anthropic/…, google/…, openai/…); a bare cloud name is refused."
     required: false
     default: ""
   reviewer-model:
-    description: "Also run `corral review` on the change, with this model in the REVIEWER seat: a cold model that has never seen the repository is told to assume the code is wrong and prove it; every claim comes with a script corral runs in a detached worktree on the runner (`--substrate workspace`: the runner is the isolation boundary, as for the audit; run locally, `corral review` runs them in its offline sandbox), a claim that does not reproduce is demoted on the record, and the review is one entry (signed when a certify key is configured) in the same `ledger` directory the audit writes to. An API model name (its key through the *-key inputs) or an agent seat (`claude-code`, `codex`, `antigravity`, or one defined as CORRALAI_AGENT_<NAME> in the job's env). An agent seat needs its CLI installed on the runner and a login: `claude-code-oauth-token` and `codex-api-key` pass one through. corral refuses a seat whose CLI is missing before it spends anything. Off unless named; corral has no default models."
+    description: "Also run `corral review` on the change, with this model in the REVIEWER seat: a cold model that has never seen the repository is told to assume the code is wrong and prove it; every claim comes with a script corral runs in a detached worktree on the runner (`--substrate workspace`: the runner is the isolation boundary, as for the audit; run locally, `corral review` runs them in its offline sandbox), a claim that does not reproduce is demoted on the record, and the review is one entry (signed when a certify key is configured) in the same `ledger` directory the audit writes to. A hosted model named vendor/model (anthropic/…, google/…, openai/…; a bare cloud name is refused), its key through the *-key inputs, or an agent seat (`claude-code`, `codex`, `antigravity`, or one defined as CORRALAI_AGENT_<NAME> in the job's env). An agent seat needs its CLI installed on the runner and a login: `claude-code-oauth-token` and `codex-api-key` pass one through. corral refuses a seat whose CLI is missing before it spends anything. Off unless named; corral has no default models."
     required: false
     default: ""
   verifier-model:
-    description: "With `reviewer-model`, a third model (never the reviewer's) that tries to refute every finding by the same rules; a refutation whose script holds demotes the finding, and is itself recorded. Off unless named."
+    description: "With `reviewer-model`, a third model (never the reviewer's) that tries to refute every finding by the same rules; a refutation whose script holds demotes the finding, and is itself recorded. Off unless named. A hosted model is named vendor/model (anthropic/…, google/…, openai/…); a bare cloud name is refused."
     required: false
     default: ""
   review-scope:
@@ -263,8 +263,8 @@ runs:
         set -euo pipefail
         # Provider credentials are wired in under the names corral's own
         # resolution reads (internal/agentbackend): ANTHROPIC_API_KEY,
-        # GEMINI_API_KEY (which itself falls back to GOOGLE_API_KEY then
-        # OPENAI_API_KEY), OPENAI_API_KEY.
+        # GEMINI_API_KEY (read alone: no GOOGLE_API_KEY or OPENAI_API_KEY
+        # fallback), OPENAI_API_KEY.
         #
         # SEVERAL AT ONCE, deliberately. CheckDecorrelation rejects a run whose
         # test-critic shares a model with its test-writer — a critic grading its
@@ -323,7 +323,7 @@ runs:
             exit 1
           fi
           if ! printf '%s' "$key_env" | grep -qE '^[A-Za-z_][A-Za-z0-9_]*$'; then
-            echo "::error::model-key-env must be a plain environment variable name (letters, digits and underscore, not starting with a digit) — got something else, which will not be exported. Use one of corral's credential names: GEMINI_API_KEY, GOOGLE_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY." >&2
+            echo "::error::model-key-env must be a plain environment variable name (letters, digits and underscore, not starting with a digit) — got something else, which will not be exported. Use one of corral's credential names: GEMINI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, OPENROUTER_API_KEY." >&2
             exit 1
           fi
           declare_key "$key_env" "$MODEL_KEY"

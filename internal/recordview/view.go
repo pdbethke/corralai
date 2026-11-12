@@ -474,9 +474,14 @@ func isHex(s string) bool {
 	return true
 }
 
-// vendorOfSeat resolves a seat to a vendor, or "" when it cannot. Returning
-// "" matters: an undetermined vendor is excluded from the cross-vendor count
-// rather than guessed into it, so the headline can only understate.
+// vendorOfSeat is a LABEL read off a recorded seat's name, or "" when the
+// name matches nothing. It is used because the ledger records no provider for
+// a seat, so the name is all a renderer has. It can be wrong in BOTH
+// directions: a local model whose name looks hosted (a gpt-oss reviewer run on
+// ollama) is labelled openai, which can overstate the cross-vendor count, and
+// a hosted model under an unrecognised name is left out, which understates it.
+// A "" is excluded from the count rather than guessed into it. Routing never
+// reads this (founder ruling 2026-11-12); only rendering does.
 func vendorOfSeat(seat string) string {
 	// RecordedVendorOf, not VendorOf: a signed historical entry was run by
 	// the built-in agent it names, whatever CORRALAI_AGENT_* this renderer's

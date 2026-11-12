@@ -10,8 +10,10 @@
 // ANTHROPIC_API_KEY: FromEnv().(ModelSwitcher).WithModel("claude-sonnet-5")
 // / .WithModel("claude-haiku-4-5")) without shelling out to corral-agent.
 //
-// corral-agent itself is unchanged behaviorally: it now calls FromEnv() and
-// AsChatter() here instead of the old local newBackend()/backendChatter.
+// corral-agent calls FromEnv() and AsChatter() here instead of the old local
+// newBackend()/backendChatter. Neither FromEnv nor anything else here has a
+// default model, endpoint or backend: an absent value refuses, naming what to
+// pass.
 package agentbackend
 
 import (
@@ -44,13 +46,13 @@ var ErrModelUnreachable = errors.New("model unreachable")
 // "any model, any agent" point. Ollama is just the zero-cost local default;
 // it is NOT hard-wired in.
 //
-// Select with MODEL_BACKEND:
-//   - ollama   (default)  — local, free. OLLAMA_URL.
+// Select with MODEL_BACKEND (required; there is no default backend):
+//   - ollama             — local, free. OLLAMA_URL (required; no default address).
 //   - openai             — ANY OpenAI-compatible endpoint via OPENAI_BASE_URL +
 //     OPENAI_API_KEY. That covers a lot on purpose:
 //   - Gemini:     OPENAI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
 //   - OpenRouter: OPENAI_BASE_URL=https://openrouter.ai/api/v1  (→ Claude, Gemini, anything)
-//   - OpenAI:     (default base)
+//   - OpenAI:     (the vendor's own base)
 //   - local:      vLLM / LM Studio / llama.cpp servers
 type Backend interface {
 	Chat(messages []Message, tools []any) (Message, error)
@@ -174,12 +176,30 @@ type ModelSwitcher interface {
 	WithModel(model string) Backend
 }
 
-// FromEnv constructs the Backend selected by MODEL_BACKEND, reading the
-// vendor-specific env vars exactly as corral-agent always has. It is the
-// exported form of what used to be corral-agent's unexported newBackend().
-func FromEnv() Backend {
-	model := env("AGENT_MODEL", "qwen2.5-coder:7b")
-	switch env("MODEL_BACKEND", "ollama") {
+// FromEnv constructs the Backend selected by MODEL_BACKEND for the model named
+// by AGENT_MODEL, reading the vendor-specific env vars. It is the exported form
+// of what used to be corral-agent's unexported newBackend(), and it is corral-
+// agent's door only: every `corral` verb routes its seats through the resolver
+// (cmd/corral/seat_resolver.go) and agentbackend.Build instead.
+//
+// There are no defaults. An unset MODEL_BACKEND used to mean ollama, an unset
+// AGENT_MODEL used to mean qwen2.5-coder:7b (on a hosted backend too, where it
+// is a 404 at best), an unset OLLAMA_URL used to mean 127.0.0.1:11434, and an
+// unrecognised MODEL_BACKEND fell into the ollama arm, so a typo ran locally.
+// Each of those was a decision nobody made, so each refuses and names the
+// variable to set. The vendors' own endpoints (api.openai.com,
+// api.anthropic.com, openrouter.ai) are not defaults in that sense: they are
+// where that vendor is.
+func FromEnv() (Backend, error) {
+	pinned := strings.TrimSpace(os.Getenv("MODEL_BACKEND"))
+	if pinned == "" {
+		return nil, errors.New("agentbackend: MODEL_BACKEND is not set — set it to one of ollama, openai, openrouter, gemini, anthropic (alias claude) (there is no default backend)")
+	}
+	model := strings.TrimSpace(os.Getenv("AGENT_MODEL"))
+	if model == "" {
+		return nil, fmt.Errorf("agentbackend: AGENT_MODEL is not set — name the model MODEL_BACKEND=%s should serve (there is no default model)", pinned)
+	}
+	switch pinned {
 	case "gemini":
 		// Gemini speaks the OpenAI wire format but is NOT OpenAI: it has its
 		// own endpoint and its own key. It used to share the arm below, so
@@ -189,52 +209,43 @@ func FromEnv() Backend {
 		// two disagreed about what "gemini" means depending on which door you
 		// came in: a cross-vendor CRITIC worked while aiming a WHOLE run at
 		// Gemini silently did not.
-		return &openaiBackend{base: geminiBase(true), key: geminiKey(), model: model}
-	case "openai", "openrouter":
-		// Same per-model wire choice as ForModel — a Codex model named through
+		key := geminiKey()
+		if key == "" {
+			return nil, fmt.Errorf("agentbackend: MODEL_BACKEND=gemini needs GEMINI_API_KEY (GOOGLE_API_KEY and OPENAI_API_KEY are not read)")
+		}
+		return &openaiBackend{base: geminiBase(), key: key, model: model}, nil
+	case "openai":
+		// Same per-model wire choice as ForVendor — a Codex model named through
 		// MODEL_BACKEND=openai must reach /responses, not /chat/completions.
-		// OpenRouter fronts many vendors on the chat-completions shape, so a
-		// "-codex" name there is left alone unless the operator points
-		// OPENAI_BASE_URL at OpenAI itself.
-		if env("MODEL_BACKEND", "") == "openai" {
-			return newOpenAIBackend(agentSecret("OPENAI_API_KEY"), model)
+		return newOpenAIBackend(openAIBase(), agentSecret("OPENAI_API_KEY"), model), nil
+	case "openrouter":
+		// OpenRouter's own variable and its own endpoint, nothing borrowed.
+		// This arm used to fall back to OPENAI_API_KEY (an OpenAI secret sent
+		// to openrouter.ai) and OPENAI_BASE_URL (the OpenRouter key sent to
+		// whatever proxy a company's OpenAI traffic goes through); the
+		// resolver's pinned-gateway step dropped both fallbacks (5cec2670) and
+		// this door now agrees with it. OpenRouter fronts many vendors on the
+		// chat-completions shape, so a "-codex" name is left alone here.
+		key := agentSecret("OPENROUTER_API_KEY")
+		if key == "" {
+			return nil, errors.New("agentbackend: MODEL_BACKEND=openrouter needs OPENROUTER_API_KEY — set it (OPENAI_API_KEY is not read for OpenRouter)")
 		}
-		// MODEL_BACKEND=openrouter: the docs said "one OpenRouter key
-		// covers gemini + gpt + claude" and named OPENROUTER_API_KEY in
-		// three places — and nothing read it. The arm read OPENAI_API_KEY
-		// and defaulted the base to api.openai.com, so the documented setup
-		// sent an unauthenticated request to OpenAI. OpenRouter's own
-		// variable and endpoint come first; the OpenAI ones stay as the
-		// fallback for operators who configured it that way.
-		return &openaiBackend{
-			base:  env("OPENROUTER_BASE_URL", env("OPENAI_BASE_URL", "https://openrouter.ai/api/v1")),
-			key:   firstSecret("OPENROUTER_API_KEY", "OPENAI_API_KEY"),
-			model: model,
-		}
+		return &openaiBackend{base: env("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"), key: key, model: model}, nil
 	case "anthropic", "claude":
 		return &anthropicBackend{
 			base:  env("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
 			key:   agentSecret("ANTHROPIC_API_KEY"),
 			model: model, // e.g. claude-sonnet-4-6 / claude-haiku-4-5-20251001 / claude-opus-4-8
+		}, nil
+	case "ollama":
+		url := strings.TrimSpace(os.Getenv("OLLAMA_URL"))
+		if url == "" {
+			return nil, errors.New("agentbackend: MODEL_BACKEND=ollama needs OLLAMA_URL — set it to the daemon that serves the model (there is no default address)")
 		}
-	default: // ollama
-		return &ollamaBackend{url: env("OLLAMA_URL", "http://127.0.0.1:11434"), model: model}
+		return &ollamaBackend{url: url, model: model}, nil
+	default:
+		return nil, fmt.Errorf("agentbackend: MODEL_BACKEND=%q is not a backend — use one of ollama, openai, openrouter, gemini, anthropic (alias claude)", pinned)
 	}
-}
-
-// ForModelOrLocal is ForModel with a LOCAL fallback: a model name that matches
-// no cloud vendor prefix is an Ollama model, served by the local daemon.
-//
-// ForModel alone is the cross-vendor CLOUD path and refuses such a name. That
-// is right for a cross-vendor critic, and wrong for any seat an operator may
-// legitimately fill with a local model — which is every seat corral has. A
-// caller that wants "whatever backend serves this model" wants this function;
-// a caller that specifically requires a cloud vendor still wants ForModel.
-func ForModelOrLocal(model string) (Backend, error) {
-	if apiVendorOf(model) == "" {
-		return NewOllamaBackend(env("OLLAMA_URL", "http://127.0.0.1:11434"), model), nil
-	}
-	return ForModel(model)
 }
 
 // NewOllamaBackend builds an ollama Backend directly (bypassing MODEL_BACKEND
@@ -246,105 +257,115 @@ func NewOllamaBackend(url, model string) Backend {
 
 // geminiBase and geminiKey are the SINGLE resolution of Gemini's endpoint and
 // credential, shared by FromEnv (MODEL_BACKEND=gemini, every role on Gemini)
-// and ForModel (a cross-vendor gemini-* role on another base backend). They
+// and ForVendor (a google seat beside seats at other vendors). They
 // were duplicated in only one of the two, which is exactly how those paths
 // came to disagree — factoring them means a future change cannot fix one door
 // and leave the other pointing at api.openai.com.
 //
-// The credential falls back through GEMINI_API_KEY, then GOOGLE_API_KEY, then
-// OPENAI_API_KEY. That last hop is deliberate BACK-COMPAT, not sloppiness: the
-// OpenAI variable was the only thing that made MODEL_BACKEND=gemini reach any
-// endpoint at all before this, so an operator already configured that way must
-// keep working.
-//
-// The OPENAI_BASE_URL hop applies to the PINNED door only (pinned true:
-// MODEL_BACKEND=gemini, where that variable was the operator's way of
-// naming Gemini's endpoint before CORRALAI_GEMINI_BASE_URL existed). On the
-// cross-vendor door it does not: an unpinned run with OPENAI_BASE_URL set
-// for its gpt seats used to send its gemini-* seat — carrying the GOOGLE
-// key — to whatever the gpt gateway does with that name.
-func geminiBase(pinned bool) string {
+// The credential is GEMINI_API_KEY and nothing else, and the endpoint is
+// CORRALAI_GEMINI_BASE_URL or Google's own. Both used to fall back: the key
+// through GOOGLE_API_KEY to OPENAI_API_KEY (so with only an OpenAI key set,
+// that OpenAI secret was sent to Google), and the pinned door's URL to
+// OPENAI_BASE_URL (often a company's OpenAI proxy, which then received the
+// Google key). A fallback from one variable to another is a default, and
+// these two each delivered one vendor's secret to another.
+func geminiBase() string {
 	if base := os.Getenv("CORRALAI_GEMINI_BASE_URL"); base != "" {
-		return base
-	}
-	if base := os.Getenv("OPENAI_BASE_URL"); pinned && base != "" {
 		return base
 	}
 	return "https://generativelanguage.googleapis.com/v1beta/openai"
 }
 
-// firstSecret resolves the first non-empty credential among names.
-func firstSecret(names ...string) string {
-	for _, n := range names {
-		if v := agentSecret(n); v != "" {
-			return v
+func geminiKey() string { return agentSecret("GEMINI_API_KEY") }
+
+// HostedVendors is the closed set of vendors a seat may name in the explicit
+// vendor/model form, in the order refusals list them. It is closed on
+// purpose: an ollama name may carry a slash (hf.co/…, library/…), and only an
+// exact member of this set is a vendor.
+var HostedVendors = []string{"anthropic", "google", "openai"}
+
+// SplitVendorModel parses the explicit vendor/model seat form. ok is false for
+// anything whose part before the first slash is not exactly one of
+// HostedVendors, or whose model part is empty.
+func SplitVendorModel(spec string) (vendor, model string, ok bool) {
+	v, m, found := strings.Cut(strings.TrimSpace(spec), "/")
+	if !found || strings.TrimSpace(m) == "" {
+		return "", "", false
+	}
+	for _, h := range HostedVendors {
+		if v == h {
+			return v, strings.TrimSpace(m), true
 		}
 	}
-	return ""
+	return "", "", false
 }
 
-func geminiKey() string {
-	if key := agentSecret("GEMINI_API_KEY"); key != "" {
-		return key
-	}
-	if key := agentSecret("GOOGLE_API_KEY"); key != "" {
-		return key
-	}
-	return agentSecret("OPENAI_API_KEY")
-}
-
-// ForModel infers the cloud vendor from model's name prefix and builds the
-// matching backend, reading THAT vendor's base URL + key from env/keystore —
-// independent of MODEL_BACKEND/FromEnv. It exists for exactly one case: a
-// `corral certify --local` role (the decorrelated test-critic, by design)
-// that needs to run on a DIFFERENT vendor than the run's base backend, e.g. a
-// Gemini critic grading a Claude writer/mutant-generator. It fails closed —
-// a clear, actionable error naming the missing env var — rather than falling
-// back to any other backend, because a silent fallback here would silently
-// collapse the cross-vendor decorrelation the caller asked for.
+// ForVendor builds the backend for a model at a vendor the CALLER declared,
+// reading THAT vendor's base URL and key from env/keystore — independent of
+// MODEL_BACKEND/FromEnv. It fails closed with an actionable error naming the
+// missing variable rather than falling back to any other backend.
 //
-// ForModel is NOT a general-purpose backend constructor: it only recognizes
-// hosted-cloud model name prefixes. Local/ollama models (and any explicit
-// MODEL_BACKEND setup) are unaffected — they keep going through FromEnv().
-func ForModel(model string) (Backend, error) {
-	switch {
-	case hasAnyPrefix(model, "claude-", "opus-", "sonnet-", "haiku-", "fable-"):
+// It replaces ForModel, which inferred the vendor from the model's name
+// prefix. That inference decided where the audited source and a credential
+// went: a local gpt-oss:20b with no declared source was routed to OpenAI by
+// its "gpt-" prefix, and with OPENAI_API_KEY exported would have sent the code
+// to api.openai.com before anything failed (founder ruling 2026-11-12: "any
+// guessing is a security hole"). The vendor now comes from a declaration —
+// the explicit vendor/model form, or a registry entry's provider — and never
+// from the spelling. Hence the model is only ever passed through.
+//
+// openrouter is served here too, for a registry entry that declares provider
+// openrouter without a gateway endpoint: OpenRouter's own URL and key, never
+// OpenAI's. It is not part of the command-line vendor/model set, where a
+// gateway is pinned with MODEL_BACKEND instead.
+func ForVendor(vendor, model string) (Backend, error) {
+	if strings.TrimSpace(model) == "" {
+		return nil, fmt.Errorf("agentbackend: vendor %q was named with no model — name the model, e.g. %s/<model>", vendor, vendor)
+	}
+	switch vendor {
+	case "anthropic":
 		key := agentSecret("ANTHROPIC_API_KEY")
 		if key == "" {
-			return nil, fmt.Errorf("agentbackend: ForModel: model %q needs an Anthropic key — set ANTHROPIC_API_KEY", model)
+			return nil, fmt.Errorf("agentbackend: model %q at anthropic needs an Anthropic key — set ANTHROPIC_API_KEY", model)
 		}
 		return &anthropicBackend{
 			base:  env("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
 			key:   key,
 			model: model,
 		}, nil
-	case hasAnyPrefix(model, "gemini-"):
+	case "google":
 		key := geminiKey()
 		if key == "" {
-			return nil, fmt.Errorf("agentbackend: ForModel: model %q needs a Google key — set GEMINI_API_KEY (or GOOGLE_API_KEY)", model)
+			return nil, fmt.Errorf("agentbackend: model %q at google needs a Google key — set GEMINI_API_KEY (GOOGLE_API_KEY and OPENAI_API_KEY are not read)", model)
 		}
-		return &openaiBackend{base: geminiBase(false), key: key, model: model}, nil
-	case hasAnyPrefix(model, "gpt-", "o1-", "o3-"):
+		return &openaiBackend{base: geminiBase(), key: key, model: model}, nil
+	case "openai":
 		key := agentSecret("OPENAI_API_KEY")
 		if key == "" {
-			return nil, fmt.Errorf("agentbackend: ForModel: model %q needs an OpenAI key — set OPENAI_API_KEY", model)
+			return nil, fmt.Errorf("agentbackend: model %q at openai needs an OpenAI key — set OPENAI_API_KEY", model)
 		}
 		// Not every OpenAI model speaks the same wire format: the Codex models
-		// are served on the Responses API only. newOpenAIBackend picks by model
-		// rather than by vendor, so naming one no longer routes to an endpoint
-		// that cannot serve it.
-		return newOpenAIBackend(key, model), nil
+		// are served on the Responses API only. newOpenAIBackend picks the WIRE
+		// by model once the vendor is known; it never picks the vendor.
+		return newOpenAIBackend(openAIBase(), key, model), nil
+	case "openrouter":
+		key := agentSecret("OPENROUTER_API_KEY")
+		if key == "" {
+			return nil, fmt.Errorf("agentbackend: model %q at openrouter needs OPENROUTER_API_KEY — set it (OPENAI_API_KEY is not read for OpenRouter)", model)
+		}
+		return &openaiBackend{base: env("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"), key: key, model: model}, nil
 	default:
-		return nil, fmt.Errorf("agentbackend: ForModel: cannot infer a cloud vendor for model %q (this path is for cross-vendor cloud critics; local/ollama models use the base backend)", model)
+		return nil, fmt.Errorf("agentbackend: %q is not a hosted vendor corral serves — name one of %s (corral does not infer a vendor from a model's name)", vendor, strings.Join(HostedVendors, ", "))
 	}
 }
 
-// VendorOf reports which cloud vendor a seat spec is served by
-// ("anthropic"/"google"/"openai"), or "" when none is known (a local/ollama
-// model name, or an operator-defined agent that is not pinned to a model).
+// VendorOf is the LABEL for an agent seat's vendor ("anthropic"/"google"/
+// "openai"), or "" when none is known. It answers for agent seats only: a
+// spec that is not an agent seat answers "", because a model name's spelling
+// is not a vendor (founder ruling 2026-11-12). A model seat's vendor is what
+// the seat resolver recorded on ResolvedSeat.Provider, from a declaration.
 //
-// A model name is answered by its prefix (apiVendorOf, the table ForModel
-// routes by). An AGENT seat is answered by what it runs: pinned
+// An AGENT seat is answered by what it runs: pinned
 // (`codex:gpt-6-astra`) the model's own vendor, falling back to the agent's
 // maker when the model name matches no prefix; unpinned the maker of the
 // built-in definition (`codex` -> openai). The maker is DATA on builtinAgent,
@@ -352,15 +373,15 @@ func ForModel(model string) (Backend, error) {
 // the operator has REDEFINED, has no declared maker — corral cannot know what
 // their command runs — so unpinned it answers "": silence over a guess.
 //
-// Callers that compare vendors (the same-vendor warning, the verdict's "every
-// graded seat is X" line, cross-vendor routing) ask this, so an agent seat
-// takes part in those rules instead of being invisible to them.
+// The seat resolver asks this for an agent seat's Provider, so an agent seat
+// takes part in the same-vendor disclosures instead of being invisible to
+// them. It is a label: Build never routes an agent seat by it.
 func VendorOf(spec string) string {
 	if name, model, ok := AgentSeat(spec); ok {
 		_, builtin, _ := agentDefinition(name)
 		return agentVendor(name, model, builtin)
 	}
-	return apiVendorOf(spec)
+	return ""
 }
 
 // RecordedVendorOf is VendorOf for a seat that was RECORDED, not one about to
@@ -395,10 +416,12 @@ func agentVendor(name, model string, makerKnown bool) string {
 	return ""
 }
 
-// apiVendorOf is the model-name prefix table: the vendor ForModel routes a
-// MODEL name to. It is deliberately agent-blind — ForModel and
-// ForModelOrLocal build API backends, and must never mistake a CLI seat for
-// one.
+// apiVendorOf is the model-name prefix table. It ROUTES NOTHING: it survives
+// only to label what already ran — a historical ledger entry
+// (RecordedVendorOf, which recordview renders) and an agent seat's pinned
+// model (agentVendor). Every routing path takes its vendor from a declaration
+// (ForVendor), and TestNoRoutingPathReachesTheNamePrefixTable fails any
+// function returning a Backend that reaches this table.
 func apiVendorOf(model string) string {
 	switch {
 	case hasAnyPrefix(model, "claude-", "opus-", "sonnet-", "haiku-", "fable-"):

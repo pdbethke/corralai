@@ -307,7 +307,7 @@ func buildMutantRows(mutants []scanstore.Mutant, scanID int64, meta bundleMeta) 
 }
 
 func buildModelCallRows(calls []scanstore.ModelCall, scanID int64, meta bundleMeta) []auditpush.ModelCallRow {
-	// Whether a seat was an agent is what agentbackend.ForSeat resolved when
+	// Whether a seat was an agent is what the seat resolver and agentbackend.Build resolved when
 	// the run started, which SeatTools already records per role. Read here
 	// rather than re-resolved: the cost must follow the record, and a
 	// re-resolution could disagree with it (a CLI installed since).

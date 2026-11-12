@@ -71,8 +71,8 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	deriveModel := fs.String("derive-model", "", "model (or agent seat) that derives a goal per file when --goals is not given — REQUIRED unless --goals is supplied; corral has no default models")
 	// Per-role models. `certify --local` has had these all along; without them
 	// here a repo scan was locked to the Claude defaults with no override.
-	writerModelFlag := fs.String("writer-model", "", "model for the test-writer role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json), a concrete model name, or an agent seat (`codex`, `claude-code`, `antigravity`, or your own CORRALAI_AGENT_<NAME>)")
-	mutantModelFlag := fs.String("mutant-model", "", "model for the mutant-generator role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json), a concrete model name, or an agent seat (`codex`, `claude-code`, `antigravity`, or your own CORRALAI_AGENT_<NAME>). \"off\" leaves the seat empty, and is allowed only with --mutants-from, whose tool mutants are then the whole exam")
+	writerModelFlag := fs.String("writer-model", "", "model for the test-writer role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json), a hosted model as vendor/model (`anthropic/…`, `google/…`, `openai/…` — a bare cloud name is refused, corral never guesses a vendor), a local model the OLLAMA_URL daemon lists, or an agent seat (`codex`, `claude-code`, `antigravity`, or your own CORRALAI_AGENT_<NAME>)")
+	mutantModelFlag := fs.String("mutant-model", "", "model for the mutant-generator role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json), a hosted model as vendor/model (`anthropic/…`, `google/…`, `openai/…` — a bare cloud name is refused, corral never guesses a vendor), a local model the OLLAMA_URL daemon lists, or an agent seat (`codex`, `claude-code`, `antigravity`, or your own CORRALAI_AGENT_<NAME>). \"off\" leaves the seat empty, and is allowed only with --mutants-from, whose tool mutants are then the whole exam")
 	criticModelFlag := fs.String("critic-model", "", "model (or agent seat) for the test-critic role, which must differ from the writer's; \"off\" disables the critic entirely (it is advisory and never gates the verdict, so a single-vendor run with only one usable model can drop it). No default")
 	scopeTestsFlag := fs.Bool("scope-tests", false, "REMOVED — see --whole-suite. Selection by coverage evidence is now the default")
 	wholeSuiteFlag := fs.Bool("whole-suite", false, "grade every mutant against the project's WHOLE suite instead of the tests that demonstrably execute each file (the default, from one instrumented run per scan). Costs O(mutants x whole-suite runtime) per file and answers a different question — 'did ANY test catch it' rather than 'do this file's tests test it'. The verdict records which was used")
@@ -226,8 +226,21 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// key, the ledger or the signed statement, so every one of them records
 	// the CONCRETE model. An alias is a label for humans and is never
 	// authoritative.
-	seatReg, regErr := resolveSeatRegistry("corral certify --repo", *repoDir,
-		certifySeats(deriveModel, mutantModelFlag, writerModelFlag, criticModelFlag, shadow.model, shadow.writerModel), stderr)
+	// --local-endpoint placements are parsed BEFORE the seats resolve: a
+	// placement is itself a declared source for a seat with a bare local name,
+	// and the preflight below (resolveAuditRoles) must see it folded in.
+	localEndpoints, lerr := parseLocalEndpoints(localEndpointFlag)
+	if lerr != nil {
+		fmt.Fprintf(stderr, "corral certify --repo: %v\n", lerr)
+		return 2
+	}
+	// context.Background(): no cancellable context exists here. The SIGINT
+	// handler (auditContext) is installed after the goal derivation, on
+	// purpose — an interrupt before any audit has nothing to record, and
+	// TestAnInterruptedRepoScanRecordsNothing_APISeat depends on it. The one
+	// network call, listing OLLAMA_URL's daemon, has its own 10s bound.
+	seats, regErr := resolveSeatsPlaced(context.Background(), "corral certify --repo", *repoDir,
+		certifySeats(deriveModel, mutantModelFlag, writerModelFlag, criticModelFlag, shadow.model, shadow.writerModel), localEndpoints, stderr)
 	if regErr != nil {
 		fmt.Fprintf(stderr, "corral certify --repo: %v\n", regErr)
 		return 2
@@ -912,7 +925,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			criticModel:       *criticModelFlag,
 			shadowModel:       *shadow.model,
 			shadowWriterModel: *shadow.writerModel,
-			seatProviders:     seatReg.seatProviders(),
+			seats:             seats,
 			// The cap is checked here too, so a seat it cannot see (an
 			// unmetered agent) is refused before any goal is derived — the
 			// per-file resolution below would only find it after the scan
@@ -929,8 +942,11 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// The derive seat is under the same cap, so the same refusal: a
 		// derive seat the cap cannot see is refused before it derives.
 		// Only when it will be asked at all (--goals skips it).
-		if strings.TrimSpace(*goalsPath) == "" && strings.TrimSpace(*deriveModel) != "" && isAgentSeat(*deriveModel) {
-			db, err := agentbackend.ForSeat(*deriveModel, agentbackend.SeatOptions{})
+		// Whether it is an agent seat is read from its resolved Kind, never
+		// re-guessed from the name, and it is built by the same constructor
+		// every grading seat uses.
+		if rs := seats["derive-model"]; strings.TrimSpace(*goalsPath) == "" && rs.Kind == "agent" {
+			db, err := agentbackend.Build(rs, agentbackend.SeatOptions{})
 			if err == nil {
 				err = capCanSee(scanBudget, roleGoalDeriver, *deriveModel, db)
 			}
@@ -964,8 +980,8 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// the scan's record and its cost line (scanModelCallRowsWith). Keeping
 	// only the last would drop an earlier one's spend silently.
 	var scanDerivers deriverSet
-	keepDeriver := func(model, endpoint string) (reposcan.Deriver, error) {
-		d, err := certifyRepoDeriver(model, endpoint)
+	keepDeriver := func(rs agentbackend.ResolvedSeat) (reposcan.Deriver, error) {
+		d, err := certifyRepoDeriver(rs)
 		if err == nil && d != nil {
 			// The deriver draws on the scan's one budget, like every seat.
 			d = withDeriveBudget(d, scanBudget)
@@ -979,7 +995,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
 		return 2
 	}
-	gs, disclosure, code := resolveGoalSource(stderr, *repoDir, *goalsPath, *deriveModel, seatReg.deriveEndpoint(), *dryRun, len(selected), keepDeriver, goalStore, *noGoalCacheFlag, !*noGoalCacheFlag)
+	gs, disclosure, code := resolveGoalSource(stderr, *repoDir, *goalsPath, seats["derive-model"], *dryRun, len(selected), keepDeriver, goalStore, *noGoalCacheFlag, !*noGoalCacheFlag)
 	if code != 0 {
 		return code
 	}
@@ -1373,18 +1389,8 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// HEAD leaves it unknown, never "clean against some other revision".
 	auditedTreeDirty := treeDirtyAt(*repoDir, *commit)
 
-	localEndpoints, lerr := parseLocalEndpoints(localEndpointFlag)
-	if lerr != nil {
-		fmt.Fprintf(stderr, "corral certify --repo: %v\n", lerr)
-		return 2
-	}
-	// A registry entry with a local provider carries its daemon endpoint, and
-	// it feeds the SAME role->url mechanism --local-endpoint does — one path,
-	// not two. An explicit --local-endpoint wins: it names one seat's daemon
-	// for this run, against a declaration that covers every run.
-	localEndpoints = mergeLocalEndpoints(localEndpoints, seatReg.localEndpoints())
 	if ex != nil {
-		ex.localEndpoints = localEndpoints
+		ex.seats = seats
 		ex.tokenBudget = scanBudget
 		ex.toolProbe = scanTools
 	}
@@ -1431,7 +1437,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
 			return 2
 		}
-		gs, disclosure, code = resolveGoalSource(stderr, *repoDir, *goalsPath, *deriveModel, seatReg.deriveEndpoint(), *dryRun, len(selected), keepDeriver, goalStore, *noGoalCacheFlag, !*noGoalCacheFlag)
+		gs, disclosure, code = resolveGoalSource(stderr, *repoDir, *goalsPath, seats["derive-model"], *dryRun, len(selected), keepDeriver, goalStore, *noGoalCacheFlag, !*noGoalCacheFlag)
 		if code != 0 {
 			return code
 		}
@@ -2600,12 +2606,12 @@ func changedFiles(root, baseRef string) ([]string, error) {
 	return changed, nil
 }
 
-// deriverFactory builds a Deriver for a model, served at endpoint when the
-// registry placed the derive seat on a local daemon ("" otherwise). Injected
+// deriverFactory builds a Deriver from the derive seat the resolver chose,
+// whatever it resolved to (a local daemon, a gateway, a vendor, an agent). Injected
 // so the goal-source wiring can be tested without a provider credential —
 // and, more importantly, without any possibility of a real model call from
 // a unit test.
-type deriverFactory func(model, endpoint string) (reposcan.Deriver, error)
+type deriverFactory func(rs agentbackend.ResolvedSeat) (reposcan.Deriver, error)
 
 // certifyRepoDeriver is the factory runCertifyRepo actually uses. A package
 // var rather than a direct call to newLLMDeriver so a test can prove a
@@ -2676,7 +2682,7 @@ func goalReceiptLine(dsn string, recordEnabled bool, fresh int) string {
 // cache already follows (see NewCachingGoalSource's doc).
 //
 // Returns the process exit code to use on failure; 0 means the source is good.
-func resolveGoalSource(stderr io.Writer, repoDir, goalsPath, deriveModel, deriveEndpoint string, dryRun bool, nSelected int, newDeriver deriverFactory, store reposcan.GoalCacheStore, noGoalCache, recordEnabled bool) (reposcan.GoalSource, string, int) {
+func resolveGoalSource(stderr io.Writer, repoDir, goalsPath string, derive agentbackend.ResolvedSeat, dryRun bool, nSelected int, newDeriver deriverFactory, store reposcan.GoalCacheStore, noGoalCache, recordEnabled bool) (reposcan.GoalSource, string, int) {
 	// --goals takes precedence when given, so hand-written goals keep working
 	// and that path needs no provider credential at all.
 	if goalsPath != "" {
@@ -2700,15 +2706,16 @@ func resolveGoalSource(stderr io.Writer, repoDir, goalsPath, deriveModel, derive
 		// refuses BEFORE the credential check below so the message names the
 		// actual problem (no model chosen) rather than the symptom a missing
 		// key would produce.
-		if strings.TrimSpace(deriveModel) == "" {
-			fmt.Fprintf(stderr, "corral certify --repo: no goal source. corral has no default models, so deriving a goal per file needs --derive-model <model>; or supply --goals <file> to skip derivation entirely (that path calls no model and needs no key)\n")
+		deriveModel := strings.TrimSpace(derive.Spec)
+		if deriveModel == "" {
+			fmt.Fprintf(stderr, "corral certify --repo: no goal source. corral has no default models, so deriving a goal per file needs --derive-model <model> (off names no model for this seat); or supply --goals <file> to skip derivation entirely (that path calls no model and needs no key)\n")
 			return nil, "", 2
 		}
 		// Constructed only when there is something to derive FOR. It fails
 		// closed on a missing credential, which is the right answer for a real
 		// scan — but demanding a provider key to report "0 candidates" would
 		// refuse a scan that was never going to call a model.
-		d, derr := newDeriver(deriveModel, deriveEndpoint)
+		d, derr := newDeriver(derive)
 		if derr != nil {
 			fmt.Fprintf(stderr, "corral certify --repo: %v\n", derr)
 			return nil, "", 2
@@ -5150,9 +5157,10 @@ type localExecutor struct {
 	// detect their runner as before.
 	runner string
 
-	// localEndpoints places local seats on specific ollama daemons for every
-	// file this scan audits — one daemon per GPU. See parseLocalEndpoints.
-	localEndpoints map[string]string
+	// seats is every seat of this scan, resolved once and shared by every
+	// file it audits; --local-endpoint placements (one daemon per GPU, see
+	// parseLocalEndpoints) are already folded in.
+	seats seatSet
 	// tokenBudget is the scan-wide --max-tokens cap, one for every file.
 	tokenBudget *agentbackend.TokenBudget
 	// toolProbe is the scan's one seatToolProbe, handed to every job.
@@ -5545,10 +5553,10 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 	// twice and disagree.
 	sel := l.selectionFor(j)
 	return localAuditInput{
-		localEndpoints: l.localEndpoints,
-		tokenBudget:    l.tokenBudget,
-		toolProbe:      l.toolProbe,
-		repoDir:        l.repoDir,
+		seats:       l.seats,
+		tokenBudget: l.tokenBudget,
+		toolProbe:   l.toolProbe,
+		repoDir:     l.repoDir,
 		// Read only when the job builds its own seed (no shared one): the
 		// scan's bound, so the two can never seed under different limits.
 		seedLimit: l.seedLimit,

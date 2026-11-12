@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/agentworker"
 	"github.com/pdbethke/corralai/internal/models"
 )
@@ -39,8 +41,8 @@ func TestRegistryAliasResolvesAtEverySeatFlag(t *testing.T) {
 	t.Setenv(models.EnvFile, "")
 	s := &seatPtrs{derive: "fast", mutant: "fast", writer: "scribe", critic: "strong", shadow: "fast", shadowWriter: "strong"}
 	var errb bytes.Buffer
-	if _, err := resolveSeatRegistry("test", t.TempDir(), s.flags(), &errb); err != nil {
-		t.Fatalf("resolveSeatRegistry: %v", err)
+	if _, err := resolveSeats(context.Background(), "test", t.TempDir(), s.flags(), &errb); err != nil {
+		t.Fatalf("resolveSeats: %v", err)
 	}
 	want := seatPtrs{
 		derive: "gemini-3.6-flash", mutant: "gemini-3.6-flash",
@@ -59,8 +61,9 @@ func TestRegistryAliasResolvesAtEverySeatFlag(t *testing.T) {
 	}
 }
 
-// A concrete model name still works EXACTLY as it does today, registry or no
-// registry. This is the additive guarantee: nobody's command line changes.
+// A vendor/model name resolves EXACTLY the same, registry or no registry: the
+// registry is additive. Either way the seat is rewritten to its bare model,
+// which is the spelling every record keeps.
 func TestConcreteModelNameUnchangedByRegistry(t *testing.T) {
 	for _, tc := range []struct{ name, inline string }{
 		{"no registry", ""},
@@ -69,35 +72,40 @@ func TestConcreteModelNameUnchangedByRegistry(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv(models.EnvInline, tc.inline)
 			t.Setenv(models.EnvFile, "")
-			s := &seatPtrs{mutant: "gemini-3.6-flash", writer: "claude-sonnet-5", critic: "off"}
+			s := &seatPtrs{mutant: "google/gemini-3.6-flash", writer: "anthropic/claude-sonnet-5", critic: "off"}
 			var errb bytes.Buffer
-			if _, err := resolveSeatRegistry("test", t.TempDir(), s.flags(), &errb); err != nil {
-				t.Fatalf("resolveSeatRegistry: %v", err)
+			if _, err := resolveSeats(context.Background(), "test", t.TempDir(), s.flags(), &errb); err != nil {
+				t.Fatalf("resolveSeats: %v", err)
 			}
 			want := seatPtrs{mutant: "gemini-3.6-flash", writer: "claude-sonnet-5", critic: "off"}
 			if *s != want {
-				t.Errorf("seats = %+v, want them untouched %+v", *s, want)
+				t.Errorf("seats = %+v, want them rewritten to the bare models %+v", *s, want)
 			}
 		})
 	}
 }
 
-// With no registry at all the resolver is SILENT — a repo that has never heard
-// of this feature must behave byte for byte as it did before.
-func TestNoRegistryEmitsNothing(t *testing.T) {
+// With no registry the resolver declares no placement, but it still DISCLOSES
+// how each seat resolved (the plan prints whenever a seat resolved): the
+// vendor-named seats say "vendor/model", and nothing is placed on a local daemon.
+func TestNoRegistryStillDisclosesResolution(t *testing.T) {
 	t.Setenv(models.EnvInline, "")
 	t.Setenv(models.EnvFile, "")
-	s := &seatPtrs{mutant: "gemini-3.6-flash", writer: "claude-sonnet-5"}
+	s := &seatPtrs{mutant: "google/gemini-3.6-flash", writer: "anthropic/claude-sonnet-5"}
 	var errb bytes.Buffer
-	ep, err := resolveSeatRegistry("test", t.TempDir(), s.flags(), &errb)
+	set, err := resolveSeats(context.Background(), "test", t.TempDir(), s.flags(), &errb)
 	if err != nil {
-		t.Fatalf("resolveSeatRegistry: %v", err)
+		t.Fatalf("resolveSeats: %v", err)
 	}
-	if errb.Len() != 0 {
-		t.Errorf("stderr = %q, want silence with no registry", errb.String())
+	for _, w := range []string{"no registry declared", "google/gemini-3.6-flash", "anthropic/claude-sonnet-5", "(vendor/model)"} {
+		if !strings.Contains(errb.String(), w) {
+			t.Errorf("stderr = %q, want it to name %q", errb.String(), w)
+		}
 	}
-	if len(ep.localEndpoints()) != 0 || len(ep.seatProviders()) != 0 {
-		t.Errorf("resolution = %+v, want nothing with no registry", ep)
+	for flag, rs := range set {
+		if rs.Endpoint != "" || rs.Wire != models.WireHosted {
+			t.Errorf("seat %s = %+v, want no local placement with no registry", flag, rs)
+		}
 	}
 }
 
@@ -107,8 +115,8 @@ func TestRegistryNeverFillsAnUnnamedSeat(t *testing.T) {
 	t.Setenv(models.EnvInline, registryJSON)
 	t.Setenv(models.EnvFile, "")
 	s := &seatPtrs{}
-	if _, err := resolveSeatRegistry("test", t.TempDir(), s.flags(), &errDiscard{}); err != nil {
-		t.Fatalf("resolveSeatRegistry: %v", err)
+	if _, err := resolveSeats(context.Background(), "test", t.TempDir(), s.flags(), &errDiscard{}); err != nil {
+		t.Fatalf("resolveSeats: %v", err)
 	}
 	if (*s != seatPtrs{}) {
 		t.Fatalf("seats = %+v, want every one still empty — a registry is not a default", *s)
@@ -129,8 +137,8 @@ func TestAliasRenameDoesNotChangeTheCacheKey(t *testing.T) {
 		t.Setenv(models.EnvInline, inline)
 		t.Setenv(models.EnvFile, "")
 		s := &seatPtrs{writer: writerAlias, mutant: mutantAlias, critic: "off"}
-		if _, err := resolveSeatRegistry("test", t.TempDir(), s.flags(), &errDiscard{}); err != nil {
-			t.Fatalf("resolveSeatRegistry: %v", err)
+		if _, err := resolveSeats(context.Background(), "test", t.TempDir(), s.flags(), &errDiscard{}); err != nil {
+			t.Fatalf("resolveSeats: %v", err)
 		}
 		w, m, c, sh, sw := resolveRoleModels(localAuditInput{
 			writerModel: s.writer, mutantModel: s.mutant, criticModel: s.critic,
@@ -140,7 +148,7 @@ func TestAliasRenameDoesNotChangeTheCacheKey(t *testing.T) {
 	}
 	a := keyFor(t, `{"scribe": {"provider":"anthropic","model":"claude-sonnet-5"}, "fast": {"provider":"google","model":"gemini-3.6-flash"}}`, "scribe", "fast")
 	b := keyFor(t, `{"penman": {"provider":"anthropic","model":"claude-sonnet-5"}, "quick": {"provider":"google","model":"gemini-3.6-flash"}}`, "penman", "quick")
-	concrete := keyFor(t, "", "claude-sonnet-5", "gemini-3.6-flash")
+	concrete := keyFor(t, "", "anthropic/claude-sonnet-5", "google/gemini-3.6-flash")
 	if a != b {
 		t.Errorf("renaming aliases changed the cache key:\n  %s\n  %s", a, b)
 	}
@@ -183,8 +191,8 @@ func TestBadRegistryRefusesTheRun(t *testing.T) {
 	t.Setenv(models.EnvFile, "")
 	var out, errb bytes.Buffer
 	code := runCertifyRepo([]string{
-		"--repo", t.TempDir(), "--writer-model", "gemini-3.6-flash",
-		"--mutant-model", "gemini-3.6-flash", "--critic-model", "off", "--dry-run",
+		"--repo", t.TempDir(), "--writer-model", "google/gemini-3.6-flash",
+		"--mutant-model", "google/gemini-3.6-flash", "--critic-model", "off", "--dry-run",
 	}, &out, &errb)
 	if code != 2 {
 		t.Fatalf("exit = %d, want 2 for an alias named \"default\"\nstderr=%s", code, errb.String())
@@ -216,21 +224,18 @@ func TestLocalRegistryEntryPlacesItsSeatOnItsDaemon(t *testing.T) {
 	t.Setenv(models.EnvInline, `{"edge": {"provider":"ollama","model":"qwen3.5:9b-q8_0","endpoint":"`+declared.URL+`"}}`)
 	t.Setenv(models.EnvFile, "")
 
+	// The daemon at OLLAMA_URL lists the undeclared seat's model; the listing
+	// itself is faked so only chat requests are counted below.
+	fakeOllama(t, "gemma4:12b")
 	s := &seatPtrs{writer: "edge", mutant: "gemma4:12b"}
-	res, err := resolveSeatRegistry("test", t.TempDir(), s.flags(), &errDiscard{})
+	set, err := resolveSeats(context.Background(), "test", t.TempDir(), s.flags(), &errDiscard{})
 	if err != nil {
-		t.Fatalf("resolveSeatRegistry: %v", err)
+		t.Fatalf("resolveSeats: %v", err)
 	}
-	endpoints := res.localEndpoints()
-	if got := endpoints[advpool.RoleTestWriter]; got != declared.URL {
-		t.Fatalf("registry endpoint for the writer = %q, want %q", got, declared.URL)
+	if rs, _ := set.byRole(advpool.RoleTestWriter); rs.Endpoint != declared.URL {
+		t.Fatalf("registry endpoint for the writer = %q, want %q", rs.Endpoint, declared.URL)
 	}
-	chatterFor, err := localChatterFor(
-		advpool.RoleAssignment{advpool.RoleTestWriter: s.writer, advpool.RoleMutantGenerator: s.mutant},
-		nil,
-		mergeLocalEndpoints(nil, endpoints),
-		nil,
-	)
+	chatterFor, err := localChatterFor(set, nil, nil)
 	if err != nil {
 		t.Fatalf("localChatterFor: %v", err)
 	}
@@ -250,17 +255,25 @@ func TestLocalRegistryEntryPlacesItsSeatOnItsDaemon(t *testing.T) {
 }
 
 // An explicit --local-endpoint beats the declaration: the flag names one
-// seat's daemon for THIS run against a declaration covering every run.
+// seat's daemon for THIS run against a declaration covering every run. The
+// seat the flag does not name keeps the registry's daemon.
 func TestExplicitLocalEndpointBeatsTheRegistry(t *testing.T) {
-	got := mergeLocalEndpoints(
-		map[string]string{advpool.RoleTestWriter: "http://flag:1"},
-		map[string]string{advpool.RoleTestWriter: "http://registry:2", advpool.RoleMutantGenerator: "http://registry:3"},
-	)
-	if got[advpool.RoleTestWriter] != "http://flag:1" {
-		t.Errorf("writer endpoint = %q, want the flag to win", got[advpool.RoleTestWriter])
+	clearSeatEnv(t)
+	t.Setenv(models.EnvInline, `{
+  "scribe": {"provider":"ollama","model":"qwen3.5:9b","endpoint":"http://registry:2"},
+  "edge":   {"provider":"ollama","model":"gemma4:12b","endpoint":"http://registry:3"}
+}`)
+	s := &seatPtrs{writer: "scribe", mutant: "edge"}
+	set, err := resolveSeatsPlaced(context.Background(), "test", t.TempDir(), s.flags(),
+		map[string]string{advpool.RoleTestWriter: "http://flag:1"}, &errDiscard{})
+	if err != nil {
+		t.Fatalf("resolveSeatsPlaced: %v", err)
 	}
-	if got[advpool.RoleMutantGenerator] != "http://registry:3" {
-		t.Errorf("mutant endpoint = %q, want the declared one", got[advpool.RoleMutantGenerator])
+	if rs, _ := set.byRole(advpool.RoleTestWriter); rs.Endpoint != "http://flag:1" || rs.DeclaredBy != agentbackend.DeclaredFlag {
+		t.Errorf("writer = %+v, want the flag's endpoint to win and say so", rs)
+	}
+	if rs, _ := set.byRole(advpool.RoleMutantGenerator); rs.Endpoint != "http://registry:3" {
+		t.Errorf("mutant endpoint = %q, want the declared one", rs.Endpoint)
 	}
 }
 
@@ -279,10 +292,10 @@ func TestSameVendorSeatsAreDisclosedNotRefused(t *testing.T) {
 	t.Setenv("MODEL_BACKEND", "")
 	t.Setenv("GEMINI_API_KEY", "k")
 	var errb bytes.Buffer
-	if _, err := resolveAuditRoles(localAuditInput{
+	if _, err := resolveRoles(t, localAuditInput{
 		cmdName:     "corral certify --repo",
-		writerModel: "gemini-3.7-flash", mutantModel: "gemini-3.6-flash",
-		criticModel: "gemini-3.6-flash",
+		writerModel: "google/gemini-3.7-flash", mutantModel: "google/gemini-3.6-flash",
+		criticModel: "google/gemini-3.6-flash",
 	}, &errb); err != nil {
 		t.Fatalf("two distinct models from one vendor must still be ACCEPTED: %v", err)
 	}
@@ -312,6 +325,11 @@ func TestDeclaredProviderDrivesTheVendorDisclosure(t *testing.T) {
 	if got := sharedSeatProvider(nil, "qwen3.5:9b", "gemma4:12b"); got != "" {
 		t.Errorf("two unplaceable local names = %q, want \"\" (never a guessed shared vendor)", got)
 	}
+	// Two gemini-* names with no resolved provider make no claim: the vendor
+	// is the declaration the resolver recorded, never the spelling.
+	if got := sharedSeatProvider(nil, "gemini-3.6-flash", "gemini-3.7-flash"); got != "" {
+		t.Errorf("two names with no resolved provider = %q, want \"\" (never a vendor read off a name)", got)
+	}
 	if got := sharedSeatProvider(nil, "gemini-3.6-flash", "off"); got != "" {
 		t.Errorf("a disabled critic = %q, want \"\"", got)
 	}
@@ -333,7 +351,7 @@ func TestStrictRegistryRefusesAnUnknownAlias(t *testing.T) {
 	t.Setenv(models.EnvFile, "")
 	s := &seatPtrs{writer: "nope", mutant: "fast"}
 	var errb bytes.Buffer
-	_, err := resolveSeatRegistry("test", t.TempDir(), s.flags(), &errb)
+	_, err := resolveSeats(context.Background(), "test", t.TempDir(), s.flags(), &errb)
 	if err == nil {
 		t.Fatal("strict registry accepted an unknown value, want a refusal")
 	}
@@ -365,7 +383,7 @@ func TestStrictRegistryAllowsAliasesAndOff(t *testing.T) {
 	t.Setenv(models.EnvFile, "")
 	s := &seatPtrs{writer: "scribe", mutant: "fast", critic: "off"}
 	var errb bytes.Buffer
-	if _, err := resolveSeatRegistry("test", t.TempDir(), s.flags(), &errb); err != nil {
+	if _, err := resolveSeats(context.Background(), "test", t.TempDir(), s.flags(), &errb); err != nil {
 		t.Fatalf("strict registry refused declared aliases: %v", err)
 	}
 	want := seatPtrs{writer: "claude-sonnet-5", mutant: "gemini-3.6-flash", critic: "off"}
@@ -377,7 +395,7 @@ func TestStrictRegistryAllowsAliasesAndOff(t *testing.T) {
 	}
 
 	empty := &seatPtrs{}
-	if _, err := resolveSeatRegistry("test", t.TempDir(), empty.flags(), &errDiscard{}); err != nil {
+	if _, err := resolveSeats(context.Background(), "test", t.TempDir(), empty.flags(), &errDiscard{}); err != nil {
 		t.Fatalf("strict registry refused an unnamed seat at resolution: %v", err)
 	}
 	if (*empty != seatPtrs{}) {
@@ -388,22 +406,22 @@ func TestStrictRegistryAllowsAliasesAndOff(t *testing.T) {
 	}
 }
 
-// NON-strict is unchanged: an unknown value is still the concrete model name
-// the flags have always accepted, and it is still disclosed as an inference.
+// NON-strict is unchanged: a value that is no alias is still resolved by the
+// later steps (its vendor/model form here), and disclosed as such.
 func TestNonStrictRegistryStillAcceptsAConcreteName(t *testing.T) {
 	t.Setenv(models.EnvInline, registryJSON)
 	t.Setenv(models.EnvFile, "")
-	s := &seatPtrs{writer: "claude-sonnet-5", mutant: "gemini-3.6-flash"}
+	s := &seatPtrs{writer: "anthropic/claude-sonnet-5", mutant: "google/gemini-3.6-flash"}
 	var errb bytes.Buffer
-	if _, err := resolveSeatRegistry("test", t.TempDir(), s.flags(), &errb); err != nil {
+	if _, err := resolveSeats(context.Background(), "test", t.TempDir(), s.flags(), &errb); err != nil {
 		t.Fatalf("non-strict registry refused a concrete model name: %v", err)
 	}
 	want := seatPtrs{writer: "claude-sonnet-5", mutant: "gemini-3.6-flash"}
 	if *s != want {
-		t.Errorf("seats = %+v, want them untouched %+v", *s, want)
+		t.Errorf("seats = %+v, want them rewritten to the bare models %+v", *s, want)
 	}
-	if !strings.Contains(errb.String(), "concrete name") {
-		t.Errorf("disclosure %q does not disclose the inference", errb.String())
+	if !strings.Contains(errb.String(), "(vendor/model)") {
+		t.Errorf("disclosure %q does not say how the seat resolved", errb.String())
 	}
 	if strings.Contains(errb.String(), "strict") {
 		t.Errorf("a non-strict registry announced strict mode: %q", errb.String())

@@ -159,52 +159,26 @@ func (d llmDeriver) modelCallRows() []scanstore.ModelCall {
 	return out
 }
 
-// newLLMDeriver routes to the backend that serves the model and fails closed
-// when a cloud vendor's credential is absent.
-//
-// THE SAME RULES AS EVERY GRADING SEAT (localChatterFor). This seat used to
-// call ForModelOrLocal directly (now ForSeat), which ignores MODEL_BACKEND — so with the
-// operator's gateway pinned (MODEL_BACKEND=openrouter, OPENAI_BASE_URL=…),
-// the three grading seats went through the gateway and the derive seat
-// dialled the vendor directly, demanding the vendor's own key and sending
-// every candidate's SOURCE to a host the operator had pinned everything
-// away from. And a registry endpoint for this seat was printed, then
-// discarded.
-//
-// In order: endpoint (the registry placed this seat on a daemon) wins; a
-// pinned base backend serves a cloud name it fronts (its own vendor, or a
-// gateway that fronts every vendor); otherwise the vendor that owns the
-// name, or the local daemon for a local name — goal derivation was once
-// the only seat that demanded a cloud vendor, against corral's own
-// local-first claim, and a summarizing task is one a local model handles.
-func newLLMDeriver(model, endpoint string) (reposcan.Deriver, error) {
-	if isAgentSeat(model) {
-		// A coding agent as the derive seat: a CLI with its own login, so
-		// neither a registry daemon nor the pinned gateway applies to it.
-		if endpoint != "" {
-			return nil, fmt.Errorf("goal deriver: the registry places the derive seat on a local daemon (%s), but %q is an agent seat that runs as a CLI — remove the endpoint, or give this seat a local model", endpoint, model)
-		}
-		b, err := agentbackend.ForSeat(model, agentbackend.SeatOptions{})
-		if err != nil {
-			return nil, fmt.Errorf("goal deriver: %w", err)
-		}
-		return newMeteredDeriver(b, model), nil
+// newLLMDeriver builds the derive seat from the routing the resolver already
+// decided (resolveSeats), through the one constructor every grading seat
+// uses (agentbackend.Build). The seat is NOT re-guessed here from its model's
+// name or from MODEL_BACKEND: this door used to carry its own copy of that
+// guesswork, which is how it came to honour a registry endpoint and a pinned
+// gateway differently from the grading seats, and to read keys and URLs the
+// resolver had been told not to (an OpenAI secret must never reach a pinned
+// openrouter.ai). A seat with no usable routing refuses here, naming the flag.
+func newLLMDeriver(rs agentbackend.ResolvedSeat) (reposcan.Deriver, error) {
+	if rs.Kind == "agent" && rs.Endpoint != "" {
+		// A coding agent is a CLI with its own login, so a daemon endpoint
+		// cannot apply to it. Build ignores the field, so the contradiction
+		// is refused here rather than silently dropped.
+		return nil, fmt.Errorf("goal deriver: the registry places the derive seat on a local daemon (%s), but %q is an agent seat that runs as a CLI — remove the endpoint, or give this seat a local model", rs.Endpoint, rs.Spec)
 	}
-	if endpoint != "" {
-		return newMeteredDeriver(agentbackend.NewOllamaBackend(endpoint, model), model), nil
-	}
-	if v := agentbackend.VendorOf(model); v != "" && backendPinned() && (baseVendor() == "" || baseVendor() == v) {
-		base := agentbackend.FromEnv()
-		if sw, ok := base.(agentbackend.ModelSwitcher); ok {
-			return newMeteredDeriver(sw.WithModel(model), model), nil
-		}
-		return newMeteredDeriver(base, model), nil
-	}
-	b, err := agentbackend.ForSeat(model, agentbackend.SeatOptions{})
+	b, err := agentbackend.Build(rs, agentbackend.SeatOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("goal deriver: %w", err)
 	}
-	return newMeteredDeriver(b, model), nil
+	return newMeteredDeriver(b, rs.Spec), nil
 }
 
 // goalDeriverUserTemplate is the format string Derive fills in with the

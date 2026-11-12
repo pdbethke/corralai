@@ -726,6 +726,11 @@ func TestVerdictNamesASingleVendorHerd(t *testing.T) {
 			advpool.RoleTestWriter:      "claude-sonnet-5",
 			advpool.RoleTestCritic:      "claude-haiku-4-5",
 		},
+		SeatProviders: map[string]string{
+			advpool.RoleMutantGenerator: "anthropic",
+			advpool.RoleTestWriter:      "anthropic",
+			advpool.RoleTestCritic:      "anthropic",
+		},
 	})
 	out := b.String()
 	if !strings.Contains(out, "decorrelation:") {
@@ -748,6 +753,11 @@ func TestVerdictSilentOnACrossVendorHerd(t *testing.T) {
 			advpool.RoleTestWriter:      "gemini-3.6-flash",
 			advpool.RoleTestCritic:      "claude-haiku-4-5",
 		},
+		SeatProviders: map[string]string{
+			advpool.RoleMutantGenerator: "google",
+			advpool.RoleTestWriter:      "google",
+			advpool.RoleTestCritic:      "anthropic",
+		},
 	})
 	if strings.Contains(b.String(), "decorrelation:") {
 		t.Fatalf("a cross-vendor herd needs no caveat:\n%s", b.String())
@@ -763,6 +773,11 @@ func TestSoleGradedVendorIgnoresTheShadowSeat(t *testing.T) {
 		advpool.RoleTestWriter:            "claude-sonnet-5",
 		advpool.RoleTestCritic:            "claude-haiku-4-5",
 		advpool.RoleMutantGeneratorShadow: "gemini-3.6-flash",
+	}, map[string]string{
+		advpool.RoleMutantGenerator:       "anthropic",
+		advpool.RoleTestWriter:            "anthropic",
+		advpool.RoleTestCritic:            "anthropic",
+		advpool.RoleMutantGeneratorShadow: "google",
 	})
 	if got != "anthropic" {
 		t.Fatalf("the shadow seat must not break a single-vendor finding, got %q", got)
@@ -775,8 +790,32 @@ func TestSoleGradedVendorSilentOnAnUnknownModel(t *testing.T) {
 	if got := soleGradedVendor(map[string]string{
 		advpool.RoleMutantGenerator: "some-local-7b",
 		advpool.RoleTestWriter:      "claude-sonnet-5",
-	}); got != "" {
+	}, map[string]string{advpool.RoleTestWriter: "anthropic"}); got != "" {
 		t.Fatalf("an unrecognized model must yield no claim, got %q", got)
+	}
+}
+
+// The vendor is the RESOLVED provider, never one read off a model's name: a
+// herd of claude-* names with no recorded provider makes no claim (founder
+// ruling 2026-11-12 — "silence over a guess"), and a gpt-* name the resolver
+// recorded as ollama is ollama.
+func TestSoleGradedVendorReadsTheResolvedProviderNotTheName(t *testing.T) {
+	names := map[string]string{
+		advpool.RoleMutantGenerator: "claude-sonnet-5",
+		advpool.RoleTestWriter:      "claude-sonnet-5",
+		advpool.RoleTestCritic:      "claude-haiku-4-5",
+	}
+	if got := soleGradedVendor(names, nil); got != "" {
+		t.Fatalf("no resolved providers: got %q, want no claim", got)
+	}
+	local := map[string]string{
+		advpool.RoleMutantGenerator: "gpt-oss:20b",
+		advpool.RoleTestWriter:      "gpt-oss:20b",
+	}
+	if got := soleGradedVendor(local, map[string]string{
+		advpool.RoleMutantGenerator: "ollama", advpool.RoleTestWriter: "ollama",
+	}); got != "ollama" {
+		t.Fatalf("gpt-oss resolved to ollama: got %q, want ollama", got)
 	}
 }
 
@@ -787,6 +826,8 @@ func TestSoleGradedVendorSkipsAnOffRole(t *testing.T) {
 		advpool.RoleMutantGenerator: "gemini-3.6-flash",
 		advpool.RoleTestWriter:      "gemini-3.6-flash",
 		advpool.RoleTestCritic:      "off",
+	}, map[string]string{
+		advpool.RoleMutantGenerator: "google", advpool.RoleTestWriter: "google",
 	}); got != "google" {
 		t.Fatalf("an off role must not block the finding, got %q", got)
 	}

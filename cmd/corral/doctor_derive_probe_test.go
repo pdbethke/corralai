@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/agentbackend"
+	"github.com/pdbethke/corralai/internal/models"
 	"github.com/pdbethke/corralai/internal/reposcan"
 )
 
@@ -18,7 +19,9 @@ func installDoctorDeriver(t *testing.T, fb *fakeBackend) {
 	t.Helper()
 	prev := doctorDeriver
 	t.Cleanup(func() { doctorDeriver = prev })
-	doctorDeriver = func(model, _ string) (reposcan.Deriver, error) { return newMeteredDeriver(fb, model), nil }
+	doctorDeriver = func(rs agentbackend.ResolvedSeat) (reposcan.Deriver, error) {
+		return newMeteredDeriver(fb, rs.Spec), nil
+	}
 }
 
 // THE DERIVE PROBE (ruling R25): one small real derive call through
@@ -42,7 +45,7 @@ func TestDoctorDeriveProbeReportsEachOutcome(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			installDoctorDeriver(t, c.fb)
-			r := probeDeriveSeat("claude-code", "")
+			r := probeDeriveSeat(agentbackend.ResolvedSeat{Flag: "derive-model", Spec: "claude-code", Kind: "agent", DeclaredBy: agentbackend.DeclaredAgent})
 			if r.ok != c.ok {
 				t.Errorf("ok = %v, want %v: %+v", r.ok, c.ok, r)
 			}
@@ -67,7 +70,10 @@ func TestDoctorProbesNothingWithoutADeriveModel(t *testing.T) {
 	called := false
 	prev := doctorDeriver
 	t.Cleanup(func() { doctorDeriver = prev })
-	doctorDeriver = func(string, string) (reposcan.Deriver, error) { called = true; return nil, errors.New("unused") }
+	doctorDeriver = func(agentbackend.ResolvedSeat) (reposcan.Deriver, error) {
+		called = true
+		return nil, errors.New("unused")
+	}
 	var out bytes.Buffer
 	runDoctor([]string{"--repo", t.TempDir()}, &out, &bytes.Buffer{})
 	if called || strings.Contains(out.String(), "derive seat answers") {
@@ -79,6 +85,10 @@ func TestDoctorProbesNothingWithoutADeriveModel(t *testing.T) {
 // sandbox backend) stops the other checks' output; the derive probe still
 // says it is spending a call, before making it, and prints what came back.
 func TestDoctorShowsTheDeriveProbeAfterAFatalCheck(t *testing.T) {
+	// The derive seat's bare local name needs a declared source like any seat.
+	t.Setenv("OLLAMA_URL", "http://ollama.test.invalid:11434")
+	t.Setenv("MODEL_BACKEND", "")
+	fakeOllama(t, "llama3.2:3b")
 	installDoctorDeriver(t, &fakeBackend{reply: "Clamp bounds v.", usage: agentbackend.Usage{InputTokens: 10, OutputTokens: 4}})
 	var out bytes.Buffer
 	runDoctor([]string{"--repo", t.TempDir(), "--jail", "no-such-backend", "--derive-model", "llama3.2:3b"}, &out, &bytes.Buffer{})
@@ -90,5 +100,25 @@ func TestDoctorShowsTheDeriveProbeAfterAFatalCheck(t *testing.T) {
 	result := strings.Index(s, "derive seat answers (llama3.2:3b)")
 	if announce < 0 || result < announce || !strings.Contains(s, "goal: Clamp bounds v.") {
 		t.Errorf("the probe must be announced, then reported, after a fatal check:\n%s", s)
+	}
+}
+
+// Doctor rehearses the derive seat from the SAME resolved routing certify
+// builds it from: a registry seat on an openai-chat daemon passes with no
+// cloud credential in scope, and its failure to build is reported as the
+// derive seat's, not as a missing vendor key.
+func TestDoctorChecksTheDeriveSeatFromItsResolvedRouting(t *testing.T) {
+	noKeys(t)
+	rs := agentbackend.ResolvedSeat{
+		Flag: "derive-model", Spec: "qwen3-coder", Kind: "api", Provider: "vllm",
+		Wire: models.WireOpenAIChat, Endpoint: "http://gpu2.internal:8000/v1", DeclaredBy: agentbackend.DeclaredRegistry,
+	}
+	if res := checkDeriveSeat(rs); len(res) != 1 || !res[0].ok {
+		t.Fatalf("a resolved openai-chat derive seat failed doctor's rehearsal: %+v", res)
+	}
+	rs.Endpoint = ""
+	res := checkDeriveSeat(rs)
+	if len(res) != 1 || res[0].ok || !strings.Contains(res[0].detail, "no endpoint was resolved") {
+		t.Fatalf("a seat with no resolved endpoint must fail naming that: %+v", res)
 	}
 }

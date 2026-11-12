@@ -302,8 +302,8 @@ Usage of certify --local:
     	max mutant-generator seats fanned out across the file's functions (0 = 8). Bounds PARALLELISM only — every function is probed regardless; --n-mutants is the PER-SHARD budget
   -max-tokens int
     	cap on model TOKENS for the whole run, input + output, every seat (0 = no cap; an agent seat that reports no token usage is refused, since the cap could not see it). Checked before each call and charged after it, so one in-flight call can overshoot by its own size. Once reached: a generator seat that has not run makes its file ungradable (executor-error naming the cap), a writer or critic seat is skipped and the file flagged as it is for a provider failure — the dev kill rate already measured stands. The cost line says the cap was reached and after how many calls. Corral has bounded mutants, shards and wall clock and never money; this is the money bound
-  -mutant-model codex
-    	model for the mutant-generator role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json), a concrete model name, or an agent seat (codex, `claude-code`, `antigravity`, or your own CORRALAI_AGENT_<NAME>). "off" leaves the seat empty, and is allowed only with --mutants-from, whose tool mutants are then the whole exam
+  -mutant-model anthropic/…
+    	model for the mutant-generator role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json), a hosted model as vendor/model (anthropic/…, `google/…`, `openai/…` — a bare cloud name is refused, corral never guesses a vendor), a local model the OLLAMA_URL daemon lists, or an agent seat (`codex`, `claude-code`, `antigravity`, or your own CORRALAI_AGENT_<NAME>). "off" leaves the seat empty, and is allowed only with --mutants-from, whose tool mutants are then the whole exam
   -mutants string
     	REPLAY a recorded mutant set (see --record-mutants) instead of generating one: --code is graded against exactly the mutants recorded for it, and no mutant-generator model call is made. Refused (exit 2) if the file is absent from the set or its bytes have changed since it was recorded — a mutant is a single-point edit of specific bytes, and re-applying it to different ones grades an exam nobody wrote. Reads a corral-mutants-2 document, or an older corral-mutants-1 one, whose whole-file mutants still replay byte-for-byte.
   -mutants-from <tool>[@<version>]:<report path>
@@ -360,8 +360,8 @@ Usage of certify --local:
     	the seed of the over-budget sample of --mutants-from's tool mutants, to replay a recorded run's sample. Absent, a seed is drawn and printed. Refused without --mutants-from
   -writer-mode per-survivor
     	how the test-writer attacks this file's survivors: per-survivor (the default) makes ONE call per survivor — each carrying the file once as a cacheable shared prefix plus that survivor's diff, each repaired on its own budget and each PROVEN ALONE against its own mutant — or `batched`, the original shape: one call carrying every survivor, one repair budget, one proof pass over all of them. Nothing measured changes between them (a survivor is proven iff an authored test kills it alone and passes on the original, either way); what changes is that one unbuildable test no longer spends the whole file's retries and takes every other survivor down with it. Each survivor's proof in per-survivor mode runs its OWN compliant baseline (a compliant pass plus a canary, per seat), so a file with N survivors pays N baselines where batched paid one: on a repo whose suite takes a minute, prefer --writer-mode batched or expect N baselines' worth of wall clock.
-  -writer-model codex
-    	model for the test-writer role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json), a concrete model name, or an agent seat (codex, `claude-code`, `antigravity`, or your own CORRALAI_AGENT_<NAME>)
+  -writer-model anthropic/…
+    	model for the test-writer role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json), a hosted model as vendor/model (anthropic/…, `google/…`, `openai/…` — a bare cloud name is refused, corral never guesses a vendor), a local model the OLLAMA_URL daemon lists, or an agent seat (`codex`, `claude-code`, `antigravity`, or your own CORRALAI_AGENT_<NAME>)
 ```
 
 ## `corral control` flags
@@ -413,10 +413,10 @@ Usage of demo:
     	model (or agent seat) for the test-critic role, which must differ from the writer's ("off" disables it)
   -dir string
     	where to write the demo project (default: a new temp dir, printed and kept)
-  -mutant-model codex
-    	model for the mutant-generator role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json), a concrete model name, or an agent seat (codex, `claude-code`, `antigravity`, or your own CORRALAI_AGENT_<NAME>)
-  -writer-model codex
-    	model for the test-writer role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json), a concrete model name, or an agent seat (codex, `claude-code`, `antigravity`, or your own CORRALAI_AGENT_<NAME>)
+  -mutant-model anthropic/…
+    	model for the mutant-generator role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json), a hosted model as vendor/model (anthropic/…, `google/…`, `openai/…` — a bare cloud name is refused, corral never guesses a vendor), a local model the OLLAMA_URL daemon lists, or an agent seat (`codex`, `claude-code`, `antigravity`, or your own CORRALAI_AGENT_<NAME>)
+  -writer-model anthropic/…
+    	model for the test-writer role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json), a hosted model as vendor/model (anthropic/…, `google/…`, `openai/…` — a bare cloud name is refused, corral never guesses a vendor), a local model the OLLAMA_URL daemon lists, or an agent seat (`codex`, `claude-code`, `antigravity`, or your own CORRALAI_AGENT_<NAME>)
 ```
 
 ## `corral doctor` flags
@@ -966,8 +966,8 @@ flags of `corral review`:
     	with --push, also send the scripts and what they printed (they quote the audited code); off by default
   -repo string
     	the checkout to review (a git repository at a commit) (default ".")
-  -reviewer-model <name>:<model>
-    	the reviewer seat — an alias from the registry, a provider model name, or an AGENTIC seat: an agent NAME, pinned to a model as <name>:<model>. `claude-code`, `codex` and `antigravity` are defined; ANY agent is defined the same way as CORRALAI_AGENT_<NAME>="<command line>" ({dir} the worktree, {out} a reply file, {model} / {model:FLAG} the pin; the brief on stdin, the reply on stdout). An agentic seat is a coding agent started in a disposable copy of the repository: it reads the whole scope itself (no --max-bytes cap) and hands back scripts, which corral runs — nothing it did itself is on the record. Required; corral has no default models
+  -reviewer-model anthropic/…
+    	the reviewer seat — an alias from the registry, a hosted model as vendor/model (anthropic/…, `google/…`, `openai/…`; a bare cloud name is refused), a local model the OLLAMA_URL daemon lists, or an AGENTIC seat: an agent NAME, pinned to a model as `<name>:<model>`. `claude-code`, `codex` and `antigravity` are defined; ANY agent is defined the same way as CORRALAI_AGENT_<NAME>="<command line>" ({dir} the worktree, {out} a reply file, {model} / {model:FLAG} the pin; the brief on stdin, the reply on stdout). An agentic seat is a coding agent started in a disposable copy of the repository: it reads the whole scope itself (no --max-bytes cap) and hands back scripts, which corral runs — nothing it did itself is on the record. Required; corral has no default models
   -scope string
     	the directory or file under --repo to review (required)
   -substrate jail
@@ -1291,8 +1291,8 @@ Usage of certify --repo:
     	cap on model TOKENS for the whole SCAN, every file, input + output, every seat (0 = no cap; an agent seat that reports no token usage is refused, since the cap could not see it). Checked before each call and charged after it, so one in-flight call can overshoot by its own size. Once reached: a generator seat that has not run makes its file ungradable (executor-error naming the cap), a writer or critic seat is skipped and the file flagged as it is for a provider failure — the dev kill rate already measured stands. The cost line says the cap was reached and after how many calls. Corral has bounded mutants, shards and wall clock and never money; this is the money bound
   -min-kill-rate string
     	fail the scan (exit 1) if ANY audited file's kill rate is below this value (0.0-1.0 inclusive; a minimum, so a file exactly at the threshold passes). Opt-in: unset by default, so exit codes are unchanged unless this is given. Applies PER FILE, not to the aggregate — a well-tested file must not mask a weak one
-  -mutant-model codex
-    	model for the mutant-generator role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json), a concrete model name, or an agent seat (codex, `claude-code`, `antigravity`, or your own CORRALAI_AGENT_<NAME>). "off" leaves the seat empty, and is allowed only with --mutants-from, whose tool mutants are then the whole exam
+  -mutant-model anthropic/…
+    	model for the mutant-generator role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json), a hosted model as vendor/model (anthropic/…, `google/…`, `openai/…` — a bare cloud name is refused, corral never guesses a vendor), a local model the OLLAMA_URL daemon lists, or an agent seat (`codex`, `claude-code`, `antigravity`, or your own CORRALAI_AGENT_<NAME>). "off" leaves the seat empty, and is allowed only with --mutants-from, whose tool mutants are then the whole exam
   -mutants string
     	REPLAY a recorded mutant set (see --record-mutants) instead of generating one: every audited file is graded against exactly the mutants in this file, and not one generator model call is made. Mutants are authored by a model, so an ordinary run re-draws the exam every time and two runs of the same audit are not two samples of one measurement — pin the set and a change to anything ELSE becomes measurable. Every selected file must appear in the set with the SAME bytes it was recorded from; a missing file or a changed one is refused (exit 2) up front, never half-replayed. Reads a corral-mutants-2 document, or an older corral-mutants-1 one, whose whole-file mutants still replay byte-for-byte.
   -mutants-from <tool>[@<version>]:<report path>
@@ -1357,8 +1357,8 @@ Usage of certify --repo:
     	grade every mutant against the project's WHOLE suite instead of the tests that demonstrably execute each file (the default, from one instrumented run per scan). Costs O(mutants x whole-suite runtime) per file and answers a different question — 'did ANY test catch it' rather than 'do this file's tests test it'. The verdict records which was used
   -writer-mode per-survivor
     	how the test-writer attacks a file's survivors: per-survivor (the default) makes ONE call per survivor — each carrying the file once as a cacheable shared prefix plus that survivor's diff, each repaired on its own budget and each PROVEN ALONE against its own mutant — or `batched`, the original shape: one call carrying every survivor, one repair budget for the file, one proof pass over all of them. Nothing measured changes between them (a survivor is proven iff an authored test kills it alone and passes on the original, either way); what changes is that one unbuildable test no longer spends the whole file's retries and takes every other survivor down with it. The verdict, the report line, the ledger and the attestation all record which mode earned the numbers. Each survivor's proof in per-survivor mode runs its OWN compliant baseline (a compliant pass plus a canary, per seat), so a file with N survivors pays N baselines where batched paid one: on a repo whose suite takes a minute, prefer --writer-mode batched or expect N baselines' worth of wall clock.
-  -writer-model codex
-    	model for the test-writer role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json), a concrete model name, or an agent seat (codex, `claude-code`, `antigravity`, or your own CORRALAI_AGENT_<NAME>)
+  -writer-model anthropic/…
+    	model for the test-writer role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json), a hosted model as vendor/model (anthropic/…, `google/…`, `openai/…` — a bare cloud name is refused, corral never guesses a vendor), a local model the OLLAMA_URL daemon lists, or an agent seat (`codex`, `claude-code`, `antigravity`, or your own CORRALAI_AGENT_<NAME>)
 ```
 
 ## `corral certify verify` flags

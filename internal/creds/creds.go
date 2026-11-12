@@ -33,8 +33,9 @@ var errReadOnly = errors.New("creds: backend is read-only")
 type Provider struct{ Env, Vendor string }
 
 // Providers lists every provider credential corral recognises. GOOGLE_API_KEY
-// is a second spelling of the Gemini key (agentbackend accepts either), so
-// Google appears twice on purpose.
+// is no longer read as the Gemini key (GEMINI_API_KEY alone is); it stays
+// listed so it is still scrubbed from the jail and the doctor and secret
+// checks still recognise it, which is why Google appears twice.
 var Providers = []Provider{
 	{"ANTHROPIC_API_KEY", "Anthropic"},
 	{"OPENAI_API_KEY", "OpenAI"},

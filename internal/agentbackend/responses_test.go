@@ -16,9 +16,9 @@ import (
 func TestCodexModelsRouteToTheResponsesAPI(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "test-openai-key")
 	for _, model := range []string{"gpt-5-codex", "gpt-5.1-codex", "gpt-5.1-codex-mini", "gpt-5.3-codex"} {
-		b, err := ForModel(model)
+		b, err := ForVendor("openai", model)
 		if err != nil {
-			t.Fatalf("ForModel(%q): %v", model, err)
+			t.Fatalf("ForVendor(openai, %q): %v", model, err)
 		}
 		if _, ok := b.(*responsesBackend); !ok {
 			t.Errorf("model %q routed to %T, want *responsesBackend — Codex is Responses-API only", model, b)
@@ -31,9 +31,9 @@ func TestCodexModelsRouteToTheResponsesAPI(t *testing.T) {
 func TestNonCodexOpenAIModelsStayOnChatCompletions(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "test-openai-key")
 	for _, model := range []string{"gpt-4o", "o1-preview", "o3-mini"} {
-		b, err := ForModel(model)
+		b, err := ForVendor("openai", model)
 		if err != nil {
-			t.Fatalf("ForModel(%q): %v", model, err)
+			t.Fatalf("ForVendor(openai, %q): %v", model, err)
 		}
 		if _, ok := b.(*openaiBackend); !ok {
 			t.Errorf("model %q routed to %T, want *openaiBackend", model, b)

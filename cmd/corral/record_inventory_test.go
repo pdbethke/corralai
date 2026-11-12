@@ -153,6 +153,7 @@ func TestRankCountsTheCandidatesItCouldNotSize(t *testing.T) {
 // accepts it, and the printed line carries the same seed, pool size and
 // parameters.
 func TestTheShadowDrawReachesTheLedgerAndReplays(t *testing.T) {
+	declareLocalSeats(t, "localmodel-a:1", "localmodel-b:1")
 	f := flagsWith("", "localmodel-a:1,localmodel-b:1", "", "", "")
 	var errb bytes.Buffer
 	sels, err := drawShadowSeats("corral certify --local", t.TempDir(), "go", f, nil, filepath.Join(t.TempDir(), "none.duckdb"), &errb)

@@ -121,7 +121,7 @@ func reviewFlagSet(out io.Writer) (*flag.FlagSet, *reviewFlags) {
 	f := &reviewFlags{}
 	fs.StringVar(&f.repoDir, "repo", ".", "the checkout to review (a git repository at a commit)")
 	fs.StringVar(&f.scope, "scope", "", "the directory or file under --repo to review (required)")
-	fs.StringVar(&f.model, "reviewer-model", "", "the reviewer seat — an alias from the registry, a provider model name, or an AGENTIC seat: an agent NAME, pinned to a model as `<name>:<model>`. `claude-code`, `codex` and `antigravity` are defined; ANY agent is defined the same way as CORRALAI_AGENT_<NAME>=\"<command line>\" ({dir} the worktree, {out} a reply file, {model} / {model:FLAG} the pin; the brief on stdin, the reply on stdout). An agentic seat is a coding agent started in a disposable copy of the repository: it reads the whole scope itself (no --max-bytes cap) and hands back scripts, which corral runs — nothing it did itself is on the record. Required; corral has no default models")
+	fs.StringVar(&f.model, "reviewer-model", "", "the reviewer seat — an alias from the registry, a hosted model as vendor/model (`anthropic/…`, `google/…`, `openai/…`; a bare cloud name is refused), a local model the OLLAMA_URL daemon lists, or an AGENTIC seat: an agent NAME, pinned to a model as `<name>:<model>`. `claude-code`, `codex` and `antigravity` are defined; ANY agent is defined the same way as CORRALAI_AGENT_<NAME>=\"<command line>\" ({dir} the worktree, {out} a reply file, {model} / {model:FLAG} the pin; the brief on stdin, the reply on stdout). An agentic seat is a coding agent started in a disposable copy of the repository: it reads the whole scope itself (no --max-bytes cap) and hands back scripts, which corral runs — nothing it did itself is on the record. Required; corral has no default models")
 	fs.StringVar(&f.verifier, "verifier-model", "", "a VERIFIER seat, adversarial to the reviewer: a different model that tries to refute every finding, by the same rules — a REPRODUCED refutation (a sh script that exits 0 iff the refutation is demonstrated) that holds demotes the finding on the record; a CODE-READ refutation is carried as opinion; a search that finds nothing is never a refutation. Must not be the reviewer's model. Off unless named")
 	fs.StringVar(&f.ledger, "ledger", "", "the ledger directory the review entry is written to (default: <repo>/.corral/ledger, or $CORRAL_LEDGER). A copy of the entry also goes to this machine's own ledger (the state directory's ledger, see corral state paths; override CORRALAI_MACHINE_LEDGER); a machine ledger that resolves inside the checkout is skipped, with the reason printed")
 	fs.StringVar(&f.attest, "attest", "", "write an in-toto statement (predicate https://corralai.dev/review/v1) to this path, and its DSSE envelope beside it when a certify key is configured: the REPRODUCTIONS — every finding's declared and recorded tier, the hash of its script and output, its exit, the verifier's refutation on the same terms — signed; the opinion bound by its hash and not carried. The ledger entry then names the statement. corral verify --attest <path> --db <ledger dir> recomputes the reproductions' hash from the entry")
@@ -173,8 +173,13 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "corral review: --repo is not a git checkout at a commit — a review names the revision it reviewed")
 		return 2
 	}
-	if _, err := resolveSeatRegistry("corral review", root, []seatFlag{{flag: "reviewer-model", val: model}, {flag: "verifier-model", val: verifier}}, stderr); err != nil {
-		fmt.Fprintf(stderr, "corral review: %v\n", err)
+	// context.Background(): no cancellable context exists yet — the SIGINT
+	// handler (auditContext) is installed after the substrate is chosen, so an
+	// interrupt before this point has nothing to unwind. The one network call
+	// (listing OLLAMA_URL's daemon) has its own 10s bound.
+	seats, regErr := resolveSeats(context.Background(), "corral review", root, []seatFlag{{flag: "reviewer-model", val: model}, {flag: "verifier-model", val: verifier}}, stderr)
+	if regErr != nil {
+		fmt.Fprintf(stderr, "corral review: %v\n", regErr)
 		return 2
 	}
 	// The decorrelation rule, the same one the writer and the critic live
@@ -215,19 +220,23 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 	}
 	defer seatCleanup()
 	agentTimeout := 30 * time.Minute
-	seat := func(spec string) (agentbackend.Backend, string, error) {
-		if _, _, isAgent := agentbackend.AgentSeat(spec); isAgent {
-			b, err := agentbackend.ForSeat(spec, agentbackend.SeatOptions{Dir: seatTree, Timeout: agentTimeout, Tools: reviewSeatTools})
+	// A seat is built from the resolution resolveSeats already made for it: the
+	// registry's endpoint, the pinned gateway or the discovered daemon is what
+	// the call goes to, and no name is re-guessed here.
+	seat := func(flag string) (agentbackend.Backend, string, error) {
+		rs := seats[flag]
+		if rs.Kind == "agent" {
+			b, err := agentbackend.Build(rs, agentbackend.SeatOptions{Dir: seatTree, Timeout: agentTimeout, Tools: reviewSeatTools})
 			if err != nil {
 				return nil, "", err
 			}
 			// The same helper certify's Verdict.SeatTools is built with.
-			return b, agentbackend.SeatTool(spec), nil
+			return b, agentbackend.SeatTool(rs.Spec), nil
 		}
-		b, err := newReviewerBackend(spec, "")
+		b, err := newReviewerBackend(rs, agentbackend.SeatOptions{})
 		return b, "", err
 	}
-	backend, reviewerTool, err := seat(*model)
+	backend, reviewerTool, err := seat("reviewer-model")
 	if err != nil {
 		fmt.Fprintf(stderr, "corral review: reviewer seat: %v\n", err)
 		return 2
@@ -235,13 +244,14 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 	var verifierBackend agentbackend.Backend
 	verifierTool := ""
 	if strings.TrimSpace(*verifier) != "" {
-		if verifierBackend, verifierTool, err = seat(*verifier); err != nil {
+		if verifierBackend, verifierTool, err = seat("verifier-model"); err != nil {
 			fmt.Fprintf(stderr, "corral review: verifier seat: %v\n", err)
 			return 2
 		}
 	}
-	_, _, reviewerIsAgent := agentbackend.AgentSeat(*model)
-	_, _, verifierIsAgent := agentbackend.AgentSeat(*verifier)
+	// Agent-ness is what the resolver decided, never re-read from the flag.
+	reviewerIsAgent := seats["reviewer-model"].Kind == "agent"
+	verifierIsAgent := seats["verifier-model"].Kind == "agent"
 
 	// Read from seatTree, the detached worktree AT commit, never from root:
 	// the entry is recorded against commit and the reproductions run on it,
@@ -477,27 +487,7 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 }
 
 // newReviewerBackend is the seat's constructor; a test substitutes a fake.
-var newReviewerBackend = seatBackend
-
-// seatBackend resolves one seat's model to a backend the way the goal
-// deriver does: a local daemon when the registry placed it on one, the
-// pinned MODEL_BACKEND when it serves this vendor, else the model's own
-// provider.
-func seatBackend(model, endpoint string) (agentbackend.Backend, error) {
-	if endpoint != "" {
-		return agentbackend.NewOllamaBackend(endpoint, model), nil
-	}
-	if v := agentbackend.VendorOf(model); v != "" && !isAgentSeat(model) && backendPinned() && (baseVendor() == "" || baseVendor() == v) {
-		base := agentbackend.FromEnv()
-		if sw, ok := base.(agentbackend.ModelSwitcher); ok {
-			return sw.WithModel(model), nil
-		}
-		return base, nil
-	}
-	// ForSeat defers to ForModelOrLocal for a non-agent name, so the local
-	// fallback is kept; an agent spec never reaches here (seat() takes it).
-	return agentbackend.ForSeat(model, agentbackend.SeatOptions{})
-}
+var newReviewerBackend = agentbackend.Build
 
 // reviewSeatTools are the tools an agent seat in review is granted: it reads
 // the tree, so it may read, search and list it — and nothing else. A

@@ -31,9 +31,9 @@ func refuseModelEndpoints(t *testing.T) {
 	t.Helper()
 	noKeys(t)
 	prev := certifyRepoDeriver
-	certifyRepoDeriver = func(model, endpoint string) (reposcan.Deriver, error) {
-		t.Errorf("a model endpoint was constructed (deriver %q at %q) on a path that must call no model", model, endpoint)
-		return prev(model, endpoint)
+	certifyRepoDeriver = func(rs agentbackend.ResolvedSeat) (reposcan.Deriver, error) {
+		t.Errorf("a model endpoint was constructed (deriver %q at %q) on a path that must call no model", rs.Spec, rs.Endpoint)
+		return prev(rs)
 	}
 	t.Cleanup(func() { certifyRepoDeriver = prev })
 }

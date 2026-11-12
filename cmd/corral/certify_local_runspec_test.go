@@ -29,14 +29,14 @@ func TestResolvedChallengerModelsReachTheRunSpec(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 
 	in := localAuditInput{
-		writerModel:       "gemini-3.6-flash",
-		mutantModel:       "gemini-3.6-flash",
+		writerModel:       "google/gemini-3.6-flash",
+		mutantModel:       "google/gemini-3.6-flash",
 		criticModel:       "off",
-		shadowModel:       "gemini-3.5-flash",
-		shadowWriterModel: "gemini-3.5-flash",
+		shadowModel:       "google/gemini-3.5-flash",
+		shadowWriterModel: "google/gemini-3.5-flash",
 		checkArgv:         []string{"go", "test", "./..."},
 	}
-	roles, err := resolveAuditRoles(in, nil)
+	roles, err := resolveRoles(t, in, nil)
 	if err != nil {
 		t.Fatalf("resolveAuditRoles: %v", err)
 	}
@@ -72,12 +72,12 @@ func TestRepoShadowSelectionReachesTheRunSpec(t *testing.T) {
 
 	ex := newLocalExecutor(t.TempDir(), []string{"go", "test", "./..."}, "jail", 0, nil)
 	ex.models = auditModels{
-		writer: "gemini-3.6-flash", mutant: "gemini-3.6-flash", critic: "off",
-		shadow:          "gemini-3.5-flash",
+		writer: "google/gemini-3.6-flash", mutant: "google/gemini-3.6-flash", critic: "off",
+		shadow:          "google/gemini-3.5-flash",
 		shadowSelection: []shadowpool.Selection{{Role: "mutant", Lang: "go", Chosen: "c"}},
 	}
 	in := ex.auditInputFor(reposcan.Job{Path: "a.go", TestPath: "a_test.go", Lang: "go"})
-	roles, err := resolveAuditRoles(in, nil)
+	roles, err := resolveRoles(t, in, nil)
 	if err != nil {
 		t.Fatalf("resolveAuditRoles: %v", err)
 	}
@@ -101,13 +101,13 @@ func TestUnnamedChallengerWriterLeavesTheRunSpecEmpty(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 
 	in := localAuditInput{
-		writerModel: "gemini-3.6-flash",
-		mutantModel: "gemini-3.6-flash",
+		writerModel: "google/gemini-3.6-flash",
+		mutantModel: "google/gemini-3.6-flash",
 		criticModel: "off",
 		shadowModel: "off",
 		checkArgv:   []string{"go", "test", "./..."},
 	}
-	roles, err := resolveAuditRoles(in, nil)
+	roles, err := resolveRoles(t, in, nil)
 	if err != nil {
 		t.Fatalf("resolveAuditRoles: %v", err)
 	}

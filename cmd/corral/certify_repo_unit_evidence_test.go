@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/reposcan"
 )
@@ -619,7 +620,7 @@ func TestAnEvidenceOnlyCandidateIsAskedForItsGoal(t *testing.T) {
 	d := &recordingDeriver{}
 	prev := certifyRepoDeriver
 	t.Cleanup(func() { certifyRepoDeriver = prev })
-	certifyRepoDeriver = func(string, string) (reposcan.Deriver, error) { return d, nil }
+	certifyRepoDeriver = func(agentbackend.ResolvedSeat) (reposcan.Deriver, error) { return d, nil }
 	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
 
 	var out, errb bytes.Buffer

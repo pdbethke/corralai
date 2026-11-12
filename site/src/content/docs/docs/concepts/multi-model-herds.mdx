@@ -28,7 +28,9 @@ OpenAI-compatible, or a local model through Ollama.
 **What is enforced, what is warned about, and what isn't checked.**
 `CheckDecorrelation` (`internal/advpool/driver.go`) compares exactly one pair —
 `test-critic` against `test-writer` — by name, and refuses the run if they
-match. That is the *entire* rule. Cross-vendor separation is **warned about,
+match. That is the *entire* rule. The name compared is the bare model, after
+the `vendor/model` form is resolved, so `google/m` writing and `openai/m`
+critiquing are refused as the same model `m`. Cross-vendor separation is **warned about,
 not enforced**: when the writer and critic are different models from one
 provider, the run says the critic is "an independent MODEL but not an
 independent VENDOR", and when every graded seat is one vendor the verdict says
@@ -101,9 +103,10 @@ Claude Code agent running on a Claude Pro/Max subscription instead of
 per-call API billing. The herd "contract" is nothing but MCP tool calls
 against the brain (`bootstrap → claim_task → work → complete_task`);
 `corral-agent` is merely the reference implementation of that same contract,
-wired to a local Ollama model by default (`MODEL_BACKEND=ollama`,
-`AGENT_MODEL=qwen2.5-coder:7b`) or any OpenAI-compatible endpoint
-(`MODEL_BACKEND=openai`, e.g. Gemini or OpenRouter). Neither binary is
+wired to whichever backend you name: `MODEL_BACKEND` and `AGENT_MODEL` are
+both required (there is no default), and `OLLAMA_URL` too for
+`MODEL_BACKEND=ollama`. Any OpenAI-compatible endpoint works
+(`MODEL_BACKEND=openai`, e.g. OpenRouter). Neither binary is
 special-cased brain-side — both are ordinary MCP clients.
 
 ### `model_comparison` across a mission

@@ -18,7 +18,7 @@ corral certify --repo . --dry-run</pre>
   <pre class="code">export ANTHROPIC_API_KEY=sk-ant-...
 corral certify --local --repo-dir . --code path/to/file.go \
   --goal "what it must guarantee" \
-  --writer-model claude-sonnet-5 --mutant-model claude-sonnet-5 --critic-model claude-haiku-4-5 \
+  --writer-model anthropic/claude-sonnet-5 --mutant-model anthropic/claude-sonnet-5 --critic-model anthropic/claude-haiku-4-5 \
   --out record.json \
   -- go test ./...</pre>
   <p>
@@ -64,8 +64,8 @@ corral certify --local --repo-dir . --code path/to/file.go \
     the highest-ranked files with a bound on files and on money:
   </p>
   <pre class="code">corral certify --repo . --top 3 --max-tokens 3000000 \
-  --writer-model claude-sonnet-5 --mutant-model claude-sonnet-5 --critic-model claude-haiku-4-5 \
-  --derive-model claude-sonnet-5 \
+  --writer-model anthropic/claude-sonnet-5 --mutant-model anthropic/claude-sonnet-5 --critic-model anthropic/claude-haiku-4-5 \
+  --derive-model anthropic/claude-sonnet-5 \
   -- .venv/bin/python -m pytest   # the project's venv; or your own test command</pre>
   <p>
     Without <code>--top</code>, a repo scan audits up to 25 files. It runs in

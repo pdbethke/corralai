@@ -493,6 +493,7 @@ var printedMetrics = map[string]printedRow{
 	"internal/reposcan/cachekey.go:DigestDir":                 {Exempt: exDigestFrame},
 	"internal/reposcan/tree_digest.go:TreeDigest":             {Exempt: exDigestFrame},
 	"internal/reposcan/rank.go:Rank":                          {Fields: []string{"ScanRow.Inventory"}},
+	"internal/modelcatalog/ollama.go:getJSON":                 {Exempt: "error message: the HTTP status of a model listing that failed, which refuses the seat; it measures no run"},
 	"internal/reposcan/selection.go:emptySelectionRunNote":    {Exempt: "error message: exit code of a selection evidence run that printed nothing"},
 	"internal/reposcan/selection.go:CollectSelectionEvidence": {Exempt: "error message: exit code of an unparseable selection evidence run"},
 	"internal/reposcan/unit_evidence.go:CollectUnitEvidence":  {Exempt: "error message: a bad worker count and the exit code of the failed unit listing"},

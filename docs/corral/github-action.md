@@ -156,10 +156,10 @@ slow"`), not a shell one-liner that chains multiple commands.
     anthropic-key: ${{ secrets.ANTHROPIC_API_KEY }}
     # corral has no default models: name every seat you want filled.
     # These are an example — use whichever provider you supplied a key for.
-    derive-model: claude-sonnet-5
-    writer-model: claude-sonnet-5
-    mutant-model: claude-sonnet-5
-    critic-model: claude-haiku-4-5
+    derive-model: anthropic/claude-sonnet-5
+    writer-model: anthropic/claude-sonnet-5
+    mutant-model: anthropic/claude-sonnet-5
+    critic-model: anthropic/claude-haiku-4-5
     top: "3"                 # audit at most three changed files, highest-ranked first
     max-tokens: "3000000"    # a hard cap on the audit's spend, every audit seat
 ```
@@ -180,10 +180,10 @@ need before the corral step:
   with:
     test-command: "python -m pytest -q"
     gemini-key: ${{ secrets.GEMINI_API_KEY }}
-    derive-model: gemini-3.8-flash
-    writer-model: gemini-3.8-flash
-    mutant-model: gemini-3.8-flash
-    critic-model: gemini-3.7-flash
+    derive-model: google/gemini-3.8-flash
+    writer-model: google/gemini-3.8-flash
+    mutant-model: google/gemini-3.8-flash
+    critic-model: google/gemini-3.7-flash
     top: "3"
     max-tokens: "3000000"
 ```
@@ -511,7 +511,7 @@ and the fix belongs in the code, not a caveat in these docs.
 | `openai-key` | no | `""` | OpenAI (or OpenAI-compatible) key, supplied as `OPENAI_API_KEY`. |
 | `claude-code-oauth-token` | no | `""` | Login for a `claude-code` agent seat, supplied as `CLAUDE_CODE_OAUTH_TOKEN` (create one with `claude setup-token`). The `claude` CLI must be installed on the runner. Not yet run on a runner. |
 | `codex-api-key` | no | `""` | API key for a `codex` agent seat, supplied as `CODEX_API_KEY`. The `codex` CLI must be installed on the runner. An API key bills per token, unlike a subscription login. Not yet run on a runner: the variable name comes from the codex binary's own error text, not its `--help`. |
-| `model-key` | no | `""` | Generic escape hatch for a credential the three named inputs do not cover (e.g. `GOOGLE_API_KEY`, or a gateway reading its own variable). Prefer the named inputs. |
+| `model-key` | no | `""` | Generic escape hatch for a credential the three named inputs do not cover (e.g. `OPENROUTER_API_KEY`, or a gateway reading its own variable). Prefer the named inputs. |
 | `model-key-env` | no | `""` | Which environment variable `model-key` becomes. Must be a plain environment variable name. **Required when `model-key` is set** — it no longer defaults to `ANTHROPIC_API_KEY`, because corral has no default models and guessing a vendor here puts the key in the wrong variable. Naming a variable a named input already fills, with a *different* value, is refused. |
 | `derive-model` | **yes**, unless `goals` is set | `""` | Model that derives a goal per file. `goals` skips derivation entirely and needs no model or key. **corral has no default models** — see "Naming the herd" below. |
 | `writer-model` | **yes** | `""` | Model for the test-writer role — the half that authors a test to prove a survivor is a real gap. |
@@ -615,10 +615,10 @@ back, re-linking the entry if another run pushed first.
         with:
           test-command: pytest -q
           ledger: .corral-ledger
-          derive-model: gemini-3.6-flash
-          mutant-model: gemini-3.6-flash
-          writer-model: gemini-3.6-flash
-          critic-model: claude-haiku-4-5
+          derive-model: google/gemini-3.6-flash
+          mutant-model: google/gemini-3.6-flash
+          writer-model: google/gemini-3.6-flash
+          critic-model: anthropic/claude-haiku-4-5
           gemini-key: ${{ secrets.GEMINI_API_KEY }}
           anthropic-key: ${{ secrets.ANTHROPIC_API_KEY }}
       - name: Attest this run's ledger entry (keyless, via the workflow's identity)
@@ -947,9 +947,9 @@ Both halves have to move together:
     test-command: "go test ./..."
     top: "1"
     gemini-key: ${{ secrets.GEMINI_API_KEY }}
-    derive-model: gemini-3.6-flash
-    writer-model: gemini-3.6-flash
-    mutant-model: gemini-3.6-flash
+    derive-model: google/gemini-3.6-flash
+    writer-model: google/gemini-3.6-flash
+    mutant-model: google/gemini-3.6-flash
     critic-model: "off"
 ```
 
@@ -964,14 +964,14 @@ to satisfy it, and one dishonest one:
 
 ```yaml
     # Two models, one key — satisfies the guard.
-    writer-model: gemini-3.6-flash
-    critic-model: gemini-3.7-flash
+    writer-model: google/gemini-3.6-flash
+    critic-model: google/gemini-3.7-flash
 
     # Two vendors — genuine independence. Keys are additive; set both.
     gemini-key:    ${{ secrets.GEMINI_API_KEY }}
     anthropic-key: ${{ secrets.ANTHROPIC_API_KEY }}
-    writer-model: gemini-3.6-flash
-    critic-model: claude-haiku-4-5
+    writer-model: google/gemini-3.6-flash
+    critic-model: anthropic/claude-haiku-4-5
 
     # Turning the independence check off because the plumbing was in the way.
     critic-model: "off"
@@ -1080,9 +1080,9 @@ Set `min-kill-rate` (a number from `0.0` to `1.0`) to give the gate teeth:
   with:
     test-command:  "go test ./..."
     gemini-key:    ${{ secrets.GEMINI_API_KEY }}
-    mutant-model:  gemini-3.6-flash
-    writer-model:  gemini-3.6-flash
-    derive-model:  gemini-3.6-flash
+    mutant-model:  google/gemini-3.6-flash
+    writer-model:  google/gemini-3.6-flash
+    derive-model:  google/gemini-3.6-flash
     critic-model:  "off"
     min-kill-rate: "0.7"
 ```
@@ -1120,12 +1120,12 @@ and the same step runs it when `reviewer-model` is named:
       - uses: pdbethke/corralai@v1.0.0-rc.31
         with:
           test-command: "go test ./..."
-          mutant-model: gemini-3.6-flash
-          writer-model: gemini-3.6-flash
+          mutant-model: google/gemini-3.6-flash
+          writer-model: google/gemini-3.6-flash
           critic-model: off
-          derive-model: gemini-3.6-flash
-          reviewer-model: gemini-3.6-flash
-          verifier-model: claude-haiku-4-5
+          derive-model: google/gemini-3.6-flash
+          reviewer-model: google/gemini-3.6-flash
+          verifier-model: anthropic/claude-haiku-4-5
           gemini-key: ${{ secrets.GEMINI_API_KEY }}
           anthropic-key: ${{ secrets.ANTHROPIC_API_KEY }}
           ledger: .corral-ledger

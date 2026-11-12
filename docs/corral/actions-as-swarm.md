@@ -46,9 +46,9 @@ jobs:
           push-source: "false"    # default; only the numbers leave the runner
           motherduck-token: ${{ secrets.MOTHERDUCK_TOKEN }}
           attest: "true"
-          derive-model: gemini-3.6-flash
-          writer-model: gemini-3.6-flash
-          mutant-model: gemini-3.6-flash
+          derive-model: google/gemini-3.6-flash
+          writer-model: google/gemini-3.6-flash
+          mutant-model: google/gemini-3.6-flash
           critic-model: "off"
           gemini-key: ${{ secrets.GEMINI_API_KEY }}
 ```
@@ -91,9 +91,9 @@ covers the rest:
       push: "md:corral"
       motherduck-token: ${{ secrets.MOTHERDUCK_TOKEN }}
       attest: "true"
-      derive-model: gemini-3.6-flash
-      writer-model: gemini-3.6-flash
-      mutant-model: gemini-3.6-flash
+      derive-model: google/gemini-3.6-flash
+      writer-model: google/gemini-3.6-flash
+      mutant-model: google/gemini-3.6-flash
       critic-model: "off"
       gemini-key: ${{ secrets.GEMINI_API_KEY }}
 ```

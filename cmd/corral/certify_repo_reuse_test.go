@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/reposcan"
@@ -173,8 +174,8 @@ func reuseFixtureScanOpt(t *testing.T, root, dsn string, deriver reposcan.Derive
 	if !noGoalCache {
 		goalStore = newGoalLedgerCache(dsn)
 	}
-	gs, disclosure, code := resolveGoalSource(&errb, root, "", "test-model-x", "", false, len(selected),
-		func(string, string) (reposcan.Deriver, error) { return deriver, nil }, goalStore, noGoalCache, true)
+	gs, disclosure, code := resolveGoalSource(&errb, root, "", testDeriveSeat("test-model-x"), false, len(selected),
+		func(agentbackend.ResolvedSeat) (reposcan.Deriver, error) { return deriver, nil }, goalStore, noGoalCache, true)
 	if code != 0 {
 		t.Fatalf("resolveGoalSource: code=%d stderr=%s", code, errb.String())
 	}
@@ -263,7 +264,7 @@ func reuseFixtureScanOpt(t *testing.T, root, dsn string, deriver reposcan.Derive
 			t.Fatalf("SelectionCachePut: %v", perr)
 		}
 	}
-	if errb.Len() != 0 {
+	if stripModelsDisclosure(errb.String()) != "" {
 		t.Fatalf("stderr must be empty: %q", errb.String())
 	}
 

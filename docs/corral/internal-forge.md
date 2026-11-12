@@ -62,8 +62,8 @@ corral certify --repo "$PWD" --substrate workspace \
   --owner "$OWNER" --commit "$COMMIT_SHA" \
   --diff-base "origin/$TARGET_BRANCH" \
   --ledger .corral-ledger --record-mutants ".corral-ledger/mutants/$COMMIT_SHA.json" \
-  --derive-model gemini-3.6-flash --mutant-model gemini-3.6-flash \
-  --writer-model gemini-3.6-flash --critic-model claude-haiku-4-5 \
+  --derive-model google/gemini-3.6-flash --mutant-model google/gemini-3.6-flash \
+  --writer-model google/gemini-3.6-flash --critic-model anthropic/claude-haiku-4-5 \
   --min-kill-rate 0.6 \
   -- pytest -q
 code=$?

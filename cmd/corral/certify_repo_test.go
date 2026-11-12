@@ -25,6 +25,7 @@ import (
 	_ "github.com/marcboeker/go-duckdb/v2"
 
 	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/reposcan"
@@ -35,8 +36,8 @@ import (
 // corral has no default models, so every fixture that reaches role resolution
 // must name its own herd. These are the TEST's models, not product defaults.
 const (
-	testHerdWriter = "claude-sonnet-5"
-	testHerdMutant = "claude-sonnet-5"
+	testHerdWriter = "anthropic/claude-sonnet-5"
+	testHerdMutant = "anthropic/claude-sonnet-5"
 )
 
 // gitCmd returns a helper that runs a git command in dir for a test fixture,
@@ -531,7 +532,7 @@ func TestCertifyRepoRecordRoundTripsReportedFiles(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d: stdout=%s stderr=%s", code, out.String(), errb.String())
 	}
-	if errb.Len() != 0 {
+	if stripModelsDisclosure(errb.String()) != "" {
 		t.Fatalf("the ledger write must not fail on a writable directory, stderr=%q", errb.String())
 	}
 
@@ -698,7 +699,7 @@ func TestCertifyRepoRecordCoversExecutionStageRejections(t *testing.T) {
 	if !strings.Contains(out.String(), "COULD-NOT-GRADE") {
 		t.Fatalf("fixture precondition failed: want the baseline-failed shape:\n%s", out.String())
 	}
-	if errb.Len() != 0 {
+	if stripModelsDisclosure(errb.String()) != "" {
 		t.Fatalf("the ledger write must not fail on a writable directory, stderr=%q", errb.String())
 	}
 
@@ -811,7 +812,7 @@ func TestCertifyRepoRecordTopReflectsTheEffectiveBound(t *testing.T) {
 	if code2 != 1 {
 		t.Fatalf("exit %d, want 1 (COULD-NOT-GRADE): stdout=%s stderr=%s", code2, out2.String(), errb2.String())
 	}
-	if errb2.Len() != 0 {
+	if stripModelsDisclosure(errb2.String()) != "" {
 		t.Fatalf("the ledger write must not fail on a writable directory, stderr=%q", errb2.String())
 	}
 
@@ -901,7 +902,7 @@ func TestCertifyRepoRecordPreflightOverlayRoundTrips(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d: stdout=%s stderr=%s", code, out.String(), errb.String())
 	}
-	if errb.Len() != 0 {
+	if stripModelsDisclosure(errb.String()) != "" {
 		t.Fatalf("the ledger write must not fail on a writable directory, stderr=%q", errb.String())
 	}
 	if !strings.Contains(out.String(), "file(s) executed at least once") {
@@ -1813,7 +1814,7 @@ func TestResolveAuditRolesWarningCarriesTheCommandPrefix(t *testing.T) {
 	var errb bytes.Buffer
 	// critic != writer keeps decorrelation happy; shadow == mutant fires the
 	// warning, which is written before any credential check.
-	_, _ = resolveAuditRoles(localAuditInput{
+	_, _ = resolveRoles(t, localAuditInput{
 		writerModel: "w", criticModel: "c", mutantModel: "m", shadowModel: "m",
 	}, &errb)
 	if !strings.Contains(errb.String(), "corral certify --local: warning: --shadow-model") {
@@ -1821,7 +1822,7 @@ func TestResolveAuditRolesWarningCarriesTheCommandPrefix(t *testing.T) {
 	}
 
 	errb.Reset()
-	_, _ = resolveAuditRoles(localAuditInput{
+	_, _ = resolveRoles(t, localAuditInput{
 		cmdName:     "corral certify --repo",
 		writerModel: "w", criticModel: "c", mutantModel: "m", shadowModel: "m",
 	}, &errb)
@@ -2216,7 +2217,7 @@ func TestRunCertifyLegacyRepoFlagIsNotHijacked(t *testing.T) {
 // model as the writer is a judge in her own cause, and must be a USAGE error
 // (exit 2), not an internal failure.
 func TestResolveAuditRolesRejectsCollapsedDecorrelation(t *testing.T) {
-	_, err := resolveAuditRoles(localAuditInput{
+	_, err := resolveRoles(t, localAuditInput{
 		writerModel: "same-model", criticModel: "same-model",
 		mutantModel: "same-model", shadowModel: "off",
 	}, io.Discard)
@@ -3050,11 +3051,11 @@ func TestCertifyRepoPreflightsBeforeSpendingOnDerivation(t *testing.T) {
 func TestResolveGoalSourceDerivedPathDisclosesTheModel(t *testing.T) {
 	var errb bytes.Buffer
 	called := 0
-	gs, disclosure, code := resolveGoalSource(&errb, t.TempDir(), "", "test-model-x", "", false, 3,
-		func(model, _ string) (reposcan.Deriver, error) {
+	gs, disclosure, code := resolveGoalSource(&errb, t.TempDir(), "", testDeriveSeat("test-model-x"), false, 3,
+		func(rs agentbackend.ResolvedSeat) (reposcan.Deriver, error) {
 			called++
-			if model != "test-model-x" {
-				t.Errorf("factory got model %q", model)
+			if rs.Spec != "test-model-x" {
+				t.Errorf("factory got model %q", rs.Spec)
 			}
 			return stubDeriver{}, nil
 		}, nil, false, true)
@@ -3083,8 +3084,8 @@ func TestResolveGoalSourceGoalsFileDisclosesNothingAndDerivesNothing(t *testing.
 	mustWrite(t, goals, `{"pkg/a.go": "hand written"}`)
 
 	var errb bytes.Buffer
-	gs, disclosure, code := resolveGoalSource(&errb, root, goals, "test-model-x", "", false, 3,
-		func(string, string) (reposcan.Deriver, error) {
+	gs, disclosure, code := resolveGoalSource(&errb, root, goals, testDeriveSeat("test-model-x"), false, 3,
+		func(agentbackend.ResolvedSeat) (reposcan.Deriver, error) {
 			t.Fatal("the --goals path must never construct a deriver")
 			return nil, nil
 		}, nil, false, true)
@@ -3100,8 +3101,8 @@ func TestResolveGoalSourceGoalsFileDisclosesNothingAndDerivesNothing(t *testing.
 // provider credential either.
 func TestResolveGoalSourceNothingSelectedNeedsNoDeriver(t *testing.T) {
 	var errb bytes.Buffer
-	gs, disclosure, code := resolveGoalSource(&errb, t.TempDir(), "", "test-model-x", "", false, 0,
-		func(string, string) (reposcan.Deriver, error) {
+	gs, disclosure, code := resolveGoalSource(&errb, t.TempDir(), "", testDeriveSeat("test-model-x"), false, 0,
+		func(agentbackend.ResolvedSeat) (reposcan.Deriver, error) {
 			t.Fatal("no candidate was selected; a deriver must not be built")
 			return nil, nil
 		}, nil, false, true)
@@ -3113,8 +3114,10 @@ func TestResolveGoalSourceNothingSelectedNeedsNoDeriver(t *testing.T) {
 // A missing credential is a USAGE error (exit 2), reported before any spend.
 func TestResolveGoalSourceDeriverFailureIsAUsageError(t *testing.T) {
 	var errb bytes.Buffer
-	gs, _, code := resolveGoalSource(&errb, t.TempDir(), "", "test-model-x", "", false, 3,
-		func(string, string) (reposcan.Deriver, error) { return nil, errors.New("goal deriver: no key") }, nil, false, true)
+	gs, _, code := resolveGoalSource(&errb, t.TempDir(), "", testDeriveSeat("test-model-x"), false, 3,
+		func(agentbackend.ResolvedSeat) (reposcan.Deriver, error) {
+			return nil, errors.New("goal deriver: no key")
+		}, nil, false, true)
 	if code != 2 || gs != nil {
 		t.Fatalf("code=%d gs=%v, want 2 and nil", code, gs)
 	}

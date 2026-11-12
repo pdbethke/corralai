@@ -17,9 +17,9 @@ writes the verdict to the run page verbatim.
   with:
     test-command:  "go test ./..."
     gemini-key:    ${{ secrets.GEMINI_API_KEY }}
-    mutant-model:  gemini-3.6-flash
-    writer-model:  gemini-3.6-flash
-    derive-model:  gemini-3.6-flash
+    mutant-model:  google/gemini-3.6-flash
+    writer-model:  google/gemini-3.6-flash
+    derive-model:  google/gemini-3.6-flash
     critic-model:  "off"
 ```
 
@@ -111,9 +111,9 @@ existing caller.
   with:
     test-command:  "go test ./..."
     gemini-key:    ${{ secrets.GEMINI_API_KEY }}
-    mutant-model:  gemini-3.6-flash
-    writer-model:  gemini-3.6-flash
-    derive-model:  gemini-3.6-flash
+    mutant-model:  google/gemini-3.6-flash
+    writer-model:  google/gemini-3.6-flash
+    derive-model:  google/gemini-3.6-flash
     critic-model:  "off"
     min-kill-rate: "0.7"
 ```
@@ -339,9 +339,9 @@ the whole thing:
   with:
     test-command:  "pytest -q"
     gemini-key:    ${{ secrets.GEMINI_API_KEY }}
-    mutant-model:  gemini-3.6-flash
-    writer-model:  gemini-3.6-flash
-    derive-model:  gemini-3.6-flash
+    mutant-model:  google/gemini-3.6-flash
+    writer-model:  google/gemini-3.6-flash
+    derive-model:  google/gemini-3.6-flash
     critic-model:  "off"
     shadow-model:  "off"
     min-kill-rate: "0.8"

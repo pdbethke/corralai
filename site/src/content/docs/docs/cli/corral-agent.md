@@ -8,7 +8,7 @@ description: Generated CLI reference for corral-agent — never hand-written; se
 ## Usage
 
 ```
-corral-agent — reference LLM-driven audit-role worker (local Ollama by default)
+corral-agent — reference LLM-driven audit-role worker (no default backend or model)
 
 Usage:
   corral-agent            connect to the brain and work the queue
@@ -24,7 +24,8 @@ Env:
   AGENT_NAME         display name in the swarm UI (default same as AGENT_ROLE,
                      e.g. "researcher+designer" or "generalist")
   AGENT_WORKSPACE    working directory for edits (default $TMPDIR/corral-demo-ws)
-  MODEL_BACKEND      ollama (default) | openai (Gemini/OpenRouter/local, any OpenAI-compatible endpoint)
-  AGENT_MODEL        model name passed to the backend (default qwen2.5-coder:7b)
+  MODEL_BACKEND      REQUIRED: ollama | openai (any OpenAI-compatible endpoint) | openrouter | gemini | anthropic
+  AGENT_MODEL        REQUIRED: model name passed to the backend
+  OLLAMA_URL         REQUIRED with MODEL_BACKEND=ollama: the daemon's URL (no default address)
   CLOBBER            set "1" to ignore coordination conflicts and edit anyway (demo of what NOT coordinating looks like)
 ```

@@ -63,14 +63,6 @@ func TestForSeatCloudNameWithoutItsKeyFailsRatherThanFallingBackLocal(t *testing
 	}
 }
 
-// An unprefixed name is a local model, as review's seat always served it.
-func TestForSeatServesAnUnprefixedNameFromTheLocalDaemon(t *testing.T) {
-	b, err := ForSeat("llama-local-7b", SeatOptions{})
-	if err != nil || modelOf(b) != "llama-local-7b" {
-		t.Fatalf("got %v, %v", b, err)
-	}
-}
-
 func TestForSeatEmptySpecIsTheSameErrorAsForModel(t *testing.T) {
 	_, want := ForModel("")
 	_, got := ForSeat("", SeatOptions{})

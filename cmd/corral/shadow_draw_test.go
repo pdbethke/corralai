@@ -25,8 +25,8 @@ func flagsWith(model, pool, wModel, wPool, seed string) *shadowSeatFlags {
 	return &shadowSeatFlags{model: &model, pool: &pool, writerModel: &wModel, writerPool: &wPool, seed: &seed}
 }
 
-// Names with no cloud-vendor prefix resolve as local (ForModelOrLocal), so
-// these tests need no key.
+// The local names are declared (declareLocalSeats) so the resolver routes
+// them, and a declared local seat needs no key.
 func TestDrawShadowSeatsWritesTheDrawIntoTheSeat(t *testing.T) {
 	declareLocalSeats(t, "localmodel-a:1", "localmodel-b:1")
 	f := flagsWith("", "localmodel-a:1,localmodel-b:1", "", "", "0x2a")

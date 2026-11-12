@@ -58,7 +58,7 @@ func env(k, d string) string {
 }
 
 func usageText() string {
-	return `corral-agent — reference LLM-driven audit-role worker (local Ollama by default)
+	return `corral-agent — reference LLM-driven audit-role worker (no default backend or model)
 
 Usage:
   corral-agent            connect to the brain and work the queue
@@ -74,8 +74,9 @@ Env:
   AGENT_NAME         display name in the swarm UI (default same as AGENT_ROLE,
                      e.g. "researcher+designer" or "generalist")
   AGENT_WORKSPACE    working directory for edits (default $TMPDIR/corral-demo-ws)
-  MODEL_BACKEND      ollama (default) | openai (Gemini/OpenRouter/local, any OpenAI-compatible endpoint)
-  AGENT_MODEL        model name passed to the backend (default qwen2.5-coder:7b)
+  MODEL_BACKEND      REQUIRED: ollama | openai (any OpenAI-compatible endpoint) | openrouter | gemini | anthropic
+  AGENT_MODEL        REQUIRED: model name passed to the backend
+  OLLAMA_URL         REQUIRED with MODEL_BACKEND=ollama: the daemon's URL (no default address)
   CLOBBER            set "1" to ignore coordination conflicts and edit anyway (demo of what NOT coordinating looks like)
 `
 }
@@ -176,13 +177,21 @@ func main() {
 		ws   = env("AGENT_WORKSPACE", filepath.Join(os.TempDir(), "corral-demo-ws"))
 	)
 	globalBrainURL = brainURL
-	backend := agentbackend.FromEnv() // MODEL_BACKEND: ollama (default) | openai (Gemini/OpenRouter/local) — NOT hard-wired
+	// MODEL_BACKEND and AGENT_MODEL are required, and so is OLLAMA_URL for
+	// ollama: this worker has no default backend, model or endpoint, so a
+	// misconfigured one exits here instead of quietly driving whatever answers
+	// at a default address.
+	backend, err := agentbackend.FromEnv()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "agent:", err)
+		os.Exit(2)
+	}
 	// Provider keys and the brain token are resolved (env or keystore) by now —
 	// agentbackend.FromEnv() already captured them into the Backend struct, and
 	// scrubSecretEnv caches CORRALAI_BRAIN_KEY for later on-demand reads. Scrub
 	// the env now so none of it leaks into a jailed child process this agent spawns.
 	scrubSecretEnv()
-	modelDesc := env("MODEL_BACKEND", "ollama") + ":" + env("AGENT_MODEL", "qwen2.5-coder:7b")
+	modelDesc := env("MODEL_BACKEND", "") + ":" + env("AGENT_MODEL", "")
 	// clobber: the agent STILL connects to the brain (so it's visible in the swarm
 	// UI), but its prompt tells it to IGNORE conflicts and edit anyway — so you watch
 	// the agents pile onto the same files (red conflicts) and trample each other's
@@ -304,7 +313,7 @@ func main() {
 			}
 			brain("report_host", map[string]any{
 				"role": role, "host": host,
-				"model": env("AGENT_MODEL", "qwen2.5-coder:7b"), "backend": env("MODEL_BACKEND", "ollama"),
+				"model": env("AGENT_MODEL", ""), "backend": env("MODEL_BACKEND", ""),
 				"jail": jail, "net": execRuntime.network,
 				"os": runtime.GOOS + "/" + runtime.GOARCH, "pid": os.Getpid(),
 				"local_agents": scanLocalAgents(),
@@ -370,7 +379,7 @@ func runQueueLoop(ctx context.Context, backend Backend, name, role string, rs ag
 			poll = time.Duration(n) * time.Second
 		}
 	}
-	modelDesc := env("MODEL_BACKEND", "ollama") + ":" + env("AGENT_MODEL", "qwen2.5-coder:7b")
+	modelDesc := env("MODEL_BACKEND", "") + ":" + env("AGENT_MODEL", "")
 	fmt.Printf("[%s/%s] queue mode — pulling tasks\n", name, role)
 	// One mirror per agent worker: tracks per-mission snapshot dirs + written paths.
 	mir := newMirror(ws)
@@ -763,7 +772,7 @@ func handleTaskError(taskID, missionID int64, role, modelDesc string, err error,
 // model — but the mismatch is recorded in the returned summary ("ran <own>
 // not assigned <x>") rather than silently pretending it ran the assignment.
 func runTask(ctx context.Context, backend Backend, name, role, ws string, brain func(string, map[string]any) string, tools []any, missionID, taskID int64, title, system, instruction string, mir *mirror, bc brainCall, assignedModel string) (string, error) {
-	defaultModel := env("AGENT_MODEL", "qwen2.5-coder:7b")
+	defaultModel := env("AGENT_MODEL", "")
 	wantModel := taskModel(assignedModel, defaultModel)
 	modelMismatch := ""
 	if wantModel != defaultModel {

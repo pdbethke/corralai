@@ -35,7 +35,10 @@ func TestFromEnvGeminiUsesGoogleKeyAndEndpoint(t *testing.T) {
 	t.Setenv("CORRALAI_GEMINI_BASE_URL", "")
 	t.Setenv("OPENAI_BASE_URL", "")
 
-	b := FromEnv()
+	b, err := FromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
 	ob, ok := b.(*openaiBackend)
 	if !ok {
 		t.Fatalf("FromEnv() = %T, want *openaiBackend", b)
@@ -67,13 +70,17 @@ func TestFromEnvGeminiFallbackOrder(t *testing.T) {
 			t.Setenv("CORRAL_CREDS_DIR", t.TempDir())
 			t.Setenv("CREDENTIALS_DIRECTORY", "")
 			t.Setenv("MODEL_BACKEND", "gemini")
+			t.Setenv("AGENT_MODEL", "gemini-3.6-flash")
 			t.Setenv("GEMINI_API_KEY", c.gemini)
 			t.Setenv("GOOGLE_API_KEY", c.google)
 			t.Setenv("OPENAI_API_KEY", c.openai)
 			t.Setenv("CORRALAI_GEMINI_BASE_URL", "")
 			t.Setenv("OPENAI_BASE_URL", "")
 
-			b := FromEnv()
+			b, err := FromEnv()
+			if err != nil {
+				t.Fatal(err)
+			}
 			ob, ok := b.(*openaiBackend)
 			if !ok {
 				t.Fatalf("FromEnv() = %T, want *openaiBackend", b)
@@ -93,11 +100,15 @@ func TestFromEnvOpenAIUnchanged(t *testing.T) {
 	t.Setenv("CORRAL_CREDS_DIR", t.TempDir())
 	t.Setenv("CREDENTIALS_DIRECTORY", "")
 	t.Setenv("MODEL_BACKEND", "openai")
+	t.Setenv("AGENT_MODEL", "some-model")
 	t.Setenv("OPENAI_API_KEY", "oai")
 	t.Setenv("GEMINI_API_KEY", "gm")
 	t.Setenv("OPENAI_BASE_URL", "")
 
-	b := FromEnv()
+	b, err := FromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
 	ob, ok := b.(*openaiBackend)
 	if !ok {
 		t.Fatalf("FromEnv() = %T, want *openaiBackend", b)

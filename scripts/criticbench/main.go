@@ -152,7 +152,7 @@ func gradeFull(f fixture, findings []queue.Finding) (flagged []string, right, mi
 
 func main() {
 	model := flag.String("model", "", "the critic model (required): a cloud model name goes to its vendor, anything else to the local ollama daemon")
-	url := flag.String("url", envOr("OLLAMA_URL", "http://127.0.0.1:11434"), "ollama base URL")
+	url := flag.String("url", os.Getenv("OLLAMA_URL"), "ollama base URL (required for a local model; $OLLAMA_URL when unset, no default address)")
 	runs := flag.Int("runs", 5, "runs per fixture per mode")
 	out := flag.String("out", "", "write the markdown report here as well as to stdout")
 	files := flag.String("files", "", "comma-separated real Go source files to bench INSTEAD of the keyed fixtures; each needs its _test.go beside it, and has no answer key")
@@ -196,7 +196,7 @@ func main() {
 		}
 		return
 	}
-	backend := agentbackend.NewOllamaBackend(*url, *model)
+	var backend agentbackend.Backend
 	if agentbackend.VendorOf(*model) != "" {
 		b, err := agentbackend.ForSeat(*model, agentbackend.SeatOptions{})
 		if err != nil {
@@ -204,6 +204,12 @@ func main() {
 			os.Exit(2)
 		}
 		backend = b
+	} else {
+		if *url == "" {
+			fmt.Fprintf(os.Stderr, "criticbench: %q is not a cloud model, so it runs on a local ollama daemon — pass -url or set OLLAMA_URL (there is no default address)\n", *model)
+			os.Exit(2)
+		}
+		backend = agentbackend.NewOllamaBackend(*url, *model)
 	}
 	var results []result
 	for _, f := range bench {
@@ -319,13 +325,6 @@ func render(model string, runs int, results []result, total map[string]int) stri
 	b.WriteString("\nright/missed/false are summed over the runs, against an answer key checked by execution (TestFixtureAnswerKeysAreExecuted). A real file has no key: only a flag naming a test that is not in the file counts as false there. A planted file is keyed on its planted tests only; flags on its other tests are counted apart.\n")
 	writeAgreement(&b, results, runs)
 	return b.String()
-}
-
-func envOr(k, def string) string {
-	if v := strings.TrimSpace(os.Getenv(k)); v != "" {
-		return v
-	}
-	return def
 }
 
 // writeAgreement lists, for each real (unkeyed) file, every test any mode

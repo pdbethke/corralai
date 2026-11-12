@@ -573,18 +573,18 @@ type SeatOptions struct {
 	Tools []string
 }
 
-// ForSeat is the single resolver for a seat: spec is either an agent seat
-// (`codex`, `claude-code:claude-sonnet-5`, any CORRALAI_AGENT_<NAME>) or a
-// model name. An agent seat is driven as a CLI; anything else defers to
-// ForModelOrLocal, so a name with no cloud-vendor prefix is still served by
-// the local daemon, as review's seats always were.
+// ForSeat builds a seat from a spec that is either an agent seat (`codex`,
+// `claude-code:claude-sonnet-5`, any CORRALAI_AGENT_<NAME>) or a HOSTED model
+// name. An agent seat is driven as a CLI; anything else defers to ForModel, so
+// a claude-/gemini-/gpt- model whose key is missing returns the actionable
+// credential error and is never quietly re-served by something else (certify's
+// up-front credential check relies on that).
 //
-// The deferral keeps ForModel's fail-closed guarantee for every CLOUD name: a
-// claude-/gemini-/gpt- model whose key is missing returns the actionable
-// credential error and is NEVER quietly re-served by a local model (the
-// local fallback applies only to names VendorOf does not recognise). certify's
-// up-front credential check relies on that. An empty spec returns the same
-// error ForModel("") does.
+// A bare local model name is REFUSED here, on purpose. It used to fall back to
+// the local daemon at a default address; whether a name is local, and where, is
+// a routing decision that belongs to the seat resolver (a registry entry, an
+// OLLAMA_URL that lists it, or a pinned gateway), not to a guess from the
+// spelling. An empty spec returns the same error ForModel("") does.
 //
 // An agent seat does not implement ModelSwitcher: it is one tool and one
 // model, and WithModel would silently change what sat in the seat.
@@ -595,10 +595,7 @@ func ForSeat(spec string, opt SeatOptions) (Backend, error) {
 		}
 		return b, nil
 	}
-	if strings.TrimSpace(spec) == "" {
-		return ForModel(spec)
-	}
-	return ForModelOrLocal(spec)
+	return ForModel(spec)
 }
 
 // DefinedAgents lists the seat names an operator can use right now — the

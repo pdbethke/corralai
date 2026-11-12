@@ -294,8 +294,10 @@ subscription; and `codex`'s read-only sandbox still lets it read the host. (This
 a subscription and `certify` could not, and pointed at
 `cmd/corral/review_agent.go`, which no longer exists. The brain's Pro/Max line in
 `docs/corral/brain.md` is a separate thing: that is the frozen brain's harness.)
-`ollama` is `MODEL_BACKEND`'s default and is local and free, the other
-zero-cost way to run seats.
+`ollama` is local and free, the other zero-cost way to run seats. It is a
+daemon you declare (`.corral/models.json`, `OLLAMA_URL`, or a pinned
+`MODEL_BACKEND` gateway), never a default: there is no default backend, model or
+address.
 
 **A key alone does not move providers.** Each role resolves its own backend from
 its own model name; a Gemini model name with only an Anthropic key configured is

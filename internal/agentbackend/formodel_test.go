@@ -175,7 +175,11 @@ func TestOpenRouterReadsItsOwnKey(t *testing.T) {
 	t.Setenv("OPENAI_BASE_URL", "")
 	t.Setenv("OPENROUTER_BASE_URL", "")
 
-	b := FromEnv()
+	t.Setenv("AGENT_MODEL", "some-model")
+	b, err := FromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
 	ob, ok := b.(*openaiBackend)
 	if !ok {
 		t.Fatalf("FromEnv() = %T, want *openaiBackend", b)
@@ -186,14 +190,9 @@ func TestOpenRouterReadsItsOwnKey(t *testing.T) {
 	if !strings.Contains(ob.base, "openrouter.ai") {
 		t.Errorf("base = %q, want OpenRouter's endpoint by default", ob.base)
 	}
-	// The older configuration keeps working.
-	t.Setenv("OPENROUTER_API_KEY", "")
-	t.Setenv("OPENAI_API_KEY", "sk-oai")
-	t.Setenv("OPENAI_BASE_URL", "http://127.0.0.1:1/v1")
-	resetCredsMemoForTest(t)
-	if ob := FromEnv().(*openaiBackend); ob.key != "sk-oai" || ob.base != "http://127.0.0.1:1/v1" {
-		t.Errorf("fallback = %q @ %q, want the OPENAI_* configuration honoured", ob.key, ob.base)
-	}
+	// The older OPENAI_* configuration no longer stands in for it: that sent an
+	// OpenAI secret to openrouter.ai and the OpenRouter key to an OpenAI proxy.
+	// TestFromEnvOpenRouterNeverBorrowsOpenAIConfiguration pins the refusal.
 }
 
 // VendorOf answers for agent seats from the maker declared on the built-in
@@ -226,17 +225,6 @@ func TestVendorOfAgentSeats(t *testing.T) {
 	t.Setenv("CORRALAI_AGENT_CODEX", "/bin/cat")
 	if got := VendorOf("codex"); got != "" {
 		t.Errorf("VendorOf(redefined codex) = %q, want empty", got)
-	}
-}
-
-// ForModelOrLocal must stay agent-blind: it builds API backends.
-func TestForModelOrLocalIgnoresAgentNames(t *testing.T) {
-	b, err := ForModelOrLocal("codex")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := b.(*ollamaBackend); !ok {
-		t.Fatalf("ForModelOrLocal(codex) = %T, want the local backend", b)
 	}
 }
 

@@ -22,6 +22,7 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ### Fixed
 
+- **Go 1.26.11.** The standard-library advisory in `net/http` (GO-2026-6859, a data race in `MaxBytesReader` header handling, fixed in go1.26.11) is reported by govulncheck against go1.26.10, so the module floor and the Dockerfiles move up.
 - **A salvaged authored pass ran the whole suite while the record said "proven by the authored test alone".** When some of a written test's examples failed on the unmodified code, salvage excluded them and graded the rest. The excluding command reached the scorer as the run's base; rspec's file-level command refuses argv carrying a name filter (`-E`), so the pass fell back to the whole suite, while the verdict, which judges the unsalvaged base, recorded `AuthoredAlone` and `ProvenByAuthoredAlone`. Found on hashie/hashie: three files in ledger entry 72574089 and four in e0e4f5ac carry the false claim. The salvaged pass is now built exactly as an unsalvaged one is, with the failing examples excluded afterwards, and a runner that cannot exclude from that command salvages nothing rather than running wider than the record says. The "could not narrow" log lines now say why. `VerdictGeneration` is 41: verdicts of generation 40 are re-measured, not reused.
 
 ## [v1.0.0-rc.31] — 2026-11-05

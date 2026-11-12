@@ -91,17 +91,17 @@ func TestATokenCapRefusesAnUnmeteredSeat(t *testing.T) {
 	wiredAgent(t, "fakew", "", "x")
 	wiredAgent(t, "fakem", "claude-json", claudeJSONReply)
 	assign := advpool.RoleAssignment{advpool.RoleMutantGenerator: "fakem", advpool.RoleTestWriter: "fakew"}
-	_, err := localChatterFor(assign, nil, nil, agentbackend.NewTokenBudget(1000))
+	_, err := localChatterFor(seatsForAssign(t, assign, nil), nil, agentbackend.NewTokenBudget(1000))
 	if err == nil || err.Error() != capBlindWant {
 		t.Fatalf("got %v\nwant %s", err, capBlindWant)
 	}
 	// No cap, no refusal: the seat runs and says it is not metered.
-	if _, err := localChatterFor(assign, nil, nil, nil); err != nil {
+	if _, err := localChatterFor(seatsForAssign(t, assign, nil), nil, nil); err != nil {
 		t.Fatalf("with no cap an unmetered seat must run: %v", err)
 	}
 	// A cap with every seat metered is no refusal either.
 	t.Setenv("CORRALAI_AGENT_FAKEW_WIRE", "claude-json")
-	if _, err := localChatterFor(assign, nil, nil, agentbackend.NewTokenBudget(1000)); err != nil {
+	if _, err := localChatterFor(seatsForAssign(t, assign, nil), nil, agentbackend.NewTokenBudget(1000)); err != nil {
 		t.Fatalf("a cap over metered seats must be accepted: %v", err)
 	}
 }
@@ -194,7 +194,7 @@ func TestUnmeteredCallsSurviveFromTheSeatToEverySurface(t *testing.T) {
 	wiredAgent(t, "fakew", "", "plain reply")
 	assign := advpool.RoleAssignment{advpool.RoleTestWriter: "fakew"}
 	meters := auditRoleMeters(assign)
-	chatterFor, err := localChatterFor(assign, meters, nil, nil)
+	chatterFor, err := localChatterFor(seatsForAssign(t, assign, nil), meters, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

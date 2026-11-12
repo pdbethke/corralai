@@ -226,8 +226,21 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// key, the ledger or the signed statement, so every one of them records
 	// the CONCRETE model. An alias is a label for humans and is never
 	// authoritative.
-	seatReg, regErr := resolveSeatRegistry("corral certify --repo", *repoDir,
-		certifySeats(deriveModel, mutantModelFlag, writerModelFlag, criticModelFlag, shadow.model, shadow.writerModel), stderr)
+	// --local-endpoint placements are parsed BEFORE the seats resolve: a
+	// placement is itself a declared source for a seat with a bare local name,
+	// and the preflight below (resolveAuditRoles) must see it folded in.
+	localEndpoints, lerr := parseLocalEndpoints(localEndpointFlag)
+	if lerr != nil {
+		fmt.Fprintf(stderr, "corral certify --repo: %v\n", lerr)
+		return 2
+	}
+	// context.Background(): no cancellable context exists here. The SIGINT
+	// handler (auditContext) is installed after the goal derivation, on
+	// purpose — an interrupt before any audit has nothing to record, and
+	// TestAnInterruptedRepoScanRecordsNothing_APISeat depends on it. The one
+	// network call, listing OLLAMA_URL's daemon, has its own 10s bound.
+	seats, regErr := resolveSeatsPlaced(context.Background(), "corral certify --repo", *repoDir,
+		certifySeats(deriveModel, mutantModelFlag, writerModelFlag, criticModelFlag, shadow.model, shadow.writerModel), localEndpoints, stderr)
 	if regErr != nil {
 		fmt.Fprintf(stderr, "corral certify --repo: %v\n", regErr)
 		return 2
@@ -912,7 +925,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			criticModel:       *criticModelFlag,
 			shadowModel:       *shadow.model,
 			shadowWriterModel: *shadow.writerModel,
-			seatProviders:     seatReg.seatProviders(),
+			seats:             seats,
 			// The cap is checked here too, so a seat it cannot see (an
 			// unmetered agent) is refused before any goal is derived — the
 			// per-file resolution below would only find it after the scan
@@ -930,7 +943,14 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// derive seat the cap cannot see is refused before it derives.
 		// Only when it will be asked at all (--goals skips it).
 		if strings.TrimSpace(*goalsPath) == "" && strings.TrimSpace(*deriveModel) != "" && isAgentSeat(*deriveModel) {
-			db, err := agentbackend.ForSeat(*deriveModel, agentbackend.SeatOptions{})
+			// The seat is built from its resolved routing, never re-guessed
+			// from the name: the same constructor every grading seat uses.
+			rs, ok := seats["derive-model"]
+			if !ok {
+				fmt.Fprintf(stderr, "corral certify --repo: --derive-model %q was never resolved to a seat\n", *deriveModel)
+				return 2
+			}
+			db, err := agentbackend.Build(rs, agentbackend.SeatOptions{})
 			if err == nil {
 				err = capCanSee(scanBudget, roleGoalDeriver, *deriveModel, db)
 			}
@@ -979,7 +999,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
 		return 2
 	}
-	gs, disclosure, code := resolveGoalSource(stderr, *repoDir, *goalsPath, *deriveModel, seatReg.deriveEndpoint(), *dryRun, len(selected), keepDeriver, goalStore, *noGoalCacheFlag, !*noGoalCacheFlag)
+	gs, disclosure, code := resolveGoalSource(stderr, *repoDir, *goalsPath, *deriveModel, deriveEndpointOf(seats), *dryRun, len(selected), keepDeriver, goalStore, *noGoalCacheFlag, !*noGoalCacheFlag)
 	if code != 0 {
 		return code
 	}
@@ -1373,18 +1393,8 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// HEAD leaves it unknown, never "clean against some other revision".
 	auditedTreeDirty := treeDirtyAt(*repoDir, *commit)
 
-	localEndpoints, lerr := parseLocalEndpoints(localEndpointFlag)
-	if lerr != nil {
-		fmt.Fprintf(stderr, "corral certify --repo: %v\n", lerr)
-		return 2
-	}
-	// A registry entry with a local provider carries its daemon endpoint, and
-	// it feeds the SAME role->url mechanism --local-endpoint does — one path,
-	// not two. An explicit --local-endpoint wins: it names one seat's daemon
-	// for this run, against a declaration that covers every run.
-	localEndpoints = mergeLocalEndpoints(localEndpoints, seatReg.localEndpoints())
 	if ex != nil {
-		ex.localEndpoints = localEndpoints
+		ex.seats = seats
 		ex.tokenBudget = scanBudget
 		ex.toolProbe = scanTools
 	}
@@ -1431,7 +1441,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
 			return 2
 		}
-		gs, disclosure, code = resolveGoalSource(stderr, *repoDir, *goalsPath, *deriveModel, seatReg.deriveEndpoint(), *dryRun, len(selected), keepDeriver, goalStore, *noGoalCacheFlag, !*noGoalCacheFlag)
+		gs, disclosure, code = resolveGoalSource(stderr, *repoDir, *goalsPath, *deriveModel, deriveEndpointOf(seats), *dryRun, len(selected), keepDeriver, goalStore, *noGoalCacheFlag, !*noGoalCacheFlag)
 		if code != 0 {
 			return code
 		}
@@ -5150,9 +5160,10 @@ type localExecutor struct {
 	// detect their runner as before.
 	runner string
 
-	// localEndpoints places local seats on specific ollama daemons for every
-	// file this scan audits — one daemon per GPU. See parseLocalEndpoints.
-	localEndpoints map[string]string
+	// seats is every seat of this scan, resolved once and shared by every
+	// file it audits; --local-endpoint placements (one daemon per GPU, see
+	// parseLocalEndpoints) are already folded in.
+	seats seatSet
 	// tokenBudget is the scan-wide --max-tokens cap, one for every file.
 	tokenBudget *agentbackend.TokenBudget
 	// toolProbe is the scan's one seatToolProbe, handed to every job.
@@ -5545,10 +5556,10 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 	// twice and disagree.
 	sel := l.selectionFor(j)
 	return localAuditInput{
-		localEndpoints: l.localEndpoints,
-		tokenBudget:    l.tokenBudget,
-		toolProbe:      l.toolProbe,
-		repoDir:        l.repoDir,
+		seats:       l.seats,
+		tokenBudget: l.tokenBudget,
+		toolProbe:   l.toolProbe,
+		repoDir:     l.repoDir,
 		// Read only when the job builds its own seed (no shared one): the
 		// scan's bound, so the two can never seed under different limits.
 		seedLimit: l.seedLimit,

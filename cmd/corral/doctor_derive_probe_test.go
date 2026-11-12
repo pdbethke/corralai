@@ -79,6 +79,10 @@ func TestDoctorProbesNothingWithoutADeriveModel(t *testing.T) {
 // sandbox backend) stops the other checks' output; the derive probe still
 // says it is spending a call, before making it, and prints what came back.
 func TestDoctorShowsTheDeriveProbeAfterAFatalCheck(t *testing.T) {
+	// The derive seat's bare local name needs a declared source like any seat.
+	t.Setenv("OLLAMA_URL", "http://ollama.test.invalid:11434")
+	t.Setenv("MODEL_BACKEND", "")
+	fakeOllama(t, "llama3.2:3b")
 	installDoctorDeriver(t, &fakeBackend{reply: "Clamp bounds v.", usage: agentbackend.Usage{InputTokens: 10, OutputTokens: 4}})
 	var out bytes.Buffer
 	runDoctor([]string{"--repo", t.TempDir(), "--jail", "no-such-backend", "--derive-model", "llama3.2:3b"}, &out, &bytes.Buffer{})

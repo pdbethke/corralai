@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -64,22 +65,36 @@ func (e errNoSource) Error() string {
 //
 //  1. a registry alias (strict mode refuses a miss);
 //  2. a coding-agent seat;
-//  3. a pinned MODEL_BACKEND gateway (ollama, openrouter, openai with
+//  3. a seat the operator placed on a daemon with --local-endpoint, when its
+//     name is no vendor's (a vendor-looking name needs a source that proves it
+//     is local, step 4 or 5, and a placement on a cloud seat is refused);
+//  4. a pinned MODEL_BACKEND gateway (ollama, openrouter, openai with
 //     OPENAI_BASE_URL) — never re-routed by the model's name;
-//  4. a model OLLAMA_URL's daemon lists (a set OLLAMA_URL that cannot be
+//  5. a model OLLAMA_URL's daemon lists (a set OLLAMA_URL that cannot be
 //     listed refuses the seat, naming the URL and the cause);
-//  5. a cloud vendor named by the model's prefix;
-//  6. otherwise refuse, naming the three ways to declare a source.
+//  6. a cloud vendor named by the model's prefix;
+//  7. otherwise refuse, naming the three ways to declare a source.
 //
 // A declared provider therefore always outranks what a name looks like. An
 // unnamed seat and "off" are skipped: corral has no default models.
 func resolveSeats(ctx context.Context, cmdName, repoRoot string, seats []seatFlag, stderr io.Writer) (seatSet, error) {
-	return resolveSeatsOpt(ctx, cmdName, repoRoot, seats, stderr, false)
+	return resolveSeatsOpt(ctx, cmdName, repoRoot, seats, nil, stderr, false)
+}
+
+// resolveSeatsPlaced is resolveSeats for a run that may carry --local-endpoint
+// placements (role -> daemon URL, as parseLocalEndpoints returns them). A
+// placement is itself a declared source for a seat with a bare local name, and
+// an override of the endpoint of a seat that is already local; a placement on
+// a cloud or agent seat is refused (applyLocalEndpoints). The placement is
+// folded in BEFORE the disclosure prints, so the lines show where each seat
+// will really talk.
+func resolveSeatsPlaced(ctx context.Context, cmdName, repoRoot string, seats []seatFlag, placed map[string]string, stderr io.Writer) (seatSet, error) {
+	return resolveSeatsOpt(ctx, cmdName, repoRoot, seats, placed, stderr, false)
 }
 
 // resolveSeatsOpt is resolveSeats with the adapter's one concession:
 // skipNoSource leaves a seat no source declares unresolved instead of refusing.
-func resolveSeatsOpt(ctx context.Context, cmdName, repoRoot string, seats []seatFlag, stderr io.Writer, skipNoSource bool) (seatSet, error) {
+func resolveSeatsOpt(ctx context.Context, cmdName, repoRoot string, seats []seatFlag, placed map[string]string, stderr io.Writer, skipNoSource bool) (seatSet, error) {
 	if stderr == nil {
 		stderr = io.Discard
 	}
@@ -128,24 +143,30 @@ func resolveSeatsOpt(ctx context.Context, cmdName, repoRoot string, seats []seat
 		} else if isAgentSeat(v) { // (2)
 			rs.Kind, rs.DeclaredBy = "agent", agentbackend.DeclaredAgent
 			rs.Provider = agentbackend.VendorOf(v)
-		} else if pinned, ok, err := pinnedGateway(rs); err != nil { // (3)
+		} else if u := placed[s.role]; u != "" && agentbackend.VendorOf(v) == "" { // (3)
+			rs.Provider, rs.Wire, rs.Endpoint = "ollama", models.WireOllama, u
+			rs.DeclaredBy = agentbackend.DeclaredFlag
+		} else if pinned, ok, err := pinnedGateway(rs); err != nil { // (4)
 			return nil, err
 		} else if ok {
 			rs = pinned
-		} else if served, u, err := servedBy(listing, v); err != nil { // (4)
+		} else if served, u, err := servedBy(listing, v); err != nil { // (5)
 			return nil, fmt.Errorf("--%s %q: OLLAMA_URL is set, but corral could not list models at %s: %w — start that daemon, or unset OLLAMA_URL if no seat runs there", s.flag, v, u, err)
 		} else if served {
 			rs.Provider, rs.Wire, rs.Endpoint = "ollama", models.WireOllama, u
 			rs.DeclaredBy = agentbackend.DeclaredDiscovered
-		} else if vendor := agentbackend.VendorOf(v); vendor != "" { // (5)
+		} else if vendor := agentbackend.VendorOf(v); vendor != "" { // (6)
 			rs.Provider, rs.Wire, rs.DeclaredBy = vendor, models.WireHosted, agentbackend.DeclaredName
-		} else if skipNoSource { // (6), tolerated
+		} else if skipNoSource { // (7), tolerated
 			continue
-		} else { // (6)
+		} else { // (7)
 			return nil, errNoSource{flag: s.flag, value: v}
 		}
 		set[s.flag] = rs
 		order = append(order, s.flag)
+	}
+	if err := applyLocalEndpoints(set, placed); err != nil {
+		return nil, err
 	}
 	if len(order) > 0 {
 		fmt.Fprintf(stderr, "  models: %s\n", resolutionSource(reg))
@@ -154,6 +175,39 @@ func resolveSeatsOpt(ctx context.Context, cmdName, repoRoot string, seats []seat
 		}
 	}
 	return set, nil
+}
+
+// applyLocalEndpoints folds --local-endpoint placements into the resolved
+// seats: a local seat keeps its wire and moves to the placed daemon (one
+// daemon per GPU is the whole point of the flag); a seat that is not served by
+// a local daemon is refused rather than ignored, because silently dropping the
+// placement would leave the operator believing a seat runs somewhere it does
+// not. A role with no seat (no model assigned, or off) is skipped, as it
+// always was.
+func applyLocalEndpoints(set seatSet, placed map[string]string) error {
+	roles := make([]string, 0, len(placed))
+	for role := range placed {
+		roles = append(roles, role)
+	}
+	sort.Strings(roles)
+	for _, role := range roles {
+		url := placed[role]
+		rs, ok := set.byRole(role)
+		if !ok {
+			continue
+		}
+		if rs.Kind == "agent" {
+			return fmt.Errorf("--local-endpoint %s=%s: seat %s is the agent seat %q, which runs as a CLI and is not served by a local daemon — remove the endpoint, or give this seat a local model", role, url, role, rs.Spec)
+		}
+		if rs.Wire != models.WireOllama && rs.Wire != models.WireOpenAIChat {
+			return fmt.Errorf("--local-endpoint %s=%s: seat %s runs the CLOUD model %q (vendor %s), which is not served by a local daemon — remove the endpoint, or give this seat a local model", role, url, role, rs.Spec, rs.Provider)
+		}
+		if rs.Endpoint != url {
+			rs.Endpoint, rs.DeclaredBy = url, agentbackend.DeclaredFlag
+			set[rs.Flag] = rs
+		}
+	}
+	return nil
 }
 
 // servedBy reports whether OLLAMA_URL's daemon lists the model, and the URL
@@ -207,7 +261,14 @@ func pinnedGateway(rs agentbackend.ResolvedSeat) (agentbackend.ResolvedSeat, boo
 		rs.Provider, rs.Wire, rs.Endpoint = "ollama", models.WireOllama, u
 		return rs, true, nil
 	case "openrouter":
+		// OpenRouter's own variable first, then OPENAI_API_KEY: the documented
+		// fallback for operators who configured the gateway that way, and what
+		// FromEnv's openrouter arm has always read. With neither set the
+		// refusal names OpenRouter's.
 		rs.Provider, rs.Wire, rs.KeyEnv = "openrouter", models.WireHosted, "OPENROUTER_API_KEY"
+		if agentbackend.Secret("OPENROUTER_API_KEY") == "" && agentbackend.Secret("OPENAI_API_KEY") != "" {
+			rs.KeyEnv = "OPENAI_API_KEY"
+		}
 		rs.Endpoint = firstSet(os.Getenv("OPENROUTER_BASE_URL"), os.Getenv("OPENAI_BASE_URL"), "https://openrouter.ai/api/v1")
 		return rs, true, nil
 	case "openai":
@@ -237,7 +298,7 @@ func firstSet(vals ...string) string {
 // was, because those callers still hand such names to the legacy router. The
 // caller migrations make that refusal real.
 func resolveSeatRegistry(cmdName, repoRoot string, seats []seatFlag, stderr io.Writer) (*seatResolution, error) {
-	set, err := resolveSeatsOpt(context.Background(), cmdName, repoRoot, seats, stderr, true)
+	set, err := resolveSeatsOpt(context.Background(), cmdName, repoRoot, seats, nil, stderr, true)
 	if err != nil {
 		return nil, err
 	}

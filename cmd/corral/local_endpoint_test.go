@@ -110,9 +110,9 @@ func TestLocalEndpointRoutesSeatToItsDaemon(t *testing.T) {
 		advpool.RoleMutantGenerator: "qwen3.5:9b-q8_0",
 		advpool.RoleTestWriter:      "gemma4:12b",
 	}
-	chatterFor, err := localChatterFor(assign, nil, map[string]string{
+	chatterFor, err := localChatterFor(seatsForAssign(t, assign, map[string]string{
 		advpool.RoleTestWriter: writerSrv.URL,
-	}, nil)
+	}), nil, nil)
 	if err != nil {
 		t.Fatalf("localChatterFor: %v", err)
 	}
@@ -138,12 +138,8 @@ func TestLocalEndpointRoutesSeatToItsDaemon(t *testing.T) {
 func TestLocalEndpointRefusedForCloudSeat(t *testing.T) {
 	t.Setenv("MODEL_BACKEND", "")
 	t.Setenv("GEMINI_API_KEY", "k")
-	_, err := localChatterFor(
-		advpool.RoleAssignment{advpool.RoleTestWriter: "gemini-3.7-flash"},
-		nil,
-		map[string]string{advpool.RoleTestWriter: "http://localhost:11436"},
-		nil,
-	)
+	_, err := resolveSeatsOf(t, localAuditInput{writerModel: "gemini-3.7-flash"},
+		map[string]string{advpool.RoleTestWriter: "http://localhost:11436"})
 	if err == nil {
 		t.Fatal("endpoint on a cloud seat = nil error, want a refusal")
 	}
@@ -165,7 +161,7 @@ func TestMaxTokensIsOneCapAcrossSeats(t *testing.T) {
 
 	assign := advpool.RoleAssignment{advpool.RoleMutantGenerator: "qwen3.5:9b-q8_0", advpool.RoleTestWriter: "gemma4:12b"}
 	budget := agentbackend.NewTokenBudget(1000)
-	chatterFor, err := localChatterFor(assign, nil, nil, budget)
+	chatterFor, err := localChatterFor(seatsForAssign(t, assign, nil), nil, budget)
 	if err != nil {
 		t.Fatal(err)
 	}

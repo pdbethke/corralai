@@ -36,7 +36,7 @@ func TestResolvedChallengerModelsReachTheRunSpec(t *testing.T) {
 		shadowWriterModel: "gemini-3.5-flash",
 		checkArgv:         []string{"go", "test", "./..."},
 	}
-	roles, err := resolveAuditRoles(in, nil)
+	roles, err := resolveRoles(t, in, nil)
 	if err != nil {
 		t.Fatalf("resolveAuditRoles: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestRepoShadowSelectionReachesTheRunSpec(t *testing.T) {
 		shadowSelection: []shadowpool.Selection{{Role: "mutant", Lang: "go", Chosen: "c"}},
 	}
 	in := ex.auditInputFor(reposcan.Job{Path: "a.go", TestPath: "a_test.go", Lang: "go"})
-	roles, err := resolveAuditRoles(in, nil)
+	roles, err := resolveRoles(t, in, nil)
 	if err != nil {
 		t.Fatalf("resolveAuditRoles: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestUnnamedChallengerWriterLeavesTheRunSpecEmpty(t *testing.T) {
 		shadowModel: "off",
 		checkArgv:   []string{"go", "test", "./..."},
 	}
-	roles, err := resolveAuditRoles(in, nil)
+	roles, err := resolveRoles(t, in, nil)
 	if err != nil {
 		t.Fatalf("resolveAuditRoles: %v", err)
 	}

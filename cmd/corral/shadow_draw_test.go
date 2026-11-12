@@ -170,6 +170,10 @@ func TestEveryDoorDrawsFromItsPoolFlags(t *testing.T) {
 // surface: --shadow-writer-pool
 // surface: --shadow-writer-model
 func TestDoctorValidatesShadowPools(t *testing.T) {
+	// Bare local names need a declared source like any seat.
+	t.Setenv("OLLAMA_URL", "http://ollama.test.invalid:11434")
+	t.Setenv("MODEL_BACKEND", "")
+	fakeOllama(t, "localmodel-a:1", "localmodel-b:1")
 	cases := []struct {
 		name string
 		args []string

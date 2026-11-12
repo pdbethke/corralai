@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -223,20 +224,14 @@ func TestLocalRegistryEntryPlacesItsSeatOnItsDaemon(t *testing.T) {
 	// itself is faked so only chat requests are counted below.
 	fakeOllama(t, "gemma4:12b")
 	s := &seatPtrs{writer: "edge", mutant: "gemma4:12b"}
-	res, err := resolveSeatRegistry("test", t.TempDir(), s.flags(), &errDiscard{})
+	set, err := resolveSeats(context.Background(), "test", t.TempDir(), s.flags(), &errDiscard{})
 	if err != nil {
-		t.Fatalf("resolveSeatRegistry: %v", err)
+		t.Fatalf("resolveSeats: %v", err)
 	}
-	endpoints := res.localEndpoints()
-	if got := endpoints[advpool.RoleTestWriter]; got != declared.URL {
-		t.Fatalf("registry endpoint for the writer = %q, want %q", got, declared.URL)
+	if rs, _ := set.byRole(advpool.RoleTestWriter); rs.Endpoint != declared.URL {
+		t.Fatalf("registry endpoint for the writer = %q, want %q", rs.Endpoint, declared.URL)
 	}
-	chatterFor, err := localChatterFor(
-		advpool.RoleAssignment{advpool.RoleTestWriter: s.writer, advpool.RoleMutantGenerator: s.mutant},
-		nil,
-		mergeLocalEndpoints(nil, endpoints),
-		nil,
-	)
+	chatterFor, err := localChatterFor(set, nil, nil)
 	if err != nil {
 		t.Fatalf("localChatterFor: %v", err)
 	}
@@ -285,7 +280,7 @@ func TestSameVendorSeatsAreDisclosedNotRefused(t *testing.T) {
 	t.Setenv("MODEL_BACKEND", "")
 	t.Setenv("GEMINI_API_KEY", "k")
 	var errb bytes.Buffer
-	if _, err := resolveAuditRoles(localAuditInput{
+	if _, err := resolveRoles(t, localAuditInput{
 		cmdName:     "corral certify --repo",
 		writerModel: "gemini-3.7-flash", mutantModel: "gemini-3.6-flash",
 		criticModel: "gemini-3.6-flash",

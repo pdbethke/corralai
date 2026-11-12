@@ -237,12 +237,27 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 		return 2
 	}
 
-	// The model registry (docs/design/model-registry.md). Same contract as the
-	// --repo path: a declared alias resolves to its concrete model HERE, before
-	// anything else reads the value, and anything that is not a declared alias
-	// stays exactly as typed. With no registry declared this changes nothing.
-	seatReg, regErr := resolveSeatRegistry("corral certify --local", *repoDirFlag,
-		certifySeats(nil, mutantModel, writerModel, criticModel, shadow.model, shadow.writerModel), stderr)
+	// --local-endpoint placements are parsed BEFORE the seats resolve: a
+	// placement is itself a declared source for a seat with a bare local name.
+	localEndpoints, lerr := parseLocalEndpoints(localEndpointFlag)
+	if lerr != nil {
+		fmt.Fprintf(stderr, "corral certify --local: %v\n", lerr)
+		return 2
+	}
+	// Every seat resolves ONCE, here (docs/design/model-registry.md): a
+	// declared alias becomes its concrete model before anything else reads the
+	// value, and each seat's provider, wire and endpoint are decided in one
+	// stated order (resolveSeats) so no later door re-guesses them from the
+	// model's name. A registry entry places its local seat on its own daemon;
+	// an explicit --local-endpoint overrides it. With no registry, this
+	// changes only what a bare name that no source serves does: it refuses.
+	//
+	// context.Background(): no cancellable context exists yet — the SIGINT
+	// handler (auditContext) is installed after the preflight, so an
+	// interrupt before this point has nothing to unwind. The one network call
+	// (listing OLLAMA_URL's daemon) has its own 10s bound.
+	seats, regErr := resolveSeatsPlaced(context.Background(), "corral certify --local", *repoDirFlag,
+		certifySeats(nil, mutantModel, writerModel, criticModel, shadow.model, shadow.writerModel), localEndpoints, stderr)
 	if regErr != nil {
 		fmt.Fprintf(stderr, "corral certify --local: %v\n", regErr)
 		return 2
@@ -268,15 +283,6 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 	// --code path. Without --repo-dir they'd be silently unread — refuse
 	// loudly instead so an operator's misplaced flag doesn't look like a
 	// no-op.
-	localEndpoints, lerr := parseLocalEndpoints(localEndpointFlag)
-	if lerr != nil {
-		fmt.Fprintf(stderr, "corral certify --local: %v\n", lerr)
-		return 2
-	}
-	// A local registry entry places its seat on its own daemon through the
-	// SAME role->url map --local-endpoint fills; the explicit flag wins.
-	localEndpoints = mergeLocalEndpoints(localEndpoints, seatReg.localEndpoints())
-
 	if strings.TrimSpace(*repoDirFlag) == "" && (len(bindDirFlag) > 0 || *noBindDepsFlag) {
 		fmt.Fprintln(stderr, "corral certify --local: --bind-dir/--no-bind-deps require --repo-dir (they configure how the cloned tree is seeded into the jail; a single --code file has no dependency dirs to bind or copy)")
 		return 2
@@ -540,13 +546,12 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 		mutantModel: *mutantModel, shadowModel: *shadow.model,
 		shadowWriterModel: *shadow.writerModel,
 		shadowSelection:   shadowSels,
-		seatProviders:     seatReg.seatProviders(),
+		seats:             seats,
 		writerMode:        writerMode,
 
 		jail: *jailFlag, checkArgv: checkArgv,
-		localEndpoints: localEndpoints,
-		tokenBudget:    agentbackend.NewTokenBudget(*maxTokensFlag),
-		bindDirs:       bindDirFlag, noBindDeps: *noBindDepsFlag,
+		tokenBudget: agentbackend.NewTokenBudget(*maxTokensFlag),
+		bindDirs:    bindDirFlag, noBindDeps: *noBindDepsFlag,
 		seedLimit: seedLimit,
 
 		repo: subjectRepo, commit: subjectCommit, subjectResolved: true,
@@ -685,12 +690,13 @@ type localAuditInput struct {
 	// verdict and the signed record say which member ran and why.
 	shadowSelection []shadowpool.Selection
 
-	// seatProviders is role -> provider for the seats the model registry
-	// resolved (and, for a concrete model name, the provider inferred from it).
-	// Empty is the ordinary case and means "infer from the model name", which
-	// is what every caller did before the registry existed. Its only use today
-	// is DISCLOSURE: decorrelation still refuses on the model name alone.
-	seatProviders map[string]string
+	// seats is every seat of this invocation, resolved once (resolveSeats):
+	// the provider, wire, endpoint and key each model is served by. Provider
+	// feeds the decorrelation DISCLOSURE (decorrelation still refuses on the
+	// model name alone); the rest is what localChatterFor builds the
+	// backends from. A seat's --local-endpoint placement is already folded in.
+	// A role with a model but no seat here is refused by resolveAuditRoles.
+	seats seatSet
 
 	// writerMode is the resolved --writer-mode: how the writer seat attacks
 	// this file's survivors. Already validated by ResolveWriterMode at the
@@ -698,11 +704,6 @@ type localAuditInput struct {
 	// it reaches here — never an operator's raw string.
 	writerMode string
 
-	// localEndpoints places a LOCAL seat on a specific ollama daemon
-	// (role -> base URL). A daemon is pinned to a GPU by its own environment,
-	// so this is how two models occupy two cards at once; corral selects the
-	// daemon, never the device. Empty keeps every local seat on OLLAMA_URL.
-	localEndpoints map[string]string
 	// tokenBudget is the RUN-WIDE cap on model tokens (--max-tokens),
 	// shared by every seat and, on a scan, every file; nil is no cap. See
 	// agentbackend.TokenBudget.
@@ -1722,72 +1723,40 @@ func resolveAuditRoles(in localAuditInput, stderr io.Writer) (auditRoles, error)
 	// Said once, at the seam where decorrelation is decided, so the operator
 	// reads it before spending rather than inferring it from two model names
 	// afterwards.
-	if v := sharedSeatProvider(in.seatProviders, writer, critic); v != "" {
+	if v := sharedSeatProvider(in.seats.providers(), writer, critic); v != "" {
 		fmt.Fprintf(stderr, "%s: decorrelation: test-writer (%s) and test-critic (%s) are different models from the SAME provider (%s) — the critic is an independent MODEL but not an independent VENDOR. Point one seat at another provider for a cross-vendor read.\n",
 			orDefault(in.cmdName, "corral certify --local"), writer, critic, v)
 	}
 	// The spec's other half of that disclosure: a seat whose vendor corral
 	// cannot tell makes the check above silent, and silence reads as "two
 	// vendors". Said once, naming the seat(s).
-	if seats := untellableAgentSeats(in.seatProviders, writer, critic); len(seats) > 0 {
+	if seats := untellableAgentSeats(in.seats.providers(), writer, critic); len(seats) > 0 {
 		fmt.Fprintf(stderr, "%s: decorrelation: the vendor of %s cannot be told — an operator-defined agent declares no maker and corral will not guess — so the same-vendor check could not compare it.\n",
 			orDefault(in.cmdName, "corral certify --local"), strings.Join(seats, " and "))
 	}
 
-	// Require a provider key for whatever the operator actually named. There
-	// are no default models, so nothing here assumes a vendor: the backend a
-	// run needs is the one its ASSIGNED models imply.
-	backendSel := strings.TrimSpace(os.Getenv("MODEL_BACKEND"))
-	// When MODEL_BACKEND is unset, the backend this run needs is the one its
-	// ASSIGNED MODELS imply — not Claude by assumption. Naming gemini-* models
-	// for every seat has already said which vendor the run uses; requiring
-	// MODEL_BACKEND as well is requiring the operator to say it twice, and the
-	// error when they don't names the WRONG vendor ("export your Claude key"
-	// on an all-Gemini run — found by the first real CI run of the Action).
+	// There is no default vendor and no whole-run backend: each seat was
+	// resolved on its own (resolveSeats), so the credential a seat needs is the
+	// one ITS provider names, and building the router below is what asks for
+	// it. This block used to infer a single MODEL_BACKEND from the assigned
+	// models and export it into the process, which a mixed herd could not
+	// use and which named the wrong vendor in its refusal.
 	//
-	// Only the unambiguous case is inferred: every seat on one cloud vendor.
-	// A mixed assignment is the cross-vendor critic design and is left to
-	// localChatterFor below; an explicit MODEL_BACKEND is an operator pointing
-	// every seat at one endpoint on purpose and is never overruled.
-	if backendSel == "" {
-		if vendor, model := soleAssignedCloudModel(assign); vendor != "" {
-			// ForSeat (which defers to ForModel for a cloud name) is the single source of truth for which credential a
-			// model needs, and its error already names the right variable —
-			// so this both validates the key and refuses with an actionable
-			// message, before any jail or store is opened.
-			if _, err := agentbackend.ForSeat(model, agentbackend.SeatOptions{}); err != nil {
-				return r, auditUsageErr("%v", err)
-			}
-			backendSel = backendForVendor(vendor)
-			if err := os.Setenv("MODEL_BACKEND", backendSel); err != nil {
-				return r, auditErr("selecting %s backend: %v", backendSel, err)
-			}
-			// The challenger seat is excluded from the inference above (it
-			// never gates a verdict), but it still runs and still needs a
-			// credential — and it carries a CLAUDE default, so an otherwise
-			// all-Gemini scan really does contain an Anthropic seat. Refuse
-			// here naming THAT seat: the old message said "export your Claude
-			// key" about a run with no Claude in it anywhere the operator
-			// could see, which describes a configuration they never chose.
-			if sm := strings.TrimSpace(assign[advpool.RoleMutantGeneratorShadow]); sm != "" && agentbackend.VendorOf(sm) != vendor {
-				if _, err := agentbackend.ForSeat(sm, agentbackend.SeatOptions{}); err != nil {
-					return r, auditUsageErr("the challenger seat (--shadow-model) is %q, a different vendor from this run's graded %s seats, and %v. It only records a comparison and never gates the verdict — pass --shadow-model off to drop it, or give it a %s model", sm, vendor, err, vendor)
-				}
-			}
+	// What is checked here is that every assigned seat WAS resolved. A role
+	// with a model but no seat would get no chatter and fail mid-run, so it
+	// is refused now, naming the role.
+	for _, role := range []string{
+		advpool.RoleMutantGenerator, advpool.RoleTestWriter, advpool.RoleTestCritic,
+		advpool.RoleMutantGeneratorShadow, advpool.RoleTestWriterShadow,
+	} {
+		m := strings.TrimSpace(assign[role])
+		if m == "" || strings.EqualFold(m, "off") {
+			continue
+		}
+		if _, ok := in.seats.byRole(role); !ok {
+			return r, auditErr("seat %s (%q) was never resolved to a provider — a caller built the audit input without resolving its seats (resolveSeats)", role, m)
 		}
 	}
-	// THERE IS NO DEFAULT VENDOR. This used to be a Claude special case: an
-	// UNSET MODEL_BACKEND was read as "the default Claude path", so a run
-	// demanded ANTHROPIC_API_KEY no matter which models the operator had
-	// named. Unset does not mean Claude — it means "infer from the assigned
-	// models", which the block above now does for every vendor including
-	// Anthropic.
-	//
-	// When the models name no cloud vendor at all (local/ollama names, or a
-	// name matching no prefix), nothing is demanded and FromEnv builds its
-	// ollama default, which needs no key. Asking for an Anthropic key there
-	// named a vendor the operator had not chosen and could not see anywhere in
-	// their own command.
 
 	// Resolve the role→backend router NOW, before opening the jail or any
 	// store: a cross-vendor critic (e.g. a Gemini critic against a Claude
@@ -1795,7 +1764,7 @@ func resolveAuditRoles(in localAuditInput, stderr io.Writer) (auditRoles, error)
 	// run here — fail closed at the top, not mid-run after jails, stores and
 	// mutants are already in flight.
 	meters := auditRoleMeters(assign)
-	chatterFor, err := localChatterFor(assign, meters, in.localEndpoints, in.tokenBudget)
+	chatterFor, err := localChatterFor(in.seats, meters, in.tokenBudget)
 	if err != nil {
 		return r, auditUsageErr("%v", err)
 	}

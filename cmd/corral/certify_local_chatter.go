@@ -12,76 +12,6 @@ import (
 	"github.com/pdbethke/corralai/internal/agentworker"
 )
 
-// backendForVendor maps agentbackend.VendorOf's answer onto the MODEL_BACKEND
-// label FromEnv switches on. They are deliberately not the same vocabulary —
-// VendorOf says who makes the model ("google"), MODEL_BACKEND names the
-// backend implementation ("gemini") — so the translation lives in exactly one
-// place rather than being re-guessed per caller.
-func backendForVendor(vendor string) string {
-	switch vendor {
-	case "google":
-		return "gemini"
-	case "openai":
-		return "openai"
-	case "anthropic":
-		return "anthropic"
-	default:
-		return ""
-	}
-}
-
-// soleAssignedCloudModel reports the single cloud vendor every assigned seat
-// uses, plus one model that names it — or "", "" when the seats span more than
-// one vendor, or none resolves to a cloud vendor at all.
-//
-// "More than one vendor" is deliberately left alone: that is the cross-vendor
-// critic design (Claude writer + Gemini critic), which localChatterFor already
-// routes per-role from the base backend. Only the unambiguous case — every
-// seat on one vendor — is safe to infer a whole-run backend from.
-// Only the GRADED seats are considered. The challenger seat
-// (RoleMutantGeneratorShadow) is a measurement seat that never gates a verdict
-// and carries a Claude default, so letting it veto the inference would mean an
-// all-Gemini scan could never infer anything. It still needs its own credential
-// — resolveAuditRoles checks it separately so the error can name that seat
-// rather than blaming the whole run.
-func soleAssignedCloudModel(assign advpool.RoleAssignment) (vendor, model string) {
-	for _, role := range []string{
-		advpool.RoleMutantGenerator,
-		advpool.RoleTestWriter,
-		advpool.RoleTestCritic,
-	} {
-		m := strings.TrimSpace(assign[role])
-		// "off" is a disabled seat (the critic), not a model, and an empty
-		// assignment never reached a default. Neither says anything about
-		// which vendor the run needs.
-		if m == "" || m == "off" {
-			continue
-		}
-		// An AGENT seat (codex, claude-code:<model>) is a CLI that brings its
-		// own login: it needs no backend and no key, so it says nothing about
-		// which API the run must be pointed at. Counting it would make an
-		// all-agent run demand an API key it never uses, and set
-		// MODEL_BACKEND for a vendor nothing will dial.
-		if isAgentSeat(m) {
-			continue
-		}
-		v := agentbackend.VendorOf(m)
-		if v == "" {
-			// A local/ollama model name. Inferring a cloud backend from a set
-			// that includes one would point a local seat at a cloud endpoint.
-			return "", ""
-		}
-		if vendor == "" {
-			vendor, model = v, m
-			continue
-		}
-		if v != vendor {
-			return "", ""
-		}
-	}
-	return vendor, model
-}
-
 // isAgentSeat reports whether spec names a coding-agent seat (`codex`,
 // `claude-code:<model>`, any CORRALAI_AGENT_<NAME>) rather than a model name.
 // Every site that treats a seat's name as an API model asks this first.
@@ -90,54 +20,38 @@ func isAgentSeat(spec string) bool {
 	return ok
 }
 
-// localChatterFor builds the role→backend router for a real run: the base
-// backend from FromEnv() (MODEL_BACKEND-selected), switched to each role's
-// assigned model via WithModel when the backend supports it. A single ANTHROPIC
-// key + the anthropic backend serves all three Claude models this way.
+// localChatterFor builds the role→backend router for a real run from the
+// RESOLVED seat set: every assigned role's backend is agentbackend.Build of the
+// seat resolveSeats decided for it, so no door here re-guesses a vendor from a
+// model's name, consults MODEL_BACKEND, or falls back to a process-wide base
+// backend. The routing facts (provider, wire, endpoint, key) were fixed once,
+// up front, in one stated order; this function only constructs.
 //
-// Cross-vendor critic (design 2026-07-19): decorrelation is strongest when the
-// test-critic runs on a DIFFERENT VENDOR than the writer/mutant-generator, not
-// just a different model on the same vendor. When the operator hasn't pinned
-// an explicit MODEL_BACKEND (the default direct-Claude path) AND the critic's
-// model resolves to a cloud vendor other than the base backend's, this builds
-// a dedicated critic backend via agentbackend.ForSeat ONCE up front and
-// routes RoleTestCritic to it; every other role keeps the base+WithModel path
-// unchanged. An explicit MODEL_BACKEND (openai/openrouter/ollama — an
-// operator pointing every role at one endpoint on purpose) is never
-// disturbed: all roles including the critic keep today's single-backend
-// WithModel behavior.
+// Every seat is built, not just the critic. This used to cross-route the
+// test-critic alone, which quietly made the product's central claim
+// unreachable: the mutant-generator and the test-writer were pinned to
+// whatever single backend the run started on, so "one model plants the
+// faults, a DIFFERENT one writes the killing test" could only ever mean
+// two models from the same vendor. It also stranded the scorecard: the
+// learning loop measures which model actually catches bugs IN WHICH ROLE, and
+// routing could act on that for one role in three; a measurement computed and
+// then not actable is the same shape as a measurement computed and discarded.
 //
-// Fails closed: if a cross-vendor critic is requested but its vendor's key is
-// missing, this returns the actionable error from ForSeat (ForModel for a cloud name) instead of
-// silently falling back to the base backend — the caller must refuse to
-// start the run, not fail mid-run.
+// Built UP FRONT so a missing credential refuses the run before any jail or
+// store is opened, naming the role the operator has to fix. A role with NO
+// seat gets no chatter, so its task fails loudly ("no model backend for role")
+// rather than being answered by a backend nobody chose.
+//
+// --local-endpoint placements are already merged into the seats
+// (applyLocalEndpoints), which is also where a cloud or agent seat given one is
+// refused.
+//
 // meters, when non-nil, is ONE UsageMeter PER ROLE — built by
 // auditRoleMeters — that this seat's reported token usage is recorded into,
 // including the cross-vendor seats, which each get their own backend and
 // would otherwise be counted by nobody. A role absent from meters (or a nil
 // map) records nothing, the same as a nil single meter always has.
-func localChatterFor(assign advpool.RoleAssignment, meters map[string]*agentbackend.UsageMeter, endpoints map[string]string, budget *agentbackend.TokenBudget) (func(role string) agentworker.Chatter, error) {
-	base := agentbackend.FromEnv()
-	sw, canSwitch := base.(agentbackend.ModelSwitcher)
-	bv := baseVendor()
-	pinned := backendPinned()
-
-	// Resolve EVERY seat, not just the critic. This used to cross-route the
-	// test-critic alone, which quietly made the product's central claim
-	// unreachable: the mutant-generator and the test-writer were pinned to
-	// whatever single backend the run started on, so "one model plants the
-	// faults, a DIFFERENT one writes the killing test" could only ever mean
-	// two models from the same vendor. Asking for a Gemini generator and a
-	// Claude critic did not fail loudly either — the Gemini name was sent to
-	// Anthropic's endpoint and came back 404.
-	//
-	// It also stranded the scorecard. The learning loop measures which model
-	// actually catches bugs IN WHICH ROLE, and routing could act on that for
-	// one role in three; a measurement computed and then not actable is the
-	// same shape as a measurement computed and discarded.
-	//
-	// Resolved UP FRONT so a missing credential refuses the run before any
-	// jail or store is opened, naming the role the operator has to fix.
+func localChatterFor(seats seatSet, meters map[string]*agentbackend.UsageMeter, budget *agentbackend.TokenBudget) (func(role string) agentworker.Chatter, error) {
 	perRole := map[string]agentworker.Chatter{}
 	for _, role := range []string{
 		advpool.RoleMutantGenerator,
@@ -146,82 +60,39 @@ func localChatterFor(assign advpool.RoleAssignment, meters map[string]*agentback
 		advpool.RoleMutantGeneratorShadow,
 		advpool.RoleTestWriterShadow,
 	} {
-		model := strings.TrimSpace(assign[role])
-		if model == "" {
+		rs, ok := seats.byRole(role)
+		if !ok {
 			continue
 		}
-		// An AGENT seat is driven as a CLI through the one resolver, which
-		// needs no key and no backend. It is never routed through the base
-		// backend (it is not a model it could serve), and a daemon placement
-		// cannot apply to it: refuse that rather than ignore it.
-		if isAgentSeat(model) {
-			if url := endpoints[role]; url != "" {
-				return nil, fmt.Errorf("--local-endpoint %s=%s: seat %s is the agent seat %q, which runs as a CLI and is not served by a local daemon — remove the endpoint, or give this seat a local model", role, url, role, model)
-			}
-			// No per-call timeout exists for certify's API seats either, so
-			// the seat's own 15m default applies.
-			ab, err := agentbackend.ForSeat(model, agentbackend.SeatOptions{})
-			if err != nil {
+		// No per-call timeout exists for certify's API seats, so an agent
+		// seat's own 15m default applies.
+		b, err := agentbackend.Build(rs, agentbackend.SeatOptions{})
+		if err != nil {
+			if rs.Kind == "agent" {
 				return nil, fmt.Errorf("agent seat %s: %w", role, err)
 			}
-			if err := capCanSee(budget, role, model, ab); err != nil {
+			// Names the flag and the model, so the operator sees which seat
+			// needs the fix. A challenger is a measurement seat that never
+			// gates a verdict, so its refusal also says how to drop it: the
+			// old message blamed "your Claude key" for a seat the operator
+			// could not see.
+			if role == advpool.RoleMutantGeneratorShadow || role == advpool.RoleTestWriterShadow {
+				return nil, fmt.Errorf("the challenger seat (--%s) is %q and cannot be built: %w. It only records a comparison and never gates the verdict — pass --%s off to drop it, or give it a model whose provider you hold a key for", rs.Flag, rs.Spec, err, rs.Flag)
+			}
+			return nil, fmt.Errorf("seat %s (--%s %q): %w", role, rs.Flag, rs.Spec, err)
+		}
+		if rs.Kind == "agent" {
+			if err := capCanSee(budget, role, rs.Spec, b); err != nil {
 				return nil, err
 			}
-			perRole[role] = agentbackend.AsChatterBudgeted(ab, meters[role], budget)
-			continue
 		}
-		v := agentbackend.VendorOf(model)
-		if v == "" {
-			// A local/ollama name: the base backend serves it — UNLESS the
-			// operator placed this seat on a specific daemon. That is how two
-			// models occupy two GPUs at once: one daemon per card, each pinned
-			// by its own environment, corral choosing the daemon rather than
-			// the device. Without it every local seat shares OLLAMA_URL, one
-			// card, and one VRAM budget.
-			if url := endpoints[role]; url != "" {
-				perRole[role] = agentbackend.AsChatterBudgeted(agentbackend.NewOllamaBackend(url, model), meters[role], budget)
-			}
-			continue
-		}
-		// A CLOUD model is served by its vendor, not by a local daemon, so an
-		// endpoint for this seat cannot do what the operator is asking for.
-		// Refuse rather than ignore it: silently dropping the placement would
-		// leave them believing a seat runs somewhere it does not.
-		if url := endpoints[role]; url != "" {
-			return nil, fmt.Errorf("--local-endpoint %s=%s: seat %s runs the CLOUD model %q (vendor %s), which is not served by a local daemon — remove the endpoint, or give this seat a local model", role, url, role, model, v)
-		}
-		if pinned && (v == bv || bv == "") {
-			// Already this backend's vendor — or the operator pinned a
-			// GATEWAY (openrouter/ollama) that fronts many vendors behind one
-			// endpoint, where a "claude-" name is not an Anthropic call and
-			// must never be re-routed to Anthropic behind their back.
-			continue
-		}
-		cb, err := agentbackend.ForSeat(model, agentbackend.SeatOptions{})
-		if err != nil {
-			return nil, fmt.Errorf("cross-vendor %s: %w", role, err)
-		}
-		perRole[role] = agentbackend.AsChatterBudgeted(cb, meters[role], budget)
+		perRole[role] = agentbackend.AsChatterBudgeted(b, meters[role], budget)
 	}
-
 	return func(role string) agentworker.Chatter {
 		if c, ok := perRole[role]; ok {
 			return c
 		}
-		// A role with NO model assigned gets no chatter, so its task fails
-		// loudly ("no model backend for role") rather than being answered by
-		// the base backend, whose own unpinned answer is FromEnv's ollama
-		// default: a model nobody named, whose output would be graded and
-		// signed under a seat the header calls empty. No caller asks for a
-		// role it did not assign; this makes sure none ever can.
-		model := strings.TrimSpace(assign[role])
-		if model == "" {
-			return nil
-		}
-		if canSwitch {
-			return agentbackend.AsChatterBudgeted(sw.WithModel(model), meters[role], budget)
-		}
-		return agentbackend.AsChatterBudgeted(base, meters[role], budget)
+		return nil
 	}, nil
 }
 

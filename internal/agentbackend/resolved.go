@@ -18,6 +18,9 @@ const (
 	DeclaredPinned     DeclaredBy = "pinned"
 	DeclaredDiscovered DeclaredBy = "discovered"
 	DeclaredName       DeclaredBy = "name"
+	// DeclaredFlag is a seat the operator placed on a daemon with
+	// --local-endpoint: the most specific statement there is about one seat.
+	DeclaredFlag DeclaredBy = "--local-endpoint"
 )
 
 // ResolvedSeat is one seat's routing, decided once: which provider serves it,

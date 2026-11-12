@@ -81,6 +81,14 @@ func TestAnInterruptedRepoScanRecordsNothing_AgentSeat(t *testing.T) {
 	}
 	t.Setenv("CORRALAI_AGENT_INTR", path+" {model:--model}")
 	fakeAgent(t, "quiet", "x")
+	// The derive seat is a bare local name, so it needs a declared source like
+	// any other: a daemon that lists it. Nothing here is ever called.
+	tags := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"models":[{"name":"local-deriver"}]}`))
+	}))
+	defer tags.Close()
+	t.Setenv("OLLAMA_URL", tags.URL)
 	interruptedRepoRun(t, "intr", "quiet")
 }
 
@@ -99,7 +107,7 @@ func TestAnInterruptedRepoScanRecordsNothing_APISeat(t *testing.T) {
 		// the default action and kill the test binary.
 		if r.URL.Path == "/api/tags" {
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"models":[{"name":"local-mutant"},{"name":"local-writer"}]}`))
+			_, _ = w.Write([]byte(`{"models":[{"name":"local-mutant"},{"name":"local-writer"},{"name":"local-deriver"}]}`))
 			return
 		}
 		once.Do(func() { _ = syscall.Kill(os.Getpid(), syscall.SIGINT) })

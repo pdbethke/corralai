@@ -202,3 +202,18 @@ func seatProvider(providers map[string]string, role, model string) string {
 	}
 	return agentbackend.VendorOf(model)
 }
+
+// deriveEndpointOf is the daemon the derive seat resolved onto, "" when it is
+// not a local seat (a cloud, agent or unnamed one). The derive seat has no
+// advpool role, so it is the one seat read by flag name. Transitional: the
+// goal-deriver itself still takes a URL until it builds from the seat.
+func deriveEndpointOf(seats seatSet) string {
+	rs, ok := seats["derive-model"]
+	if !ok || rs.Kind == "agent" {
+		return ""
+	}
+	if rs.Wire == models.WireOllama || rs.Wire == models.WireOpenAIChat {
+		return rs.Endpoint
+	}
+	return ""
+}

@@ -67,7 +67,7 @@ func TestLocalChatterForSameVendorCriticSharesBaseBackend(t *testing.T) {
 		advpool.RoleTestWriter:      "claude-sonnet-5",
 		advpool.RoleTestCritic:      "claude-haiku-4-5",
 	}
-	chatterFor, err := localChatterFor(assign, nil, nil, nil)
+	chatterFor, err := localChatterFor(seatsForAssign(t, assign, nil), nil, nil)
 	if err != nil {
 		t.Fatalf("localChatterFor: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestLocalChatterForCrossVendorCriticRoutesToGemini(t *testing.T) {
 		advpool.RoleTestWriter:      "claude-sonnet-5",
 		advpool.RoleTestCritic:      "gemini-3.5-flash",
 	}
-	chatterFor, err := localChatterFor(assign, nil, nil, nil)
+	chatterFor, err := localChatterFor(seatsForAssign(t, assign, nil), nil, nil)
 	if err != nil {
 		t.Fatalf("localChatterFor: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestLocalChatterForCrossVendorCriticFailsClosedWithoutKey(t *testing.T) {
 		advpool.RoleTestWriter:      "claude-sonnet-5",
 		advpool.RoleTestCritic:      "gemini-3.5-flash",
 	}
-	_, err := localChatterFor(assign, nil, nil, nil)
+	_, err := localChatterFor(seatsForAssign(t, assign, nil), nil, nil)
 	if err == nil {
 		t.Fatal("localChatterFor with missing GEMINI_API_KEY: want error, got nil")
 	}
@@ -196,7 +196,7 @@ func TestLocalChatterForExplicitBackendNeverCrossVendorRoutes(t *testing.T) {
 		advpool.RoleTestWriter:      "some-router-model",
 		advpool.RoleTestCritic:      "gemini-3.5-flash",
 	}
-	chatterFor, err := localChatterFor(assign, nil, nil, nil)
+	chatterFor, err := localChatterFor(seatsForAssign(t, assign, nil), nil, nil)
 	if err != nil {
 		t.Fatalf("localChatterFor: %v", err)
 	}
@@ -250,11 +250,14 @@ func TestResolveAuditRolesDerivesBackendFromAssignedModels(t *testing.T) {
 		t.Setenv("GOOGLE_API_KEY", "")
 		t.Setenv("OPENAI_API_KEY", "")
 
-		if _, err := resolveAuditRoles(geminiModels(), nil); err != nil {
+		if _, err := resolveRoles(t, geminiModels(), nil); err != nil {
 			t.Fatalf("an all-Gemini run with a Gemini key must be accepted; got: %v", err)
 		}
-		if got := os.Getenv("MODEL_BACKEND"); got != "gemini" {
-			t.Errorf("MODEL_BACKEND = %q, want %q — the backend must be derived from the assigned models so FromEnv builds the right one (unset would default to ollama)", got, "gemini")
+		// Each seat carries its own routing now, so nothing is exported into
+		// the process: the run used to set MODEL_BACKEND=gemini here for
+		// FromEnv to read, a side effect a mixed herd could not use.
+		if got := os.Getenv("MODEL_BACKEND"); got != "" {
+			t.Errorf("MODEL_BACKEND = %q, want it left unset — resolveAuditRoles must not export a whole-run backend", got)
 		}
 	})
 
@@ -265,7 +268,7 @@ func TestResolveAuditRolesDerivesBackendFromAssignedModels(t *testing.T) {
 		t.Setenv("GOOGLE_API_KEY", "")
 		t.Setenv("OPENAI_API_KEY", "")
 
-		_, err := resolveAuditRoles(geminiModels(), nil)
+		_, err := resolveRoles(t, geminiModels(), nil)
 		if err == nil {
 			t.Fatal("a run with no usable credential must refuse before any jail or store is opened")
 		}
@@ -284,7 +287,7 @@ func TestResolveAuditRolesDerivesBackendFromAssignedModels(t *testing.T) {
 		t.Setenv("ANTHROPIC_API_KEY", "sk-ant-test")
 		t.Setenv("GEMINI_API_KEY", "")
 
-		_, err := resolveAuditRoles(localAuditInput{}, nil)
+		_, err := resolveRoles(t, localAuditInput{}, nil)
 		if err == nil {
 			t.Fatal("an unnamed herd must be refused — a present Anthropic key must NOT cause Claude models to be assumed")
 		}
@@ -305,7 +308,7 @@ func TestResolveAuditRolesDerivesBackendFromAssignedModels(t *testing.T) {
 		t.Setenv("GOOGLE_API_KEY", "")
 		t.Setenv("OPENAI_API_KEY", "")
 
-		_, err := resolveAuditRoles(localAuditInput{}, nil)
+		_, err := resolveRoles(t, localAuditInput{}, nil)
 		if err == nil {
 			t.Fatal("an unnamed herd must be refused")
 		}
@@ -335,7 +338,7 @@ func TestResolveAuditRolesDerivesBackendFromAssignedModels(t *testing.T) {
 
 		in := geminiModels()
 		in.shadowModel = testShadowModel // an Anthropic model, named on purpose
-		_, err := resolveAuditRoles(in, nil)
+		_, err := resolveRoles(t, in, nil)
 		if err == nil {
 			t.Fatal("a challenger seat whose provider key is absent must refuse — it would fail mid-run otherwise")
 		}
@@ -361,7 +364,7 @@ func TestResolveAuditRolesDerivesBackendFromAssignedModels(t *testing.T) {
 
 		in := geminiModels()
 		in.shadowModel = "" // unnamed: the challenger is simply off
-		roles, err := resolveAuditRoles(in, nil)
+		roles, err := resolveRoles(t, in, nil)
 		if err != nil {
 			t.Fatalf("an all-Gemini run with a Gemini key must be accepted when no challenger is named; got: %v", err)
 		}
@@ -382,7 +385,7 @@ func TestResolveAuditRolesDerivesBackendFromAssignedModels(t *testing.T) {
 		t.Setenv("ANTHROPIC_API_KEY", "")
 		t.Setenv("GEMINI_API_KEY", "")
 
-		if _, err := resolveAuditRoles(geminiModels(), nil); err != nil {
+		if _, err := resolveRoles(t, geminiModels(), nil); err != nil {
 			t.Fatalf("an explicit MODEL_BACKEND must be honoured as-is: %v", err)
 		}
 		if got := os.Getenv("MODEL_BACKEND"); got != "openrouter" {
@@ -432,11 +435,11 @@ func TestUnpinnedMixedVendorRunRoutesEverySeatByName(t *testing.T) {
 	t.Setenv("GEMINI_API_KEY", "test-google-key")
 	t.Setenv("ANTHROPIC_API_KEY", "")
 
-	_, err := localChatterFor(advpool.RoleAssignment{
+	_, err := localChatterFor(seatsForAssign(t, advpool.RoleAssignment{
 		advpool.RoleMutantGenerator: "gemini-3.6-flash",
 		advpool.RoleTestWriter:      "gemini-3.6-flash",
 		advpool.RoleTestCritic:      "claude-haiku-4-5-20251001",
-	}, nil, nil, nil)
+	}, nil), nil, nil)
 	if err == nil {
 		t.Fatal("an unpinned mixed-vendor run accepted a Claude critic with no Anthropic key: " +
 			"the seat was not routed by name and would reach the ollama default instead")
@@ -455,9 +458,9 @@ func TestPinnedGatewayIsNeverReRoutedBehindTheOperator(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "")
 	t.Setenv("OPENAI_API_KEY", "test-openrouter-key")
 
-	chatterFor, err := localChatterFor(advpool.RoleAssignment{
+	chatterFor, err := localChatterFor(seatsForAssign(t, advpool.RoleAssignment{
 		advpool.RoleMutantGenerator: "claude-sonnet-5",
-	}, nil, nil, nil)
+	}, nil), nil, nil)
 	if err != nil {
 		t.Fatalf("a gateway-pinned claude- name was re-routed to Anthropic behind the operator: %v", err)
 	}
@@ -482,11 +485,11 @@ func TestLocalChatterFailsClosedOnAnyRoleNotJustTheCritic(t *testing.T) {
 	t.Setenv("GEMINI_API_KEY", "")
 	t.Setenv("GOOGLE_API_KEY", "")
 
-	_, err := localChatterFor(advpool.RoleAssignment{
+	_, err := localChatterFor(seatsForAssign(t, advpool.RoleAssignment{
 		advpool.RoleMutantGenerator: "gemini-3.6-flash",
 		advpool.RoleTestWriter:      "claude-sonnet-5",
 		advpool.RoleTestCritic:      "claude-haiku-4-5",
-	}, nil, nil, nil)
+	}, nil), nil, nil)
 	if err == nil {
 		t.Fatal("a Gemini generator with no Gemini key must refuse the run, not 404 mid-run")
 	}
@@ -504,11 +507,11 @@ func TestLocalChatterRoutesThreeVendorsAtOnce(t *testing.T) {
 	t.Setenv("GEMINI_API_KEY", "gm-test")
 	t.Setenv("OPENAI_API_KEY", "sk-oai-test")
 
-	pick, err := localChatterFor(advpool.RoleAssignment{
+	pick, err := localChatterFor(seatsForAssign(t, advpool.RoleAssignment{
 		advpool.RoleMutantGenerator: "gemini-3.6-flash",
 		advpool.RoleTestWriter:      "claude-sonnet-5",
 		advpool.RoleTestCritic:      "gpt-5",
-	}, nil, nil, nil)
+	}, nil), nil, nil)
 	if err != nil {
 		t.Fatalf("all three credentials present, want no error: %v", err)
 	}
@@ -530,13 +533,20 @@ func TestLocalChatterRoutesThreeVendorsAtOnce(t *testing.T) {
 // operator pointed every seat at one endpoint on purpose. Re-routing a
 // "claude-" name there to Anthropic would overrule them and spend on a vendor
 // they did not choose.
+//
+// The gateway's OWN key is required (a seat built without it would send an
+// unauthenticated request mid-run, which FromEnv used to allow); no other
+// vendor's key is, which the empty Anthropic and Gemini keys prove.
 func TestLocalChatterLeavesAPinnedGatewayAlone(t *testing.T) {
 	t.Setenv("MODEL_BACKEND", "openrouter")
+	t.Setenv("OPENROUTER_API_KEY", "or-test")
 	t.Setenv("ANTHROPIC_API_KEY", "")
-	if _, err := localChatterFor(advpool.RoleAssignment{
+	t.Setenv("GEMINI_API_KEY", "")
+	t.Setenv("GOOGLE_API_KEY", "")
+	if _, err := localChatterFor(seatsForAssign(t, advpool.RoleAssignment{
 		advpool.RoleMutantGenerator: "anthropic/claude-sonnet-5",
 		advpool.RoleTestCritic:      "google/gemini-3.6-flash",
-	}, nil, nil, nil); err != nil {
+	}, nil), nil, nil); err != nil {
 		t.Fatalf("a pinned gateway must not be cross-routed or key-checked: %v", err)
 	}
 }
@@ -554,7 +564,7 @@ func TestUnsetBackendDoesNotDemandAnthropic(t *testing.T) {
 	t.Setenv("GOOGLE_API_KEY", "")
 	t.Setenv("OPENAI_API_KEY", "")
 
-	_, err := resolveAuditRoles(localAuditInput{
+	_, err := resolveRoles(t, localAuditInput{
 		writerModel: "qwen2.5-coder:7b",
 		mutantModel: "qwen2.5-coder:7b",
 		criticModel: "off",
@@ -573,7 +583,7 @@ func TestAnthropicHerdStillRefusesWithoutItsKey(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "")
 	t.Setenv("GEMINI_API_KEY", "")
 
-	_, err := resolveAuditRoles(localAuditInput{
+	_, err := resolveRoles(t, localAuditInput{
 		writerModel: "claude-sonnet-5",
 		mutantModel: "claude-sonnet-5",
 		criticModel: "off",

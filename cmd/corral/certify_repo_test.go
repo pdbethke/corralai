@@ -1813,7 +1813,7 @@ func TestResolveAuditRolesWarningCarriesTheCommandPrefix(t *testing.T) {
 	var errb bytes.Buffer
 	// critic != writer keeps decorrelation happy; shadow == mutant fires the
 	// warning, which is written before any credential check.
-	_, _ = resolveAuditRoles(localAuditInput{
+	_, _ = resolveRoles(t, localAuditInput{
 		writerModel: "w", criticModel: "c", mutantModel: "m", shadowModel: "m",
 	}, &errb)
 	if !strings.Contains(errb.String(), "corral certify --local: warning: --shadow-model") {
@@ -1821,7 +1821,7 @@ func TestResolveAuditRolesWarningCarriesTheCommandPrefix(t *testing.T) {
 	}
 
 	errb.Reset()
-	_, _ = resolveAuditRoles(localAuditInput{
+	_, _ = resolveRoles(t, localAuditInput{
 		cmdName:     "corral certify --repo",
 		writerModel: "w", criticModel: "c", mutantModel: "m", shadowModel: "m",
 	}, &errb)
@@ -2216,7 +2216,7 @@ func TestRunCertifyLegacyRepoFlagIsNotHijacked(t *testing.T) {
 // model as the writer is a judge in her own cause, and must be a USAGE error
 // (exit 2), not an internal failure.
 func TestResolveAuditRolesRejectsCollapsedDecorrelation(t *testing.T) {
-	_, err := resolveAuditRoles(localAuditInput{
+	_, err := resolveRoles(t, localAuditInput{
 		writerModel: "same-model", criticModel: "same-model",
 		mutantModel: "same-model", shadowModel: "off",
 	}, io.Discard)

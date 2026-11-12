@@ -43,7 +43,7 @@ func versionedAgent(t *testing.T, name, version string) {
 func TestCertifySeatToolsReachTheRunSpec(t *testing.T) {
 	noKeys(t)
 	versionedAgent(t, "fakew", "fake-cli 1.0")
-	r, err := resolveAuditRoles(localAuditInput{mutantModel: "qwen3.5:9b", writerModel: "fakew:m1", criticModel: "off", shadowModel: "off"}, &bytes.Buffer{})
+	r, err := resolveRoles(t, localAuditInput{mutantModel: "qwen3.5:9b", writerModel: "fakew:m1", criticModel: "off", shadowModel: "off"}, &bytes.Buffer{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -439,7 +439,7 @@ func TestTheSeatToolIsProbedOncePerSeatPerScan(t *testing.T) {
 	p.probe = func(spec string) string { probes[spec]++; return inner(spec) }
 	_ = modelSetKeyWith(p, "fakew:m1", "qwen3.5:9b", "off", "off", "")
 	for job := 0; job < 3; job++ {
-		r, err := resolveAuditRoles(localAuditInput{toolProbe: p, mutantModel: "qwen3.5:9b", writerModel: "fakew:m1", criticModel: "off", shadowModel: "off"}, &bytes.Buffer{})
+		r, err := resolveRoles(t, localAuditInput{toolProbe: p, mutantModel: "qwen3.5:9b", writerModel: "fakew:m1", criticModel: "off", shadowModel: "off"}, &bytes.Buffer{})
 		if err != nil {
 			t.Fatal(err)
 		}

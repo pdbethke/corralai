@@ -531,7 +531,7 @@ func TestCertifyRepoRecordRoundTripsReportedFiles(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d: stdout=%s stderr=%s", code, out.String(), errb.String())
 	}
-	if errb.Len() != 0 {
+	if stripModelsDisclosure(errb.String()) != "" {
 		t.Fatalf("the ledger write must not fail on a writable directory, stderr=%q", errb.String())
 	}
 
@@ -698,7 +698,7 @@ func TestCertifyRepoRecordCoversExecutionStageRejections(t *testing.T) {
 	if !strings.Contains(out.String(), "COULD-NOT-GRADE") {
 		t.Fatalf("fixture precondition failed: want the baseline-failed shape:\n%s", out.String())
 	}
-	if errb.Len() != 0 {
+	if stripModelsDisclosure(errb.String()) != "" {
 		t.Fatalf("the ledger write must not fail on a writable directory, stderr=%q", errb.String())
 	}
 
@@ -811,7 +811,7 @@ func TestCertifyRepoRecordTopReflectsTheEffectiveBound(t *testing.T) {
 	if code2 != 1 {
 		t.Fatalf("exit %d, want 1 (COULD-NOT-GRADE): stdout=%s stderr=%s", code2, out2.String(), errb2.String())
 	}
-	if errb2.Len() != 0 {
+	if stripModelsDisclosure(errb2.String()) != "" {
 		t.Fatalf("the ledger write must not fail on a writable directory, stderr=%q", errb2.String())
 	}
 
@@ -901,7 +901,7 @@ func TestCertifyRepoRecordPreflightOverlayRoundTrips(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d: stdout=%s stderr=%s", code, out.String(), errb.String())
 	}
-	if errb.Len() != 0 {
+	if stripModelsDisclosure(errb.String()) != "" {
 		t.Fatalf("the ledger write must not fail on a writable directory, stderr=%q", errb.String())
 	}
 	if !strings.Contains(out.String(), "file(s) executed at least once") {

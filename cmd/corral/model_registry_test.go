@@ -82,8 +82,9 @@ func TestConcreteModelNameUnchangedByRegistry(t *testing.T) {
 	}
 }
 
-// With no registry at all the resolver is SILENT — a repo that has never heard
-// of this feature must behave byte for byte as it did before.
+// With no registry the resolver declares no placement, but it still DISCLOSES
+// how each seat resolved (the plan prints whenever a seat resolved): the
+// vendor-named seats say "name", and nothing is placed on a local daemon.
 func TestNoRegistryEmitsNothing(t *testing.T) {
 	t.Setenv(models.EnvInline, "")
 	t.Setenv(models.EnvFile, "")
@@ -93,11 +94,13 @@ func TestNoRegistryEmitsNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveSeatRegistry: %v", err)
 	}
-	if errb.Len() != 0 {
-		t.Errorf("stderr = %q, want silence with no registry", errb.String())
+	for _, w := range []string{"no registry declared", "google/gemini-3.6-flash", "anthropic/claude-sonnet-5", "(name)"} {
+		if !strings.Contains(errb.String(), w) {
+			t.Errorf("stderr = %q, want it to name %q", errb.String(), w)
+		}
 	}
-	if len(ep.localEndpoints()) != 0 || len(ep.seatProviders()) != 0 {
-		t.Errorf("resolution = %+v, want nothing with no registry", ep)
+	if len(ep.localEndpoints()) != 0 {
+		t.Errorf("resolution = %+v, want no local placement with no registry", ep)
 	}
 }
 
@@ -216,6 +219,9 @@ func TestLocalRegistryEntryPlacesItsSeatOnItsDaemon(t *testing.T) {
 	t.Setenv(models.EnvInline, `{"edge": {"provider":"ollama","model":"qwen3.5:9b-q8_0","endpoint":"`+declared.URL+`"}}`)
 	t.Setenv(models.EnvFile, "")
 
+	// The daemon at OLLAMA_URL lists the undeclared seat's model; the listing
+	// itself is faked so only chat requests are counted below.
+	fakeOllama(t, "gemma4:12b")
 	s := &seatPtrs{writer: "edge", mutant: "gemma4:12b"}
 	res, err := resolveSeatRegistry("test", t.TempDir(), s.flags(), &errDiscard{})
 	if err != nil {
@@ -402,7 +408,7 @@ func TestNonStrictRegistryStillAcceptsAConcreteName(t *testing.T) {
 	if *s != want {
 		t.Errorf("seats = %+v, want them untouched %+v", *s, want)
 	}
-	if !strings.Contains(errb.String(), "concrete name") {
+	if !strings.Contains(errb.String(), "(name)") {
 		t.Errorf("disclosure %q does not disclose the inference", errb.String())
 	}
 	if strings.Contains(errb.String(), "strict") {

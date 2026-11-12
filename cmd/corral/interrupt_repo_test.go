@@ -92,6 +92,16 @@ func TestAnInterruptedRepoScanRecordsNothing_APISeat(t *testing.T) {
 	// default action and kill the test binary.
 	var once sync.Once
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Seat resolution lists the daemon BEFORE auditContext installs its
+		// handler, so the listing must answer (it is what declares these
+		// bare names as served here) and the signal must wait for the first
+		// model call, which is mid-scan. A signal on the listing would hit
+		// the default action and kill the test binary.
+		if r.URL.Path == "/api/tags" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"models":[{"name":"local-mutant"},{"name":"local-writer"}]}`))
+			return
+		}
 		once.Do(func() { _ = syscall.Kill(os.Getpid(), syscall.SIGINT) })
 		http.Error(w, "stopped", http.StatusServiceUnavailable)
 	}))

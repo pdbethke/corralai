@@ -4,7 +4,6 @@ package main
 
 import (
 	"fmt"
-	"io"
 	"strings"
 
 	"github.com/pdbethke/corralai/internal/advpool"
@@ -109,80 +108,6 @@ func (r *seatResolution) seatProviders() map[string]string {
 		return nil
 	}
 	return r.providers
-}
-
-func resolveSeatRegistry(cmdName, repoRoot string, seats []seatFlag, stderr io.Writer) (*seatResolution, error) {
-	if stderr == nil {
-		stderr = io.Discard
-	}
-	reg, err := models.Load(repoRoot)
-	if err != nil {
-		return nil, err
-	}
-	if reg.Len() == 0 {
-		if models.RepoLocalIgnored() && models.RepoLocalExists(repoRoot) {
-			// Said once, so a workflow that relied on the checkout's own
-			// registry learns why its aliases are now concrete names.
-			fmt.Fprintf(stderr, "%s: %s in the checkout is IGNORED on a CI runner — the checkout is the change under audit and may not choose its own auditors; declare the registry with %s or %s instead\n",
-				cmdName, models.RepoRelPath, models.EnvFile, models.EnvInline)
-		}
-		// No registry declared. Emit nothing at all: a repo without one must
-		// behave, byte for byte, as it did before this feature existed.
-		return nil, nil
-	}
-	res := &seatResolution{endpoints: map[string]string{}, providers: map[string]string{}}
-	var lines []string
-	for _, s := range seats {
-		if s.val == nil {
-			continue
-		}
-		v := strings.TrimSpace(*s.val)
-		// An unnamed seat stays unnamed (the no-defaults rule), and "off" is a
-		// deliberately disabled seat, not a model to look up.
-		if v == "" || strings.EqualFold(v, "off") {
-			continue
-		}
-		e, ok := reg.Lookup(v)
-		if !ok && reg.Strict {
-			// STRICT: a value that is not a declared alias is a typo, and the
-			// fall-through would turn it into a bogus model name that fails at
-			// the seat hours into a paid run — the precise stale-reference
-			// failure this registry exists to remove. Refused before anything
-			// is spent, naming what IS declared.
-			return nil, reg.UnknownAliasErr(s.flag, v)
-		}
-		if !ok {
-			// Not an alias: the concrete model name this flag has always
-			// accepted. Disclose the provider corral INFERS from the name, so
-			// the operator sees the same fact the registry would have stated.
-			lines = append(lines, fmt.Sprintf("    %-19s %s (concrete name, provider inferred: %s)", s.flag+":", v, inferredProvider(v)))
-			if p := agentbackend.VendorOf(v); p != "" && s.role != "" {
-				res.providers[s.role] = p
-			}
-			continue
-		}
-		*s.val = e.Model
-		lines = append(lines, fmt.Sprintf("    %-19s %s = %s/%s%s", s.flag+":", v, e.Provider, e.Model, endpointNote(e)))
-		if s.role != "" {
-			res.providers[s.role] = e.Provider
-			if e.IsLocal() {
-				res.endpoints[s.role] = e.Endpoint
-			}
-		} else if s.flag == "derive-model" && e.IsLocal() {
-			res.deriveURL = e.Endpoint
-		}
-	}
-	if len(lines) > 0 {
-		// The mode is part of the disclosure: "this value was accepted" means
-		// something different under each, and an operator reading the line
-		// should not have to open the file to know which rule applied.
-		mode := "concrete model names are also accepted"
-		if reg.Strict {
-			mode = "strict — every seat must name an alias"
-		}
-		fmt.Fprintf(stderr, "  models: from %s (%s)\n%s\n", reg.Source, mode, strings.Join(lines, "\n"))
-	}
-	return res, nil
 }
 
 // endpointNote names the daemon a local seat will actually talk to. A local

@@ -83,7 +83,7 @@ func TestSelectionCacheReusesIdenticalTree(t *testing.T) {
 	// Scan 1: a MISS. Must run the instrumented pass exactly once and say so.
 	var out1, err1 bytes.Buffer
 	runCertifyRepo(selCacheArgs(root, base, goals, dsn), &out1, &err1)
-	if err1.Len() != 0 {
+	if stripModelsDisclosure(err1.String()) != "" {
 		t.Fatalf("scan 1: stderr must be empty, got %q", err1.String())
 	}
 	if calls != 1 {
@@ -110,7 +110,7 @@ func TestSelectionCacheReusesIdenticalTree(t *testing.T) {
 	// scan).
 	var out2, err2 bytes.Buffer
 	runCertifyRepo(selCacheArgs(root, base, goals, dsn), &out2, &err2)
-	if err2.Len() != 0 {
+	if stripModelsDisclosure(err2.String()) != "" {
 		t.Fatalf("scan 2: stderr must be empty, got %q", err2.String())
 	}
 	if calls != 1 {
@@ -138,7 +138,7 @@ func TestSelectionCacheReusesIdenticalTree(t *testing.T) {
 	}
 	var out3, err3 bytes.Buffer
 	runCertifyRepo(selCacheArgs(root, base, goals, dsn), &out3, &err3)
-	if err3.Len() != 0 {
+	if stripModelsDisclosure(err3.String()) != "" {
 		t.Fatalf("scan 3: stderr must be empty, got %q", err3.String())
 	}
 	if calls != 2 {
@@ -172,7 +172,7 @@ func TestNoSelectionCacheFlagRunsEveryTime(t *testing.T) {
 	var out2, err2 bytes.Buffer
 	runCertifyRepo(args, &out2, &err2)
 
-	if err1.Len() != 0 || err2.Len() != 0 {
+	if stripModelsDisclosure(err1.String()) != "" || stripModelsDisclosure(err2.String()) != "" {
 		t.Fatalf("stderr must be empty: %q / %q", err1.String(), err2.String())
 	}
 	if calls != 2 {
@@ -211,7 +211,7 @@ func TestSelectionCacheNeverPutsOnAFailedRun(t *testing.T) {
 
 	var out1, err1 bytes.Buffer
 	runCertifyRepo(selCacheArgs(root, base, goals, dsn), &out1, &err1)
-	if err1.Len() != 0 {
+	if stripModelsDisclosure(err1.String()) != "" {
 		t.Fatalf("scan 1: stderr must be empty, got %q", err1.String())
 	}
 	if calls != 1 {
@@ -236,7 +236,7 @@ func TestSelectionCacheNeverPutsOnAFailedRun(t *testing.T) {
 	// though it were a hit for zero cost.
 	var out2, err2 bytes.Buffer
 	runCertifyRepo(selCacheArgs(root, base, goals, dsn), &out2, &err2)
-	if err2.Len() != 0 {
+	if stripModelsDisclosure(err2.String()) != "" {
 		t.Fatalf("scan 2: stderr must be empty, got %q", err2.String())
 	}
 	if calls != 2 {

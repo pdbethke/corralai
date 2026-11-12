@@ -263,7 +263,7 @@ func reuseFixtureScanOpt(t *testing.T, root, dsn string, deriver reposcan.Derive
 			t.Fatalf("SelectionCachePut: %v", perr)
 		}
 	}
-	if errb.Len() != 0 {
+	if stripModelsDisclosure(errb.String()) != "" {
 		t.Fatalf("stderr must be empty: %q", errb.String())
 	}
 

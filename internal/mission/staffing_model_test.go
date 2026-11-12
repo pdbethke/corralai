@@ -139,16 +139,106 @@ func TestStaffSetsTheBackendItFoundTheModelIn(t *testing.T) {
 
 	llm := &fakeLLM{response: `{"role_assignments":{
 		"security-breaker":"gpt-oss:20b",
-		"correctness-reviewer":"gpt-4o"}}`}
+		"correctness-reviewer":"anthropic/claude-x",
+		"edge-hunter":"gpt-4o"}}`}
 	policy := rolemodel.New()
-	mgr := &StaffingManager{LLM: llm, Perf: &fakePerf{}, RoleModels: policy}
+	mgr := &StaffingManager{LLM: llm, Perf: &fakePerf{}, RoleModels: policy,
+		Declared: []rolemodel.ModelRef{{Backend: "anthropic", Model: "claude-x"}}}
 	if err := mgr.Staff("d"); err != nil {
 		t.Fatalf("Staff: %v", err)
 	}
 	if ref, ok := policy.Lookup("security-breaker"); !ok || ref != (rolemodel.ModelRef{Backend: "ollama", Model: "gpt-oss:20b"}) {
 		t.Errorf("security-breaker = %+v (ok=%v), want the ollama daemon that listed it", ref, ok)
 	}
-	if ref, ok := policy.Lookup("correctness-reviewer"); ok {
-		t.Errorf("correctness-reviewer staffed as %+v from an undeclared name", ref)
+	if ref, ok := policy.Lookup("correctness-reviewer"); !ok || ref != (rolemodel.ModelRef{Backend: "anthropic", Model: "claude-x"}) {
+		t.Errorf("correctness-reviewer = %+v (ok=%v), want the declared anthropic ref", ref, ok)
+	}
+	if ref, ok := policy.Lookup("edge-hunter"); ok {
+		t.Errorf("edge-hunter staffed as %+v from an undeclared name", ref)
+	}
+}
+
+// A pass whose required roles end up empty is a failure, not a success that
+// applied nothing (it used to return nil).
+func TestStaffFailsWhenARequiredRoleIsLeftEmpty(t *testing.T) {
+	llm := &fakeLLM{response: `{"role_assignments":{"security-breaker":"m","correctness-reviewer":"gpt-4o"}}`}
+	policy := rolemodel.New()
+	mgr := &StaffingManager{LLM: llm, Perf: &fakePerf{}, RoleModels: policy,
+		Declared: []rolemodel.ModelRef{{Backend: "ollama", Model: "m"}}}
+	t.Setenv("OLLAMA_URL", "")
+	err := mgr.Staff("d")
+	if err == nil || !strings.Contains(err.Error(), "correctness-reviewer") {
+		t.Fatalf("Staff = %v, want a failure naming correctness-reviewer", err)
+	}
+	if policy.Len() != 0 {
+		t.Fatalf("a failed pass applied %v", policy.Snapshot())
+	}
+}
+
+func TestEstimateVRAMReadsTheSizeOrSaysUnknown(t *testing.T) {
+	cases := []struct {
+		tag   string
+		gb    float64
+		known bool
+	}{
+		{"qwen2.5-coder:7b", 4.9, true},
+		{"gpt-oss:20b", 14, true}, // the old suffix list had no 20b and costed it as 7b
+		{"qwen3.6:35b-a3b", 24.5, true},
+		{"qwen2.5:1.5b", 1.05, true},
+		{"llama3.2:3b", 2.1, true},
+		{"mistral:latest", 0, false}, // used to be assumed 7B
+		{"claude-x", 0, false},
+	}
+	for _, c := range cases {
+		gb, known := estimateVRAM(c.tag)
+		if known != c.known || (known && (gb < c.gb-0.01 || gb > c.gb+0.01)) {
+			t.Errorf("estimateVRAM(%q) = %.2f,%v; want %.2f,%v", c.tag, gb, known, c.gb, c.known)
+		}
+	}
+}
+
+func TestClampDoesNotConsolidateOnAnUnknownSize(t *testing.T) {
+	res := WorkstationResources{GPUVRAMGB: 8, PulledModels: []string{"qwen2.5-coder:7b", "mistral:latest", "qwen2.5-coder:14b"}}
+	got := (&StaffingManager{}).Clamp(map[string]string{
+		"security-breaker": "qwen2.5-coder:14b", "correctness-reviewer": "mistral:latest", "edge-hunter": "qwen2.5-coder:7b",
+	}, res)
+	if got["security-breaker"].Model != "qwen2.5-coder:14b" || got["correctness-reviewer"].Model != "mistral:latest" {
+		t.Fatalf("Clamp consolidated on a size it could not read: %+v", got)
+	}
+}
+
+func TestClampLeavesADeclaredOllamaRefOnItsDeclaredServer(t *testing.T) {
+	declared := rolemodel.ModelRef{Backend: "ollama", Model: "big:70b"}
+	res := WorkstationResources{GPUVRAMGB: 8, PulledModels: []string{"qwen2.5-coder:7b", "qwen2.5-coder:14b"},
+		DeclaredModels: []rolemodel.ModelRef{declared}}
+	got := (&StaffingManager{}).Clamp(map[string]string{
+		"security-breaker": "qwen2.5-coder:14b", "correctness-reviewer": "qwen2.5-coder:7b", "edge-hunter": "ollama/big:70b",
+	}, res)
+	if got["edge-hunter"] != declared {
+		t.Errorf("declared ref rewritten to %+v", got["edge-hunter"])
+	}
+	if got["security-breaker"].Model != "qwen2.5-coder:7b" {
+		t.Errorf("listed 14b+7b over 8 GB not consolidated: %+v", got)
+	}
+}
+
+func TestCandidateCollisionIsNoCandidate(t *testing.T) {
+	res := WorkstationResources{PulledModels: []string{"anthropic/x"}, DeclaredModels: []rolemodel.ModelRef{{Backend: "anthropic", Model: "x"}}}
+	if _, ok := candidateRefs(res)["anthropic/x"]; ok {
+		t.Fatal("a name that is both a listed local tag and a declared key was kept as a candidate")
+	}
+}
+
+func TestStatsByCandidateCreditsTheDeclaredKey(t *testing.T) {
+	res := WorkstationResources{
+		PulledModels:   []string{"qwen2.5-coder:7b"},
+		DeclaredModels: []rolemodel.ModelRef{{Backend: "anthropic", Model: "claude-x"}, {Backend: "openai", Model: "dup"}, {Backend: "google", Model: "dup"}},
+	}
+	got := statsByCandidate([]ModelStats{{Model: "claude-x"}, {Model: "qwen2.5-coder:7b"}, {Model: "dup"}}, res)
+	want := []string{"anthropic/claude-x", "qwen2.5-coder:7b", "dup"}
+	for i, w := range want {
+		if got[i].Model != w {
+			t.Errorf("row %d = %q, want %q", i, got[i].Model, w)
+		}
 	}
 }

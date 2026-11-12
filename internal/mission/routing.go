@@ -10,8 +10,10 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -125,6 +127,11 @@ func (s *StaffingManager) staffOnce(directive string) (err error) {
 		return jErr
 	}
 	clamped := s.Clamp(assignments, resources)
+	// A pass that leaves a required role empty did not staff the mission, and
+	// is reported as a failure rather than a success with nothing applied.
+	if missing := unstaffedRequired(clamped); len(missing) > 0 {
+		return fmt.Errorf("staffing: the planner left required role(s) %s unstaffed (its proposals were not candidates)", strings.Join(missing, ", "))
+	}
 	log.Printf("staffing complete. Clamped: %+v, Load Order: %v", clamped, loadOrder)
 	for role, ref := range clamped {
 		s.RoleModels.Set(role, ref) // threadsafe: the UI topology and spawn read this same policy
@@ -207,7 +214,7 @@ func (s *StaffingManager) Judge(ctx context.Context, directive string, resources
 	if len(candidates) == 0 {
 		return nil, nil, fmt.Errorf("staffing: no candidate models — set OLLAMA_URL to a daemon that lists models, or declare models with their backend in CORRALAI_ROLE_MODELS (role=backend:model); corral does not name a model for you")
 	}
-	brief := buildLeaderboardBrief(stats, candidates, minConfidentSamples)
+	brief := buildLeaderboardBrief(statsByCandidate(stats, resources), candidates, minConfidentSamples)
 
 	systemPrompt := `You are the Corralai swarm staffing planner. Analyze the directive, workstation hardware resources, available local/cloud models, and historical performance stats. Propose the optimal role-to-model staffing assignment and load order to run an adversarial-verification swarm that BREAKS the change under review in order to CERTIFY it — not one that builds it.
 
@@ -285,7 +292,12 @@ func (s *StaffingManager) Clamp(assignments map[string]string, resources Worksta
 	}
 	sort.Strings(roles)
 
+	listed := map[string]bool{}
+	for _, m := range resources.PulledModels {
+		listed[m] = true
+	}
 	var totalVRAMNeeded float64
+	var unsized []string
 	counted := map[string]bool{}
 	smallestLocal, smallestSize := "", 0.0
 	for _, role := range roles {
@@ -296,10 +308,17 @@ func (s *StaffingManager) Clamp(assignments map[string]string, resources Worksta
 			continue
 		}
 		clamped[role] = ref
-		if ref.Backend != localBackend {
+		// Only a model the OLLAMA_URL daemon LISTED is sized and consolidated:
+		// a declared ollama ref may name another daemon, and swapping it for a
+		// listed model would move the role to a server it was not declared on.
+		if !listed[proposed] {
 			continue
 		}
-		size := estimateVRAM(ref.Model)
+		size, known := estimateVRAM(ref.Model)
+		if !known {
+			unsized = append(unsized, ref.Model)
+			continue
+		}
 		if !counted[ref.Model] {
 			counted[ref.Model] = true
 			totalVRAMNeeded += size
@@ -309,22 +328,64 @@ func (s *StaffingManager) Clamp(assignments map[string]string, resources Worksta
 		}
 	}
 
-	if resources.GPUVRAMGB > 0 && totalVRAMNeeded > resources.GPUVRAMGB && smallestLocal != "" {
+	if len(unsized) > 0 && resources.GPUVRAMGB > 0 {
+		// A size read off nothing would decide which model a role loses; with
+		// any proposed model unsized, the fit is not checked at all.
+		log.Printf("staffing: cannot size %s from its tag, so the VRAM fit is not checked and no role is consolidated", strings.Join(unsized, ", "))
+	} else if resources.GPUVRAMGB > 0 && totalVRAMNeeded > resources.GPUVRAMGB && smallestLocal != "" {
 		log.Printf("staffing: proposed local models need %.1f GB VRAM, exceeding physical %.1f GB. Consolidating all local roles to %s (the smallest the planner proposed).",
 			totalVRAMNeeded, resources.GPUVRAMGB, smallestLocal)
-		for role, ref := range clamped {
-			if ref.Backend == localBackend {
+		for role, proposed := range assignments {
+			if ref, ok := clamped[role]; ok && listed[strings.TrimSpace(proposed)] && ref.Backend == localBackend {
 				clamped[role] = rolemodel.ModelRef{Backend: localBackend, Model: smallestLocal}
 			}
 		}
 	}
 
-	for _, required := range []string{"security-breaker", "correctness-reviewer"} {
-		if _, ok := clamped[required]; !ok {
-			log.Printf("staffing: required role %q is unstaffed — corral does not fill it with a model nobody chose", required)
-		}
+	for _, required := range unstaffedRequired(clamped) {
+		log.Printf("staffing: required role %q is unstaffed — corral does not fill it with a model nobody chose", required)
 	}
 	return clamped
+}
+
+// requiredRoles are the roles every staffing pass must fill.
+var requiredRoles = []string{"security-breaker", "correctness-reviewer"}
+
+// unstaffedRequired lists the required roles clamped leaves empty.
+func unstaffedRequired(clamped map[string]rolemodel.ModelRef) []string {
+	var missing []string
+	for _, r := range requiredRoles {
+		if _, ok := clamped[r]; !ok {
+			missing = append(missing, r)
+		}
+	}
+	return missing
+}
+
+// statsByCandidate renames each leaderboard row to the candidate name the
+// planner is shown. Workers report a bare model name, but a declared model is
+// shown as backend/model, so without this every declared model read as
+// "untested" beside its own evidence. A bare name maps to a declared key only
+// when exactly one declared candidate has that model and the local daemon does
+// not list it; otherwise the row is left as reported (ambiguous evidence is not
+// credited to a guessed candidate).
+func statsByCandidate(stats []ModelStats, res WorkstationResources) []ModelStats {
+	listed := map[string]bool{}
+	for _, m := range res.PulledModels {
+		listed[m] = true
+	}
+	byModel := map[string][]string{}
+	for _, r := range res.DeclaredModels {
+		byModel[r.Model] = append(byModel[r.Model], declaredKey(r))
+	}
+	out := make([]ModelStats, len(stats))
+	for i, st := range stats {
+		out[i] = st
+		if keys := byModel[st.Model]; !listed[st.Model] && len(keys) == 1 {
+			out[i].Model = keys[0]
+		}
+	}
+	return out
 }
 
 // localBackend is the backend of a model the OLLAMA_URL daemon listed: that
@@ -364,14 +425,22 @@ func declaredWithBackend(refs []rolemodel.ModelRef) []rolemodel.ModelRef {
 // backend, and a bare name is matched only against the listing.
 func declaredKey(r rolemodel.ModelRef) string { return r.Backend + "/" + r.Model }
 
-// candidateRefs maps every assignable name to the ref it stands for.
+// candidateRefs maps every assignable name to the ref it stands for. A name
+// that is both a listed local model and a declared backend/model key (an
+// ollama tag can contain a slash) would mean two different servers, so it is
+// not a candidate at all rather than one source silently winning.
 func candidateRefs(res WorkstationResources) map[string]rolemodel.ModelRef {
 	m := map[string]rolemodel.ModelRef{}
 	for _, name := range res.PulledModels {
 		m[name] = rolemodel.ModelRef{Backend: localBackend, Model: name}
 	}
 	for _, r := range res.DeclaredModels {
-		m[declaredKey(r)] = r
+		k := declaredKey(r)
+		if prev, ok := m[k]; ok && prev != r {
+			delete(m, k)
+			continue
+		}
+		m[k] = r
 	}
 	return m
 }
@@ -535,14 +604,23 @@ func cleanJSONResponse(s string) string {
 	return strings.TrimSpace(s)
 }
 
-func estimateVRAM(model string) float64 {
-	m := strings.ToLower(model)
-	var size float64 = 7.0
-	for _, suffix := range []string{"70b", "32b", "14b", "8b", "7b", "3b", "1.5b"} {
-		if strings.Contains(m, suffix) {
-			_, _ = fmt.Sscanf(suffix, "%fb", &size)
-			break
-		}
+// paramSize finds a parameter-count token in a model tag — "7b", "20b",
+// "1.5b" — standing on its own (so the "a3b" in qwen3.6:35b-a3b, an active-
+// parameter count, is not read as the size).
+var paramSize = regexp.MustCompile(`(?:^|[^a-z0-9.])(\d+(?:\.\d+)?)b(?:$|[^a-z0-9])`)
+
+// estimateVRAM estimates a local model's VRAM in GB as 0.7 GB per billion
+// parameters, read from its tag. known is false when the tag names no size:
+// it used to assume 7B, so an unsized 20B model was costed at 4.9 GB and the
+// consolidation that followed acted on a number nobody measured.
+func estimateVRAM(model string) (gb float64, known bool) {
+	m := paramSize.FindStringSubmatch(strings.ToLower(model))
+	if m == nil {
+		return 0, false
 	}
-	return size * 0.7
+	size, err := strconv.ParseFloat(m[1], 64)
+	if err != nil || size <= 0 {
+		return 0, false
+	}
+	return size * 0.7, true
 }

@@ -641,6 +641,7 @@ func Run(version string) {
 		},
 		LLM:        &llmAdapter{client: narrator},
 		RoleModels: roleModels,
+		Declared:   mission.DeclaredFrom(roleModels),
 	}
 
 	// The completion gate certifies gated tasks by RUNNING the verify command in a

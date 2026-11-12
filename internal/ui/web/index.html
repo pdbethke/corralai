@@ -2337,19 +2337,11 @@ function loadComposeOptions() {
     renderLaunchTab(true); // re-render the composer with the pickers populated
   }).catch(() => {});
 }
-// agentBackend: local_agents is a bare []string of names with no backend
-// field in the topology, so we derive the backend from the name via a
-// small heuristic; anything unrecognized (including real local models)
-// defaults to ollama.
-function agentBackend(name) {
-  const n = (name || '').toLowerCase();
-  if (n.includes('claude')) return 'anthropic';
-  if (n.includes('gemini')) return 'google';
-  if (n.includes('codex') || n.includes('gpt')) return 'openai';
-  if (n.includes('copilot')) return 'github';
-  if (n.includes('aider')) return 'ollama';
-  return 'ollama';
-}
+// No backend is ever worked out from a name. local_agents carries names only,
+// so a dragged agent has no backend ('' = not declared); a staffing proposal
+// carries the backend of the source the server found the model in. (This used
+// to be a helper that read "claude"/"gpt"/"gemini" off the spelling and
+// called everything else ollama — the vendor guess the CLI refuses.)
 function mcAllowDrop(ev) {
   ev.preventDefault();
   ev.currentTarget.classList.add('dragover');
@@ -2359,18 +2351,18 @@ function mcDragLeave(ev) {
 }
 function mcDrag(ev) {
   ev.dataTransfer.setData("text/plain", ev.target.dataset.agent);
-  ev.dataTransfer.setData("application/x-backend", ev.target.dataset.backend || agentBackend(ev.target.dataset.agent));
+  ev.dataTransfer.setData("application/x-backend", ev.target.dataset.backend || '');
 }
 function mcDrop(ev) {
   ev.preventDefault();
   ev.currentTarget.classList.remove('dragover');
   const agent = ev.dataTransfer.getData("text/plain");
-  const backend = ev.dataTransfer.getData("application/x-backend") || agentBackend(agent);
+  const backend = ev.dataTransfer.getData("application/x-backend") || '';
   const role = ev.currentTarget.dataset.role;
   mcAssign(role, agent, backend);
 }
 function mcAssign(role, agent, backend) {
-  mcAssignments[role] = {agent, backend: backend || agentBackend(agent)};
+  mcAssignments[role] = {agent, backend: backend || ''};
   const el = document.getElementById(`mc-assigned-${role}`);
   if(el){
     el.textContent = agent;
@@ -2385,15 +2377,13 @@ function getLocalAgents() {
       h.local_agents.forEach(la => agents.add(la));
     }
   });
-  if (agents.size === 0) {
-    return ["claude", "aider", "copilot", "ollama"];
-  }
+  // No stand-in list: with no agent reported, the pool is empty.
   return [...agents].sort();
 }
 function renderComposer() {
   const agents = getLocalAgents();
   const agentPoolHtml = agents.map(a => `
-    <span class="drag-agent" draggable="true" ondragstart="mcDrag(event)" data-agent="${esc(a)}" data-backend="${esc(agentBackend(a))}">${esc(a)}</span>
+    <span class="drag-agent" draggable="true" ondragstart="mcDrag(event)" data-agent="${esc(a)}" data-backend="">${esc(a)}</span>
   `).join('');
 
   const roles = ['tester', 'reviewer', 'pentester', 'writer'];
@@ -2497,7 +2487,7 @@ function submitMission() {
   const roleModels = {};
   for (const [r, a] of Object.entries(mcAssignments)) {
     if (a && a.agent) {
-      roleModels[r] = {backend: a.backend || 'ollama', model: a.agent};
+      roleModels[r] = {backend: a.backend || '', model: a.agent};
     }
   }
   const mcpEndpoints = [...document.querySelectorAll('.mc-endpoint:checked')].map(c => c.value);
@@ -2582,8 +2572,8 @@ function letCorralChoose() {
     btn.disabled = false;
     if (d.ok && d.assignments) {
       mcAssignments = {};
-      for (const [role, agent] of Object.entries(d.assignments)) {
-        mcAssign(role, agent);
+      for (const [role, ref] of Object.entries(d.assignments)) {
+        mcAssign(role, ref.model, ref.backend);
       }
     } else {
       alert('Corral could not automatically staff: ' + (d.error || 'unknown error'));

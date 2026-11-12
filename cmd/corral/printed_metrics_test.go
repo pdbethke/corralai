@@ -698,6 +698,7 @@ var printedMetrics = map[string]printedRow{
 	"internal/mission/engine.go:progressFingerprint":                     {Exempt: "stall-detection fingerprint compared from tick to tick, never shown"},
 	"internal/mission/routing.go:Judge":                                  {Exempt: "brain staffing prompt: host cores, RAM and VRAM offered to a routing model; the brain's mission record, not a scan"},
 	"internal/mission/routing.go:Staff":                                  {Exempt: "error message: the numbers are limits, ids, exit codes, offsets and counts inside a failure text, not an audit measurement"},
+	"internal/mission/routing.go:ramLine":                                {Exempt: "brain staffing prompt: the host's RAM size offered to a routing model (or \"unknown\"); the brain's mission record, not a scan"},
 	"internal/mission/routing.go:buildLeaderboardBrief":                  {Exempt: "brain staffing prompt: a model's task counts and pass rate from the brain's leaderboard, not a scan"},
 	"internal/mission/routing.go:staffOnce":                              {Exempt: "error message: builds failure text from causes, ids and paths via %v; no measured number"},
 	"internal/mission/store.go:CancelMission":                            {Exempt: "error message: the numbers are limits, ids, exit codes, offsets and counts inside a failure text, not an audit measurement"},

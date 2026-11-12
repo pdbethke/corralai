@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -53,9 +54,17 @@ var listOllama = modelcatalog.ListOllama
 // errNoSource is the refusal for a bare model name that no declared source
 // serves. A distinct type so the transitional resolveSeatRegistry adapter can
 // tell it from a real configuration error.
-type errNoSource struct{ flag, value string }
+// placeable is set where the command takes --local-endpoint, the fourth way to
+// declare a source; elsewhere the refusal must not offer a flag that is absent.
+type errNoSource struct {
+	flag, value string
+	placeable   bool
+}
 
 func (e errNoSource) Error() string {
+	if e.placeable {
+		return fmt.Sprintf("--%s %q: no declared source serves this model — declare it in .corral/models.json, set OLLAMA_URL to the daemon that serves it, pin MODEL_BACKEND, or place the seat with --local-endpoint", e.flag, e.value)
+	}
 	return fmt.Sprintf("--%s %q: no declared source serves this model — declare it in .corral/models.json, set OLLAMA_URL to the daemon that serves it, or pin MODEL_BACKEND", e.flag, e.value)
 }
 
@@ -89,7 +98,13 @@ func resolveSeats(ctx context.Context, cmdName, repoRoot string, seats []seatFla
 // folded in BEFORE the disclosure prints, so the lines show where each seat
 // will really talk.
 func resolveSeatsPlaced(ctx context.Context, cmdName, repoRoot string, seats []seatFlag, placed map[string]string, stderr io.Writer) (seatSet, error) {
-	return resolveSeatsOpt(ctx, cmdName, repoRoot, seats, placed, stderr, false)
+	set, err := resolveSeatsOpt(ctx, cmdName, repoRoot, seats, placed, stderr, false)
+	var ns errNoSource
+	if errors.As(err, &ns) {
+		ns.placeable = true
+		return nil, ns
+	}
+	return set, err
 }
 
 // resolveSeatsOpt is resolveSeats with the adapter's one concession:
@@ -261,14 +276,10 @@ func pinnedGateway(rs agentbackend.ResolvedSeat) (agentbackend.ResolvedSeat, boo
 		rs.Provider, rs.Wire, rs.Endpoint = "ollama", models.WireOllama, u
 		return rs, true, nil
 	case "openrouter":
-		// OpenRouter's own variable first, then OPENAI_API_KEY: the documented
-		// fallback for operators who configured the gateway that way, and what
-		// FromEnv's openrouter arm has always read. With neither set the
-		// refusal names OpenRouter's.
+		// OpenRouter's own variable and nothing else. FromEnv's openrouter arm
+		// fell back to OPENAI_API_KEY, which with only an OpenAI key set sent
+		// that OpenAI secret to openrouter.ai. Unset, Build refuses naming it.
 		rs.Provider, rs.Wire, rs.KeyEnv = "openrouter", models.WireHosted, "OPENROUTER_API_KEY"
-		if agentbackend.Secret("OPENROUTER_API_KEY") == "" && agentbackend.Secret("OPENAI_API_KEY") != "" {
-			rs.KeyEnv = "OPENAI_API_KEY"
-		}
 		rs.Endpoint = firstSet(os.Getenv("OPENROUTER_BASE_URL"), os.Getenv("OPENAI_BASE_URL"), "https://openrouter.ai/api/v1")
 		return rs, true, nil
 	case "openai":

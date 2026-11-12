@@ -381,7 +381,8 @@ func TestResolveAuditRolesDerivesBackendFromAssignedModels(t *testing.T) {
 	// backend from model names would silently overrule that.
 	t.Run("an explicit MODEL_BACKEND is never overruled", func(t *testing.T) {
 		t.Setenv("MODEL_BACKEND", "openrouter")
-		t.Setenv("OPENAI_API_KEY", "oa-test")
+		t.Setenv("OPENROUTER_API_KEY", "or-test")
+		t.Setenv("OPENAI_API_KEY", "")
 		t.Setenv("ANTHROPIC_API_KEY", "")
 		t.Setenv("GEMINI_API_KEY", "")
 
@@ -456,7 +457,7 @@ func TestUnpinnedMixedVendorRunRoutesEverySeatByName(t *testing.T) {
 func TestPinnedGatewayIsNeverReRoutedBehindTheOperator(t *testing.T) {
 	t.Setenv("MODEL_BACKEND", "openrouter")
 	t.Setenv("ANTHROPIC_API_KEY", "")
-	t.Setenv("OPENAI_API_KEY", "test-openrouter-key")
+	t.Setenv("OPENROUTER_API_KEY", "test-openrouter-key")
 
 	chatterFor, err := localChatterFor(seatsForAssign(t, advpool.RoleAssignment{
 		advpool.RoleMutantGenerator: "claude-sonnet-5",

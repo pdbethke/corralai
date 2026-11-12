@@ -231,3 +231,39 @@ func TestResolvePinnedOpenAIIsGatewayOnlyWithBaseURL(t *testing.T) {
 		t.Errorf("with OPENAI_BASE_URL: %+v, want the openai gateway at the proxy", rs)
 	}
 }
+
+// A pinned openrouter gateway reads OpenRouter's key and nothing else.
+// Substituting OPENAI_API_KEY would send an OpenAI secret to openrouter.ai.
+func TestPinnedOpenRouterNeverSendsTheOpenAIKey(t *testing.T) {
+	clearSeatEnv(t)
+	t.Setenv("MODEL_BACKEND", "openrouter")
+	t.Setenv("OPENROUTER_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "sk-openai-secret")
+	s := &seatPtrs{writer: "claude-sonnet-5"}
+	set, err := resolveSeats(context.Background(), "test", t.TempDir(), s.flags(), nil)
+	if err != nil {
+		t.Fatalf("resolveSeats: %v", err)
+	}
+	rs, _ := set.byRole(advpool.RoleTestWriter)
+	if rs.KeyEnv != "OPENROUTER_API_KEY" {
+		t.Fatalf("KeyEnv = %q, want OPENROUTER_API_KEY only", rs.KeyEnv)
+	}
+	if _, err := agentbackend.Build(rs, agentbackend.SeatOptions{}); err == nil || !strings.Contains(err.Error(), "OPENROUTER_API_KEY") {
+		t.Errorf("Build with only OPENAI_API_KEY set: err = %v, want a refusal naming OPENROUTER_API_KEY", err)
+	}
+}
+
+// Where the command takes --local-endpoint, the no-source refusal names it as
+// the fourth way to declare where a bare local name runs.
+func TestNoSourceRefusalNamesLocalEndpointWhereItExists(t *testing.T) {
+	clearSeatEnv(t)
+	s := &seatPtrs{writer: "qwen3.6:35b-a3b"}
+	_, err := resolveSeatsPlaced(context.Background(), "test", t.TempDir(), s.flags(), nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "--local-endpoint") {
+		t.Errorf("certify-style refusal = %v, want it to name --local-endpoint", err)
+	}
+	_, err = resolveSeats(context.Background(), "test", t.TempDir(), s.flags(), nil)
+	if err == nil || strings.Contains(err.Error(), "--local-endpoint") {
+		t.Errorf("refusal for a command without --local-endpoint = %v, must not offer it", err)
+	}
+}

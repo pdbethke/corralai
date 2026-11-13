@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -87,14 +88,13 @@ func TestRepoSync(t *testing.T) {
 
 	ctx := context.Background()
 	clientT, serverT := mcp.NewInMemoryTransports()
-	go func() {
-		_ = NewServer(cstore, nil, Options{
-			Queue:     q,
-			Missions:  mstore,
-			Repo:      eng,
-			Workspace: ws,
-		}).Run(ctx, serverT)
-	}()
+	srv := NewServer(cstore, nil, Options{
+		Queue:     q,
+		Missions:  mstore,
+		Repo:      eng,
+		Workspace: ws,
+	})
+	go func() { _ = srv.Run(ctx, serverT) }()
 
 	client := mcp.NewClient(&mcp.Implementation{Name: "bee", Version: "0"}, nil)
 	sess, err := client.Connect(ctx, clientT, nil)
@@ -230,8 +230,20 @@ func TestRepoSync(t *testing.T) {
 	}
 
 	// --- Assertion 5: repo_push payload > 64 MiB → tool error, not applied ---
+	// Sent over HTTP through the handler the daemon mounts, as a worker sends
+	// it. The in-memory transport stops reading at a 16 MiB line (go-sdk
+	// v1.8.0), so a 65 MiB call there dies in the transport and never tests
+	// the tool's own cap.
+	ts := httptest.NewServer(NewHTTPHandler(srv))
+	defer ts.Close()
+	httpSess, err := mcp.NewClient(&mcp.Implementation{Name: "bee", Version: "0"}, nil).
+		Connect(ctx, &mcp.StreamableClientTransport{Endpoint: ts.URL}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer httpSess.Close()
 	big := strings.Repeat("a", 65<<20) // 65 MiB, over the 64 MiB cap
-	res5, err := sess.CallTool(ctx, &mcp.CallToolParams{
+	res5, err := httpSess.CallTool(ctx, &mcp.CallToolParams{
 		Name: "repo_push",
 		Arguments: map[string]any{
 			"name":     "Ada",

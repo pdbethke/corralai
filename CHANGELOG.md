@@ -36,6 +36,7 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ### Changed
 
+- **The daemon now limits an MCP request body to 129 MiB, sized from its own tool caps.** go-sdk v1.8.0 (taken in this release) refuses any Streamable HTTP request over 4 MiB unless the server sets a limit, which would have made the brain answer a legitimate `repo_push` of 4 to 64 MiB with a bare 413. `brain.NewHTTPHandler` now sets the limit to twice `repo_push`'s 64 MiB cap plus 1 MiB for the JSON envelope, so `repo_push` and `save_task_artifact` refuse oversize input themselves, with their own messages. Before go-sdk v1.8.0 the transport had no limit at all.
 - **The README and the front page no longer carry a hand-kept proof table or audit list.** They point at the Languages page. The old rows were runs made before the record restarted on 2026-11-09 and are kept in the `ledger-archive/2026-11-09` tag.
 
 ### Fixed

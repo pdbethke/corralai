@@ -1342,15 +1342,16 @@ func (s *Server) proposeStaffing(w http.ResponseWriter, r *http.Request) {
 		footprint = 3
 	}
 
+	// No planner, no proposal. This used to answer with four hard-coded local
+	// models (qwen2.5-coder:7b, llama3.2:3b) as if they had been chosen —
+	// corral naming models nobody picked, served from wherever they happened
+	// to be.
 	if s.staffing == nil || s.staffing.LLM == nil || !s.staffing.LLM.Available() {
-		writeJSON(w, map[string]any{
-			"ok": true,
-			"assignments": map[string]string{
-				"security-breaker":     "qwen2.5-coder:7b",
-				"correctness-reviewer": "qwen2.5-coder:7b",
-				"exploit-attempter":    "qwen2.5-coder:7b",
-				"edge-hunter":          "llama3.2:3b",
-			},
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok":    false,
+			"error": "no staffing planner is configured (the daemon's LLM is not available) — assign each role's model by hand",
 		})
 		return
 	}
@@ -1363,10 +1364,17 @@ func (s *Server) proposeStaffing(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Each assignment carries the backend of the source it was found in
+	// (the OLLAMA_URL listing, or the operator's declaration), so the page
+	// never has to work a backend out from a model's name.
 	clamped := s.staffing.Clamp(assignments, resources)
+	out := make(map[string]map[string]string, len(clamped))
+	for role, ref := range clamped {
+		out[role] = map[string]string{"backend": ref.Backend, "model": ref.Model}
+	}
 	writeJSON(w, map[string]any{
 		"ok":          true,
-		"assignments": clamped,
+		"assignments": out,
 	})
 }
 

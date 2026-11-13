@@ -16,7 +16,7 @@
     "test:e2e": "npm run build && npx playwright test"
   },
   "dependencies": {
-    "@astrojs/mdx": "7.0.2",
+    "@astrojs/mdx": "8.1.0",
     "@astrojs/sitemap": "3.7.3",
     "@duckdb/duckdb-wasm": "^1.33.1-dev57.0",
     "astro": "7.3.3",

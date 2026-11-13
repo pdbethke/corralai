@@ -60,6 +60,7 @@ const (
 	noteModelOpinion   = "a model's opinion: advisory, signed but not verified as true"
 	notePerson         = "declared by the person who wrote it: their words, not verified as true"
 	noteAdjudicator    = "declared by the person who adjudicated"
+	noteSeatProvider   = "the provider corral resolved and sent the seat's calls to; not a check of what served the model behind that endpoint, and for an agent seat a vendor label"
 )
 
 var fieldTiers = buildFieldTiers()
@@ -139,6 +140,17 @@ func buildFieldTiers() map[[2]string]FieldTier {
 		MaxProvenMissed MinKillRate MutantBudget MutantBudgetRule ModelsByRole SeatTools PromptShape WriterMode MutantsFrom
 		PriorsApplied CacheHit PreflightState SharedDirs ComputedAt StartedAt
 		MutantsUnplaced MutantsUnmeasured MutantsDuplicate WriterAttempts`)
+	// SeatProviders is the provider corral itself resolved for each seat and
+	// sent that seat's calls to: a setting it set, in the same tier as the
+	// models and tools beside it. MEASURED here means "what corral routed
+	// to", not a check of what answered: an OpenAI-compatible gateway or a
+	// daemon may serve anything behind its endpoint, and an agent seat's
+	// value is a vendor label (the CLI routes its own calls). The note says
+	// so, because the name invites reading it as more. Not DECLARED: the
+	// operator named the seat, but the label is corral's resolution of that
+	// declaration, exactly as ModelsByRole is corral's record of the named
+	// model; and not META: it is not the run's narrative about itself.
+	add("Row", TierMeasured, noteSeatProvider, "SeatProviders")
 	add("Row", TierMeta, noteRunAccount, "ConcurrencyNote Detail Reason")
 	add("Row", TierMeta, "carries the run's full verdict document, critic opinion included: signed, but not verified as true", "VerdictJSON")
 	add("Row", TierMeta, noteModelOpinion, "VacuousFindings")
@@ -182,6 +194,8 @@ func buildFieldTiers() map[[2]string]FieldTier {
 	add("Review", TierDeclared, noteDeclaredCommit, "Author Committer CoAuthors GeneratedWith")
 	add("Review", TierMeasured, "", "Scope BytesShown Calls Coverage FilesShown Lang StartedAt Substrate Truncated ReviewerModel ReviewerModelResolved ReviewerTool VerifierModel VerifierModelResolved VerifierTool InputTokens OutputTokens UnmeteredCalls")
 	add("Review", TierMeta, noteModelOpinion, "Opinion Sound VerifierNote VerifierOpinion")
+	// The same tier and note as Row.SeatProviders, for the same reason.
+	add("Review", TierMeasured, noteSeatProvider, "SeatProviders")
 	add("Finding", TierKey, "", "ID")
 	add("Finding", TierMeasured, "", "Demoted ExitCode Script Stdout Tier Unrun")
 	add("Finding", TierMeta, noteModelOpinion, "Claim Declared File Line Severity")

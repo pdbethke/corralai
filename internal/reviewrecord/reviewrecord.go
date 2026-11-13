@@ -74,6 +74,16 @@ type Review struct {
 	// a row in models rank is a tool AND a version AND a model.
 	ReviewerTool string `json:"reviewer_tool,omitempty"`
 	VerifierTool string `json:"verifier_tool,omitempty"`
+	// SeatProviders is the provider each seat's model was served from, as
+	// the seat resolver decided it, keyed "reviewer" and "verifier"
+	// (modelrank.SeatReviewer / SeatVerifier) — the same field, under the
+	// same name, as a certify verdict's and ledger row's. The model fields
+	// hold the bare model, so openai/x and anthropic/x were one reviewer
+	// on the record. The verifier's entry is set only where VerifierModel
+	// is, beside the model it describes. Absent on an entry written before
+	// the field existed, and for a seat with no resolved provider: not
+	// recorded, never inferred from a model's name.
+	SeatProviders map[string]string `json:"seat_providers,omitempty"`
 	// ReviewerModelResolved / VerifierModelResolved report whether the model
 	// field beside them names an actual MODEL, or merely the tool that ran
 	// one. An agentic seat given without a pin ("claude-code", "antigravity")

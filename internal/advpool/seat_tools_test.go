@@ -14,7 +14,8 @@ func TestSignedSeatsCarryTheToolsOfTheSeatsTheyName(t *testing.T) {
 		RoleTestCritic:            "",
 	}}}
 	assign := RoleAssignment{RoleTestWriter: "codex", RoleMutantGenerator: "gpt-6", RoleMutantGeneratorShadow: "codex", RoleTestCritic: "claude-sonnet-5"}
-	roster, _, tools := run.signedSeats(assign)
+	seated := run.signedSeats(assign)
+	roster, tools := seated.roster, seated.tools
 	if _, ok := roster[RoleMutantGeneratorShadow]; ok {
 		t.Fatal("an undispatched challenger is not in the roster")
 	}

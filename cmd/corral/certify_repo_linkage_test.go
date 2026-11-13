@@ -127,7 +127,7 @@ func TestPushedRowsCarryTheStatementSHA(t *testing.T) {
 	// a fixture that pre-stamped the rows could not fail no matter what
 	// stampLink did.
 	bundle := oneAuditedFileBundle(0)
-	sha, _, err := writeAuditStatement(att, dir, rep, map[string]string{"writer": "m"}, nil, nil, true, 7, bundle)
+	sha, _, err := writeAuditStatement(att, dir, rep, map[string]string{"writer": "m"}, nil, nil, nil, true, 7, bundle)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +169,7 @@ func TestWriteAuditStatementHonestlyRecordsScanIDZero(t *testing.T) {
 	att := filepath.Join(dir, "att.json")
 	rep := oneAuditedFileReport()
 
-	if _, _, err := writeAuditStatement(att, dir, rep, map[string]string{"writer": "m"}, nil, nil, true, 0, oneAuditedFileBundle(0)); err != nil {
+	if _, _, err := writeAuditStatement(att, dir, rep, map[string]string{"writer": "m"}, nil, nil, nil, true, 0, oneAuditedFileBundle(0)); err != nil {
 		t.Fatal(err)
 	}
 	stmt := readStatement(t, att)

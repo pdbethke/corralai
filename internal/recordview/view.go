@@ -21,6 +21,7 @@ import (
 	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/ledger"
+	"github.com/pdbethke/corralai/internal/modelrank"
 	"github.com/pdbethke/corralai/internal/review"
 )
 
@@ -376,12 +377,12 @@ func Build(entries []auditpush.LedgerEntry, checks []auditpush.ChainCheck) Site 
 		if ev.Decorrelated {
 			v.CrossModel++
 		}
-		ev.ReviewerVendor = vendorOfSeat(r.ReviewerModel)
+		ev.ReviewerVendor = reviewSeatVendor(r, modelrank.SeatReviewer, r.ReviewerModel)
 		if ev.ReviewerVendor != "" {
 			vendors[ev.ReviewerVendor] = true
 		}
 		if ev.HasVerifier {
-			ev.VerifierVendor = vendorOfSeat(r.VerifierModel)
+			ev.VerifierVendor = reviewSeatVendor(r, modelrank.SeatVerifier, r.VerifierModel)
 			if ev.VerifierVendor != "" {
 				vendors[ev.VerifierVendor] = true
 			}
@@ -474,9 +475,25 @@ func isHex(s string) bool {
 	return true
 }
 
+// reviewSeatVendor is the vendor a review's seat is labelled with: the
+// provider the entry RECORDED for that seat (Review.SeatProviders) when it
+// has one, and the name-based label (vendorOfSeat) only for an entry that
+// recorded none — every entry written before the field existed, and a seat
+// whose provider was never resolved. The recorded value is where the seat's
+// calls went, so a model on a local daemon is labelled with the daemon
+// (ollama), not with the lineage its name suggests: it no longer overstates a
+// gpt-oss reviewer as openai, and it does not claim to know a local model's
+// lineage either.
+func reviewSeatVendor(r *review.Review, seat, model string) string {
+	if p := strings.TrimSpace(r.SeatProviders[seat]); p != "" {
+		return p
+	}
+	return vendorOfSeat(model)
+}
+
 // vendorOfSeat is a LABEL read off a recorded seat's name, or "" when the
-// name matches nothing. It is used because the ledger records no provider for
-// a seat, so the name is all a renderer has. It can be wrong in BOTH
+// name matches nothing. It is used for an entry that recorded no provider for
+// a seat (reviewSeatVendor), where the name is all a renderer has. It can be wrong in BOTH
 // directions: a local model whose name looks hosted (a gpt-oss reviewer run on
 // ollama) is labelled openai, which can overstate the cross-vendor count, and
 // a hosted model under an unrecognised name is left out, which understates it.

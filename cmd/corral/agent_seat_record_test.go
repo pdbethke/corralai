@@ -437,7 +437,7 @@ func TestTheSeatToolIsProbedOncePerSeatPerScan(t *testing.T) {
 	p := newSeatToolProbe()
 	inner := p.probe
 	p.probe = func(spec string) string { probes[spec]++; return inner(spec) }
-	_ = modelSetKeyWith(p, "fakew:m1", "qwen3.5:9b", "off", "off", "")
+	_ = modelSetKeyWith(p, nil, "fakew:m1", "qwen3.5:9b", "off", "off", "")
 	for job := 0; job < 3; job++ {
 		r, err := resolveRoles(t, localAuditInput{toolProbe: p, mutantModel: "qwen3.5:9b", writerModel: "fakew:m1", criticModel: "off", shadowModel: "off"}, &bytes.Buffer{})
 		if err != nil {

@@ -197,6 +197,9 @@ func BuildReviewAttestation(r review.Review) map[string]any {
 			predicate[k] = v
 		}
 	}
+	if sp := seatProvidersPredicate(r.SeatProviders); sp != nil {
+		predicate["seatProviders"] = sp
+	}
 	if r.VerifierModel != "" {
 		predicate["verifierModel"] = r.VerifierModel
 		predicate["verifierOpinionSha256"] = sha256Hex(r.VerifierOpinion)

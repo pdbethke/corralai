@@ -5,7 +5,7 @@ go 1.26.11
 require (
 	filippo.io/age v1.3.1
 	github.com/coreos/go-oidc/v3 v3.19.0
-	github.com/go-jose/go-jose/v4 v4.1.4
+	github.com/go-jose/go-jose/v4 v4.1.6
 	github.com/go-openapi/strfmt v0.26.4
 	github.com/go-rod/rod v0.116.2
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728

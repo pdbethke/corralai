@@ -10,8 +10,10 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -48,17 +50,27 @@ type LLMClient interface {
 }
 
 type WorkstationResources struct {
-	CPUCores     int      `json:"cpu_cores"`
+	CPUCores int `json:"cpu_cores"`
+	// TotalRAMGB is 0 when it could not be read — unknown, never a guess.
 	TotalRAMGB   float64  `json:"total_ram_gb"`
 	GPUVRAMGB    float64  `json:"gpu_vram_gb"`
 	PulledModels []string `json:"pulled_models"`
 	LoadedModels []string `json:"loaded_models"`
+	// DeclaredModels are the models the operator named WITH a backend
+	// (CORRALAI_ROLE_MODELS "role=backend:model"). With PulledModels — what the
+	// OLLAMA_URL daemon lists — they are the only models staffing may assign.
+	DeclaredModels []rolemodel.ModelRef `json:"declared_models"`
 }
 
 type StaffingManager struct {
 	Perf       PerformanceTracker
 	LLM        LLMClient
 	RoleModels *rolemodel.Policy
+	// Declared is the operator's declared role policy, snapshotted at startup
+	// before staffing writes RoleModels, so a staffed model never becomes a
+	// "declaration" for the next pass. Entries with no backend are not a
+	// source: "role=model" says which model, not who serves it.
+	Declared []rolemodel.ModelRef
 }
 
 // maxStaffAttempts bounds how many times Staff retries a failing Judge probe
@@ -66,26 +78,16 @@ type StaffingManager struct {
 // response) backs off instead of burning a 30s round-trip indefinitely.
 const maxStaffAttempts = 3
 
-// staffedModelRef derives the model reference for a clamped assignment. Clamped
-// values are model IDENTIFIERS — an Ollama name:tag (qwen2.5-coder:7b) or a cloud
-// model name — NEVER "backend:model", so we must not split on ':' (doing so
-// corrupted every local tag). Cloud models map to their provider backend; every-
-// thing else is an Ollama tag kept whole.
-func staffedModelRef(model string) rolemodel.ModelRef {
-	backend := "ollama"
-	if isCloudModel(model) {
-		lower := strings.ToLower(model)
-		switch {
-		case strings.Contains(lower, "claude"):
-			backend = "anthropic"
-		case strings.Contains(lower, "gpt"):
-			backend = "openai"
-		case strings.Contains(lower, "gemini"):
-			backend = "openai" // NOTE: audit L-item — engine vs backend.go gemini mapping disagree; out of scope for this task, keep as-is
-		}
-	}
-	return rolemodel.ModelRef{Backend: backend, Model: model}
-}
+// A staffing proposal is an LLM's output, not a declaration. The vendor that
+// serves a model decides where the change under review and an API key are
+// sent, so it is never read off the model's spelling (founder ruling
+// 2026-11-12: "any guessing is a security hole"). staffedModelRef used to do
+// exactly that — "claude" in the name meant anthropic, "gpt" openai, and
+// "gemini" also openai, which was wrong outright — and a local gpt-oss:20b
+// would have been staffed onto OpenAI. A model is now assignable only when it
+// is a candidate (candidateRefs): listed by the OLLAMA_URL daemon, or declared
+// by the operator with its backend. Clamp returns the candidate's own ref, so
+// the backend always comes from where the model was found.
 
 // Staff runs one bounded Sense→Judge→Clamp staffing pass for directive and
 // applies the clamped result to RoleModels — the standalone equivalent of the
@@ -125,9 +127,14 @@ func (s *StaffingManager) staffOnce(directive string) (err error) {
 		return jErr
 	}
 	clamped := s.Clamp(assignments, resources)
+	// A pass that leaves a required role empty did not staff the mission, and
+	// is reported as a failure rather than a success with nothing applied.
+	if missing := unstaffedRequired(clamped); len(missing) > 0 {
+		return fmt.Errorf("staffing: the planner left required role(s) %s unstaffed (its proposals were not candidates)", strings.Join(missing, ", "))
+	}
 	log.Printf("staffing complete. Clamped: %+v, Load Order: %v", clamped, loadOrder)
-	for role, model := range clamped {
-		s.RoleModels.Set(role, staffedModelRef(model)) // threadsafe: the UI writes this same policy from the mission-create handler
+	for role, ref := range clamped {
+		s.RoleModels.Set(role, ref) // threadsafe: the UI topology and spawn read this same policy
 	}
 	return nil
 }
@@ -138,6 +145,7 @@ func (s *StaffingManager) Sense() WorkstationResources {
 	}
 	res.TotalRAMGB = getSystemRAM()
 	res.GPUVRAMGB = getGPUVRAM()
+	res.DeclaredModels = declaredWithBackend(s.Declared)
 	res.PulledModels, res.LoadedModels = queryOllama()
 	return res
 }
@@ -155,7 +163,7 @@ const minConfidentSamples = 5
 // (roles and models sorted) so the same evidence yields the same brief.
 func buildLeaderboardBrief(stats []ModelStats, eligibleModels []string, minSamples int) string {
 	if len(stats) == 0 {
-		return "No historical performance data yet (cold start) — staff from sensible defaults and treat this mission as evidence-gathering, not as optimizing a ranking that doesn't exist."
+		return "No historical performance data yet (cold start) — staff from the candidate list and treat this mission as evidence-gathering, not as optimizing a ranking that doesn't exist."
 	}
 	haveData := map[string]map[string]bool{} // role -> model -> seen
 	var b strings.Builder
@@ -202,7 +210,11 @@ func (s *StaffingManager) Judge(ctx context.Context, directive string, resources
 		return nil, nil, fmt.Errorf("LLM client not available")
 	}
 
-	brief := buildLeaderboardBrief(stats, resources.PulledModels, minConfidentSamples)
+	candidates := candidateKeys(resources)
+	if len(candidates) == 0 {
+		return nil, nil, fmt.Errorf("staffing: no candidate models — set OLLAMA_URL to a daemon that lists models, or declare models with their backend in CORRALAI_ROLE_MODELS (role=backend:model); corral does not name a model for you")
+	}
+	brief := buildLeaderboardBrief(statsByCandidate(stats, resources), candidates, minConfidentSamples)
 
 	systemPrompt := `You are the Corralai swarm staffing planner. Analyze the directive, workstation hardware resources, available local/cloud models, and historical performance stats. Propose the optimal role-to-model staffing assignment and load order to run an adversarial-verification swarm that BREAKS the change under review in order to CERTIFY it — not one that builds it.
 
@@ -220,25 +232,27 @@ Respond ONLY with a valid JSON object matching this schema:
 Constraints:
 1. Local models in the load order should fit in available GPU VRAM. Estimate VRAM for a local model as parameter_size * 0.7 GB.
 2. Prefer models with high pass rates / low duration — but ONLY for cells marked [confident]. A cell marked [THIN] is a single data point, not a ranking; do not overfit it.
-3. If no stats are available (cold-start), use default models (e.g. qwen2.5-coder:7b, llama3.2:3b) and treat the mission as evidence-gathering.
+3. If no stats are available (cold-start), choose among the candidate models and treat the mission as evidence-gathering.
 4. Always allocate security-breaker and correctness-reviewer roles.
-5. If a local model is not pulled, do not assign it unless it is a cloud model API (e.g. gemini, claude, gpt).
+5. Assign ONLY models from the candidate list, written exactly as listed. Any other name is discarded and its role is left unstaffed.
 6. EXPLORE, don't ossify: when a role has untested eligible models (probe candidates), occasionally staff one instead of the current leader so the leaderboard keeps learning — especially when the leader's evidence is thin or the alternatives are entirely unmeasured.`
 
 	prompt := fmt.Sprintf(`Directive: %s
 Available Resources:
 - CPU Cores: %d
-- System RAM: %.1f GB
+- System RAM: %s
 - GPU VRAM: %.1f GB
-- Pulled local models: %v
 - Currently loaded models: %v
 
+Candidate models (the ONLY names you may assign, exactly as written):
+%s
+
 Optimization Weights (1-5 range):
-- Thoroughness: %d/5 (higher means prioritize smarter/larger models like sonnet/gemini/qwen-coder; lower means prioritize speed/smaller models like llama-3b)
+- Thoroughness: %d/5 (higher means prioritize larger, more capable models; lower means prioritize speed and smaller models)
 - Resource Footprint: %d/5 (higher means minimize GPU memory footprint, potentially sharing one model; lower means utilize full available VRAM)
 
 Historical Leaderboard:
-%s`, directive, resources.CPUCores, resources.TotalRAMGB, resources.GPUVRAMGB, resources.PulledModels, resources.LoadedModels, thoroughness, footprint, brief)
+%s`, directive, resources.CPUCores, ramLine(resources.TotalRAMGB), resources.GPUVRAMGB, resources.LoadedModels, candidateLines(resources), thoroughness, footprint, brief)
 
 	resp, err := s.LLM.Generate(ctx, systemPrompt, prompt)
 	if err != nil {
@@ -258,90 +272,219 @@ Historical Leaderboard:
 	return result.RoleAssignments, result.LoadOrder, nil
 }
 
-func (s *StaffingManager) Clamp(assignments map[string]string, resources WorkstationResources) map[string]string {
-	clamped := make(map[string]string)
-	// No hardcoded fallback model. Clamping means "swap this assignment for a
-	// LOCAL model that fits" — so the candidates are the models this
-	// workstation has actually pulled. With none pulled there is nothing to
-	// clamp to, and naming one here would be corral choosing a vendor's model
-	// on the operator's behalf, which it does not do anywhere else.
-	defaultModel := ""
-	if len(resources.PulledModels) > 0 {
-		smallestQwen := ""
-		smallestQwenSize := 999.0
-		for _, m := range resources.PulledModels {
-			if strings.Contains(strings.ToLower(m), "qwen") {
-				size := estimateVRAM(m)
-				if size < smallestQwenSize {
-					smallestQwenSize = size
-					smallestQwen = m
-				}
-			}
-		}
-		if smallestQwen != "" {
-			defaultModel = smallestQwen
-		} else {
-			defaultModel = resources.PulledModels[0]
-		}
+// Clamp turns the planner's proposal into assignments corral can stand behind.
+// A proposed name that is not a candidate, exactly as listed, is discarded and
+// its role left unstaffed: there is no prefix match, no swap to a "close"
+// model, and no fill-in model for a role the planner skipped. Each of those
+// used to exist (a pulled qwen was preferred by name as the stand-in), and
+// each was corral choosing a model on the operator's behalf.
+//
+// The one change Clamp still makes is FIT: when the accepted local models
+// together exceed the GPU's VRAM, every local role is consolidated onto the
+// smallest local model the planner itself proposed — a model it chose, from a
+// declared source, so nothing new is introduced.
+func (s *StaffingManager) Clamp(assignments map[string]string, resources WorkstationResources) map[string]rolemodel.ModelRef {
+	cands := candidateRefs(resources)
+	clamped := make(map[string]rolemodel.ModelRef)
+	roles := make([]string, 0, len(assignments))
+	for role := range assignments {
+		roles = append(roles, role)
 	}
+	sort.Strings(roles)
 
+	listed := map[string]bool{}
+	for _, m := range resources.PulledModels {
+		listed[m] = true
+	}
 	var totalVRAMNeeded float64
-	assignedModels := make(map[string]bool)
-
-	for role, model := range assignments {
-		if isCloudModel(model) {
-			clamped[role] = model
+	var unsized []string
+	counted := map[string]bool{}
+	smallestLocal, smallestSize := "", 0.0
+	for _, role := range roles {
+		proposed := strings.TrimSpace(assignments[role])
+		ref, ok := cands[proposed]
+		if !ok {
+			log.Printf("staffing: role %q left unstaffed — %q is not a candidate (not listed by the OLLAMA_URL daemon, not declared with a backend in CORRALAI_ROLE_MODELS)", role, proposed)
 			continue
 		}
+		clamped[role] = ref
+		// Only a model the OLLAMA_URL daemon LISTED is sized and consolidated:
+		// a declared ollama ref may name another daemon, and swapping it for a
+		// listed model would move the role to a server it was not declared on.
+		if !listed[proposed] {
+			continue
+		}
+		size, known := estimateVRAM(ref.Model)
+		if !known {
+			unsized = append(unsized, ref.Model)
+			continue
+		}
+		if !counted[ref.Model] {
+			counted[ref.Model] = true
+			totalVRAMNeeded += size
+		}
+		if smallestLocal == "" || size < smallestSize || (size == smallestSize && ref.Model < smallestLocal) {
+			smallestLocal, smallestSize = ref.Model, size
+		}
+	}
 
-		pulled := false
-		for _, pm := range resources.PulledModels {
-			if pm == model || strings.HasPrefix(pm, model) || strings.HasPrefix(model, pm) {
-				model = pm
-				pulled = true
-				break
+	if len(unsized) > 0 && resources.GPUVRAMGB > 0 {
+		// A size read off nothing would decide which model a role loses; with
+		// any proposed model unsized, the fit is not checked at all.
+		log.Printf("staffing: cannot size %s from its tag, so the VRAM fit is not checked and no role is consolidated", strings.Join(unsized, ", "))
+	} else if resources.GPUVRAMGB > 0 && totalVRAMNeeded > resources.GPUVRAMGB && smallestLocal != "" {
+		log.Printf("staffing: proposed local models need %.1f GB VRAM, exceeding physical %.1f GB. Consolidating all local roles to %s (the smallest the planner proposed).",
+			totalVRAMNeeded, resources.GPUVRAMGB, smallestLocal)
+		for role, proposed := range assignments {
+			if ref, ok := clamped[role]; ok && listed[strings.TrimSpace(proposed)] && ref.Backend == localBackend {
+				clamped[role] = rolemodel.ModelRef{Backend: localBackend, Model: smallestLocal}
 			}
 		}
-
-		if !pulled && defaultModel != "" {
-			model = defaultModel
-		}
-		// defaultModel == "" means nothing is pulled locally, so there is no
-		// model to clamp TO. Keep the proposal as-is rather than blanking the
-		// role: an assignment nobody can serve fails honestly downstream,
-		// where an empty one would look like a role that was never staffed.
-
-		if !assignedModels[model] {
-			assignedModels[model] = true
-			totalVRAMNeeded += estimateVRAM(model)
-		}
-
-		clamped[role] = model
 	}
 
-	if resources.GPUVRAMGB > 0 && totalVRAMNeeded > resources.GPUVRAMGB && defaultModel != "" {
-		log.Printf("staffing: proposed models need %.1f GB VRAM, exceeding physical %.1f GB. Consolidating all local roles to %s.",
-			totalVRAMNeeded, resources.GPUVRAMGB, defaultModel)
-		for role, model := range clamped {
-			if !isCloudModel(model) {
-				clamped[role] = defaultModel
-			}
-		}
+	for _, required := range unstaffedRequired(clamped) {
+		log.Printf("staffing: required role %q is unstaffed — corral does not fill it with a model nobody chose", required)
 	}
-
-	// Only fill an unstaffed role when this workstation actually has a local
-	// model to fill it with. With nothing pulled, the role stays empty and the
-	// caller sees it was never staffed — corral does not name a model for you.
-	if defaultModel != "" {
-		if clamped["security-breaker"] == "" {
-			clamped["security-breaker"] = defaultModel
-		}
-		if clamped["correctness-reviewer"] == "" {
-			clamped["correctness-reviewer"] = defaultModel
-		}
-	}
-
 	return clamped
+}
+
+// requiredRoles are the roles every staffing pass must fill.
+var requiredRoles = []string{"security-breaker", "correctness-reviewer"}
+
+// unstaffedRequired lists the required roles clamped leaves empty.
+func unstaffedRequired(clamped map[string]rolemodel.ModelRef) []string {
+	var missing []string
+	for _, r := range requiredRoles {
+		if _, ok := clamped[r]; !ok {
+			missing = append(missing, r)
+		}
+	}
+	return missing
+}
+
+// statsByCandidate renames each leaderboard row to the candidate name the
+// planner is shown. Workers report a bare model name, but a declared model is
+// shown as backend/model, so without this every declared model read as
+// "untested" beside its own evidence. A bare name maps to a declared key only
+// when exactly one declared candidate has that model and the local daemon does
+// not list it; otherwise the row is left as reported (ambiguous evidence is not
+// credited to a guessed candidate).
+func statsByCandidate(stats []ModelStats, res WorkstationResources) []ModelStats {
+	listed := map[string]bool{}
+	for _, m := range res.PulledModels {
+		listed[m] = true
+	}
+	byModel := map[string][]string{}
+	for _, r := range res.DeclaredModels {
+		byModel[r.Model] = append(byModel[r.Model], declaredKey(r))
+	}
+	out := make([]ModelStats, len(stats))
+	for i, st := range stats {
+		out[i] = st
+		if keys := byModel[st.Model]; !listed[st.Model] && len(keys) == 1 {
+			out[i].Model = keys[0]
+		}
+	}
+	return out
+}
+
+// localBackend is the backend of a model the OLLAMA_URL daemon listed: that
+// listing is where it was found, so that daemon is what serves it.
+const localBackend = "ollama"
+
+// DeclaredFrom snapshots the operator's role policy as staffing's declared
+// candidates. Call it once at startup, before staffing writes the policy.
+// Refs are sorted so the planner sees the same list every time.
+func DeclaredFrom(p *rolemodel.Policy) []rolemodel.ModelRef {
+	seen := map[rolemodel.ModelRef]bool{}
+	var out []rolemodel.ModelRef
+	for _, r := range p.Snapshot() {
+		if !seen[r] {
+			seen[r] = true
+			out = append(out, r)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return declaredKey(out[i]) < declaredKey(out[j]) })
+	return declaredWithBackend(out)
+}
+
+// declaredWithBackend keeps the declared refs that say who serves them.
+func declaredWithBackend(refs []rolemodel.ModelRef) []rolemodel.ModelRef {
+	var out []rolemodel.ModelRef
+	for _, r := range refs {
+		if strings.TrimSpace(r.Backend) != "" && strings.TrimSpace(r.Model) != "" {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// declaredKey is how a declared model is shown to the planner and matched
+// back: backend/model. A listed local model is shown bare, as the daemon names
+// it — an ollama tag contains ':' (qwen2.5-coder:7b), so ':' cannot separate a
+// backend, and a bare name is matched only against the listing.
+func declaredKey(r rolemodel.ModelRef) string { return r.Backend + "/" + r.Model }
+
+// candidateRefs maps every assignable name to the ref it stands for. A name
+// that is both a listed local model and a declared backend/model key (an
+// ollama tag can contain a slash) would mean two different servers, so it is
+// not a candidate at all rather than one source silently winning.
+func candidateRefs(res WorkstationResources) map[string]rolemodel.ModelRef {
+	m := map[string]rolemodel.ModelRef{}
+	for _, name := range res.PulledModels {
+		m[name] = rolemodel.ModelRef{Backend: localBackend, Model: name}
+	}
+	for _, r := range res.DeclaredModels {
+		k := declaredKey(r)
+		if prev, ok := m[k]; ok && prev != r {
+			delete(m, k)
+			continue
+		}
+		m[k] = r
+	}
+	return m
+}
+
+// candidateKeys is candidateRefs' names, sorted.
+func candidateKeys(res WorkstationResources) []string {
+	m := candidateRefs(res)
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// candidateLines renders the candidate list for the planner, saying where each
+// group came from.
+func candidateLines(res WorkstationResources) string {
+	var b strings.Builder
+	if len(res.PulledModels) == 0 {
+		b.WriteString("- listed by the local model daemon: none\n")
+	} else {
+		fmt.Fprintf(&b, "- listed by the local model daemon: %s\n", strings.Join(res.PulledModels, ", "))
+	}
+	if len(res.DeclaredModels) == 0 {
+		b.WriteString("- declared by the operator: none")
+	} else {
+		keys := make([]string, 0, len(res.DeclaredModels))
+		for _, r := range res.DeclaredModels {
+			keys = append(keys, declaredKey(r))
+		}
+		sort.Strings(keys)
+		fmt.Fprintf(&b, "- declared by the operator: %s", strings.Join(keys, ", "))
+	}
+	return b.String()
+}
+
+// ramLine says "unknown" for a RAM size that could not be read rather than
+// handing the planner a number nobody measured.
+func ramLine(gb float64) string {
+	if gb <= 0 {
+		return "unknown (could not be read)"
+	}
+	return fmt.Sprintf("%.1f GB", gb)
 }
 
 func getSystemRAM() float64 {
@@ -366,7 +509,9 @@ func getSystemRAM() float64 {
 			}
 		}
 	}
-	return 16.0
+	// Unknown. This returned 16.0, a size nobody measured, which the planner
+	// then sized models against.
+	return 0
 }
 
 func getGPUVRAM() float64 {
@@ -395,10 +540,15 @@ func getGPUVRAM() float64 {
 	return 0.0
 }
 
+// queryOllama lists what the OLLAMA_URL daemon serves. With OLLAMA_URL unset
+// there is no local source and nothing is listed: it used to fall back to
+// 127.0.0.1:11434, an address nobody declared (corral-agent and the seat
+// resolver refuse the same unset variable).
 func queryOllama() ([]string, []string) {
-	url := os.Getenv("OLLAMA_URL")
+	url := strings.TrimSpace(os.Getenv("OLLAMA_URL"))
 	if url == "" {
-		url = "http://127.0.0.1:11434"
+		log.Printf("staffing: OLLAMA_URL is not set, so no local models are candidates")
+		return nil, nil
 	}
 	url = strings.TrimSuffix(url, "/")
 
@@ -454,19 +604,23 @@ func cleanJSONResponse(s string) string {
 	return strings.TrimSpace(s)
 }
 
-func isCloudModel(model string) bool {
-	m := strings.ToLower(model)
-	return strings.Contains(m, "claude") || strings.Contains(m, "gpt") || strings.Contains(m, "gemini")
-}
+// paramSize finds a parameter-count token in a model tag — "7b", "20b",
+// "1.5b" — standing on its own (so the "a3b" in qwen3.6:35b-a3b, an active-
+// parameter count, is not read as the size).
+var paramSize = regexp.MustCompile(`(?:^|[^a-z0-9.])(\d+(?:\.\d+)?)b(?:$|[^a-z0-9])`)
 
-func estimateVRAM(model string) float64 {
-	m := strings.ToLower(model)
-	var size float64 = 7.0
-	for _, suffix := range []string{"70b", "32b", "14b", "8b", "7b", "3b", "1.5b"} {
-		if strings.Contains(m, suffix) {
-			_, _ = fmt.Sscanf(suffix, "%fb", &size)
-			break
-		}
+// estimateVRAM estimates a local model's VRAM in GB as 0.7 GB per billion
+// parameters, read from its tag. known is false when the tag names no size:
+// it used to assume 7B, so an unsized 20B model was costed at 4.9 GB and the
+// consolidation that followed acted on a number nobody measured.
+func estimateVRAM(model string) (gb float64, known bool) {
+	m := paramSize.FindStringSubmatch(strings.ToLower(model))
+	if m == nil {
+		return 0, false
 	}
-	return size * 0.7
+	size, err := strconv.ParseFloat(m[1], 64)
+	if err != nil || size <= 0 {
+		return 0, false
+	}
+	return size * 0.7, true
 }

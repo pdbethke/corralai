@@ -230,7 +230,7 @@ func FromEnv() (Backend, error) {
 		if key == "" {
 			return nil, errors.New("agentbackend: MODEL_BACKEND=openrouter needs OPENROUTER_API_KEY — set it (OPENAI_API_KEY is not read for OpenRouter)")
 		}
-		return &openaiBackend{base: env("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"), key: key, model: model}, nil
+		return &openaiBackend{base: openRouterBase(), key: key, model: model}, nil
 	case "anthropic", "claude":
 		return &anthropicBackend{
 			base:  env("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
@@ -353,7 +353,7 @@ func ForVendor(vendor, model string) (Backend, error) {
 		if key == "" {
 			return nil, fmt.Errorf("agentbackend: model %q at openrouter needs OPENROUTER_API_KEY — set it (OPENAI_API_KEY is not read for OpenRouter)", model)
 		}
-		return &openaiBackend{base: env("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"), key: key, model: model}, nil
+		return &openaiBackend{base: openRouterBase(), key: key, model: model}, nil
 	default:
 		return nil, fmt.Errorf("agentbackend: %q is not a hosted vendor corral serves — name one of %s (corral does not infer a vendor from a model's name)", vendor, strings.Join(HostedVendors, ", "))
 	}
@@ -935,3 +935,55 @@ func anthropicUsage(input, output int, cacheRead, cacheCreation *int64) Usage {
 		CacheWriteInputTokens: cacheCreation,
 	}
 }
+
+// Endpoint is where a MODEL_BACKEND value sends a plain text request and the
+// key it sends: Wire is "openai-chat", "anthropic" or "ollama". It exists for
+// callers that need the address but not a Backend — the daemon's narrator
+// (internal/llm) — so they resolve a backend exactly as FromEnv does instead
+// of keeping a second copy of the rules. That second copy used to default to
+// ollama at 127.0.0.1:11434 with qwen2.5-coder:7b, send an unknown backend to
+// ollama, and read OPENAI_API_KEY and api.openai.com for gemini and
+// openrouter: the bugs FromEnv had already shed, one door over.
+type Endpoint struct {
+	Wire string
+	Base string
+	Key  string
+}
+
+// EndpointFor resolves backend (a MODEL_BACKEND value) to its endpoint, with
+// FromEnv's rules: no default backend, no default Ollama address, each
+// vendor's own key variable, and an unknown backend refused.
+func EndpointFor(backend string) (Endpoint, error) {
+	switch strings.TrimSpace(backend) {
+	case "":
+		return Endpoint{}, errors.New("agentbackend: MODEL_BACKEND is not set — set it to one of ollama, openai, openrouter, gemini, anthropic (alias claude) (there is no default backend)")
+	case "gemini":
+		key := geminiKey()
+		if key == "" {
+			return Endpoint{}, errors.New("agentbackend: MODEL_BACKEND=gemini needs GEMINI_API_KEY (GOOGLE_API_KEY and OPENAI_API_KEY are not read)")
+		}
+		return Endpoint{Wire: "openai-chat", Base: geminiBase(), Key: key}, nil
+	case "openai":
+		return Endpoint{Wire: "openai-chat", Base: openAIBase(), Key: agentSecret("OPENAI_API_KEY")}, nil
+	case "openrouter":
+		key := agentSecret("OPENROUTER_API_KEY")
+		if key == "" {
+			return Endpoint{}, errors.New("agentbackend: MODEL_BACKEND=openrouter needs OPENROUTER_API_KEY — set it (OPENAI_API_KEY is not read for OpenRouter)")
+		}
+		return Endpoint{Wire: "openai-chat", Base: openRouterBase(), Key: key}, nil
+	case "anthropic", "claude":
+		return Endpoint{Wire: "anthropic", Base: env("ANTHROPIC_BASE_URL", "https://api.anthropic.com"), Key: agentSecret("ANTHROPIC_API_KEY")}, nil
+	case "ollama":
+		url := strings.TrimSpace(os.Getenv("OLLAMA_URL"))
+		if url == "" {
+			return Endpoint{}, errors.New("agentbackend: MODEL_BACKEND=ollama needs OLLAMA_URL — set it to the daemon that serves the model (there is no default address)")
+		}
+		return Endpoint{Wire: "ollama", Base: url}, nil
+	default:
+		return Endpoint{}, fmt.Errorf("agentbackend: MODEL_BACKEND=%q is not a backend — use one of ollama, openai, openrouter, gemini, anthropic (alias claude)", backend)
+	}
+}
+
+// openRouterBase is OpenRouter's own variable or OpenRouter itself, never
+// OPENAI_BASE_URL (5cec2670).
+func openRouterBase() string { return env("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1") }

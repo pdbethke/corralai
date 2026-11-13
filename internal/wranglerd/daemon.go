@@ -422,6 +422,9 @@ func Run(version string) {
 	// Built once here so both consumers (fleet oracle below, ui.Deps below) share the
 	// same configured client.
 	narrator := llm.FromEnv()
+	if !narrator.Available() {
+		log.Printf("narrator: off (debriefs, staffing planner, learn drafts, fleet oracle, control stage) — %s", narrator.Unavailable())
+	}
 
 	// learnDrafter shares the same configured LLM client, reused by the learn
 	// sweep ticker below to phrase (never decide) proposal guidance. Left nil
@@ -641,6 +644,7 @@ func Run(version string) {
 		},
 		LLM:        &llmAdapter{client: narrator},
 		RoleModels: roleModels,
+		Declared:   mission.DeclaredFrom(roleModels),
 	}
 
 	// The completion gate certifies gated tasks by RUNNING the verify command in a

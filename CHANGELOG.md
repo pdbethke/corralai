@@ -40,6 +40,7 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ### Fixed
 
+- **go-jose v4.1.6.** The daemon's bearer-token verifier (`internal/auth`, through `coreos/go-oidc`) parses JWKs and JWTs with go-jose, and v4.1.4 carried three advisories: a denial of service when parsing JWKs with RSA keys (GHSA-mgcc-cww5-fp2q), a panic in CBC-HMAC processing (GHSA-4w3g-jfj2-cw2q) and panics in JSON parsing (GHSA-vvm8-gf78-28g4). All three are fixed in v4.1.6. govulncheck reported none of them as reachable from corral's code.
 - **A registry-declared local `gpt-oss` was refused as an OpenAI model** by the herd preflight and `doctor`, because the name was matched before the declaration. A declared provider now outranks what a name looks like.
 - **`corral review` discarded registry endpoints.** It disclosed the registry's endpoint but called the host's default local daemon, and a declared local reviewer could not be reached. It now uses the endpoint it discloses.
 - **Go 1.26.11.** The standard-library advisory in `net/http` (GO-2026-6859, a data race in `MaxBytesReader` header handling, fixed in go1.26.11) is reported by govulncheck against go1.26.10, so the module floor and the Dockerfiles move up.

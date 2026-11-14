@@ -182,10 +182,24 @@ func beePrompt(name string, rs agentrole.Set, instance, desc, model, backend str
 			jsonObject("name", name, "role", roleDisplay, "host", instance, "model", model, "backend", backend, "jail", "none") +
 			" so topology and finding attribution know what drives you."
 	}
-	return fmt.Sprintf(`You are %q, a %s bee in a corralai swarm. The MCP server "corral" is the swarm's brain. Work EXACTLY ONE task, then stop.
+	// The prompt is written piece by piece, and every JSON value with
+	// b.WriteString, never through a format string: the prose around them
+	// has apostrophes ("the swarm's brain"), and a JSON value spliced into a
+	// string after an unmatched quote is the shape CodeQL's go/unsafe-quoting
+	// looks for. Each value is a complete JSON object or string on its own.
+	var b strings.Builder
+	fmt.Fprintf(&b, `You are %q, a `, name)
+	b.WriteString(roleDisplay)
+	b.WriteString(` bee in a corralai swarm. The MCP server "corral" is the swarm's brain. Work EXACTLY ONE task, then stop.
 
-1. Call bootstrap with %s to enter the swarm.%s
-2. Call claim_task with %s.
+1. Call bootstrap with `)
+	b.WriteString(jsonObject("name", name, "role", roleDisplay, "program", desc))
+	b.WriteString(` to enter the swarm.`)
+	b.WriteString(announce)
+	b.WriteString(`
+2. Call claim_task with `)
+	b.WriteString(jsonObject("name", name, "roles", json.RawMessage(rolesJSON), "instance", instance))
+	b.WriteString(`.
    - If it returns task:null, print exactly IDLE and stop. Do not invent work.
 3. Do the task in the current directory with YOUR OWN tools (write real files,
    run real commands). Before writing a file, call claim_paths on it; if a peer
@@ -196,7 +210,9 @@ func beePrompt(name string, rs agentrole.Set, instance, desc, model, backend str
    recorded, so also call report_execution with the command and exit code.
 5. Report any vulnerability/bug/design flaw/missing requirement via
    report_finding (with severity).
-6. As you work, call report_thought a few times with {"name":%s,"mission_id":<the
+6. As you work, call report_thought a few times with {"name":`)
+	b.WriteString(jsonString(name))
+	b.WriteString(`,"mission_id":<the
    claimed task's mission_id>,"text":"<a short, substantive sentence>"} — your
    ACTUAL reasoning at real decision/finding points (what you're examining,
    deciding, or finding — e.g. "the ratelimit test fails because the bucket
@@ -206,11 +222,8 @@ func beePrompt(name string, rs agentrole.Set, instance, desc, model, backend str
    filler like "working on it" and skip steps with nothing substantive to say.
 7. Call complete_task with {"id":<the task id>,"result":"<one-line summary>"}.
    If it refuses, satisfy the stated reason and try once more.
-8. Print a one-line summary of what you did.`,
-		name, roleDisplay,
-		jsonObject("name", name, "role", roleDisplay, "program", desc), announce,
-		jsonObject("name", name, "roles", json.RawMessage(rolesJSON), "instance", instance),
-		jsonString(name))
+8. Print a one-line summary of what you did.`)
+	return b.String()
 }
 
 // jsonString is s as a JSON string literal, for a value shown inside a JSON

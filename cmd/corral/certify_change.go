@@ -242,9 +242,20 @@ func runCertifyStandalone(ref string, checkArgv []string, outPath string, net bo
 // may run before sandbox.RunGuarded reports a timeout.
 const DefaultCertifyTimeout = 600 * time.Second
 
-// extractTar writes every regular file/dir in the tar stream under dest,
-// rejecting any entry whose cleaned path would escape dest (zip-slip guard).
+// extractTar writes every regular file, directory and symlink in the tar
+// stream under dest. Every write goes through an os.Root opened on dest, so
+// no entry can land outside it: not by a ".." name, and not by writing
+// through a symlink an earlier entry created. Checking the entry's NAME was
+// not enough on its own; a link "a" pointing outside dest followed by a file
+// "a/x" passed that check and wrote outside dest, on the host, before any
+// jail exists. git archive cannot emit that shape, but the guard now belongs
+// to this function rather than to git's tree rules.
 func extractTar(r io.Reader, dest string) error {
+	root, err := os.OpenRoot(dest)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
 	tr := tar.NewReader(r)
 	for {
 		h, err := tr.Next()
@@ -254,23 +265,28 @@ func extractTar(r io.Reader, dest string) error {
 		if err != nil {
 			return err
 		}
-		target := filepath.Join(dest, h.Name) // #nosec G305 -- guarded below
-		if !strings.HasPrefix(target, filepath.Clean(dest)+string(os.PathSeparator)) && target != filepath.Clean(dest) {
+		name := filepath.FromSlash(strings.TrimSuffix(h.Name, "/"))
+		if !filepath.IsLocal(name) {
 			return fmt.Errorf("archive entry %q escapes the workspace", h.Name)
+		}
+		escapes := func(err error) error {
+			return fmt.Errorf("archive entry %q escapes the workspace: %w", h.Name, err)
 		}
 		switch h.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(target, 0o750); err != nil {
-				return err
+			if err := root.MkdirAll(name, 0o750); err != nil {
+				return escapes(err)
 			}
 		case tar.TypeReg:
-			if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
-				return err
+			if dir := filepath.Dir(name); dir != "." {
+				if err := root.MkdirAll(dir, 0o750); err != nil {
+					return escapes(err)
+				}
 			}
-			mode := os.FileMode(uint32(h.Mode&0o777)) & 0o777                       // #nosec G115 -- masked to 9 perm bits before conversion, cannot overflow
-			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode) // #nosec G304 -- target is guarded against escape above
+			mode := os.FileMode(uint32(h.Mode&0o777)) & 0o777 // #nosec G115 -- masked to 9 perm bits before conversion, cannot overflow
+			f, err := root.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
 			if err != nil {
-				return err
+				return escapes(err)
 			}
 			if _, err := io.Copy(f, tr); err != nil { // #nosec G110 -- git archive of the repo's own committed tree, not hostile input
 				_ = f.Close()
@@ -280,22 +296,24 @@ func extractTar(r io.Reader, dest string) error {
 				return err
 			}
 		case tar.TypeSymlink:
-			// Recreate the committed symlink faithfully. The link FILE is
-			// written at target, which is escape-guarded above; h.Linkname is
-			// the link's *content* (where it points), not a write path, and any
-			// traversal it implies is contained by the jail the checks run in.
-			// Silently dropping it would make the checked-out tree differ from
-			// the commit the record is signed against — the one thing this tool
-			// must never do.
-			if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
-				return err
+			// Recreate the committed symlink faithfully. The link itself is
+			// created inside the root; h.Linkname is the link's content (where
+			// it points), not a write path. A later entry that tries to write
+			// THROUGH it is refused by the root, and reading through it happens
+			// only inside the jail the checks run in. Dropping the link would
+			// make the checked-out tree differ from the commit the record is
+			// signed against, the one thing this tool must never do.
+			if dir := filepath.Dir(name); dir != "." {
+				if err := root.MkdirAll(dir, 0o750); err != nil {
+					return escapes(err)
+				}
 			}
-			if err := os.Symlink(h.Linkname, target); err != nil { // #nosec G305 -- target (the link's location) is escape-guarded; Linkname is content, resolved only inside the jail
-				return err
+			if err := root.Symlink(h.Linkname, name); err != nil {
+				return escapes(err)
 			}
 		case tar.TypeXHeader, tar.TypeXGlobalHeader:
 			// pax metadata (git archive emits a global header carrying the
-			// commit sha) — not a filesystem entry; skip it, don't error.
+			// commit sha): not a filesystem entry; skip it, don't error.
 			continue
 		default:
 			// Fidelity-by-execution: an entry we can't materialize means the

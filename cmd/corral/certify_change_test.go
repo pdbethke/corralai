@@ -3,6 +3,7 @@
 package main
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"crypto/ed25519"
@@ -296,5 +297,84 @@ func TestRunCertifyStandalonePropagatesFailingExit(t *testing.T) {
 	// a record is still written for a failing check ("did not pass, here's proof")
 	if _, err := os.Stat(out); err != nil {
 		t.Errorf("expected a record even for a failing check: %v", err)
+	}
+}
+
+// extractTar checked each entry's NAME against dest, then wrote through
+// whatever earlier entries had made: a symlink "a" pointing outside dest
+// followed by a file "a/pwned" passed the name check and wrote outside dest,
+// on the host, before any jail exists. git archive cannot emit that shape (a
+// tree cannot hold both a link and a directory at one path), so the only
+// guard was git's tree rules. Writes now go through an os.Root, which refuses
+// any path that resolves outside dest.
+func TestExtractTarNeverWritesOutsideDest(t *testing.T) {
+	type entry struct {
+		name, link, body string
+		typ              byte
+	}
+	tarOf := func(es []entry) *bytes.Buffer {
+		var buf bytes.Buffer
+		tw := tar.NewWriter(&buf)
+		for _, e := range es {
+			h := &tar.Header{Name: e.name, Typeflag: e.typ, Linkname: e.link, Mode: 0o644, Size: int64(len(e.body))}
+			if err := tw.WriteHeader(h); err != nil {
+				t.Fatal(err)
+			}
+			if e.body != "" {
+				if _, err := tw.Write([]byte(e.body)); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		if err := tw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return &buf
+	}
+
+	for name, mk := range map[string]func(outside string) []entry{
+		"absolute symlink then a file through it": func(outside string) []entry {
+			return []entry{{name: "a", typ: tar.TypeSymlink, link: outside}, {name: "a/pwned", typ: tar.TypeReg, body: "x"}}
+		},
+		"relative symlink then a file through it": func(outside string) []entry {
+			return []entry{{name: "a", typ: tar.TypeSymlink, link: "../" + filepath.Base(outside)}, {name: "a/pwned", typ: tar.TypeReg, body: "x"}}
+		},
+		"symlink then a directory through it": func(outside string) []entry {
+			return []entry{{name: "a", typ: tar.TypeSymlink, link: outside}, {name: "a/sub/", typ: tar.TypeDir}}
+		},
+		"dot-dot name": func(outside string) []entry {
+			return []entry{{name: "../" + filepath.Base(outside) + "/pwned", typ: tar.TypeReg, body: "x"}}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			parent := t.TempDir()
+			dest := filepath.Join(parent, "dest")
+			outside := filepath.Join(parent, "outside")
+			for _, d := range []string{dest, outside} {
+				if err := os.Mkdir(d, 0o750); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := extractTar(tarOf(mk(outside)), dest); err == nil {
+				t.Error("extractTar accepted an archive that writes outside dest")
+			}
+			left, _ := os.ReadDir(outside)
+			if len(left) != 0 {
+				t.Errorf("extractTar wrote outside dest: %v", left)
+			}
+		})
+	}
+
+	// A committed symlink that points outside the tree is still recreated
+	// faithfully: only writing THROUGH it is refused.
+	dest := t.TempDir()
+	if err := extractTar(tarOf([]entry{{name: "dir/", typ: tar.TypeDir}, {name: "dir/f", typ: tar.TypeReg, body: "hi"}, {name: "l", typ: tar.TypeSymlink, link: "/etc/hostname"}}), dest); err != nil {
+		t.Fatalf("a legitimate archive was refused: %v", err)
+	}
+	if tgt, err := os.Readlink(filepath.Join(dest, "l")); err != nil || tgt != "/etc/hostname" {
+		t.Errorf("symlink = %q, %v; want /etc/hostname", tgt, err)
+	}
+	if b, err := os.ReadFile(filepath.Join(dest, "dir", "f")); err != nil || string(b) != "hi" {
+		t.Errorf("dir/f = %q, %v", b, err)
 	}
 }

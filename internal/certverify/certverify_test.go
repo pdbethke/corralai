@@ -7,6 +7,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/certify"
@@ -332,5 +333,16 @@ func TestVerifyRecordExtraUnsignedKeysTolerated(t *testing.T) {
 	}
 	if !c.OK {
 		t.Fatalf("extra unsigned keys must be tolerated: %+v", c)
+	}
+}
+
+// quote is a Detail message's quoting: it must escape whatever the value
+// holds, as the CLI's %q did, so an altered value cannot forge the rest of
+// the message.
+func TestQuoteEscapesLikePercentQ(t *testing.T) {
+	for _, s := range []string{"sha256:abc", `a"b`, "line\nbreak", "\x01ctl", `back\slash`, "ünï"} {
+		if got, want := quote(s), fmt.Sprintf("%q", s); got != want {
+			t.Errorf("quote(%q) = %s, want %s", s, got, want)
+		}
 	}
 }

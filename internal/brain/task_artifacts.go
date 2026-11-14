@@ -17,6 +17,9 @@ import (
 	"github.com/pdbethke/corralai/internal/taskartifacts"
 )
 
+// maxArtifactBytes caps one task artifact's decoded bytes (5 MiB).
+const maxArtifactBytes = 5 * 1024 * 1024
+
 func registerTaskArtifacts(s *mcp.Server, q *queue.Store, artStore *taskartifacts.Store) {
 	if q == nil || artStore == nil {
 		return
@@ -48,12 +51,12 @@ func registerTaskArtifacts(s *mcp.Server, q *queue.Store, artStore *taskartifact
 			return nil, okOut{OK: false}, fmt.Errorf("forbidden: task %d is not claimed by agent %q", in.TaskID, agent)
 		}
 
-		// 2. Decode payload and check size limit (5MB)
+		// 2. Decode payload and check size limit (maxArtifactBytes)
 		dataBytes, err := base64.StdEncoding.DecodeString(in.Data)
 		if err != nil {
 			return nil, okOut{OK: false}, fmt.Errorf("decode base64 artifact data: %w", err)
 		}
-		if len(dataBytes) > 5*1024*1024 {
+		if len(dataBytes) > maxArtifactBytes {
 			return nil, okOut{OK: false}, fmt.Errorf("payload exceeds 5MB size limit")
 		}
 

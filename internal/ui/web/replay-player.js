@@ -621,6 +621,16 @@ function ensure(id, kind, label){
 }
 
 function esc(s){ return (s||'').replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+// jsArg is the one way a value enters an inline handler: onclick="fn(${jsArg(v)})".
+// JSON.stringify makes v a JS literal with every quote and backslash escaped,
+// and esc makes that literal safe inside the double-quoted attribute (the
+// browser decodes &quot; back before the handler runs). The values are agent
+// names, task keys and slugs from the brain or a recorded tape. Escaping only
+// the single quote left a trailing backslash free to close the JS string and
+// a double quote free to close the attribute; esc() alone is decoded back to
+// a quote before the handler sees it. internal/ui/inline_handlers_test.go
+// fails any handler that interpolates a value without jsArg.
+function jsArg(v){ return esc(JSON.stringify(v == null ? '' : v)); }
 
 // renderFaultDiff / parseMutants: the FAULT HIGHLIGHT — the founder's key
 // transparency affordance ("here is the exact fault, and your tests pass
@@ -1227,7 +1237,7 @@ function renderReplayLine(e){
 // chip shows BOB's 💭 reasoning interleaved with BOB's ❯ commands, nothing
 // from TESS.
 function replayConsoleChip(name, role, on){
-  return '<span class="xchip" onclick="setReplayExecFilter(\'' + name.replace(/'/g,"\\'") + '\')" style="cursor:pointer;padding:1px 6px;margin-left:5px;border-radius:8px;font-size:10.5px;' +
+  return '<span class="xchip" onclick="setReplayExecFilter(' + jsArg(name) + ')" style="cursor:pointer;padding:1px 6px;margin-left:5px;border-radius:8px;font-size:10.5px;' +
     (on ? 'background:' + (role?roleColor(role):'#6b6452') + ';color:#15110a;font-weight:700'
         : 'color:' + (role?roleColor(role):'var(--muted)') + ';border:1px solid ' + hexA(role?roleColor(role):'#6b6452', .5)) +
     '">' + esc(displayName(name)) + '</span>';
@@ -1273,8 +1283,7 @@ function renderReplayTasks(){
       const dot = done ? C.green : (t.status==='claimed' ? '#5b9bd5' : '#6b6452');
       const who = t.claimedBy && !gone ? ' <span style="color:' + roleColor(t.role) + '">← ' + esc(displayName(t.claimedBy)) + '</span>' : '';
       const titleStyle = gone ? 'color:var(--muted);text-decoration:line-through' : 'color:var(--fg)';
-      const key = (t.key || '').replace(/'/g,"\\'");
-      return '<div class="trow' + (dim ? ' tdim' : '') + '" role="button" tabindex="0" title="open this task\u2019s story" onclick="replayTaskClick(\'' + key + '\')" style="cursor:pointer"><span class="tdot" style="background:' + dot + '"></span><b style="' + titleStyle + '">' + esc(t.title || t.key) + '</b> <span style="color:var(--muted)">' + esc(t.role || '') + '</span>' + who + '</div>';
+      return '<div class="trow' + (dim ? ' tdim' : '') + '" role="button" tabindex="0" title="open this task\u2019s story" onclick="replayTaskClick(' + jsArg(t.key || '') + ')" style="cursor:pointer"><span class="tdot" style="background:' + dot + '"></span><b style="' + titleStyle + '">' + esc(t.title || t.key) + '</b> <span style="color:var(--muted)">' + esc(t.role || '') + '</span>' + who + '</div>';
     }).join('');
 }
 function renderReplayFindings(){
@@ -1770,8 +1779,7 @@ function renderReplayWindowBody(name){
     h += '<div class="isec">produced <span class="ir">· click to inspect the artifact</span></div>';
     produced.forEach(k => {
       const t = replayTasks.get(k) || { key: k, title: k };
-      const key = String(k).replace(/'/g, "\\'");   // escape like renderReplayTasks — a quoted key must not break out of the inline handler
-      h += '<div class="irow itlprod" role="button" tabindex="0" title="open this task’s story" onclick="replayTaskClick(\'' + key + '\')" style="cursor:pointer">✓ ' + esc(t.title || k) + '</div>';
+      h += '<div class="irow itlprod" role="button" tabindex="0" title="open this task’s story" onclick="replayTaskClick(' + jsArg(String(k)) + ')" style="cursor:pointer">✓ ' + esc(t.title || k) + '</div>';
     });
   }
   if(ra && ra.lastTs){ h += '<div class="isec">last activity</div><div class="irow ir">' + esc(replayWindowActivityLabel(ra)) + '</div>'; }
@@ -2029,9 +2037,9 @@ function renderReplayTaskWindowBody(key){
     // task. Render it as plain text, not a clickable link that dead-ends in
     // "isn't on the recorded tape."
     if(!o){ return '<span class="aw-phase" title="an internal pool phase, not a recorded task">' + esc(k) + '</span>'; }
-    return '<span class="aw-chain" onclick="replayTaskClick(\'' + String(k).replace(/'/g,"\\'") + '\')">' + esc(o.title || o.key || k) + '</span>';
+    return '<span class="aw-chain" onclick="replayTaskClick(' + jsArg(String(k)) + ')">' + esc(o.title || o.key || k) + '</span>';
   };
-  const chainAgent = (name) => '<span class="aw-chain" onclick="replayAgentClick(\'' + String(name).replace(/'/g,"\\'") + '\')">' + esc(displayName(name)) + '</span>';
+  const chainAgent = (name) => '<span class="aw-chain" onclick="replayAgentClick(' + jsArg(String(name)) + ')">' + esc(displayName(name)) + '</span>';
 
   let h = '';
   h += '<div class="irow ir">' + esc(t.key) + (t.role && t.role !== t.key ? ' · ' + esc(t.role) : '') + '</div>';

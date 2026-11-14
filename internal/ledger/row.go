@@ -35,7 +35,18 @@ type Row struct {
 	// by role like ModelsByRole (agentbackend.SeatTool); "" when no seat was
 	// an agent. A per-model reader needs it beside the roster: an unpinned
 	// agent seat names a tool, not a model (agentbackend.RecordedSeatNamesAModel).
-	SeatTools       string `json:",omitempty"`
+	SeatTools string `json:",omitempty"`
+	// SeatProviders is the provider each seat's model was served from, as
+	// JSON keyed by role like ModelsByRole: what the seat resolver decided
+	// (the vendor of a vendor/model seat, a registry entry's provider, the
+	// pinned gateway, ollama for a discovered or placed daemon, an agent
+	// seat's vendor label). ModelsByRole holds the bare model, so this is
+	// the only place the record says where a seat's calls, and the audited
+	// source with them, went. "" on an entry written before the field
+	// existed and for a run that resolved no provider: not recorded, and a
+	// reader must never put a provider guessed from a model's name in its
+	// place.
+	SeatProviders   string `json:",omitempty"`
 	MinKillRate     *float64
 	MaxProvenMissed *int
 	Passed          *bool      // nil = not recorded; see ScanRow.Passed

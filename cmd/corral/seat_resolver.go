@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/modelcatalog"
 	"github.com/pdbethke/corralai/internal/models"
@@ -46,6 +48,25 @@ func (s seatSet) providers() map[string]string {
 		}
 	}
 	return out
+}
+
+// providersFor is providers() narrowed to the roles roster seats: the
+// record's providers describe the seats its roster records, and no others.
+// Nil when none has a resolved provider. The narrowing is advpool's, the
+// same one the verdict's providers go through.
+func (s seatSet) providersFor(roster map[string]string) map[string]string {
+	return advpool.SeatedOnly(s.providers(), roster)
+}
+
+// seatProvidersJSON is the ledger row's SeatProviders text: the role ->
+// provider map as JSON, "" when there is none, so an entry whose seats
+// resolved no provider records nothing rather than "{}".
+func seatProvidersJSON(providers map[string]string) string {
+	if len(providers) == 0 {
+		return ""
+	}
+	b, _ := json.Marshal(providers)
+	return string(b)
 }
 
 // listOllama is a var so tests substitute a fake daemon.

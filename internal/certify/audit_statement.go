@@ -215,8 +215,13 @@ type AuditStatement struct {
 	// reader can see the denominator: "3 files clean" means something
 	// different out of 4 than out of 400, and a statement that omitted it
 	// would flatter the run by silence.
-	Candidates      int
-	ModelsByRole    map[string]string
+	Candidates   int
+	ModelsByRole map[string]string
+	// SeatProviders is where each seat of ModelsByRole was served from, as
+	// the seat resolver decided it (the ledger row's SeatProviders). Signed
+	// beside the roster because the roster holds bare models; omitted, never
+	// signed empty, when no seat's provider was resolved.
+	SeatProviders   map[string]string
 	MinKillRate     *float64
 	MaxProvenMissed *int
 	Passed          bool
@@ -459,6 +464,9 @@ func BuildAuditAttestation(s AuditStatement) map[string]any {
 		// key to omit.
 		"scanId": s.ScanID,
 	}
+	if sp := seatProvidersPredicate(s.SeatProviders); sp != nil {
+		predicate["seatProviders"] = sp
+	}
 	// WarehouseRowsSHA256 is omitted, never signed as "", when the caller
 	// has nothing to say — the same rule every other unmeasured field in
 	// this predicate follows.
@@ -484,4 +492,22 @@ func BuildAuditAttestation(s AuditStatement) map[string]any {
 		"predicateType": AuditPredicateType,
 		"predicate":     predicate,
 	}
+}
+
+// seatProvidersPredicate is a record's role -> provider map as a predicate
+// value: JSON-native, and nil when there is nothing to sign, so both
+// statements omit the key rather than sign an empty claim about where their
+// seats ran.
+func seatProvidersPredicate(providers map[string]string) map[string]any {
+	var out map[string]any
+	for role, p := range providers {
+		if p == "" {
+			continue
+		}
+		if out == nil {
+			out = map[string]any{}
+		}
+		out[role] = p
+	}
+	return out
 }

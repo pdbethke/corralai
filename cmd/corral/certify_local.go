@@ -1504,6 +1504,10 @@ type auditRoles struct {
 	// by role — see seatToolProbe.toolsFor. Carried to the RunSpec so the verdict's
 	// SeatTools records what sat in each seat besides its model.
 	tools map[string]string
+	// providers is each seat's provider as the seat resolver decided it
+	// (seatSet.providers), by role. Carried to the RunSpec so the verdict's
+	// SeatProviders records where each seat's model was served from.
+	providers map[string]string
 }
 
 // herdNotConfiguredErr refuses a run whose grading seats have no model, and
@@ -1643,17 +1647,35 @@ func resolveRoleModels(in localAuditInput) (writer, mutant, critic, shadow, shad
 // rather than being dropped: "the critic was deliberately disabled" and "the
 // critic ran" are different audits and must key differently.
 func modelSetKey(writer, mutant, critic, shadow, shadowWriter string) string {
-	return modelSetKeyWith(nil, writer, mutant, critic, shadow, shadowWriter)
+	return modelSetKeyWith(nil, nil, writer, mutant, critic, shadow, shadowWriter)
 }
 
 // modelSetKeyWith is modelSetKey with the scan's tool probe, so the version
-// in the key is the version every verdict of the scan records.
-func modelSetKeyWith(probe *seatToolProbe, writer, mutant, critic, shadow, shadowWriter string) string {
+// in the key is the version every verdict of the scan records, and with each
+// seat's provider (seatSet.providers, keyed by advpool role), so the key
+// names where each seat was served from.
+//
+// The provider is in the key because the seat value is the BARE model (a
+// vendor/model seat is rewritten to its model by the resolver): without it a
+// file audited with ollama's gpt-x and a later run naming openai/gpt-x share
+// a key, the later run is served the cached verdict, and one signed entry
+// says ollama in the file's verdict and openai on its row. A seat with a
+// provider keys as "<provider>/<keyName(spec)>"; a seat with none (off, an
+// empty seat, an operator-defined agent that declares no maker) keys as the
+// spec alone, never with a guessed provider.
+func modelSetKeyWith(probe *seatToolProbe, providers map[string]string, writer, mutant, critic, shadow, shadowWriter string) string {
+	name := func(role, spec string) string {
+		k := probe.keyName(spec)
+		if p := strings.TrimSpace(providers[role]); p != "" {
+			return p + "/" + k
+		}
+		return k
+	}
 	kv := map[string]string{
-		"test-writer":      probe.keyName(writer),
-		"mutant-generator": probe.keyName(mutant),
-		"critic":           probe.keyName(critic),
-		"shadow":           probe.keyName(shadow),
+		"test-writer":      name(advpool.RoleTestWriter, writer),
+		"mutant-generator": name(advpool.RoleMutantGenerator, mutant),
+		"critic":           name(advpool.RoleTestCritic, critic),
+		"shadow":           name(advpool.RoleMutantGeneratorShadow, shadow),
 	}
 	// Omitted when off, DELIBERATELY breaking the keep-disabled-seats-in-the-key
 	// convention the other optional seats follow. The critic's on/off changes
@@ -1666,7 +1688,7 @@ func modelSetKeyWith(probe *seatToolProbe, writer, mutant, critic, shadow, shado
 	// enabling the challenger would hit a cached verdict, skip the run, and
 	// silently collect no measurement at all.
 	if shadowWriter != "" {
-		kv["test-writer-shadow"] = probe.keyName(shadowWriter)
+		kv["test-writer-shadow"] = name(advpool.RoleTestWriterShadow, shadowWriter)
 	}
 	return reposcan.CanonicalKV(kv)
 }
@@ -1770,7 +1792,7 @@ func resolveAuditRoles(in localAuditInput, stderr io.Writer) (auditRoles, error)
 		return r, auditUsageErr("%v", err)
 	}
 
-	return auditRoles{assign: assign, shadow: shadow, shadowWriter: shadowWriter, writer: writer, mutant: mutant, critic: critic, chatterFor: chatterFor, meters: meters, tools: in.toolProbe.toolsFor(assign)}, nil
+	return auditRoles{assign: assign, shadow: shadow, shadowWriter: shadowWriter, writer: writer, mutant: mutant, critic: critic, chatterFor: chatterFor, meters: meters, tools: in.toolProbe.toolsFor(assign), providers: in.seats.providers()}, nil
 }
 
 // runSubject is the FILE-and-repo half of a RunSpec: everything
@@ -1927,6 +1949,7 @@ func newAuditRunSpec(in localAuditInput, roles auditRoles, subj runSubject) advp
 		ShadowWriterModel: roles.shadowWriter,
 		ShadowSelection:   in.shadowSelection,
 		SeatTools:         roles.tools,
+		SeatProviders:     roles.providers,
 		// HOW the writer attacks. The CLI's default is per-survivor; an
 		// EMPTY value here means batched, which is what a caller outside the
 		// CLI (the brain, a test) gets — see RunSpec.WriterMode.
@@ -2322,7 +2345,6 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 	verdict.ModelCalls = modelCallsFromMeters(roles.meters)
 
 	av := advVerdictFromPool(*verdict)
-	av.SeatProviders = in.seats.providers()
 	renderAdvVerdict(stdout, in.codePath, av)
 	renderModelSpend(stdout, verdict.ModelCalls)
 	if line := budgetLine(in.tokenBudget, 0); line != "" {
@@ -3006,7 +3028,7 @@ func advVerdictFromPool(v advpool.Verdict) advVerdict {
 		DevKillRate: v.DevKillRate, MutantsTotal: v.MutantsTotal,
 		MutantsInvalid: v.MutantsInvalid, MutantsUnmeasured: v.MutantsUnmeasured,
 		Survivors: v.Survivors, ProvenMissed: v.ProvenMissed,
-		ModelsByRole: v.ModelsByRole, SeatTools: v.SeatTools, Status: v.Status,
+		ModelsByRole: v.ModelsByRole, SeatTools: v.SeatTools, SeatProviders: v.SeatProviders, Status: v.Status,
 		RecordID: v.RecordID, RecordHead: v.RecordHead,
 		RegionsTotal: v.RegionsTotal, RegionsProbed: v.RegionsProbed,
 		DroppedRegions:   v.DroppedRegions,

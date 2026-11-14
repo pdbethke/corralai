@@ -55,7 +55,10 @@ type bundleMeta struct {
 	// migration.
 	ModelsByRole string
 	// SeatTools is the roster's agent tools as JSON, beside ModelsByRole.
-	SeatTools       string
+	SeatTools string
+	// SeatProviders is the roster's providers as JSON, beside ModelsByRole
+	// (seatProvidersJSON); "" when no seat's provider was resolved.
+	SeatProviders   string
 	MinKillRate     *float64
 	MaxProvenMissed *int
 	Passed          *bool // nil when the outcome is not recoverable (scans push)
@@ -198,6 +201,7 @@ func buildAuditRows(files []scanstore.File, scanID int64, meta bundleMeta) []aud
 			MutantsPlanted: f.MutantsGraded + f.MutantsInvalid,
 			ModelsByRole:   meta.ModelsByRole,
 			SeatTools:      meta.SeatTools,
+			SeatProviders:  meta.SeatProviders,
 			MinKillRate:    meta.MinKillRate, MaxProvenMissed: meta.MaxProvenMissed,
 			Passed:    meta.Passed,
 			StartedAt: meta.StartedAt,

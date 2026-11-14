@@ -35,13 +35,13 @@ type advFinding struct {
 // tags, so its keys are the Go-default CAPITALIZED field names — matched here
 // verbatim. Changing these breaks decoding.
 type advVerdict struct {
-	// SeatProviders is role -> the provider the seat resolver recorded for
-	// that seat (seatSet.providers), for the "every graded seat is X" line.
-	// Set by the caller that resolved the seats, never derived from
-	// ModelsByRole: a model's name is not its vendor. Nil (the daemon's
-	// --adversarial path, which resolves nothing here) prints no claim.
-	// Not recorded; the line is a disclosure on this run's output.
-	SeatProviders map[string]string `json:"-"`
+	// SeatProviders mirrors advpool.Verdict.SeatProviders: role -> the
+	// provider the seat resolver decided for that seat, for the "every
+	// graded seat is X" line. Never derived from ModelsByRole: a model's
+	// name is not its vendor. Nil when the verdict carries none (the
+	// daemon's --adversarial path resolves nothing in this process), and
+	// then the line makes no claim.
+	SeatProviders map[string]string `json:"seat_providers,omitempty"`
 
 	Repo           string  `json:"Repo"`
 	Commit         string  `json:"Commit"`

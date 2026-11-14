@@ -271,9 +271,11 @@ func newSessionSecret() (string, error) {
 // header (EventSource, WebSocket) still carry it automatically — the bearer
 // itself is never rendered or sent to the browser.
 func bundleHandler(dir string, m consolebundle.BundleManifest, sessionSecret string) http.Handler {
-	assets := make(map[string]string, len(m.Assets)) // path -> sha256
+	// The request only selects an entry; the path read from disk and the
+	// hash it must match both come from the signature-verified manifest.
+	assets := make(map[string]consolebundle.BundleAsset, len(m.Assets))
 	for _, a := range m.Assets {
-		assets[a.Path] = a.SHA256
+		assets[a.Path] = a
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -289,17 +291,17 @@ func bundleHandler(dir string, m consolebundle.BundleManifest, sessionSecret str
 			http.NotFound(w, r)
 			return
 		}
-		wantSHA, ok := assets[clean]
+		asset, ok := assets[clean]
 		if !ok {
 			http.NotFound(w, r)
 			return
 		}
-		data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(clean))) // #nosec G304,G703 -- clean was validated above to reject "..", absolute paths, and any path.Clean escape, and must additionally match a path key in the signature-verified manifest (the assets map) before this line runs; dir is this process's own cache directory, not attacker-controlled
+		data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(asset.Path))) // #nosec G304,G703 -- asset.Path comes from the signature-verified manifest, not the request (which only selected it after the "..", absolute-path and path.Clean checks above); dir is this process's own cache directory
 		if err != nil {
 			http.NotFound(w, r)
 			return
 		}
-		if sha256Hex(data) != wantSHA {
+		if sha256Hex(data) != asset.SHA256 {
 			// Cache tampered on disk after fetchBundle verified it — refuse
 			// to serve rather than trust a file that no longer matches the
 			// signed manifest.

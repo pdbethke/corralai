@@ -10,6 +10,7 @@ package certverify
 import (
 	"crypto/ed25519"
 	"encoding/json"
+	"strconv"
 
 	"github.com/pdbethke/corralai/internal/certify"
 	"github.com/pdbethke/corralai/internal/transparency"
@@ -238,14 +239,12 @@ func statementSubjectDigest(stmt map[string]any) (string, bool) {
 	return sha, ok
 }
 
-// quote wraps s in double quotes for a Detail message, mirroring the CLI's
-// prior %q formatting.
+// quote wraps s in double quotes for a Detail message: the CLI's prior %q
+// formatting, which escapes every quote and control character in s. (This
+// was json.Marshal with a fallback that pasted s between bare quotes, a
+// branch that could never run, since marshaling a string cannot fail.)
 func quote(s string) string {
-	b, err := json.Marshal(s)
-	if err != nil {
-		return `"` + s + `"`
-	}
-	return string(b)
+	return strconv.Quote(s)
 }
 
 // canonicalJSON renders a decoded JSON value in a stable form so two

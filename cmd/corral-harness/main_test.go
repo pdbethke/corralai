@@ -3,6 +3,7 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -113,5 +114,46 @@ func TestMcpConfigShape(t *testing.T) {
 	// trailing slash on the brain URL must not double up
 	if strings.Contains(mcpConfig("http://b:9019/"), "9019//") {
 		t.Fatal("double slash in mcp url")
+	}
+}
+
+// The prompt shows tool arguments as literal JSON for the harness to copy.
+// They were built with Go's %q, which is not JSON: a control character comes
+// out as \x01, which no JSON parser accepts, so a bee named from an unusual
+// AGENT_NAME was told to send arguments its MCP client cannot encode. Each
+// argument object built from inputs must parse and carry the inputs exactly.
+func TestBeePromptToolArgumentsAreJSON(t *testing.T) {
+	name, instance, model, backend := "Co\x01dy \"q\" \\ <b>", "host\x7f-1", "m\x02", "b\"e"
+	p := beePrompt(name, agentrole.Parse("reviewer"), instance, "codex", model, backend)
+	args := func(tool string) map[string]any {
+		t.Helper()
+		i := strings.Index(p, "Call "+tool+" with ")
+		if i < 0 {
+			i = strings.Index(p, "call "+tool+" with ")
+		}
+		if i < 0 {
+			t.Fatalf("prompt has no %s call:\n%s", tool, p)
+		}
+		var m map[string]any
+		if err := json.NewDecoder(strings.NewReader(p[i+len("Call "+tool+" with "):])).Decode(&m); err != nil {
+			t.Fatalf("%s's arguments are not JSON: %v\n%s", tool, err, p)
+		}
+		return m
+	}
+	for tool, want := range map[string]map[string]any{
+		"bootstrap":   {"name": name, "role": "reviewer"},
+		"claim_task":  {"name": name, "instance": instance},
+		"report_host": {"name": name, "host": instance, "model": model, "backend": backend, "jail": "none"},
+	} {
+		got := args(tool)
+		for k, v := range want {
+			if got[k] != v {
+				t.Errorf("%s %q = %#v, want %#v", tool, k, got[k], v)
+			}
+		}
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal([]byte(mcpConfig("http://b\x01:9019")), &cfg); err != nil {
+		t.Errorf("mcpConfig is not JSON for an unusual URL: %v", err)
 	}
 }

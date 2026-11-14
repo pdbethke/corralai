@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -496,12 +497,10 @@ func withWireArgs(argv, extra []string) []string {
 	if len(extra) == 0 {
 		return argv
 	}
-	out := make([]string, 0, len(argv)+len(extra))
 	if n := len(argv); n > 1 && argv[n-1] == "-" {
-		out = append(append(append(out, argv[:n-1]...), extra...), "-")
-		return out
+		return slices.Concat(argv[:n-1], extra, []string{"-"})
 	}
-	return append(append(out, argv...), extra...)
+	return slices.Concat(argv, extra)
 }
 
 // newAgentSeat is the backend for an agentic seat in dir ("" = a fresh empty

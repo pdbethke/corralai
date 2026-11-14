@@ -130,7 +130,34 @@ Env:
 // mcpConfig is the de-facto standard .mcp.json shape understood by Claude
 // Code, Gemini CLI, Cursor, and friends.
 func mcpConfig(brain string) string {
-	return fmt.Sprintf(`{"mcpServers":{"corral":{"type":"http","url":%q}}}`, strings.TrimRight(brain, "/")+"/mcp/")
+	return `{"mcpServers":{"corral":` + jsonObject("type", "http", "url", strings.TrimRight(brain, "/")+"/mcp/") + `}}`
+}
+
+// jsonObject renders key/value pairs, in order, as one JSON object. The bee
+// prompt shows tool arguments as literal JSON for the harness to copy, and
+// Go's %q is not JSON: it writes a control character as \x01, which no JSON
+// parser accepts. Values are encoded with encoding/json; a json.RawMessage
+// is placed as is.
+func jsonObject(kv ...any) string {
+	var b strings.Builder
+	b.WriteByte('{')
+	for i := 0; i+1 < len(kv); i += 2 {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		k, _ := json.Marshal(kv[i])
+		v, err := json.Marshal(kv[i+1])
+		if err != nil {
+			// Only strings and json.RawMessage from json.Marshal reach here,
+			// and neither fails; an empty string keeps the object valid.
+			v = []byte(`""`)
+		}
+		b.Write(k)
+		b.WriteByte(':')
+		b.Write(v)
+	}
+	b.WriteByte('}')
+	return b.String()
 }
 
 // beePrompt is the one-task bee contract, phrased for a harness that has its
@@ -151,13 +178,14 @@ func beePrompt(name string, rs agentrole.Set, instance, desc, model, backend str
 	rolesJSON, _ := json.Marshal(rs.ClaimArg())
 	announce := ""
 	if model != "" {
-		announce = fmt.Sprintf("\n   Then call report_host with {\"name\":%q,\"role\":%q,\"host\":%q,\"model\":%q,\"backend\":%q,\"jail\":\"none\"} so topology and finding attribution know what drives you.",
-			name, roleDisplay, instance, model, backend)
+		announce = "\n   Then call report_host with " +
+			jsonObject("name", name, "role", roleDisplay, "host", instance, "model", model, "backend", backend, "jail", "none") +
+			" so topology and finding attribution know what drives you."
 	}
 	return fmt.Sprintf(`You are %q, a %s bee in a corralai swarm. The MCP server "corral" is the swarm's brain. Work EXACTLY ONE task, then stop.
 
-1. Call bootstrap with {"name":%q,"role":%q,"program":%q} to enter the swarm.%s
-2. Call claim_task with {"name":%q,"roles":%s,"instance":%q}.
+1. Call bootstrap with %s to enter the swarm.%s
+2. Call claim_task with %s.
    - If it returns task:null, print exactly IDLE and stop. Do not invent work.
 3. Do the task in the current directory with YOUR OWN tools (write real files,
    run real commands). Before writing a file, call claim_paths on it; if a peer
@@ -168,7 +196,7 @@ func beePrompt(name string, rs agentrole.Set, instance, desc, model, backend str
    recorded, so also call report_execution with the command and exit code.
 5. Report any vulnerability/bug/design flaw/missing requirement via
    report_finding (with severity).
-6. As you work, call report_thought a few times with {"name":%q,"mission_id":<the
+6. As you work, call report_thought a few times with {"name":%s,"mission_id":<the
    claimed task's mission_id>,"text":"<a short, substantive sentence>"} — your
    ACTUAL reasoning at real decision/finding points (what you're examining,
    deciding, or finding — e.g. "the ratelimit test fails because the bucket
@@ -179,7 +207,17 @@ func beePrompt(name string, rs agentrole.Set, instance, desc, model, backend str
 7. Call complete_task with {"id":<the task id>,"result":"<one-line summary>"}.
    If it refuses, satisfy the stated reason and try once more.
 8. Print a one-line summary of what you did.`,
-		name, roleDisplay, name, roleDisplay, desc, announce, name, string(rolesJSON), instance, name)
+		name, roleDisplay,
+		jsonObject("name", name, "role", roleDisplay, "program", desc), announce,
+		jsonObject("name", name, "roles", json.RawMessage(rolesJSON), "instance", instance),
+		jsonString(name))
+}
+
+// jsonString is s as a JSON string literal, for a value shown inside a JSON
+// example whose other fields are placeholders.
+func jsonString(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
 }
 
 func expand(tmpl string, sub map[string]string) string {

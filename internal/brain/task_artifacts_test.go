@@ -5,7 +5,6 @@ package brain
 import (
 	"context"
 	"encoding/base64"
-	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
@@ -59,10 +58,7 @@ func TestTaskArtifactsSecurity(t *testing.T) {
 		TaskArtifacts:  artstore,
 		WorkerSessions: ws,
 	})
-	handler := mcp.NewStreamableHTTPHandler(
-		func(*http.Request) *mcp.Server { return srv },
-		&mcp.StreamableHTTPOptions{DisableLocalhostProtection: true},
-	)
+	handler := NewHTTPHandler(srv)
 	ts := httptest.NewServer(handler)
 	defer ts.Close()
 

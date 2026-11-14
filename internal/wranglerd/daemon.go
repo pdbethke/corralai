@@ -24,8 +24,6 @@ import (
 
 	"golang.org/x/crypto/acme/autocert"
 
-	"github.com/modelcontextprotocol/go-sdk/mcp"
-
 	"github.com/pdbethke/corralai/internal/artifacts"
 	"github.com/pdbethke/corralai/internal/attest"
 	"github.com/pdbethke/corralai/internal/auth"
@@ -857,16 +855,9 @@ func Run(version string) {
 		}
 	}()
 
-	// The brain listens on 127.0.0.1 behind a reverse proxy / tunnel: requests arrive
-	// via localhost but carry the public Host header (your CORRALAI_ALLOWED_HOSTS),
-	// which the go-sdk's localhost DNS-rebinding guard rejects with 403. That guard
-	// defends a *local* MCP server against malicious web pages; here the brain is
-	// proxy-fronted AND OIDC-authenticated (a browser can't forge the Bearer token),
-	// so the guard only false-positives real client traffic. Disable it.
-	mcpHandler := mcp.NewStreamableHTTPHandler(
-		func(*http.Request) *mcp.Server { return srv },
-		&mcp.StreamableHTTPOptions{DisableLocalhostProtection: true},
-	)
+	// brain.NewHTTPHandler carries the transport options (the localhost guard,
+	// and a body limit sized to the brain's own tool caps) and says why.
+	mcpHandler := brain.NewHTTPHandler(srv)
 
 	// Authorization: a valid token is necessary but not sufficient — only principals
 	// in the role store may use the brain. Backed by the live store so add_member /

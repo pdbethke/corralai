@@ -36,11 +36,13 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ### Changed
 
+- **The daemon now limits an MCP request body to 129 MiB, sized from its own tool caps.** go-sdk v1.8.0 (taken in this release) refuses any Streamable HTTP request over 4 MiB unless the server sets a limit, which would have made the brain answer a legitimate `repo_push` of 4 to 64 MiB with a bare 413. `brain.NewHTTPHandler` now sets the limit to twice `repo_push`'s 64 MiB cap plus 1 MiB for the JSON envelope, so `repo_push` and `save_task_artifact` refuse oversize input themselves, with their own messages. Before go-sdk v1.8.0 the transport had no limit at all.
 - **The README and the front page no longer carry a hand-kept proof table or audit list.** They point at the Languages page. The old rows were runs made before the record restarted on 2026-11-09 and are kept in the `ledger-archive/2026-11-09` tag.
 
 ### Fixed
 
 - **go-jose v4.1.6.** The daemon's bearer-token verifier (`internal/auth`, through `coreos/go-oidc`) parses JWKs and JWTs with go-jose, and v4.1.4 carried three advisories: a denial of service when parsing JWKs with RSA keys (GHSA-mgcc-cww5-fp2q), a panic in CBC-HMAC processing (GHSA-4w3g-jfj2-cw2q) and panics in JSON parsing (GHSA-vvm8-gf78-28g4). All three are fixed in v4.1.6. govulncheck reported none of them as reachable from corral's code.
+- **OpenTelemetry Go v1.47.0 and Python 1.45.2.** `go.opentelemetry.io/otel/trace` (indirect) moves from v1.44.0 to v1.47.0, and the starlette campaign image's hashed requirements take `opentelemetry-api` and `-sdk` 1.45.2, each clearing a medium Dependabot advisory. The requirements file is now compiled with `--no-emit-index-url`, so a local pip configuration's index URL cannot be written into it.
 - **A registry-declared local `gpt-oss` was refused as an OpenAI model** by the herd preflight and `doctor`, because the name was matched before the declaration. A declared provider now outranks what a name looks like.
 - **`corral review` discarded registry endpoints.** It disclosed the registry's endpoint but called the host's default local daemon, and a declared local reviewer could not be reached. It now uses the endpoint it discloses.
 - **Go 1.26.11.** The standard-library advisory in `net/http` (GO-2026-6859, a data race in `MaxBytesReader` header handling, fixed in go1.26.11) is reported by govulncheck against go1.26.10, so the module floor and the Dockerfiles move up.

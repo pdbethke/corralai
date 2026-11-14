@@ -47,21 +47,25 @@ test('jsArg carries any value into an inline handler intact and inert', async ({
   }
 });
 
-// The same check against the old escaping, so this test is known to fail on
-// the shape it replaced.
+// The same check against what the old escaping produced, so this test is
+// known to fail on the shape it replaced. For the key x\');window.__pwned=1;//
+// the old code, '\'' + key.replace(/'/g,"\\'") + '\'', wrote exactly this
+// markup. It is a fixed string so the test does not contain the escaping it
+// condemns (CodeQL flags that pattern wherever it appears).
+const oldEscapingMarkup = String.raw`<span id="__h" onclick="__probe('x\\');window.__pwned=1;//')">x</span>`;
+
 test('the old single-quote escaping is what jsArg replaced (negative control)', async ({ page }) => {
   await page.goto('/');
-  const pwned = await page.evaluate(() => {
+  const pwned = await page.evaluate((markup) => {
     const w = window as any;
     delete w.__pwned;
     w.__probe = () => {};
-    const v = `x\\');window.__pwned=1;//`;
     const host = document.createElement('div');
-    host.innerHTML = '<span id="__h" onclick="__probe(\'' + v.replace(/'/g, "\\'") + '\')">x</span>';
+    host.innerHTML = markup;
     document.body.appendChild(host);
     (host.querySelector('#__h') as HTMLElement).click();
     host.remove();
     return w.__pwned;
-  });
+  }, oldEscapingMarkup);
   expect(pwned).toBe(1);
 });

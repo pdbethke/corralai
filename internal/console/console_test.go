@@ -228,13 +228,13 @@ func TestReboundHostRefusedOnAPIRoute(t *testing.T) {
 
 func TestSameOriginRequiresMatchingScheme(t *testing.T) {
 	// Host matches, but the Origin claims https while the request itself is
-	// plain http (r.TLS == nil) — sameOrigin must not admit this: it would
+	// plain http (r.TLS == nil) — SameOrigin must not admit this: it would
 	// let a scheme-confused Origin (e.g. an https page whose host happens to
 	// collide with the console's Host string) ride as same-origin.
 	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8080/api/ping", nil)
 	req.Header.Set("Origin", "https://127.0.0.1:8080")
-	if sameOrigin(req) {
-		t.Fatal("sameOrigin admitted an Origin whose scheme (https) does not match the request's scheme (http)")
+	if SameOrigin(req) {
+		t.Fatal("SameOrigin admitted an Origin whose scheme (https) does not match the request's scheme (http)")
 	}
 }
 
@@ -435,7 +435,7 @@ func TestCookieOnlyRequestPassesGate(t *testing.T) {
 
 // TestCookieOnlyRequestStillFailsClosed proves the cookie addition didn't
 // weaken csrfGate's other two defenses: a cross-origin request carrying the
-// valid cookie is still refused (sameOrigin still bites), and a request with
+// valid cookie is still refused (SameOrigin still bites), and a request with
 // neither cookie nor header is still refused.
 func TestCookieOnlyRequestStillFailsClosed(t *testing.T) {
 	d := newRealBundleDaemon(t)

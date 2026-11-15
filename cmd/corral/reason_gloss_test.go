@@ -60,3 +60,18 @@ func TestNotCollectedErrorCarriesItsScanReason(t *testing.T) {
 		t.Fatalf("ordinary audit error claims reason %q, want none", rc2.ScanReason())
 	}
 }
+
+// A collect refusal on certify --repo comes after the file's goal was
+// derived, so neither the summary gloss nor the per-file refusal may claim
+// nothing was spent. Both did, above a cost line of 78.1k tokens
+// (ramsey/uuid, 2026-11-15).
+func TestCollectRefusalNeverClaimsNothingWasSpent(t *testing.T) {
+	for name, text := range map[string]string{
+		"gloss":   reasonGloss(reposcan.ReasonTestCmdCannotCollect),
+		"refusal": notCollectedAdvice,
+	} {
+		if strings.Contains(strings.ToLower(text), "nothing was spent") {
+			t.Errorf("%s claims nothing was spent, which is false on certify --repo: %q", name, text)
+		}
+	}
+}

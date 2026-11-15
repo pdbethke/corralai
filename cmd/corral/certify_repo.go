@@ -4678,7 +4678,7 @@ func printAuthoredSource(w io.Writer, src string) {
 func reasonGloss(reason string) string {
 	switch reason {
 	case reposcan.ReasonTestCmdCannotCollect:
-		return " — your test command would not run the test corral writes, so no gap could be proven; NOT a corral failure, and nothing was spent"
+		return " — your test command would not run the test corral writes, so no gap could be proven; NOT a corral failure, and no mutant was planted or test written for it"
 	case reposcan.ReasonUngoaled:
 		return " — no testable property: the file is purely declarative (interfaces, constants, generated code), so there is nothing a mutant could violate"
 	case reposcan.ReasonBaselineFailed:

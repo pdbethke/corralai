@@ -461,11 +461,18 @@ type Enumerator interface {
 }
 
 // CanaryCode is deliberately invalid source in every language corral
-// supports (go, python, ruby, javascript, typescript). Any check command
+// supports (TestCanaryCodeIsInvalidSourceInEveryLanguage runs each
+// registered language's own syntax check on it). Any check command
 // that genuinely compiles or imports the file under audit MUST fail on it.
 // A suite that still passes provably never reads the file, so nothing it
 // reports about that file can mean anything.
-const CanaryCode = "!!!corral canary!!!"
+//
+// It opens with `<?php` because in PHP, text outside that tag is not code but
+// literal output: the bare "!!!corral canary!!!" this used to be was VALID
+// PHP. PHPUnit loaded a canary test file, printed it and passed, so the
+// authored-test positive control refused every PHP `certify --repo` as not
+// collected. The tag is itself a syntax error in every other language.
+const CanaryCode = "<?php !!!corral canary!!!"
 
 // Report is the outcome of scoring a candidate test against compliant code
 // and a set of mutants.

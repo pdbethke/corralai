@@ -963,6 +963,19 @@ func auditUsageErr(format string, a ...any) error {
 	return localAuditError{usage: true, msg: fmt.Sprintf(format, a...), causes: errorArgs(a)}
 }
 
+// notCollectedAdvice is the refusal for a test command that would not run
+// the authored test. It says what this file's audit did not do (no mutant, no
+// test) and never that "nothing was spent": on certify --repo the file's goal
+// was already derived, at a cost the run's cost line reports. It said
+// "Nothing was spent" until ramsey/uuid (2026-11-15) printed it 25 times
+// above a cost line of 78.1k tokens.
+const notCollectedAdvice = "your test command would not run the test this audit writes, so it could not prove a gap even if it found one.\n" +
+	"  corral writes its killing test beside your own, as: %s\n" +
+	"  Your command does not collect that file — a command naming a single test file is the usual cause.\n" +
+	"  Widen it to the directory or the runner's own discovery: `-- pytest tests/` rather than `-- pytest tests/test_one.py`;\n" +
+	"  `-- npx jest tests/` rather than a single spec path.\n" +
+	"  This is checked before any mutant is planted or test written for this file."
+
 // auditNotCollectedErr is auditUsageErr for the ONE refusal a repo scan must
 // report distinctly: the caller's test command would not run the test this
 // audit writes. It is a fact about the invocation, not a corral failure.
@@ -2314,14 +2327,7 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 	// the run had already solved.
 	authoredArgv := scorer.AuthoredCommand(rs.CodePath, adequacy.ShellSplit(rs.TestCmd))
 	if collected, cerr := scorer.AuthoredTestWouldBeCollected(ctx, rs.CodePath, authoredArgv); cerr == nil && !collected {
-		return zero, auditNotCollectedErr(
-			"your test command would not run the test this audit writes, so it could not prove a gap even if it found one.\n"+
-				"  corral writes its killing test beside your own, as: %s\n"+
-				"  Your command does not collect that file — a command naming a single test file is the usual cause.\n"+
-				"  Widen it to the directory or the runner's own discovery: `-- pytest tests/` rather than `-- pytest tests/test_one.py`;\n"+
-				"  `-- npx jest tests/` rather than a single spec path.\n"+
-				"  Nothing was spent — this is checked before any model runs.",
-			advpool.AuthoredTestPathFor(rs.Landing, rs.CodePath, rs.DevTestPath))
+		return zero, auditNotCollectedErr(notCollectedAdvice, advpool.AuthoredTestPathFor(rs.Landing, rs.CodePath, rs.DevTestPath))
 	}
 
 	verdict, err := driveLocalRun(ctx, d, q, localMissionID, chatterFor, poll, time.Sleep, stdout, rec, actorFor, swarm)

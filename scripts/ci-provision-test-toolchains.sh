@@ -64,7 +64,12 @@ TSDIR=/usr/local/lib/corral-ci-toolchains
 { sudo install -d "$TSDIR" &&
   sudo cp "$REPO/scripts/npm-pins/ci-toolchains/package.json" "$REPO/scripts/npm-pins/ci-toolchains/package-lock.json" "$TSDIR/" &&
   sudo npm ci --prefix "$TSDIR" --no-audit --no-fund &&
-  sudo ln -sf "$TSDIR/node_modules/.bin/tsc" /usr/local/bin/tsc; } || true
+  sudo ln -sf "$TSDIR/node_modules/.bin/tsc" /usr/local/bin/tsc &&
+  # The same node_modules is what the real-compiler halves of the project-tsc
+  # tests bind into the jail as a project's own; without it they skip.
+  if [ -n "${GITHUB_ENV:-}" ]; then
+    echo "CORRALAI_TYPESCRIPT_NODE_MODULES=$TSDIR/node_modules" >> "$GITHUB_ENV"
+  fi; } || true
 tsc --version || echo "tsc not available — ts-in-jail test will SKIP"
 
 echo "== Rust (internal/lang rust plugin; the jail's pinned RUSTUP_HOME) =="

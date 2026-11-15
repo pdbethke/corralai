@@ -142,7 +142,7 @@ func NewWithOptions(brainRaw, token string, readOnly, allowUnsigned bool) (http.
 	// served entry document. Without this, a DNS-rebound Host (attacker
 	// domain rebound to 127.0.0.1) would still be "same-origin" from the
 	// browser's perspective and could read that secret via GET /, then ride
-	// both csrfGate checks on the strength of it. See hostGate/loopbackHost.
+	// both csrfGate checks on the strength of it. See hostGate/LoopbackHost.
 	return hostGate(mux), nil
 }
 
@@ -154,7 +154,7 @@ func NewWithOptions(brainRaw, token string, readOnly, allowUnsigned bool) (http.
 // before bundleHandler or the proxy ever sees the request.
 func hostGate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !loopbackHost(r) {
+		if !LoopbackHost(r) {
 			http.Error(w, "console: request Host is not loopback — refused (DNS-rebinding guard)", http.StatusForbidden)
 			return
 		}
@@ -162,10 +162,10 @@ func hostGate(next http.Handler) http.Handler {
 	})
 }
 
-// loopbackHost reports whether r.Host's hostname (port and IPv6 brackets
+// LoopbackHost reports whether r.Host's hostname (port and IPv6 brackets
 // stripped) is "localhost" (case-insensitive) or a loopback IP
 // (127.0.0.0/8, ::1).
-func loopbackHost(r *http.Request) bool {
+func LoopbackHost(r *http.Request) bool {
 	h := r.Host
 	if host, _, err := net.SplitHostPort(h); err == nil {
 		h = host
@@ -188,7 +188,7 @@ func loopbackHost(r *http.Request) bool {
 // next (the proxy) ever runs — i.e. before the bearer is attached.
 func csrfGate(secret string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !sameOrigin(r) {
+		if !SameOrigin(r) {
 			http.Error(w, "console: request Origin/Referer does not match this console — refused", http.StatusForbidden)
 			return
 		}
@@ -200,14 +200,14 @@ func csrfGate(secret string, next http.Handler) http.Handler {
 	})
 }
 
-// sameOrigin reports whether the request's Origin (or Referer, if Origin is
+// SameOrigin reports whether the request's Origin (or Referer, if Origin is
 // absent) host AND scheme match the console's own — i.e. this request
 // originated from a page the console itself served, not a third-party
 // site. Fails closed: no Origin and no Referer is refused, not admitted.
 // The scheme check matters even with matching hosts: without it, an
 // https:// Origin would be accepted for a plain http request, which is
 // never how this local console is actually reached.
-func sameOrigin(r *http.Request) bool {
+func SameOrigin(r *http.Request) bool {
 	src := r.Header.Get("Origin")
 	if src == "" {
 		src = r.Header.Get("Referer")
@@ -230,21 +230,21 @@ func sameOrigin(r *http.Request) bool {
 // the header for programmatic/legacy clients, the cookie for the real SPA's
 // transports (bare fetch(), EventSource, WebSocket) that can never set a
 // custom header. Either path is sufficient; both are checked with the same
-// constant-time discipline via constEq.
+// constant-time discipline via ConstEq.
 func validSession(r *http.Request, secret string) bool {
-	if constEq(r.Header.Get(consoleSessionHeader), secret) {
+	if ConstEq(r.Header.Get(consoleSessionHeader), secret) {
 		return true
 	}
-	if c, err := r.Cookie(consoleSessionCookie); err == nil && constEq(c.Value, secret) {
+	if c, err := r.Cookie(consoleSessionCookie); err == nil && ConstEq(c.Value, secret) {
 		return true
 	}
 	return false
 }
 
-// constEq reports whether got equals secret, in constant time once lengths
+// ConstEq reports whether got equals secret, in constant time once lengths
 // match. The length check runs first (cheap, not secret-dependent) so
 // subtle.ConstantTimeCompare only ever runs on equal-length inputs.
-func constEq(got, secret string) bool {
+func ConstEq(got, secret string) bool {
 	if got == "" || len(got) != len(secret) {
 		return false
 	}
@@ -316,7 +316,7 @@ func bundleHandler(dir string, m consolebundle.BundleManifest, sessionSecret str
 			// No Secure attribute: this console is reached over plain
 			// http://127.0.0.1, and Secure would make the browser silently
 			// drop the cookie — re-breaking the exact bug this fixes.
-			http.SetCookie(w, &http.Cookie{ // #nosec G124 -- Secure is deliberately omitted: this console is reached ONLY over plain http://127.0.0.1/localhost (hostGate enforces loopback above), never TLS; a Secure cookie would be silently dropped by the browser and reintroduce the exact bug this fix closes. HttpOnly + SameSite=Strict are set; the confused-deputy/cross-origin threat is covered by sameOrigin + hostGate, not by Secure (which defends against network eavesdropping, not applicable on loopback)
+			http.SetCookie(w, &http.Cookie{ // #nosec G124 -- Secure is deliberately omitted: this console is reached ONLY over plain http://127.0.0.1/localhost (hostGate enforces loopback above), never TLS; a Secure cookie would be silently dropped by the browser and reintroduce the exact bug this fix closes. HttpOnly + SameSite=Strict are set; the confused-deputy/cross-origin threat is covered by SameOrigin + hostGate, not by Secure (which defends against network eavesdropping, not applicable on loopback)
 				Name:     consoleSessionCookie,
 				Value:    sessionSecret,
 				Path:     "/",

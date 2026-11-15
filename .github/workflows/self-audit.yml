@@ -78,7 +78,7 @@ jobs:
     # of it, on purpose — see `timeout`.
     timeout-minutes: 360
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # The action derives its own --diff-base from the PR's base ref and
           # asks git for the merge base. A shallow clone has no merge base to

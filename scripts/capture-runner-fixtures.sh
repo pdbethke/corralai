@@ -35,10 +35,22 @@ JEST=30.5.2 VITEST=3.2.7 MOCHA=11.8.0 PHPUNIT=11.5.57
 mkdir -p "$DIR"
 cp -r "$OUT/src/." "$DIR/"
 cd "$DIR"
-# The versions are spelled out here, not interpolated, so a pin scanner can read them;
-# the guard below keeps them equal to the variables the manifest reports.
-[ "$JEST $VITEST $MOCHA" = "30.5.2 3.2.7 11.8.0" ] || { echo "JEST/VITEST/MOCHA drifted from the npm install line" >&2; exit 1; }
-npm install --silent --no-audit --no-fund jest@30.5.2 vitest@3.2.7 mocha@11.8.0 >/dev/null
+# The runners come from scripts/npm-pins/runner-fixtures/package-lock.json via
+# `npm ci`, so every package is pinned by its integrity hash. They are installed
+# beside the fixtures, not into them: a lockfile in the copied src/ would be one
+# more file the runner tests see. The guard keeps the lockfile equal to the
+# variables the manifest reports.
+PINS="$REPO/scripts/npm-pins/runner-fixtures"
+for pin in "jest $JEST" "vitest $VITEST" "mocha $MOCHA"; do
+  set -- $pin
+  got=$(node -e 'console.log(require(process.argv[1]).packages["node_modules/"+process.argv[2]].version)' "$PINS/package-lock.json" "$1")
+  [ "$got" = "$2" ] || { echo "$1 is $got in $PINS/package-lock.json but $2 here" >&2; exit 1; }
+done
+TOOLS="$(mktemp -d)"
+cp "$PINS/package.json" "$PINS/package-lock.json" "$TOOLS/"
+npm ci --prefix "$TOOLS" --silent --no-audit --no-fund >/dev/null
+mv "$TOOLS/node_modules" "$DIR/node_modules"
+rm -rf "$TOOLS"
 [ -f vendor/bin/phpunit ] || composer require -q --dev "phpunit/phpunit:$PHPUNIT"
 
 # --- list commands: stdout only, as the enumerator keeps it ---------------

@@ -30,7 +30,7 @@ DIR="${1:-$(mktemp -d)}"
 [ "$KEEP" = 1 ] || trap 'rm -rf "$DIR"' EXIT
 RSPEC="${RSPEC:-rspec}"
 
-JEST=30.5.2 VITEST=3.2.7 MOCHA=11.8.0 PHPUNIT=11.5.57
+JEST=30.5.2 VITEST=5.1.0 MOCHA=12.0.3 PHPUNIT=11.5.57
 
 mkdir -p "$DIR"
 cp -r "$OUT/src/." "$DIR/"
@@ -100,7 +100,11 @@ want() { # want <runner> <expected> <got>
   if [ "$2" = "$3" ]; then echo "ok   $1: ran $3"; else echo "FAIL $1: ran $3, want $2"; fail=1; fi
 }
 want jest 1 "$(npx jest --json --testNamePattern '^Calc adds \(a\+b\)$' calc.jest.test.js 2>/dev/null | node -e 'const j=JSON.parse(require("fs").readFileSync(0));console.log(j.numPassedTests+j.numFailedTests)')"
-want vitest 1 "$(npx vitest run --reporter=json -t '^Calc neg adds$' calc.vitest.test.mjs 2>/dev/null | node -e 'const j=JSON.parse(require("fs").readFileSync(0));console.log(j.numPassedTests+j.numFailedTests)')"
+# The -t patterns below are the ones corral builds (vitestName): either joiner,
+# since vitest 3 matched titles joined by a space and vitest 5 by " > ".
+# vitest 5 writes its JSON report to a file, so the count is read from one.
+npx vitest run --reporter=json --outputFile=vitest-one.json -t '^Calc(?: | > )neg(?: | > )adds$' calc.vitest.test.mjs >/dev/null 2>&1 || true
+want vitest 1 "$(node -e 'const j=JSON.parse(require("fs").readFileSync("vitest-one.json"));console.log(j.numPassedTests+j.numFailedTests)')"
 want mocha-fullname-collision 2 "$(npx mocha --reporter spec --reporter json --grep '^Calc adds$' calc.mocha.js 2>/dev/null | node -e 'const j=JSON.parse(require("fs").readFileSync(0));console.log(j.stats.tests)')"
 want mocha 1 "$(npx mocha --reporter spec --reporter json --grep '^Calc neg adds$' calc.mocha.js 2>/dev/null | node -e 'const j=JSON.parse(require("fs").readFileSync(0));console.log(j.stats.tests)')"
 want node 1 "$(node --test --test-reporter=tap --test-name-pattern '^Calc neg adds$' calc.node.test.js 2>/dev/null | sed -n 's/^# pass //p')"
@@ -308,7 +312,7 @@ skipok() { # skipok <name> <cmd...>
   want "$name-skip" "1 exit 0" "$(printf '%s' "$out" | sed 's/\x1b\[[0-9;]*m//g' | passed) exit $rc"
 }
 skipok jest npx jest fail/f.jest.test.js --testNamePattern '^(?!(?:Calc adds \(a\+b\)|Calc neg adds|top level)$)'
-skipok vitest npx vitest run fail/f.vitest.test.mjs -t '^(?!(?:Calc adds \(a\+b\)|Calc neg adds|top level)$)'
+skipok vitest npx vitest run fail/f.vitest.test.mjs -t '^(?!(?:Calc(?: | > )adds \(a\+b\)|Calc(?: | > )neg(?: | > )adds|top level)$)'
 skipok mocha npx mocha fail/f.mocha.js --grep '^(?:Calc adds \(a\+b\)|Calc neg adds|top level)$' --invert
 skipok node node --test --test-skip-pattern '^(?:Calc adds \(a\+b\)|Calc neg adds|top level)$' fail/f.node.test.js
 # node reads options only before the first file (runner_node.go nodeWith): after it, ignored.

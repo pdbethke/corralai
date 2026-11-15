@@ -299,7 +299,7 @@ var runners = []Runner{
 		// on its command line (measured on mocha 11.8.0), so `mocha <file>`
 		// runs every configured spec as well, and argv cannot show whether
 		// a config names one.
-		Note: "listing and one-test runs verified on mocha 11.8 (listing needs mocha 9 or later); no unit evidence: its config's spec list is always added to the files on its command line, so it has no one-file run",
+		Note: "listing and one-test runs verified on mocha 11.8 and 12.0 (listing needs mocha 9 or later); no unit evidence: its config's spec list is always added to the files on its command line, so it has no one-file run",
 	},
 	{
 		// Detect adds vitest's entry script to the word; a shell-wrapped
@@ -313,7 +313,7 @@ var runners = []Runner{
 		EvidenceArgs:   vitestEvidenceArgs,
 		VersionCmd:     vitestVersionCmd,
 		UnitNoCoverage: "no worker coverage: the run's V8 coverage named no project file, though corral ran the unit with --pool=threads; that is what vitest's forks pool gives (measured on vitest 3.2.7 and 5.0.3), so check whether the test file itself forces another pool",
-		Note:           "listing, one-test, one-file and several-file runs verified on vitest 3.2; the unit evidence pass runs each file with --pool=threads, because the forks pool wrote no worker coverage (measured on vitest 3.2.7 and 5.0.3); unit evidence counted through corral's vm source-map preload on vitest 3.2.7 and 5.0.3; vitest 1, 2 and 4 were not run",
+		Note:           "listing, one-test, one-file and several-file runs verified on vitest 3.2 and 5.1, salvage on 5.1; the unit evidence pass runs each file with --pool=threads, because the forks pool wrote no worker coverage (measured on vitest 3.2.7 and 5.0.3); unit evidence counted through corral's vm source-map preload on vitest 3.2.7 and 5.0.3; vitest 1, 2 and 4 were not run",
 	},
 	{
 		Name: "node --test", ID: "node-test", Languages: []string{"javascript", "typescript"}, Default: true,

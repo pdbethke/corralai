@@ -16,6 +16,19 @@ updates:
     groups:
       npm-minor-patch:
         update-types: ["minor", "patch"]
+  # The compiler CI provisions for the TS-in-jail tests. A bump is tested by
+  # the very CI run its PR triggers. scripts/npm-pins/runner-fixtures is left
+  # out on purpose: its versions are the ones the recorded runner fixtures
+  # came from, so they move only with a re-capture (security alerts still
+  # read its lockfile).
+  - package-ecosystem: "npm"
+    directory: "/scripts/npm-pins/ci-toolchains"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      ci-npm-minor-patch:
+        update-types: ["minor", "patch"]
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

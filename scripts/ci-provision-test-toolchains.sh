@@ -26,7 +26,8 @@ set -uo pipefail
 sudo apt-get update || true
 
 # Hashed requirements (pip-compile --generate-hashes from ci-python-requirements.in).
-PYREQ="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ci-python-requirements.txt"
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PYREQ="$REPO/scripts/ci-python-requirements.txt"
 
 echo "== Python (internal/lang python plugin) =="
 sudo apt-get install -y python3-pytest ||
@@ -52,9 +53,18 @@ ruby --version || echo "ruby not available — ruby-in-jail test will SKIP"
 
 echo "== JS/TS (internal/lang javascript + typescript plugins) =="
 node --version || echo "node missing — js/ts-in-jail tests will SKIP"
-# Global npm lands under /usr/lib/node_modules, which IS jail-visible; a
-# project-local install is not.
-sudo npm install -g typescript@7.0.2 @types/node@26.6.5 || npm install -g typescript@7.0.2 @types/node@26.6.5 || true
+# A project-local install is not jail-visible; anything under /usr is. So the
+# compiler goes into /usr/local/lib and tsc onto /usr/local/bin. It is installed
+# with `npm ci` from scripts/npm-pins/ci-toolchains/package-lock.json, so every
+# package is pinned by its integrity hash (`npm install -g <name>@<version>`
+# pins a version but takes whatever bytes the registry serves for it).
+# Change a version in that package.json, then regenerate the lockfile with
+#   (cd scripts/npm-pins/ci-toolchains && npm install --package-lock-only)
+TSDIR=/usr/local/lib/corral-ci-toolchains
+{ sudo install -d "$TSDIR" &&
+  sudo cp "$REPO/scripts/npm-pins/ci-toolchains/package.json" "$REPO/scripts/npm-pins/ci-toolchains/package-lock.json" "$TSDIR/" &&
+  sudo npm ci --prefix "$TSDIR" --no-audit --no-fund &&
+  sudo ln -sf "$TSDIR/node_modules/.bin/tsc" /usr/local/bin/tsc; } || true
 tsc --version || echo "tsc not available — ts-in-jail test will SKIP"
 
 echo "== Rust (internal/lang rust plugin; the jail's pinned RUSTUP_HOME) =="

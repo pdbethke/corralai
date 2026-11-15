@@ -1,0 +1,10 @@
+{
+ "name": "corral-runner-fixture-tools",
+ "private": true,
+ "description": "The JS test runners scripts/capture-runner-fixtures.sh records output from. Installed with npm ci from the lockfile beside this file, so every package is pinned by its integrity hash.",
+ "dependencies": {
+  "jest": "30.5.2",
+  "mocha": "11.8.0",
+  "vitest": "3.2.7"
+ }
+}

@@ -98,11 +98,20 @@ func vitestSingleCmd(argv []string, testPath, id string) ([]string, bool) {
 // built on it checked nothing, while the " > " form ran the test. The
 // pattern accepts either joiner so one command works on both versions.
 func vitestNamePattern(id string) string {
+	return "^" + vitestName(id) + "$"
+}
+
+// vitestName is the unanchored regex for one test's full name under either
+// joiner, shared by every vitest -t pattern: the one-test and killer runs
+// anchor it alone, the deselect alternates it. The deselect used to build
+// its own space-joined names, so on vitest 5 it skipped nothing it named
+// (measured on vitest 5.1.0, 2026-11-15: two of three failing tests ran).
+func vitestName(id string) string {
 	parts := strings.Split(id, "::")
 	for i, p := range parts {
 		parts[i] = jsRegexQuote(p)
 	}
-	return "^" + strings.Join(parts, "(?: | > )") + "$"
+	return strings.Join(parts, "(?: | > )")
 }
 
 // vitestCoruns is Coruns for vitest: other runs too when the -t pattern

@@ -1,6 +1,6 @@
-Captured by scripts/capture-runner-fixtures.sh on 2026-10-25.
-jest 30.5.2, vitest 3.2.7, mocha 11.8.0 (npm); PHPUnit 11.5.57 (composer)
-node v22.23.4; rspec-core 3.13.6
+Captured by scripts/capture-runner-fixtures.sh on 2026-11-15.
+jest 30.5.2, vitest 5.1.0, mocha 12.0.3 (npm); PHPUnit 11.5.57 (composer)
+node v22.23.5; rspec-core 3.13.6
 Launchers: npm 10.9.9 and pnpm 9.15.9 take extra script arguments after --,
 yarn 1.22.22 takes them directly, composer 2.9.5 after --.
 Suites: src/. Each *-list file is the stdout of that runner's list command
@@ -48,3 +48,9 @@ jest-version.txt (added 2026-10-31): `node ./node_modules/jest/bin/jest.js --ver
 in a scratch directory after `npm install jest@30.5.2` (node v22.23.4); the
 output is the bare version, 30.5.2. Replaces the earlier note that jest had no
 version fixture.
+Re-capture 2026-11-15: every file the script writes was re-captured on
+vitest 5.1.0 and mocha 12.0.3 (jest unchanged at 30.5.2), node v22.23.5,
+go1.26.11, cargo 1.90.0, cargo-nextest 0.9.148, rspec-core 3.13.6, PHPUnit
+11.5.57. The runners are installed from scripts/npm-pins/runner-fixtures
+by npm ci. Dates in the notes above are when each file was first added;
+the hand-captured vitest5-* and *-version.txt files were not re-captured.

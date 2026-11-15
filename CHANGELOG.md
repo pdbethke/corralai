@@ -9,6 +9,12 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [Unreleased]
+
+### Fixed
+
+- **vitest 5: salvage skips the failing tests it names.** When a suite fails on unmutated code, corral re-runs it without the failing tests. For vitest it built that skip pattern from titles joined by spaces, which is how vitest 3 names a test; vitest 5 joins them with " > ", so the skip matched nothing it named, and those tests still ran (measured on vitest 5.1.0: two of three failing tests ran). The one-test and killer patterns already accepted both joiners; the skip now uses the same name builder, so the three cannot drift apart. The runner fixtures are re-captured on vitest 5.1.0 and mocha 12.0.3, and the vitest and mocha rows on the language-support page say so. That also lifts the fixture tooling off vitest 3.2.7 and mocha 11.8.0, whose dependency trees carried twelve Dependabot advisories (two critical, in tinypool); `glob` and `minimatch` are overridden to their first patched releases. `deepmerge`, pulled in by jest, has no patched release, so one low advisory remains.
+
 ## [v1.0.0-rc.32] — 2026-11-15
 
 ### Breaking

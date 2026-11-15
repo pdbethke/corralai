@@ -219,7 +219,7 @@ func TestProbeDowngradesASuiteThatIsNotConcurrencySafe(t *testing.T) {
 	}
 	root := newGitRepo(t, map[string]string{"a.py": "x=0\n"}, nil)
 	lock := filepath.Join(t.TempDir(), "lock")
-	cmd := []string{"sh", "-c", fmt.Sprintf(`exec 9>%s; flock -n 9 || exit 1; sleep 0.3; [ "$(cat a.py)" != "!!!corral canary!!!" ]`, lock)}
+	cmd := []string{"sh", "-c", fmt.Sprintf(`exec 9>%s; flock -n 9 || exit 1; sleep 0.3; [ "$(cat a.py)" != "<?php !!!corral canary!!!" ]`, lock)}
 	p, _, _ := NewWorkspacePool(context.Background(), root, 3, time.Minute)
 	defer p.Close()
 	q, d := p.Probe(context.Background(), nil, "a.py", "x=0\n", cmd)

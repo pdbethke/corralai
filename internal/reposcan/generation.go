@@ -396,7 +396,18 @@ package reposcan
 // to a run naming the same bare model on another; without it one entry could
 // carry an ollama verdict under a row saying openai. Changing the key costs
 // nothing extra: this bump already retires every "41" verdict.
-const VerdictGeneration = "42"
+// "43" (2026-11-16): merged Python proven tests parse when their parts
+// disagree about `from __future__ import …`. Headers were hoisted in
+// first-seen order, so a part without the line followed by a part with it
+// put the directive below other imports, which Python rejects: the delivered
+// merged file was a SyntaxError and authored_together recorded "fail" for
+// tests that each pass alone (Kludex/starlette 271c277: 7 of 25 files'
+// merged tests, 6 of them flagged by the together run). The Python merge now
+// emits those headers first (lang.pyPlugin.ConcatTests). A "42" verdict for
+// such a file carries a merged test that does not compile and a together
+// result that describes the merge, not the tests, so it is re-measured
+// rather than reused. Behaviour bump; the shape is unchanged.
+const VerdictGeneration = "43"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

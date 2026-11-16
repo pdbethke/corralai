@@ -1,10 +1,11 @@
 <!-- SPDX-License-Identifier: Elastic-2.0 -->
 # Ranking the seats — what the evidence says, and nothing more
 
-**Status: `corral models rank` ships reading two sources — the local
-bug-catching ledger (the default) and a pushed warehouse via `--db`.** The
-critic seat is scored only from the local adjudication store, because
-adjudication is never pushed. The goal-deriver is not scored at all, on
+**Status: `corral models rank` ships reading three sources — this machine's
+ledger (the default), a ledger directory or pushed warehouse via `--db`, and
+the old local bug-catching store via `--source scorecard`.** The critic seat
+is scored only from the local adjudication store, because adjudication is
+never pushed; so critic precision appears only under `--source scorecard`. The goal-deriver is not scored at all, on
 purpose; the last section says why.
 
 ## The question
@@ -132,7 +133,8 @@ The two sources differ here, and the report says which it is reading:
 
 | source | how it is read | language | critic precision |
 | --- | --- | --- | --- |
-| the local bug-catching ledger (default) | the same rows `corral scorecard` reports | recorded per row from the shadow-seat change on (older rows have none); `corral models rank` does not split by it yet, so a rank over this ledger is still across all languages | joined from the local adjudication store |
+| this machine's ledger (default), or a ledger directory via `--db` | `corral_audits` over the signed entries, loaded with only the rows a ranking reads; a run is one SCAN | recorded per file | **absent** — adjudication is local and never pushed |
+| the local bug-catching store (`--source scorecard`) | the same rows `corral scorecard` reports; a run is one audited FILE | recorded per row from the shadow-seat change on (older rows have none); `corral models rank` does not split by it yet, so a rank over this store is still across all languages | joined from the local adjudication store — the only source that shows critic precision |
 | a pushed warehouse (`--db <dsn>`) | `corral_audits`, the table `corral seal` and `corral verify --db` read | recorded per file | **absent** — adjudication is local and never pushed |
 
 `--lang` against evidence that records no language **refuses**, rather than

@@ -448,9 +448,11 @@ evidence you recorded rather than from benchmarks — proven gaps per survivor
 attempted for the writer, missed-fault yield for the generator, adjudicated
 precision for the critic — and it refuses to recommend on thin evidence. Its
 evidence is what you gave it: by default this machine's ledger, the signed
-entries every `certify` and `review` on this machine wrote, so a `--repo` run
-counts. `--source scorecard` reads the old local bug-catching store instead,
-and `--db` reads a ledger directory or a warehouse that `certify --repo --push`
+entries `certify` and `review` runs on this machine wrote, so a `--repo` run
+counts. Critic precision, and `certify --local` history from before that verb
+wrote ledger entries (rc.26), are shown only under `--source scorecard`, which
+reads the old local bug-catching store instead.
+`--db` reads a ledger directory or a warehouse that `certify --repo --push`
 filled. A ledger that does not verify is refused, and no source falls back to
 another. It prints a ranking; it never staffs a seat.
 

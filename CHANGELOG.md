@@ -9,6 +9,16 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [Unreleased]
+
+### Fixed
+
+- **Python: merged proven tests parse when only some of them start with `from __future__ import …`.** When a file has several proven tests, corral hands them back as one merged file, with the imports hoisted to the top in the order first seen. Python accepts a `__future__` import only before every other statement, so one test without the line followed by one with it produced a merged file that is a `SyntaxError`. Each test was still proven by its own run, and the run that checks the merged file on your unmodified code said so (`authored_together: fail`), but the file corral told you to add could not be collected. Found on Kludex/starlette at `271c277`: 7 of 25 audited files. The merge now puts `__future__` imports first. The directive then applies to the whole merged file, including tests whose writer did not ask for it; the merged file is still run once on the unmodified code, which is what catches a test that this changes.
+
+### Changed
+
+- **One-time cache miss.** `reposcan.VerdictGeneration` is now 43 (rc.33 shipped 42), so every cached verdict is measured once more: a cached Python verdict could carry a merged test that does not compile.
+
 ## [v1.0.0-rc.33] — 2026-11-15
 
 ### Fixed

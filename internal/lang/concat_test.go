@@ -3,6 +3,7 @@
 package lang
 
 import (
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -63,6 +64,52 @@ func TestPythonConcatLeavesUniqueNamesAlone(t *testing.T) {
 	}
 	if !strings.Contains(out, "def test_a(") || !strings.Contains(out, "def test_b(") {
 		t.Errorf("unique names were rewritten:\n%s", out)
+	}
+}
+
+// TestPythonConcatPutsFutureImportsFirst: Python accepts `from __future__
+// import …` only before every other statement. Headers were hoisted in the
+// order the parts first spelled them, so a part without the line followed by
+// a part with it merged into a file that is a SyntaxError. On starlette
+// (271c277, 2026-11-16) that broke the merged file for 6 of 25 audited files:
+// every proven test passed alone and the merged file could not be collected.
+// The order is asserted always; the file is also compiled where python3 is
+// present, because a merged file is only worth delivering if it parses.
+func TestPythonConcatPutsFutureImportsFirst(t *testing.T) {
+	c := concatenatorFor(t, "python")
+	out, err := c.ConcatTests([]AuthoredPart{
+		{MutantID: "s0/m1", Source: "import pytest\nfrom mod import f\n\ndef test_a():\n    assert f(1) == 1\n"},
+		{MutantID: "s0/m2", Source: "from __future__ import annotations\n\nimport pytest\n\ndef test_b() -> None:\n    assert True\n"},
+		{MutantID: "s0/m3", Source: "import os\nfrom __future__ import (\n    division,\n)\n\ndef test_c():\n    assert True\n"},
+	})
+	if err != nil {
+		t.Fatalf("ConcatTests: %v", err)
+	}
+	if n := strings.Count(out, "from __future__ import annotations"); n != 1 {
+		t.Fatalf("the __future__ import appears %d times, want 1:\n%s", n, out)
+	}
+	lastFuture := strings.LastIndex(out, "from __future__ import")
+	for _, other := range []string{"import pytest", "from mod import f", "import os"} {
+		at := strings.Index(out, other)
+		if at < 0 {
+			t.Fatalf("%q was dropped:\n%s", other, out)
+		}
+		if at < lastFuture {
+			t.Errorf("%q comes before a __future__ import, which Python rejects:\n%s", other, out)
+		}
+	}
+	if !strings.Contains(out, "from __future__ import (\n    division,\n)") {
+		t.Errorf("the multi-line __future__ import was not kept whole:\n%s", out)
+	}
+	py, err := exec.LookPath("python3")
+	if err != nil {
+		t.Log("python3 not on PATH: order asserted, merged file not compiled")
+		return
+	}
+	cmd := exec.Command(py, "-c", "import sys; compile(sys.stdin.read(), 'merged.py', 'exec')")
+	cmd.Stdin = strings.NewReader(out)
+	if b, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("the merged file does not compile: %v\n%s\n%s", err, b, out)
 	}
 }
 

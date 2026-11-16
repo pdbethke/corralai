@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	gopath "path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -193,13 +194,24 @@ func buildBrief(dir string, all []auditpush.LedgerEntry, paths []string, maxItem
 	adj := auditpush.Adjudications(live)
 	commits := map[string]bool{}
 	byPath := map[string]*BriefPath{}
-	get := func(p string) *BriefPath {
-		if bp, ok := byPath[p]; ok {
+	var getKeyed func(key, label string) *BriefPath
+	get := func(p string) *BriefPath { return getKeyed(p, p) }
+	// A counted row is keyed on what it IS (reason, path, language) and
+	// labelled with its count, so the newest scan's row wins as a per-file
+	// row does; keying on the label would print one block per count.
+	getKeyed = func(key, label string) *BriefPath {
+		if bp, ok := byPath[key]; ok {
 			return bp
 		}
-		bp := &BriefPath{Path: p, NoScan: true, NoReview: true}
-		byPath[p] = bp
+		bp := &BriefPath{Path: label, NoScan: true, NoReview: true}
+		byPath[key] = bp
 		return bp
+	}
+	rowFor := func(r auditpush.Row) *BriefPath {
+		if r.Files <= 0 {
+			return get(r.Path)
+		}
+		return getKeyed(r.Reason+"\x00"+r.Path+"\x00"+r.Lang, collapsedLabel(r.Path, r.Lang, r.Reason, r.Files, r.FileCount()))
 	}
 	under := func(file string) bool {
 		file = filepath.ToSlash(filepath.Clean(file))
@@ -221,13 +233,10 @@ func buildBrief(dir string, all []auditpush.LedgerEntry, paths []string, maxItem
 			b.Repo = e.Bundle.Scan.Repo
 		}
 		for _, r := range e.Bundle.Files {
-			// A counted row stands for files the walk saw but no row names:
-			// a requested file inside its directory is answered by it, and it
-			// is labelled with its count so it is not read as one file.
-			if !under(r.Path) && !(r.Files > 0 && inCountedDir(r.Path, paths)) {
+			if !under(r.Path) {
 				continue
 			}
-			bp := get(collapsedLabel(r.Path, r.Lang, r.Reason, r.Files, r.FileCount()))
+			bp := rowFor(r)
 			if !bp.NoScan {
 				continue // an older scan of a file already reported
 			}
@@ -272,7 +281,7 @@ func buildBrief(dir string, all []auditpush.LedgerEntry, paths []string, maxItem
 			if !ok {
 				continue
 			}
-			bp := get(collapsedLabel(r.Path, r.Lang, r.Reason, r.Files, r.FileCount()))
+			bp := rowFor(r)
 			if !bp.NoScan {
 				continue
 			}
@@ -504,44 +513,58 @@ func shortRef(ref string) string {
 	return h + "#" + id
 }
 
-// inCountedDir reports whether any requested path lies inside dir, the
-// directory a counted row ("dist/") stands for. A path-less or root row never
-// matches here: only a whole-repository request reaches those (under).
-func inCountedDir(dir string, paths []string) bool {
-	dir = filepath.ToSlash(filepath.Clean(dir))
-	if dir == "." {
-		return false
-	}
-	for _, p := range paths {
-		if strings.HasPrefix(filepath.ToSlash(filepath.Clean(p)), dir+"/") {
+// namedByARow reports whether any row of the entry is rp itself or lies under
+// rp: a recorded file is never answered by a counted row as well.
+func namedByARow(rows []auditpush.Row, rp string) bool {
+	for _, r := range rows {
+		if r.Files > 0 {
+			continue // a counted row names no file
+		}
+		path := filepath.ToSlash(filepath.Clean(r.Path))
+		if path == rp || strings.HasPrefix(path, rp+"/") {
 			return true
 		}
 	}
 	return false
 }
 
-// namedByARow reports whether any row of the entry is rp itself, lies under
-// rp, or is a counted directory row containing rp: the cases the main loop
-// already answers.
-func namedByARow(rows []auditpush.Row, rp string) bool {
-	for _, r := range rows {
-		if r.Files > 0 && r.Path == "" {
-			continue // a language row names no path
-		}
-		path := filepath.ToSlash(filepath.Clean(r.Path))
-		if path == rp || strings.HasPrefix(path, rp+"/") || (r.Files > 0 && inCountedDir(r.Path, []string{rp})) {
-			return true
-		}
+// inCountedDir reports whether rp lies inside dir, the directory a counted
+// row ("dist/") stands for. A loose row ("src/*"), a path-less language row
+// and a root row never match here.
+func inCountedDir(dir, rp string) bool {
+	if strings.HasSuffix(dir, "*") || dir == "" {
+		return false
 	}
-	return false
+	dir = filepath.ToSlash(filepath.Clean(dir))
+	return dir != "." && strings.HasPrefix(rp, dir+"/")
+}
+
+// looseParent is the directory a loose-ignored-files row ("src/*", "./*")
+// stands for, and whether the row is one.
+func looseParent(path string) (string, bool) {
+	if !strings.HasSuffix(path, "/*") {
+		return "", false
+	}
+	return filepath.ToSlash(filepath.Clean(strings.TrimSuffix(path, "/*"))), true
 }
 
 // countedRowFor finds the counted row that may stand for the requested file
-// rp, with the sentence saying what that row cannot tell. A test file is
-// matched to the is-test row of its own language, by the test-path rule the
-// walk itself applied (pairing.IsTest on the language's TestRules, as in
-// reposcan). A root-level file is matched to the "./" gitignored row.
+// rp, with the sentence saying what that row cannot tell ("" when it can
+// speak with certainty). In order:
+//   - an ignored or skipped DIRECTORY row containing rp: certain, everything
+//     under it is not audited;
+//   - the is-test row of rp's own language when rp is a test path by the
+//     rule the walk applied (pairing.IsTest on the language's TestRules, as
+//     reposcan does): hedged, the record counts test files and does not list
+//     them;
+//   - a loose-ignored row for rp's own parent directory, directly: hedged,
+//     the record does not say which files. Never "is gitignored".
 func countedRowFor(rows []auditpush.Row, rp string) (auditpush.Row, string, bool) {
+	for _, r := range rows {
+		if r.Files > 0 && inCountedDir(r.Path, rp) {
+			return r, "", true
+		}
+	}
 	if plug, ok := lang.Detect(rp); ok && pairing.IsTest(plug.TestRules(), rp) {
 		for _, r := range rows {
 			if r.Files > 0 && r.Reason == reposcan.ReasonIsTest && r.Path == "" && r.Lang == plug.Name() {
@@ -549,11 +572,14 @@ func countedRowFor(rows []auditpush.Row, rp string) (auditpush.Row, string, bool
 			}
 		}
 	}
-	if !strings.Contains(rp, "/") {
-		for _, r := range rows {
-			if r.Files > 0 && r.Reason == reposcan.ReasonGitignored && filepath.ToSlash(filepath.Clean(r.Path)) == "." {
-				return r, fmt.Sprintf("%d root-level gitignored file(s) are recorded as a count, not listed; this file may be one of them.", r.FileCount()), true
+	parent := gopath.Dir(rp)
+	for _, r := range rows {
+		if p, ok := looseParent(r.Path); ok && r.Files > 0 && r.Reason == reposcan.ReasonGitignored && p == parent {
+			what := "gitignored file(s) directly in " + parent + "/"
+			if parent == "." {
+				what = "root-level gitignored file(s)"
 			}
+			return r, fmt.Sprintf("%d %s are recorded as a count, not listed; this file may be one of them.", r.FileCount(), what), true
 		}
 	}
 	return auditpush.Row{}, "", false

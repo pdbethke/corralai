@@ -152,3 +152,28 @@ func TestEnumerateWithoutGitWalksIgnoreFileAsPlainFile(t *testing.T) {
 		t.Errorf("candidates = %v, want [a.go out/a.go] (no git: .gitignore is just a file)", got)
 	}
 }
+
+// A loose ignored file (its directory is not ignored) and a file under an
+// ignored directory are both gitignored, and the record must tell them apart:
+// the first says nothing about its neighbours, the second about the whole tree.
+func TestEnumerateMarksALooseIgnoredFile(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		".gitignore":   "scratch/\n.env\n",
+		"src/app.py":   "x = 1\n",
+		"src/.env":     "K=1\n",
+		".env":         "K=2\n",
+		"scratch/x.py": "x = 1\n",
+	})
+	gitInit(t, root)
+	_, excl, err := Enumerate(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loose := map[string]bool{}
+	for _, e := range excl {
+		loose[e.Path] = e.Loose
+	}
+	if !loose["src/.env"] || !loose[".env"] || loose["scratch/x.py"] {
+		t.Errorf("Loose by path = %v, want src/.env and .env loose and scratch/x.py not", loose)
+	}
+}

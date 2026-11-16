@@ -118,6 +118,18 @@ func TestCertifyRepoCollapsesByDefaultAndListsEveryFileWhenAsked(t *testing.T) {
 	if filesDef != filesAll {
 		t.Errorf("total files differ: default %d, every-file %d; the totals must be the same either way", filesDef, filesAll)
 	}
+	// The entry-written line says both truths: how many files the entry
+	// stands for and in how many rows. This fixture walks 8 files and the
+	// default entry holds 5 rows; the every-file entry is 8 rows for 8 files.
+	if filesDef != 8 || rowsDef != 5 {
+		t.Fatalf("fixture changed: default entry is %d file(s) in %d row(s), test expects 8 and 5", filesDef, rowsDef)
+	}
+	if !strings.Contains(outDef, "(8 file(s) in 5 row(s), 0 mutant(s))") {
+		t.Errorf("default entry-written line must say 8 file(s) in 5 row(s):\n%s", outDef)
+	}
+	if !strings.Contains(outAll, "(8 file(s) in 8 row(s), 0 mutant(s))") {
+		t.Errorf("--record-every-file entry-written line must say 8 file(s) in 8 row(s):\n%s", outAll)
+	}
 }
 
 // A repository with nothing to collapse prints no record: line.

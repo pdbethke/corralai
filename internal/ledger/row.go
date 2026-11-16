@@ -317,6 +317,17 @@ func (r Row) FileCount() int {
 	return 1
 }
 
+// FilesIn is how many files the rows stand for together: the sum of
+// FileCount. A caller printing "N file(s)" for an entry uses this, never
+// len(rows), which counts rows.
+func FilesIn(rows []Row) int {
+	n := 0
+	for _, r := range rows {
+		n += r.FileCount()
+	}
+	return n
+}
+
 // FilesSQL is FileCount for a SQL reader: the files a corral_audits row
 // stands for, summed as SUM(FilesSQL). The warehouse stores NULL for a one-file
 // row, so the same "absent means one" rule lives here as COALESCE. A reader

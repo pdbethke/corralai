@@ -25,7 +25,7 @@ func collapseFixture() (ex []reposcan.Exclusion, noPaired []reposcan.Exclusion) 
 	for i := 0; i < 3; i++ {
 		ex = append(ex, reposcan.Exclusion{Path: fmt.Sprintf("scratch/s%d.py", i), Reason: reposcan.ReasonGitignored, Dir: "scratch"})
 	}
-	ex = append(ex, reposcan.Exclusion{Path: "notes.tmp", Reason: reposcan.ReasonGitignored, Dir: "."})
+	ex = append(ex, reposcan.Exclusion{Path: "notes.tmp", Reason: reposcan.ReasonGitignored, Dir: ".", Loose: true})
 	for i := 0; i < 6; i++ {
 		ex = append(ex, reposcan.Exclusion{Path: fmt.Sprintf("tests/test_%d.py", i), Reason: reposcan.ReasonIsTest})
 	}
@@ -51,7 +51,7 @@ func TestCollapsedExclusionRows(t *testing.T) {
 	}
 	want := []k{
 		{reposcan.ReasonSkippedDir, "dist/", "", 50},
-		{reposcan.ReasonGitignored, "./", "", 1},
+		{reposcan.ReasonGitignored, "./*", "", 1},
 		{reposcan.ReasonGitignored, "scratch/", "", 3},
 		{reposcan.ReasonIsTest, "", "", 1},
 		{reposcan.ReasonIsTest, "", "python", 6},
@@ -197,5 +197,26 @@ func TestACollapsedTestFileRowIsAValidRecordRow(t *testing.T) {
 	}
 	if got["python|"] != 6 || got["typescript|"] != 4 || got["|dist/"] != 50 || len(read.Files) != 3 {
 		t.Errorf("rows read back as %v (%d rows)", got, len(read.Files))
+	}
+}
+
+// A loose ignored file is counted under "<parent>/*", never under the
+// directory row "<parent>/": the first says nothing about its neighbours.
+func TestLooseIgnoredFilesAreCountedUnderTheirParentStar(t *testing.T) {
+	ex := []reposcan.Exclusion{
+		{Path: "src/.env", Reason: reposcan.ReasonGitignored, Dir: "src", Loose: true},
+		{Path: "src/.key", Reason: reposcan.ReasonGitignored, Dir: "src", Loose: true},
+		{Path: ".env", Reason: reposcan.ReasonGitignored, Dir: ".", Loose: true},
+		{Path: "scratch/x.py", Reason: reposcan.ReasonGitignored, Dir: "scratch"},
+		{Path: "src/gen/y.py", Reason: reposcan.ReasonGitignored, Dir: "src/gen"},
+	}
+	rows, _ := collapsedExclusionRows(ex)
+	got := map[string]int{}
+	for _, r := range rows {
+		got[r.Path] = r.Files
+	}
+	want := map[string]int{"scratch/": 1, "src/*": 2, "./*": 1, "src/gen/": 1}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("rows = %v, want %v", got, want)
 	}
 }

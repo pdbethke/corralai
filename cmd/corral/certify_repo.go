@@ -2036,7 +2036,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 				exitCode = 1
 			}
 		} else if c.Total() > 0 {
-			fmt.Fprintf(stdout, "  ledger: entry written to %s (%d file(s), %d mutant(s)) — `corral verify --ledger %s` walks the chain\n", ledgerDir, c.Files, c.Mutants, ledgerDir)
+			fmt.Fprintf(stdout, "  ledger: entry written to %s (%d file(s) in %d row(s), %d mutant(s)) — `corral verify --ledger %s` walks the chain\n", ledgerDir, ledger.FilesIn(entryBundle.Files), c.Files, c.Mutants, ledgerDir)
 		}
 		writeMachineLedgerCopy(entryBundle, *repoDir, ledgerDir, stdout, stderr)
 	}
@@ -2063,8 +2063,8 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 				// none, and should not learn that from a query.
 				runnerWarning(stderr, "corral push failed", "the audit ran, but pushing its rows to %s failed: %v", *pushFlag, perr)
 			case c.Total() > 0:
-				fmt.Fprintf(stdout, "  pushed %d scan, %d file(s), %d mutant(s), %d model-call row(s), %d event(s) to %s\n",
-					c.Scans, c.Files, c.Mutants, c.Calls, c.Events, *pushFlag)
+				fmt.Fprintf(stdout, "  pushed %d scan, %d file(s) in %d row(s), %d mutant(s), %d model-call row(s), %d event(s) to %s\n",
+					c.Scans, ledger.FilesIn(bundle.Files), c.Files, c.Mutants, c.Calls, c.Events, *pushFlag)
 			}
 		}
 	}

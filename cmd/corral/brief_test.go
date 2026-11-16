@@ -250,7 +250,7 @@ func countedLedger(t *testing.T) string {
 	dir := t.TempDir()
 	rows := []auditpush.Row{
 		{Lang: "python", Disposition: "rejected", Reason: "is-test", Files: 6},
-		{Path: "./", Disposition: "rejected", Reason: "gitignored", Files: 2},
+		{Path: "./*", Disposition: "rejected", Reason: "gitignored", Files: 2},
 	}
 	b := auditpush.Bundle{Scan: auditpush.ScanRow{Repo: "o/r", Commit: "deadbeef", ScanID: 1, CorralVersion: "vtest"}, Files: rows}
 	if _, err := auditpush.PushBundle(dir+"/", b); err != nil {
@@ -311,5 +311,66 @@ func TestBriefJSONCarriesTheCountedTestRow(t *testing.T) {
 	p := b.Paths[0]
 	if p.NoScan || p.Scan == nil || p.Scan.Disposition != "rejected" || p.Scan.Reason != "is-test" || p.Path != "python test files (6 file(s), is-test)" {
 		t.Errorf("json shape: %+v scan %+v", p, p.Scan)
+	}
+}
+
+// looseLedger: src/app.py audited; src/ has one loose ignored file (src/*);
+// scratch/ is an ignored directory of 3 files.
+func looseLedger(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	rows := []auditpush.Row{
+		{Path: "src/app.py", Lang: "python", Disposition: "audited", KillRate: ptrF(0.5), MutantsGraded: 2, Survivors: 1},
+		{Path: "src/*", Disposition: "rejected", Reason: "gitignored", Files: 1},
+		{Path: "scratch/", Disposition: "rejected", Reason: "gitignored", Files: 3},
+	}
+	b := auditpush.Bundle{Scan: auditpush.ScanRow{Repo: "o/r", Commit: "deadbeef", ScanID: 1, CorralVersion: "vtest"}, Files: rows}
+	if _, err := auditpush.PushBundle(dir+"/", b); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func TestBriefAnswersALooseIgnoredFileOnlyDirectlyInItsParent(t *testing.T) {
+	dir := looseLedger(t)
+	got := briefOf(t, dir, "--scope", "src/new.py")
+	for _, want := range []string{"src/* (1 file(s), gitignored)", "1 gitignored file(s) directly in src/ are recorded as a count, not listed; this file may be one of them"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("brief src/new.py lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "is gitignored") {
+		t.Errorf("must never state the file is ignored:\n%s", got)
+	}
+	if got := briefOf(t, dir, "--scope", "src/deep/x.py"); strings.Contains(got, "src/*") {
+		t.Errorf("a file deeper than the parent is not answered by the loose row:\n%s", got)
+	}
+	got = briefOf(t, dir, "--scope", "src/app.py")
+	if !strings.Contains(got, "kill rate 0.50") || strings.Contains(got, "gitignored") || strings.Contains(got, "src/*") {
+		t.Errorf("an audited file gets only its own verdict:\n%s", got)
+	}
+}
+
+func TestBriefAnswersAFileUnderAnIgnoredDirectoryWithCertainty(t *testing.T) {
+	got := briefOf(t, looseLedger(t), "--scope", "scratch/y.py")
+	if !strings.Contains(got, "scratch/ (3 file(s), gitignored)") || strings.Contains(got, "may be one of them") {
+		t.Errorf("a file under an ignored directory is answered with certainty:\n%s", got)
+	}
+}
+
+// Two scans of the same tree: the older scan's counted row must not print
+// beside the newer one's, because its count differs.
+func TestBriefPrintsOneBlockForACountedRowAcrossScans(t *testing.T) {
+	dir := t.TempDir()
+	for i, n := range []int{50, 51} {
+		b := auditpush.Bundle{Scan: auditpush.ScanRow{Repo: "o/r", Commit: "c" + strings.Repeat("0", i), ScanID: int64(i + 1), CorralVersion: "vtest"},
+			Files: []auditpush.Row{{Path: "dist/", Disposition: "rejected", Reason: "skipped-dir", Files: n}}}
+		if _, err := auditpush.PushBundle(dir+"/", b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := briefOf(t, dir, "--scope", ".")
+	if strings.Count(got, "dist/ (") != 1 || !strings.Contains(got, "dist/ (51 file(s), skipped-dir)") {
+		t.Errorf("want exactly one dist/ block, the newer (51):\n%s", got)
 	}
 }

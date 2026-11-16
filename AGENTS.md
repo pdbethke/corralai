@@ -110,7 +110,7 @@ and exactly where is below.
 - `certify --repo` writes one entry to the repo ledger (`<repo>/.corral/ledger`,
   or `--ledger` / `$CORRAL_LEDGER`) and a copy to the **machine ledger**
   (`statedir.MachineLedger`: the state directory's `ledger`, override
-  `CORRALAI_MACHINE_LEDGER`; `corral state paths` prints it). Its rows count files in skipped or gitignored directories and test files (one row per directory, one per language) instead of listing each; `--record-every-file` restores one row per file. A `--repo` tree
+  `CORRALAI_MACHINE_LEDGER`; `corral state paths` prints it). Its rows count files in skipped or gitignored directories and test files (one row per directory, one `<parent>/*` row for loose gitignored files, one per language) instead of listing each; `--record-every-file` restores one row per file. A `--repo` tree
   with no commit writes neither entry.
 - `corral review` does the same: repo ledger entry plus the machine copy.
 - `certify --local` writes its entry to the machine ledger by default, plus

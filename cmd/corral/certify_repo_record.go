@@ -502,9 +502,10 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 }
 
 // collapsedExclusionRows stands one counted row for every skipped or
-// ignored directory and one per language for test files, in place of one row
-// per file. A scan that walks a repository with a checked-in build tree
-// otherwise signs tens of thousands of rows that say only "not audited"; the
+// ignored directory ("<dir>/"), one per parent directory for loose ignored
+// files ("<parent>/*", "./*" at the root) and one per language for test
+// files, in place of one row per file. A scan that walks a repository with a checked-in build tree
+// otherwise signs one row per file that says only "not audited"; the
 // walk still sees every file (the exclusion list stays one entry per file),
 // only the record is reduced. Rows are ordered skipped-dir by path, then
 // gitignored by path, then is-test by language (empty first). rest is every
@@ -517,7 +518,15 @@ func collapsedExclusionRows(excluded []reposcan.Exclusion) (rows []scanstore.Fil
 	for _, e := range excluded {
 		switch e.Reason {
 		case reposcan.ReasonSkippedDir, reposcan.ReasonGitignored:
-			counts[key{e.Reason, e.Dir}]++
+			// A skipped or ignored DIRECTORY is "<dir>/" and says everything
+			// under it is not audited. A loose ignored file says nothing of
+			// its neighbours, so it is counted under "<parent>/*" ("./*" at
+			// the root): a reader can then tell the two apart.
+			name := e.Dir + "/"
+			if e.Loose {
+				name = e.Dir + "/*"
+			}
+			counts[key{e.Reason, name}]++
 		case reposcan.ReasonIsTest:
 			counts[key{e.Reason, detectLang(e.Path)}]++
 		default:
@@ -543,7 +552,7 @@ func collapsedExclusionRows(excluded []reposcan.Exclusion) (rows []scanstore.Fil
 		if k.reason == reposcan.ReasonIsTest {
 			f.Lang = k.name
 		} else {
-			f.Path = k.name + "/"
+			f.Path = k.name
 		}
 		rows = append(rows, f)
 	}

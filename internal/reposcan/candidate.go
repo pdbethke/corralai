@@ -81,6 +81,11 @@ type Exclusion struct {
 	// ("." at the root). Empty for every other reason. The record collapses
 	// on it: the walk still lists every file, one exclusion each.
 	Dir string
+	// Loose is true only for a ReasonGitignored file that is ignored ON ITS
+	// OWN (a pattern such as .env), with its directory not ignored. False for
+	// a file under an ignored directory. The two say different things about
+	// the file's neighbours, so the record must not conflate them.
+	Loose bool
 }
 
 // Exclusion reasons.
@@ -459,7 +464,7 @@ func EnumerateWithTests(root string, tests *TestMap) ([]Candidate, []Exclusion, 
 			return nil
 		}
 		if ignoredFiles[slash] {
-			excl = append(excl, Exclusion{Path: slash, Reason: ReasonGitignored, Dir: gopath.Dir(slash)})
+			excl = append(excl, Exclusion{Path: slash, Reason: ReasonGitignored, Dir: gopath.Dir(slash), Loose: true})
 			return nil
 		}
 		present[slash] = true

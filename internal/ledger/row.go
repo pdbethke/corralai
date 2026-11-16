@@ -9,6 +9,11 @@ type Row struct {
 	Repo   string
 	Commit string
 	Path   string
+	// Files is how many walked files this row stands for. 0 (and 1) means
+	// the row is one file, which is every row written before the field
+	// existed; omitempty keeps such a row's JSON, and so its entry hash,
+	// byte-identical. Read it through FileCount, never as a raw int.
+	Files int `json:",omitempty"`
 	// KillRate is a POINTER so an UNCOVERED file writes SQL NULL rather than
 	// a 0.0 the report itself refuses to print. A warehouse that stores the
 	// fabricated zero is where the withheld number comes back as fact.
@@ -301,6 +306,15 @@ type Row struct {
 	// without checking this FIRST, reintroduces the exact false claim
 	// reposcan.ReasonImportOnly exists to correct.
 	ImportOnly *bool
+}
+
+// FileCount is how many files the row stands for: Files when it says so,
+// else one. The one place a reader turns the stored 0 into "one file".
+func (r Row) FileCount() int {
+	if r.Files > 0 {
+		return r.Files
+	}
+	return 1
 }
 
 // Link identifies the ledger scan and signed statement a pushed row belongs

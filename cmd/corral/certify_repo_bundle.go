@@ -183,7 +183,7 @@ func buildAuditRows(files []scanstore.File, scanID int64, meta bundleMeta) []aud
 	for _, f := range files {
 		rows = append(rows, auditpush.Row{
 			Repo: meta.Repo, Commit: meta.Commit, RunURL: meta.RunURL, ScanID: scanID,
-			Path: f.Path, Lang: f.Lang,
+			Path: f.Path, Lang: f.Lang, Files: f.Files,
 			KillRate: f.KillRate, Survivors: f.Survivors, ProvenMissed: f.ProvenMissed,
 			TimedOut: f.TimedOut, TestWriterFailed: f.TestWriterFailed,
 			PoolTestUnsound: f.PoolTestUnsound,

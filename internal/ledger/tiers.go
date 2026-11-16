@@ -126,6 +126,7 @@ func buildFieldTiers() map[[2]string]FieldTier {
 	add("ReportMutant", TierDeclared, "the tool's own claim, read from its report", "Operator Status Span Static TestsCompleted KilledBy CoveredBy CoveredByCount DurationMS")
 
 	// Row: one per audited file.
+	add("Row", TierMeasured, "", "Files")
 	add("Row", TierKey, "", "Repo Commit Path ScanID RunURL StatementSHA256 ParentSHA256 CacheKey PriorDigest ReusedFromScanID")
 	add("Row", TierMeasured, "", `Audited AuthoredFallback AuthoredLanding AuthoredPassMillis AuthoredTest AuthoredTestNotCollected
 		BaselineFailed BaselineFlaky Candidates ChallengerJaccard ChallengerKappa ChallengerMutants ChallengerShared

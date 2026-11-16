@@ -52,6 +52,23 @@ type generationRange struct {
 	Scans      int
 }
 
+// Line is the `grading rules:` text: String's range, plus how many scans
+// contributed evidence, so a reader can tell it from the scans the ledger holds.
+func (g generationRange) Line() string {
+	if g.Scans == 0 || g.Min == "" {
+		return g.String()
+	}
+	s := "generation " + g.Min
+	if g.Min != g.Max {
+		s = "generations " + g.Min + " to " + g.Max
+	}
+	s += fmt.Sprintf(" across %d scan(s) with evidence", g.Scans)
+	if g.Unrecorded > 0 {
+		s += fmt.Sprintf("; %d of them record none", g.Unrecorded)
+	}
+	return s
+}
+
 func (g generationRange) String() string {
 	if g.Scans == 0 {
 		return ""
@@ -125,7 +142,7 @@ func runModels(args []string, repoRoot string, load rankLoader, stdout, stderr i
 }
 
 const modelsUsage = `usage: corral models rank [--source ledger|scorecard] [--db <dir or dsn>] [--seat <role>] [--lang <name>] [--min-runs N] [--json]
-  A bare run reads this machine's ledger (the entries every certify and review on this machine
+  A bare run reads this machine's ledger (the entries certify and review runs on this machine
   wrote); --source scorecard reads the old local bug-catching store instead, and --db reads a
   ledger directory or a pushed warehouse you name.
   seats: goal-deriver, mutant-generator, test-writer, test-critic, and — from a ledger directory's
@@ -148,9 +165,9 @@ func runModelsRank(args []string, repoRoot string, load rankLoader, stdout, stde
 	fs := flag.NewFlagSet("models rank", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	dsn := fs.String("db", "", "a ledger directory or pushed warehouse to read instead of this machine's ledger: a ledger directory, a DuckDB file path or an `md:<db>` MotherDuck DSN. Unreachable is a refusal, never a quiet fall back to a different body of evidence")
-	source := fs.String("source", "", "where a run without --db reads its evidence: `ledger` (this machine's ledger, the default) or `scorecard` (the old local bug-catching store certify --local used to feed)")
+	source := fs.String("source", "", "where a run without --db reads its evidence: ledger (this machine's ledger, the default) or scorecard (the old local bug-catching store certify --local used to feed)")
 	seat := fs.String("seat", "", "rank only this seat: goal-deriver, mutant-generator, test-writer, test-critic, reviewer, verifier or committer")
-	lang := fs.String("lang", "", "rank only this language — needs evidence that records one (the local bugcatch ledger does not; a pushed warehouse does)")
+	lang := fs.String("lang", "", "rank only this language — needs evidence that records one: the machine ledger, a ledger directory and a pushed warehouse do; --source scorecard does not")
 	minRuns := fs.Int("min-runs", modelrank.DefaultMinRuns, "the evidence floor (default 5): a model with fewer observations in a seat is still PRINTED, with its real numbers, but marked insufficient and never preferred")
 	asJSON := fs.Bool("json", false, "emit the report as JSON")
 	fs.Usage = func() {
@@ -182,7 +199,7 @@ func runModelsRank(args []string, repoRoot string, load rankLoader, stdout, stde
 		src = rankSource{Kind: rankSourceDB, Target: target}
 	case sourceSet:
 		switch strings.TrimSpace(*source) {
-		case rankSourceLedger, "":
+		case rankSourceLedger:
 		case rankSourceScorecard:
 			src.Kind = rankSourceScorecard
 		default:
@@ -221,7 +238,7 @@ func runModelsRank(args []string, repoRoot string, load rankLoader, stdout, stde
 
 	rep := modelrank.Rank(ev.Obs, opt)
 
-	if l := strings.TrimSpace(*lang); l != "" && !rep.LangDimension {
+	if l := strings.TrimSpace(*lang); l != "" && !rep.LangDimension && len(ev.Obs) > 0 {
 		fmt.Fprintf(stderr, "corral models rank: --lang %q, but %s records no language on its observations — read a pushed warehouse with --db <dsn> (corral_audits carries a lang column), or drop --lang\n", l, ev.Source)
 		return 2
 	}
@@ -283,7 +300,7 @@ func printRankReport(rep modelrank.Report, reg *models.Registry, gen generationR
 		fmt.Fprintln(w, "mode: evidence — this project declares no model registry, so the concrete models found in the evidence are ranked instead.")
 	}
 	fmt.Fprintf(w, "evidence: %s\n", rep.Source)
-	if g := gen.String(); g != "" {
+	if g := gen.Line(); g != "" {
 		fmt.Fprintf(w, "grading rules: %s\n", g)
 	}
 	fmt.Fprintf(w, "min-runs: %d — a row below it is printed with its real numbers, marked insufficient, and never preferred.\n", rep.MinRuns)
@@ -460,7 +477,7 @@ func warehouseRankEvidence(db *sql.DB, dsn string) (rankEvidence, error) {
 	if err != nil {
 		return rankEvidence{}, err
 	}
-	rows, err := db.Query(`SELECT COALESCE(a.lang, ''), COALESCE(a.models_by_role, ''), COALESCE(a.seat_tools, ''), COALESCE(a.scan_id, 0),
+	rows, err := db.Query(`SELECT COALESCE(a.lang, ''), COALESCE(a.models_by_role, ''), COALESCE(a.seat_tools, ''), COALESCE(a.scan_id, 0), COALESCE(a.repo, ''),
 		COALESCE(a.path, ''), COALESCE(a.survivors, 0), COALESCE(a.proven_missed, 0),
 		COALESCE(a.mutants_planted, 0), COALESCE(a.mutants_graded, 0), COALESCE(a.mutants_invalid, 0),
 		COALESCE(a.cache_hit, false), a.reused_from_scan_id IS NOT NULL,
@@ -476,11 +493,11 @@ func warehouseRankEvidence(db *sql.DB, dsn string) (rankEvidence, error) {
 	// none): only scans that put an observation into ev.Obs are in it.
 	scanGen := map[string]string{}
 	for rows.Next() {
-		var lang, byRole, toolsJSON, path, scanUID string
+		var lang, byRole, toolsJSON, repo, path, scanUID string
 		var scanID int64
 		var survivors, proven, planted, graded, invalid int
 		var cacheHit, reused, baselineFailed, timedOut, writerFailed, unsound bool
-		if err := rows.Scan(&lang, &byRole, &toolsJSON, &scanID, &path, &survivors, &proven, &planted, &graded, &invalid,
+		if err := rows.Scan(&lang, &byRole, &toolsJSON, &scanID, &repo, &path, &survivors, &proven, &planted, &graded, &invalid,
 			&cacheHit, &reused, &baselineFailed, &timedOut, &writerFailed, &unsound, &scanUID); err != nil {
 			return rankEvidence{}, fmt.Errorf("scanning corral_audits from %s: %w", dsn, err)
 		}
@@ -507,7 +524,7 @@ func warehouseRankEvidence(db *sql.DB, dsn string) (rankEvidence, error) {
 		if strings.TrimSpace(toolsJSON) != "" {
 			_ = json.Unmarshal([]byte(toolsJSON), &tools)
 		}
-		run := fmt.Sprintf("%d", scanID)
+		run := scanKey(scanUID, repo, scanID)
 		for role, model := range seats {
 			if strings.TrimSpace(model) == "" || strings.EqualFold(model, "off") {
 				continue
@@ -528,13 +545,7 @@ func warehouseRankEvidence(db *sql.DB, dsn string) (rankEvidence, error) {
 				o.MutantsPlanted, o.MutantsGraded, o.MutantsInvalid, o.MutantsSurvived = planted, graded, invalid, survivors
 			}
 			ev.Obs = append(ev.Obs, o)
-			// A scan with no uid (a pre-3 push) is keyed by its scan id, so
-			// it still counts once rather than vanishing from the range.
-			key := scanUID
-			if key == "" {
-				key = "id:" + run
-			}
-			scanGen[key] = genByUID[scanUID]
+			scanGen[run] = genByUID[scanUID]
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -542,6 +553,19 @@ func warehouseRankEvidence(db *sql.DB, dsn string) (rankEvidence, error) {
 	}
 	ev.Generations = summarizeGenerations(scanGen)
 	return ev, nil
+}
+
+// scanKey identifies one scan: its scan_uid, or — for a warehouse pushed
+// before schema 3, which has none — its numeric id QUALIFIED BY REPO, since
+// two repositories can both have a scan 1. It is the run key of every
+// observation and the key of the generation map, so a run and a scan are
+// the same thing. The numeric id alone is no key: every entry in a real
+// machine ledger records scan id 0.
+func scanKey(uid, repo string, scanID int64) string {
+	if uid != "" {
+		return uid
+	}
+	return fmt.Sprintf("id:%s:%d", repo, scanID)
 }
 
 // warehouseColumns is the column set a table has in the current catalog
@@ -757,14 +781,14 @@ func machineLedgerRankEvidence() (rankEvidence, error) {
 		}
 		return db, nil
 	}, func(db *sql.DB) (string, error) {
-		var scans int
-		if err := db.QueryRow(`SELECT count(*) FROM corral_scans`).Scan(&scans); err != nil {
-			return "", fmt.Errorf("counting scans in the machine ledger %s: %w", dir, err)
+		var scans, reviews int
+		if err := db.QueryRow(`SELECT (SELECT count(*) FROM corral_scans), (SELECT count(*) FROM corral_reviews)`).Scan(&scans, &reviews); err != nil {
+			return "", fmt.Errorf("counting entries in the machine ledger %s: %w", dir, err)
 		}
-		if scans == 0 {
+		if scans == 0 && reviews == 0 {
 			return "the machine ledger " + dir + " (no entries yet)", nil
 		}
-		return fmt.Sprintf("the machine ledger %s (%d scan(s); a run is one SCAN)", dir, scans), nil
+		return fmt.Sprintf("the machine ledger %s (%d scan(s), %d review(s); a run is one SCAN)", dir, scans, reviews), nil
 	})
 }
 

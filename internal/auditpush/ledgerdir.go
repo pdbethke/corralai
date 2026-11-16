@@ -874,7 +874,7 @@ type loadFilter struct {
 	skipRunDetail   bool // corral_mutants, corral_model_calls and corral_events are skipped
 }
 
-func loadDir(dir string, f loadFilter) (*sql.DB, error) {
+func loadDir(dir string, filter loadFilter) (*sql.DB, error) {
 	// The record must not be SERVED from a chain that does not verify: this
 	// is what the UI, `verify --db` and every reader open. (R1, round four.)
 	if err := RequireIntactChain(dir); err != nil {
@@ -927,7 +927,7 @@ func loadDir(dir string, f loadFilter) (*sql.DB, error) {
 	}
 	files = ScanEntries(files)
 	for _, e := range files {
-		if _, err := insertBundle(db, e.Bundle, e.Pushed, e.ScanUID, f); err != nil {
+		if _, err := insertBundle(db, e.Bundle, e.Pushed, e.ScanUID, filter); err != nil {
 			db.Close()
 			return nil, err
 		}

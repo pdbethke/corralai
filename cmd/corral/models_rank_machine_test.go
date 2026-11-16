@@ -14,8 +14,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pdbethke/corralai/internal/auditpush"
+	"github.com/pdbethke/corralai/internal/review"
 )
 
 // machineLedgerWith writes a ledger directory of one scan entry per
@@ -31,7 +33,9 @@ func machineLedgerWith(t *testing.T, scans ...[2]string) string {
 	auditpush.SetLedgerSigner(auditpush.Ed25519LedgerSigner{KeyID: auditpush.KeyFingerprint(priv.Public().(ed25519.PublicKey)), Key: priv})
 	t.Cleanup(func() { auditpush.SetLedgerSigner(nil) })
 	for i, sc := range scans {
-		id := int64(i + 1)
+		// Every real machine-ledger entry records ScanID 0, so the fixture
+		// does too: a run must be told apart by the entry, not by this number.
+		const id = int64(0)
 		b := auditpush.Bundle{
 			Scan: auditpush.ScanRow{Repo: "acme/r", Commit: fmt.Sprintf("c%07d", i), ScanID: id, Audited: 1},
 			Files: []auditpush.Row{{
@@ -61,7 +65,7 @@ func TestRankReadsTheMachineLedgerByDefault(t *testing.T) {
 	if rc != 0 {
 		t.Fatalf("rc=%d stderr=%s", rc, errb)
 	}
-	for _, want := range []string{"claude-sonnet-5-5", "193/195 survivors proven over 1 runs", "evidence: the machine ledger " + dir + " (1 scan(s); a run is one SCAN)"} {
+	for _, want := range []string{"claude-sonnet-5-5", "193/195 survivors proven over 1 runs", "evidence: the machine ledger " + dir + " (1 scan(s), 0 review(s); a run is one SCAN)"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}
@@ -242,5 +246,117 @@ func TestRankDBLedgerDirectoryLoadsOnlyWhatRankReads(t *testing.T) {
 	}
 	if nonAudited != 0 || mutants != 0 {
 		t.Errorf("--db ledger directory loaded the full view: %d non-audited corral_audits rows, %d corral_mutants rows; want 0 and 0", nonAudited, mutants)
+	}
+}
+
+// Every real machine-ledger entry records ScanID 0. Two entries are two
+// runs; keyed by scan_id they collapsed into one ("over 1 runs") and every
+// per-run figure was a sum divided by 1.
+func TestRankCountsEachMachineLedgerEntryAsARun(t *testing.T) {
+	roles := `{"test-writer":"claude-sonnet-5-5","mutant-generator":"gen-m"}`
+	dir := machineLedgerWith(t, [2]string{roles, ""}, [2]string{roles, ""})
+	t.Setenv("CORRALAI_MACHINE_LEDGER", dir)
+	rc, out, errb := rankMachine(t, "--min-runs", "1")
+	if rc != 0 {
+		t.Fatalf("rc=%d stderr=%s", rc, errb)
+	}
+	if n := strings.Count(out, "over 2 runs"); n < 2 {
+		t.Errorf("want the writer and the generator rows both over 2 runs (found %d):\n%s", n, out)
+	}
+	if strings.Contains(out, "over 1 runs") {
+		t.Errorf("two entries collapsed into one run:\n%s", out)
+	}
+}
+
+// Two repos can share a numeric scan id; with no scan_uid (a warehouse pushed
+// before schema 3) they are still two scans.
+func TestWarehouseRankEvidenceKeepsTwoReposWithTheSameScanIDApart(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "w.duckdb")
+	for _, repo := range []string{"o/a", "o/b"} {
+		b := auditpush.Bundle{
+			Scan: auditpush.ScanRow{Repo: repo, ScanID: 1, Commit: "c", Host: "h"},
+			Files: []auditpush.Row{{Repo: repo, Commit: "c", Path: "p.go", Lang: "go",
+				Disposition: "audited", ModelsByRole: `{"test-writer":"w1"}`, ScanID: 1, Survivors: 4, ProvenMissed: 2}},
+		}
+		if _, err := auditpush.PushBundle(target, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	editWarehouse(t, target, `UPDATE corral_audits SET scan_uid = NULL`)
+	ev := readWarehouseEvidence(t, target)
+	runs := map[string]bool{}
+	for _, o := range ev.Obs {
+		runs[o.Run] = true
+	}
+	if len(runs) != 2 {
+		t.Errorf("runs = %v, want 2 (one per repo)", runs)
+	}
+	if ev.Generations.Scans != 2 {
+		t.Errorf("scans = %d, want 2", ev.Generations.Scans)
+	}
+}
+
+// A machine ledger holding only a review entry (corral review writes machine
+// copies) has entries; it must not say it has none.
+func TestRankMachineLedgerWithOnlyAReviewIsNotEmpty(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "ledger")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rev := auditpush.LedgerEntry{Kind: auditpush.KindReview, Pushed: time.Now().UTC().Truncate(time.Microsecond), Review: &review.Review{
+		Repo: "o/r", Commit: "c", Scope: "s", ReviewerModel: "m",
+		Findings: []review.Finding{{ID: "R1", Claim: "one", Declared: "HYPOTHESIS", Tier: "HYPOTHESIS"}},
+	}}
+	if _, err := auditpush.AppendLedgerEntry(dir, rev, nil); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CORRALAI_MACHINE_LEDGER", dir)
+	rc, out, errb := rankMachine(t)
+	if rc != 0 {
+		t.Fatalf("rc=%d stderr=%s", rc, errb)
+	}
+	if strings.Contains(out, "no entries yet") {
+		t.Errorf("a ledger holding a review says it has no entries:\n%s", out)
+	}
+	if !strings.Contains(out, "(0 scan(s), 1 review(s); a run is one SCAN)") {
+		t.Errorf("evidence line does not count the review:\n%s", out)
+	}
+}
+
+// With no evidence at all, --lang is not a refusal: there is nothing to
+// segment, and the answer is the same words as without it.
+func TestRankLangOnAnEmptyOrAbsentMachineLedgerIsNotARefusal(t *testing.T) {
+	absent := filepath.Join(t.TempDir(), "nope")
+	empty := filepath.Join(t.TempDir(), "ledger")
+	if err := os.MkdirAll(empty, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, dir := range map[string]string{"absent": absent, "empty": empty} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("CORRALAI_MACHINE_LEDGER", dir)
+			rc, out, errb := rankMachine(t, "--lang", "go")
+			if rc != 0 {
+				t.Fatalf("rc=%d stderr=%s", rc, errb)
+			}
+			if !strings.Contains(out, "no recorded observations for any seat yet") {
+				t.Errorf("output does not say there are no recorded observations:\n%s", out)
+			}
+		})
+	}
+}
+
+// A source that HAS observations but none with a language still refuses
+// --lang, naming a source that records one.
+func TestRankLangStillRefusesOnEvidenceWithoutLanguages(t *testing.T) {
+	rc, _, errb := runRank(t, []string{"--lang", "go"}, writerRuns("m", "", 6, 5, 10))
+	if rc != 2 || !strings.Contains(errb, "records no language") {
+		t.Errorf("rc=%d stderr=%s, want the records-no-language refusal", rc, errb)
+	}
+}
+
+func TestRankRefusesAnEmptySource(t *testing.T) {
+	rc, _, errb := rankMachine(t, "--source=")
+	if rc != 2 || !strings.Contains(errb, "ledger, scorecard") {
+		t.Errorf("--source= : rc=%d stderr=%s, want 2 listing the sources", rc, errb)
 	}
 }

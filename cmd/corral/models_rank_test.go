@@ -770,7 +770,7 @@ func TestRankPrintsTheGradingRulesLine(t *testing.T) {
 	if rc := runModels([]string{"rank"}, t.TempDir(), load, &out, &errb); rc != 0 {
 		t.Fatalf("rc=%d %s", rc, errb.String())
 	}
-	if !strings.Contains(out.String(), "grading rules: generations 9 to 40; 1 scan(s) record none\n") {
+	if !strings.Contains(out.String(), "grading rules: generations 9 to 40 across 3 scan(s) with evidence; 1 of them record none\n") {
 		t.Fatalf("missing grading rules line:\n%s", out.String())
 	}
 	if i, j := strings.Index(out.String(), "evidence:"), strings.Index(out.String(), "grading rules:"); i < 0 || j < i {

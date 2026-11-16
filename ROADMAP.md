@@ -101,7 +101,8 @@ of these has happened, with the evidence linked here:
   which changed since. Every verdict discloses whether it was primed.
 - **Reading it back** — `corral scans list|show --ledger`, `corral verify --db`,
   `corral models rank --db` and `corral brief <scope>` all open a checkout of the
-  branch as the same tables. *(This supersedes the local `--record` DuckDB scan
+  branch as the same tables. A bare `corral models rank` reads this machine's
+  ledger the same way, loading only the rows a ranking reads. *(This supersedes the local `--record` DuckDB scan
   ledger described further down; `--cache-db` is the only local file left.)*
 - **Who may sign, and what each field is worth.** A ledger can register the
   keys and the GitHub workflows allowed to sign it, under a root key

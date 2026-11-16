@@ -33,7 +33,7 @@ import (
 )
 
 func rankLoaderFor(obs []modelrank.Observation) rankLoader {
-	return func(dsn string) (rankEvidence, error) {
+	return func(rankSource) (rankEvidence, error) {
 		return rankEvidence{Obs: obs, Source: "a seeded store"}, nil
 	}
 }
@@ -174,8 +174,8 @@ func TestRankJSONShape(t *testing.T) {
 // operator asked.
 func TestRankUnreachableDBRefusesWithExitTwo(t *testing.T) {
 	var out, errb bytes.Buffer
-	load := func(dsn string) (rankEvidence, error) {
-		if dsn == "" {
+	load := func(src rankSource) (rankEvidence, error) {
+		if src.Target == "" {
 			t.Fatal("a named --db must never fall back to the default store")
 		}
 		return rankEvidence{}, errors.New("cannot read the warehouse: no such file")
@@ -378,7 +378,7 @@ func TestRankChangesNothingItReads(t *testing.T) {
 	t.Setenv("CORRALAI_BUGCATCH_DB", bcPath)
 	t.Setenv("CORRALAI_CRITICSCORE_DB", filepath.Join(dir, "cs.duckdb"))
 	var out, errb bytes.Buffer
-	if rc := runModels([]string{"rank"}, dir, defaultRankLoader, &out, &errb); rc != 0 {
+	if rc := runModels([]string{"rank", "--source", "scorecard"}, dir, defaultRankLoader, &out, &errb); rc != 0 {
 		t.Fatalf("rc=%d err=%s", rc, errb.String())
 	}
 	if !strings.Contains(out.String(), "prefer: w") {
@@ -758,7 +758,7 @@ func TestWarehouseRankEvidenceReportsTheGenerationRange(t *testing.T) {
 
 func TestRankPrintsTheGradingRulesLine(t *testing.T) {
 	target := pushThreeGenerationScans(t)
-	load := func(string) (rankEvidence, error) {
+	load := func(rankSource) (rankEvidence, error) {
 		db, err := attachWarehouse(target, true)
 		if err != nil {
 			return rankEvidence{}, err

@@ -84,12 +84,24 @@ type generationJSON struct {
 	Scans      int    `json:"scans"`
 }
 
-// rankLoader reads evidence for a DSN. An EMPTY dsn means the local bugcatch
-// ledger (the default source); a non-empty one is a pushed warehouse. The two
-// failure modes are deliberately kept apart by the caller: a warehouse the
-// operator NAMED and corral could not reach is a refusal, never a silent
+// Kinds of evidence source `corral models rank` can read. Exactly one is
+// used per run and none falls back to another: a ranking that quietly read a
+// different body of evidence than the operator asked for would be a wrong
+// answer that looks right.
+const (
+	rankSourceLedger    = "ledger"    // this machine's ledger (the default)
+	rankSourceScorecard = "scorecard" // the old local bug-catching store
+	rankSourceDB        = "db"        // a ledger directory or warehouse the operator named
+)
+
+// rankSource says where a ranking's evidence comes from. Target is set only
+// for Kind "db": the directory, DuckDB file or `md:` DSN the operator named.
+type rankSource struct{ Kind, Target string }
+
+// rankLoader reads the evidence a rankSource names. A source the operator
+// NAMED (--db) and corral could not reach is a refusal, never a silent
 // fallback to a different body of evidence.
-type rankLoader func(dsn string) (rankEvidence, error)
+type rankLoader func(src rankSource) (rankEvidence, error)
 
 // runModels dispatches `corral models <verb>`. Only `rank` exists; the noun is
 // a group rather than a bare `corral rank` because the registry (`.corral/
@@ -112,7 +124,10 @@ func runModels(args []string, repoRoot string, load rankLoader, stdout, stderr i
 	}
 }
 
-const modelsUsage = `usage: corral models rank [--db <dsn>] [--seat <role>] [--lang <name>] [--min-runs N] [--json]
+const modelsUsage = `usage: corral models rank [--source ledger|scorecard] [--db <dir or dsn>] [--seat <role>] [--lang <name>] [--min-runs N] [--json]
+  A bare run reads this machine's ledger (the entries every certify and review on this machine
+  wrote); --source scorecard reads the old local bug-catching store instead, and --db reads a
+  ledger directory or a pushed warehouse you name.
   seats: goal-deriver, mutant-generator, test-writer, test-critic, and — from a ledger directory's
   review entries — reviewer (claims that held, of those checked) and verifier (verdicts that agreed
   with the outcome; a person's adjudication is the outcome when there is one, execution otherwise),
@@ -132,7 +147,8 @@ const modelsUsage = `usage: corral models rank [--db <dsn>] [--seat <role>] [--l
 func runModelsRank(args []string, repoRoot string, load rankLoader, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("models rank", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	dsn := fs.String("db", "", "a pushed warehouse to read instead of the local bugcatch ledger: a DuckDB file path or an `md:<db>` MotherDuck DSN. Unreachable is a refusal, never a quiet fall back to a different body of evidence")
+	dsn := fs.String("db", "", "a ledger directory or pushed warehouse to read instead of this machine's ledger: a ledger directory, a DuckDB file path or an `md:<db>` MotherDuck DSN. Unreachable is a refusal, never a quiet fall back to a different body of evidence")
+	source := fs.String("source", "", "where a run without --db reads its evidence: `ledger` (this machine's ledger, the default) or `scorecard` (the old local bug-catching store certify --local used to feed)")
 	seat := fs.String("seat", "", "rank only this seat: goal-deriver, mutant-generator, test-writer, test-critic, reviewer, verifier or committer")
 	lang := fs.String("lang", "", "rank only this language — needs evidence that records one (the local bugcatch ledger does not; a pushed warehouse does)")
 	minRuns := fs.Int("min-runs", modelrank.DefaultMinRuns, "the evidence floor (default 5): a model with fewer observations in a seat is still PRINTED, with its real numbers, but marked insufficient and never preferred")
@@ -151,10 +167,33 @@ func runModelsRank(args []string, repoRoot string, load rankLoader, stdout, stde
 	}
 
 	target := strings.TrimSpace(*dsn)
-	ev, err := load(target)
+	sourceSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "source" {
+			sourceSet = true
+		}
+	})
+	src := rankSource{Kind: rankSourceLedger}
+	switch {
+	case target != "" && sourceSet:
+		fmt.Fprintln(stderr, "corral models rank: --db names a source already; --source picks between this machine's ledger and the old scorecard store")
+		return 2
+	case target != "":
+		src = rankSource{Kind: rankSourceDB, Target: target}
+	case sourceSet:
+		switch strings.TrimSpace(*source) {
+		case rankSourceLedger, "":
+		case rankSourceScorecard:
+			src.Kind = rankSourceScorecard
+		default:
+			fmt.Fprintf(stderr, "corral models rank: --source %q is not a source — it must be one of: ledger, scorecard\n", *source)
+			return 2
+		}
+	}
+	ev, err := load(src)
 	if err != nil {
 		fmt.Fprintln(stderr, "corral models rank:", err)
-		if target != "" {
+		if src.Kind == rankSourceDB {
 			// Named-but-unreachable is exit 2, distinct from "the default
 			// store failed": the operator asked a specific question of a
 			// specific warehouse and got no answer from it.
@@ -587,42 +626,34 @@ func summarizeGenerations(scanGen map[string]string) generationRange {
 }
 
 // defaultRankLoader is the wiring `corral models rank` uses in production:
-// the local bug-catching ledger (plus the local adjudication store) by
-// default, or an ATTACHed warehouse when the operator names one.
+// this machine's ledger by default, the old local bug-catching store (plus
+// the local adjudication store) on --source scorecard, or a ledger directory
+// or ATTACHed warehouse when the operator names one.
 //
 // Every open here is READ-ONLY. This command reports on runs that already
-// happened; it must not be able to alter one.
-func defaultRankLoader(dsn string) (rankEvidence, error) {
+// happened; it must not be able to alter one, and resolving the machine
+// ledger must not create its directory.
+func defaultRankLoader(src rankSource) (rankEvidence, error) {
 	ctx := context.Background()
-	if strings.TrimSpace(dsn) != "" {
-		db, err := attachWarehouse(dsn, true)
-		if err != nil {
-			return rankEvidence{}, fmt.Errorf("cannot read the warehouse %s: %w — check the path or `md:` DSN (and, for MotherDuck, that motherduck_token is set); no ranking was produced, and nothing fell back to a different body of evidence", dsn, err)
-		}
-		defer db.Close()
-		ev, err := warehouseRankEvidence(db, dsn)
-		if err != nil {
-			return ev, err
-		}
-		// The review loop's seats, from the review grains — a warehouse's
-		// own tables, or the view a ledger directory loads as.
-		robs, rerr := reviewRankEvidence(db)
-		if rerr != nil {
-			return rankEvidence{}, rerr
-		}
-		ev.Obs = append(ev.Obs, robs...)
-		if len(robs) > 0 {
-			ev.Source += "; reviewer and verifier seats from corral_findings joined to corral_adjudications"
-		}
-		cobs, cerr := committerRankEvidence(db)
-		if cerr != nil {
-			return rankEvidence{}, cerr
-		}
-		ev.Obs = append(ev.Obs, cobs...)
-		if len(cobs) > 0 {
-			ev.Source += "; the committer seat from corral_scans.author/co_authors and the reviews of each commit"
-		}
-		return ev, nil
+	switch src.Kind {
+	case rankSourceDB:
+		return rankFromView(src.Target, func() (*sql.DB, error) {
+			if auditpush.IsLedgerDir(src.Target) {
+				// Only what a ranking reads: the full view is 79,760 single-row
+				// inserts on a real ledger and takes minutes.
+				return auditpush.LoadDirForRank(src.Target)
+			}
+			db, err := attachWarehouse(src.Target, true)
+			if err != nil {
+				return nil, fmt.Errorf("cannot read the warehouse %s: %w — check the path or `md:` DSN (and, for MotherDuck, that motherduck_token is set); no ranking was produced, and nothing fell back to a different body of evidence", src.Target, err)
+			}
+			return db, nil
+		}, nil)
+	case rankSourceLedger:
+		return machineLedgerRankEvidence()
+	case rankSourceScorecard:
+	default:
+		return rankEvidence{}, fmt.Errorf("unknown evidence source %q", src.Kind)
 	}
 	bugCatchPath, err := statedir.PathForWrite(statedir.BugCatchDB)
 	if err != nil {
@@ -643,6 +674,84 @@ func defaultRankLoader(dsn string) (rankEvidence, error) {
 	critic, closeCritic := openCriticStoreBestEffort("corral models rank", os.Stderr)
 	defer closeCritic()
 	return bugcatchRankEvidence(ctx, store, critic)
+}
+
+// rankFromView reads every seat's evidence from one view (a warehouse, or a
+// ledger directory loaded as the tables a warehouse holds) and closes it.
+// head, when non-nil, supplies the Source line's opening in place of
+// warehouseRankEvidence's own (which names a warehouse); the per-seat
+// disclosures withReviewSeats appends still follow it.
+func rankFromView(label string, open func() (*sql.DB, error), head func(*sql.DB) (string, error)) (rankEvidence, error) {
+	db, err := open()
+	if err != nil {
+		return rankEvidence{}, err
+	}
+	defer db.Close()
+	ev, err := warehouseRankEvidence(db, label)
+	if err != nil {
+		return ev, err
+	}
+	if head != nil {
+		if ev.Source, err = head(db); err != nil {
+			return rankEvidence{}, err
+		}
+	}
+	return withReviewSeats(db, ev)
+}
+
+// withReviewSeats adds the review loop's seats, from the review grains — a
+// warehouse's own tables, or the view a ledger directory loads as.
+func withReviewSeats(db *sql.DB, ev rankEvidence) (rankEvidence, error) {
+	robs, rerr := reviewRankEvidence(db)
+	if rerr != nil {
+		return rankEvidence{}, rerr
+	}
+	ev.Obs = append(ev.Obs, robs...)
+	if len(robs) > 0 {
+		ev.Source += "; reviewer and verifier seats from corral_findings joined to corral_adjudications"
+	}
+	cobs, cerr := committerRankEvidence(db)
+	if cerr != nil {
+		return rankEvidence{}, cerr
+	}
+	ev.Obs = append(ev.Obs, cobs...)
+	if len(cobs) > 0 {
+		ev.Source += "; the committer seat from corral_scans.author/co_authors and the reviews of each commit"
+	}
+	return ev, nil
+}
+
+// machineLedgerRankEvidence ranks from this machine's ledger. The path is
+// resolved with statedir.Path, which has no side effects: a machine that has
+// never written an entry has no such directory, and a read must not make one.
+// A ledger that does not verify is a refusal that names the directory.
+func machineLedgerRankEvidence() (rankEvidence, error) {
+	dir, err := statedir.Path(statedir.MachineLedger)
+	if err != nil {
+		return rankEvidence{}, err
+	}
+	if _, serr := os.Stat(dir); serr != nil {
+		if os.IsNotExist(serr) {
+			return rankEvidence{Source: "the machine ledger " + dir + " (not created yet: no run on this machine has written an entry)"}, nil
+		}
+		return rankEvidence{}, fmt.Errorf("cannot read the machine ledger %s: %w", dir, serr)
+	}
+	return rankFromView(dir, func() (*sql.DB, error) {
+		db, lerr := auditpush.LoadDirForRank(dir)
+		if lerr != nil {
+			return nil, fmt.Errorf("the machine ledger %s: %w", dir, lerr)
+		}
+		return db, nil
+	}, func(db *sql.DB) (string, error) {
+		var scans int
+		if err := db.QueryRow(`SELECT count(*) FROM corral_scans`).Scan(&scans); err != nil {
+			return "", fmt.Errorf("counting scans in the machine ledger %s: %w", dir, err)
+		}
+		if scans == 0 {
+			return "the machine ledger " + dir + " (no entries yet)", nil
+		}
+		return fmt.Sprintf("the machine ledger %s (%d scan(s); a run is one SCAN)", dir, scans), nil
+	})
 }
 
 // reviewRankEvidence grades the reviewer and verifier seats from the

@@ -652,9 +652,15 @@ func defaultRankLoader(src rankSource) (rankEvidence, error) {
 	case rankSourceLedger:
 		return machineLedgerRankEvidence()
 	case rankSourceScorecard:
+		return scorecardRankEvidence(ctx)
 	default:
 		return rankEvidence{}, fmt.Errorf("unknown evidence source %q", src.Kind)
 	}
+}
+
+// scorecardRankEvidence reads the old local bug-catching store (and the
+// best-effort adjudication store) that `certify --local` used to feed.
+func scorecardRankEvidence(ctx context.Context) (rankEvidence, error) {
 	bugCatchPath, err := statedir.PathForWrite(statedir.BugCatchDB)
 	if err != nil {
 		return rankEvidence{}, err
@@ -676,6 +682,11 @@ func defaultRankLoader(src rankSource) (rankEvidence, error) {
 	return bugcatchRankEvidence(ctx, store, critic)
 }
 
+// rankViewSeam, when set by a test, is handed the loaded view before any
+// evidence is read from it, so a test can assert WHICH view was loaded (the
+// rank-only slim view or the full one) without the loaders exposing it.
+var rankViewSeam func(*sql.DB)
+
 // rankFromView reads every seat's evidence from one view (a warehouse, or a
 // ledger directory loaded as the tables a warehouse holds) and closes it.
 // head, when non-nil, supplies the Source line's opening in place of
@@ -687,6 +698,9 @@ func rankFromView(label string, open func() (*sql.DB, error), head func(*sql.DB)
 		return rankEvidence{}, err
 	}
 	defer db.Close()
+	if rankViewSeam != nil {
+		rankViewSeam(db)
+	}
 	ev, err := warehouseRankEvidence(db, label)
 	if err != nil {
 		return ev, err
@@ -739,7 +753,7 @@ func machineLedgerRankEvidence() (rankEvidence, error) {
 	return rankFromView(dir, func() (*sql.DB, error) {
 		db, lerr := auditpush.LoadDirForRank(dir)
 		if lerr != nil {
-			return nil, fmt.Errorf("the machine ledger %s: %w", dir, lerr)
+			return nil, fmt.Errorf("the machine ledger %s: %w\n  run `corral verify --ledger %s` to see which entry fails; `--source scorecard` or `--db <another ledger>` reads a different source deliberately — nothing falls back to one automatically", dir, lerr, dir)
 		}
 		return db, nil
 	}, func(db *sql.DB) (string, error) {

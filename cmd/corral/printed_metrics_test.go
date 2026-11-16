@@ -376,6 +376,7 @@ var printedMetrics = map[string]printedRow{
 		"ScanRow.Top", "ScanRow.Candidates", "ScanRow.Audited", "ScanRow.TotalFiles", "ScanRow.DiffBase", "ScanRow.AllCandidates",
 		"Row.PriorsApplied", "Row.MutantsFrom", "Row.Evidence", "ScanRow.ModelCalls", "ScanRow.Settings", "ScanRow.Inventory"},
 		Exempt: "counts in the 'ledger: entry written' and 'pushed' lines repeat the rows the entry holds"},
+	"cmd/corral/certify_repo_record.go:recordCountsLine": {Fields: []string{"Row.Files"}},
 	"cmd/corral/certify_repo.go:goalCacheDisclosureLine": {Fields: []string{"Row.GoalsDerived", "Row.GoalReused"}},
 	"cmd/corral/certify_repo.go:pickPreflightLanguage":   {Fields: []string{"ScanRow.PreflightNote"}},
 	"cmd/corral/certify_repo.go:selectionCmdDigest":      {Exempt: exDigestFrame},

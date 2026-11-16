@@ -564,6 +564,32 @@ func collapsedCounts(rows []scanstore.File) (inDirs, testFiles int) {
 	return inDirs, testFiles
 }
 
+// recordEveryFileHelp is the --record-every-file help text, one place so the
+// flag and the refusal that names it cannot drift.
+const recordEveryFileHelp = "record one ledger row for every file the scan walked. By default files in skipped or gitignored directories and test files are recorded as counts (one row per directory, one per language), which keeps an entry small; the totals are the same either way"
+
+// recordCountsLine is the scan header's disclosure that some files will be
+// recorded as counts, or "" when none will. It counts from the same
+// exclusions, through the same collapse, that buildScanFileRows applies, so
+// the line and the entry cannot disagree.
+func recordCountsLine(excluded []reposcan.Exclusion) string {
+	seen := make(map[string]bool, len(excluded))
+	fresh := make([]reposcan.Exclusion, 0, len(excluded))
+	for _, e := range excluded {
+		if seen[e.Path] {
+			continue
+		}
+		seen[e.Path] = true
+		fresh = append(fresh, e)
+	}
+	rows, _ := collapsedExclusionRows(fresh)
+	inDirs, testFiles := collapsedCounts(rows)
+	if inDirs == 0 && testFiles == 0 {
+		return ""
+	}
+	return fmt.Sprintf("  record: %d file(s) in skipped or ignored directories and %d test file(s) are recorded as counts, not listed; --record-every-file lists them", inDirs, testFiles)
+}
+
 // ungradableEvidence decides the evidence label for a job that ran (or
 // tried to) and came back ungradable — see buildScanFileRows. "proven" is
 // the single label this whole table's defensibility rests on: a later

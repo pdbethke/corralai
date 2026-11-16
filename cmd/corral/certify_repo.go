@@ -105,6 +105,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	runnerFlag := fs.String("runner", "", runnerHelp)
 	preflightFlag := fs.Bool("preflight", false, "run the project's test suite once with coverage instrumentation and report which source files it never executes. One extra suite run; reports coverage-grade evidence, not proof")
 	ledgerFlag := fs.String("ledger", "", "the ledger DIRECTORY this scan's entry is written to and earlier entries are read from as the prior (default: <repo>/.corral/ledger, or $CORRAL_LEDGER). One gzipped JSON entry per scan, naming the previous entry's hash, signed when a certify key is configured — the record, in plain text; DuckDB is its view (corral verify --ledger, seal --db <dir>, models rank --db <dir>). Make the directory a worktree of the corral/ledger branch and a laptop run and an Action run are one writer")
+	recordEveryFileFlag := fs.Bool("record-every-file", false, recordEveryFileHelp)
 	noLedgerFlag := fs.Bool("no-ledger", false, "write no ledger entry and read no prior from the default ledger directory (an explicit --prior still applies)")
 	priorFlag := fs.String("prior", "", "what earlier runs already tried, so this run plants DIFFERENT faults: a corral-mutants document (see --record-mutants), a ledger directory (see --ledger), or a directory holding any number of either — a document brings the hunks, a ledger the outcomes, merged per edit. Applied only to a file whose bytes are EXACTLY what the prior was recorded against; a file the prior knows under other bytes gets none, and the report says so. A run handed a prior sits a different exam from one without — the verdict, the ledger and the signed statement carry priorsApplied and the prior's digest, and the digest is in the cache key, so a repeat audit never reads as the tests changing when only the exam did")
 	mutantsFlag := fs.String("mutants", "", "REPLAY a recorded mutant set (see --record-mutants) instead of generating one: every audited file is graded against exactly the mutants in this file, and not one generator model call is made. Mutants are authored by a model, so an ordinary run re-draws the exam every time and two runs of the same audit are not two samples of one measurement — pin the set and a change to anything ELSE becomes measurable. Every selected file must appear in the set with the SAME bytes it was recorded from; a missing file or a changed one is refused (exit 2) up front, never half-replayed. Reads a corral-mutants-2 document, or an older corral-mutants-1 one, whose whole-file mutants still replay byte-for-byte.")
@@ -131,6 +132,14 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// does not do, and a silently inert flag would read as having worked.
 	if *evidenceFlag && !*dryRun {
 		fmt.Fprintln(stderr, "corral certify --repo: --evidence only changes --dry-run; a real run always collects evidence")
+		return 2
+	}
+	// Refused, not ignored, for the same reason as --evidence above: the flag
+	// changes what an entry holds, and with no entry written (and no warehouse
+	// push to carry the rows) it would read as having worked. --dry-run is
+	// not refused: it writes no entry either way and already lists every file.
+	if *recordEveryFileFlag && *noLedgerFlag && strings.TrimSpace(*pushFlag) == "" && !*dryRun {
+		fmt.Fprintln(stderr, "corral certify --repo: --record-every-file changes what is recorded, and this run records nothing (--no-ledger with no --push)")
 		return 2
 	}
 	// Removed with a POINTER, not deprecated into a warning: --scope-tests
@@ -1519,6 +1528,13 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		summary += fmt.Sprintf(" — unit evidence is partial: %d of %d unit(s) contributed none", unitPassFailed(ex.units), len(ex.units.Units))
 	}
 	fmt.Fprintln(stdout, summary)
+	// Said once, right after the walk summary the counts belong to, and only
+	// when the record will actually hold counted rows: a dry run writes none.
+	if !*dryRun && !*recordEveryFileFlag {
+		if line := recordCountsLine(excl); line != "" {
+			fmt.Fprintln(stdout, line)
+		}
+	}
 	// The record's inventory is taken from the SAME cands and excl the lines
 	// below print from.
 	inventory := newRecordedInventory(cands, excl)
@@ -1858,7 +1874,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// The custody switch the PUSH honours, distinct from the ledger's
 	// record of what happened: --push-source with no --push sends nothing.
 	pushSource := *pushSourceFlag && strings.TrimSpace(*pushFlag) != ""
-	files := buildScanFileRows(results, rep.Excluded, preflightResult, mutantsFromSHA, *repoDir, stderr, false)
+	files := buildScanFileRows(results, rep.Excluded, preflightResult, mutantsFromSHA, *repoDir, stderr, *recordEveryFileFlag)
 	mutants := buildScanMutantRows(0, results)
 	// modelCallRows was built above, before the scan row, so its totals could
 	// feed InputTokens/OutputTokens/ModelCalls without a second measurement.

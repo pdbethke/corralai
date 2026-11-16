@@ -6,6 +6,7 @@ import (
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/pairing"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -901,5 +902,46 @@ func TestALandingRefusedChangeIsNotAnUnauditableChangedSource(t *testing.T) {
 		t.Fatalf("UnauditableChangedSource(%q) = %v, want the same as %q (%v)",
 			ReasonTestLandingNotBuilt, UnauditableChangedSource(ReasonTestLandingNotBuilt),
 			ReasonNoLanguage, UnauditableChangedSource(ReasonNoLanguage))
+	}
+}
+
+// A file's exclusion names the directory it was skipped under, so the record
+// can stand one row for the whole directory while the walk still lists every
+// file.
+func TestExclusionNamesTheDirectoryItWasSkippedUnder(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"dist/a.js":         "x\n",
+		"dist/sub/b.js":     "x\n",
+		".gitignore":        "scratch/\nnotes.tmp\n",
+		"scratch/x.py":      "x = 1\n",
+		"scratch/deep/y.py": "y = 1\n",
+		"notes.tmp":         "n\n",
+		"README.md":         "# hi\n",
+	})
+	if out, err := exec.Command("git", "-C", root, "init", "-q").CombinedOutput(); err != nil {
+		t.Skipf("git unavailable: %v %s", err, out)
+	}
+	_, excl, err := Enumerate(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"dist/a.js": "dist", "dist/sub/b.js": "dist",
+		"scratch/x.py": "scratch", "scratch/deep/y.py": "scratch",
+		"notes.tmp": ".", "README.md": "",
+	}
+	got := map[string]string{}
+	for _, e := range excl {
+		got[e.Path] = e.Dir
+	}
+	for p, d := range want {
+		g, ok := got[p]
+		if !ok {
+			t.Errorf("%s not excluded; got %v", p, got)
+			continue
+		}
+		if g != d {
+			t.Errorf("%s: Dir = %q, want %q", p, g, d)
+		}
 	}
 }

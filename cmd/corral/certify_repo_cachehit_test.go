@@ -99,7 +99,7 @@ func TestACacheHitIsNotInTheScanTotals(t *testing.T) {
 // column is NULL — the same NULL a phase that did not run gets, which is the
 // honest answer to "how long did this scan spend on this file".
 func TestACacheHitStoresNoTiming(t *testing.T) {
-	rows := buildScanFileRows(cacheHitResults(), nil, reposcan.CoverageMap{}, "", t.TempDir(), io.Discard)
+	rows := buildScanFileRows(cacheHitResults(), nil, reposcan.CoverageMap{}, "", t.TempDir(), io.Discard, false)
 	byPath := map[string]int{}
 	for i, r := range rows {
 		byPath[r.Path] = i
@@ -162,7 +162,7 @@ func TestACacheHitPrintsNoTimeLine(t *testing.T) {
 // this scan's. Found by the fix wave's own re-review — every other timing
 // column was gated and this one, which predates the timing work, was not.
 func TestACacheHitStoresNoBaselineMillis(t *testing.T) {
-	rows := buildScanFileRows(cacheHitResults(), nil, reposcan.CoverageMap{}, "", t.TempDir(), io.Discard)
+	rows := buildScanFileRows(cacheHitResults(), nil, reposcan.CoverageMap{}, "", t.TempDir(), io.Discard, false)
 	fresh, reused := -1, -1
 	for i, r := range rows {
 		switch r.Path {

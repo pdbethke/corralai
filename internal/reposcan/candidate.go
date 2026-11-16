@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os/exec"
+	gopath "path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -73,6 +74,13 @@ type Candidate struct {
 type Exclusion struct {
 	Path   string
 	Reason string
+	// Dir is, for ReasonSkippedDir and ReasonGitignored, the OUTERMOST
+	// skipped or ignored directory the file is under (slash-separated,
+	// relative to the scan root, no trailing slash); for a single ignored
+	// file outside an ignored directory it is the file's parent directory
+	// ("." at the root). Empty for every other reason. The record collapses
+	// on it: the walk still lists every file, one exclusion each.
+	Dir string
 }
 
 // Exclusion reasons.
@@ -285,12 +293,16 @@ var invisibleDirs = treedirs.Unaccounted()
 // recorded as a single skipped-dir entry and the walk continues.
 func subtreeFiles(dir, root, reason string) ([]Exclusion, error) {
 	var out []Exclusion
+	outer := "."
+	if r, rerr := filepath.Rel(root, dir); rerr == nil {
+		outer = filepath.ToSlash(r)
+	}
 	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			// Account the unreadable path as one entry and move on. d may be
 			// nil here (an error stat-ing the root of the subtree).
 			if rel, rerr := filepath.Rel(root, p); rerr == nil {
-				out = append(out, Exclusion{Path: filepath.ToSlash(rel), Reason: reason})
+				out = append(out, Exclusion{Path: filepath.ToSlash(rel), Reason: reason, Dir: outer})
 			}
 			if d != nil && d.IsDir() {
 				return fs.SkipDir
@@ -315,7 +327,7 @@ func subtreeFiles(dir, root, reason string) ([]Exclusion, error) {
 		if rerr != nil {
 			return rerr
 		}
-		out = append(out, Exclusion{Path: filepath.ToSlash(rel), Reason: reason})
+		out = append(out, Exclusion{Path: filepath.ToSlash(rel), Reason: reason, Dir: outer})
 		return nil
 	})
 	return out, err
@@ -447,7 +459,7 @@ func EnumerateWithTests(root string, tests *TestMap) ([]Candidate, []Exclusion, 
 			return nil
 		}
 		if ignoredFiles[slash] {
-			excl = append(excl, Exclusion{Path: slash, Reason: ReasonGitignored})
+			excl = append(excl, Exclusion{Path: slash, Reason: ReasonGitignored, Dir: gopath.Dir(slash)})
 			return nil
 		}
 		present[slash] = true

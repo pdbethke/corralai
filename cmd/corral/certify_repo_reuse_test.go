@@ -229,7 +229,7 @@ func reuseFixtureScanOpt(t *testing.T, root, dsn string, deriver reposcan.Derive
 	results := reposcan.Scan(context.Background(), jobs, ex, newLedgerCache(verdictCacheDir, &errb), 1)
 	rep := reposcan.Aggregate("test-owner", "test-repo", "deadbeef", len(cands)+enumExcl, len(cands), results, excl)
 
-	files := buildScanFileRows(results, rep.Excluded, reposcan.CoverageMap{}, "", root, io.Discard)
+	files := buildScanFileRows(results, rep.Excluded, reposcan.CoverageMap{}, "", root, io.Discard, false)
 	modelRows := buildScanModelCallRows(results)
 
 	st, err := scanstore.Open(dsn)

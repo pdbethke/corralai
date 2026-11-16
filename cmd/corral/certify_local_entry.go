@@ -128,7 +128,7 @@ func localEntryBundle(in localAuditInput, v advpool.Verdict, t advpool.RunTeleme
 	if stderr == nil {
 		stderr = io.Discard
 	}
-	files := buildScanFileRows(results, nil, reposcan.CoverageMap{}, run.mutantsFrom, in.repoDir, stderr)
+	files := buildScanFileRows(results, nil, reposcan.CoverageMap{}, run.mutantsFrom, in.repoDir, stderr, false)
 	mutants := buildScanMutantRows(0, results)
 	calls := buildScanModelCallRows(results)
 	inTokens, outTokens, callCount := modelCallRowTotals(calls)

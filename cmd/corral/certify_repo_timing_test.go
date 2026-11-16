@@ -150,7 +150,7 @@ func TestLedgerStoresTheClockAndNullsWhatItDidNotMeasure(t *testing.T) {
 			},
 		},
 	}}
-	rows := buildScanFileRows(results, nil, reposcan.CoverageMap{}, "", t.TempDir(), io.Discard)
+	rows := buildScanFileRows(results, nil, reposcan.CoverageMap{}, "", t.TempDir(), io.Discard, false)
 	if len(rows) != 1 {
 		t.Fatalf("got %d file row(s), want 1", len(rows))
 	}
@@ -262,7 +262,7 @@ func TestUnmeasuredSelectionIsNullAndDashed(t *testing.T) {
 			DevKillRate: 0.5,
 			Timing:      advpool.Timing{DevPass: 35 * time.Minute, Total: 36 * time.Minute},
 		},
-	}}, nil, reposcan.CoverageMap{}, "", t.TempDir(), io.Discard)
+	}}, nil, reposcan.CoverageMap{}, "", t.TempDir(), io.Discard, false)
 	if len(rows) != 1 || rows[0].SelectionMillis != nil {
 		t.Errorf("a scan that ran no selection pass stored %v; NULL is the only honest value", rows[0].SelectionMillis)
 	}

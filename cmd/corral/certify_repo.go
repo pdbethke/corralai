@@ -1858,7 +1858,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// The custody switch the PUSH honours, distinct from the ledger's
 	// record of what happened: --push-source with no --push sends nothing.
 	pushSource := *pushSourceFlag && strings.TrimSpace(*pushFlag) != ""
-	files := buildScanFileRows(results, rep.Excluded, preflightResult, mutantsFromSHA, *repoDir, stderr)
+	files := buildScanFileRows(results, rep.Excluded, preflightResult, mutantsFromSHA, *repoDir, stderr, false)
 	mutants := buildScanMutantRows(0, results)
 	// modelCallRows was built above, before the scan row, so its totals could
 	// feed InputTokens/OutputTokens/ModelCalls without a second measurement.

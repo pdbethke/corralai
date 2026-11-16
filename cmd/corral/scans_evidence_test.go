@@ -123,7 +123,7 @@ func TestScansShowEvidence_CarriesTheTogetherOutcome(t *testing.T) {
 					AuthoredTest: authored, AuthoredTogether: c.together,
 					AuthoredTogetherOutput: c.output,
 				},
-			}}, nil, reposcan.CoverageMap{}, "", t.TempDir(), &bytes.Buffer{})
+			}}, nil, reposcan.CoverageMap{}, "", t.TempDir(), &bytes.Buffer{}, false)
 			var out, errOut bytes.Buffer
 			if code := runScans([]string{"show", "1", "--evidence"}, openFake(&fakeScansReader{files: rows}), &out, &errOut); code != 0 {
 				t.Fatalf("show exit %d: %s", code, errOut.String())

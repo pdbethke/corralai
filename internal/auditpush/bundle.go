@@ -1099,7 +1099,7 @@ func pushBundleOnce(target string, b Bundle) (Counts, error) {
 	}
 	defer db.Close()
 	now, uid := mintPush(b)
-	return insertBundle(db, b, now, uid)
+	return insertBundle(db, b, now, uid, loadFilter{})
 }
 
 // ledgerSigner signs ledger-directory entries; set by SetLedgerSigner from
@@ -1123,7 +1123,7 @@ func mintPush(b Bundle) (time.Time, string) {
 // insertBundle writes b's five grains into db (attached and USE'd, schema
 // ensured) under the given push stamp. Shared by the warehouse push and by
 // LoadDir, which replays JSON bundles into an in-memory view.
-func insertBundle(db *sql.DB, b Bundle, now time.Time, uid string) (Counts, error) {
+func insertBundle(db *sql.DB, b Bundle, now time.Time, uid string, f loadFilter) (Counts, error) {
 	tx, err := db.Begin()
 	if err != nil {
 		return Counts{}, fmt.Errorf("auditpush: begin: %w", err)
@@ -1193,12 +1193,18 @@ func insertBundle(db *sql.DB, b Bundle, now time.Time, uid string) (Counts, erro
 	}
 
 	for _, r := range b.Files {
+		if f.auditedRowsOnly && fileDisposition(r) != "audited" {
+			continue
+		}
 		if err := insertFileRow(tx, uid, now, r); err != nil {
 			return Counts{}, err
 		}
 		c.Files++
 	}
 
+	if f.skipRunDetail {
+		b.Mutants, b.Calls, b.Events = nil, nil, nil
+	}
 	for _, m := range b.Mutants {
 		// Code IS the audited source. It is already withheld — PushBundle
 		// ran BlankUnpushedSource before this transaction opened — so all
@@ -1264,6 +1270,11 @@ func insertBundle(db *sql.DB, b Bundle, now time.Time, uid string) (Counts, erro
 	}
 	return c, nil
 }
+
+// fileDisposition is the value the disposition column holds for r. One
+// function so the INSERT and the rank-view filter in insertBundle cannot
+// disagree about which rows are "audited".
+func fileDisposition(r Row) string { return r.Disposition }
 
 // insertFileRow writes one corral_audits row. Kept as its own function only
 // because seventy columns in the middle of the transaction loop hid the four
@@ -1337,7 +1348,7 @@ func insertFileRow(tx *sql.Tx, uid string, now time.Time, r Row) error {
 		// carries none. A 0 in an INTEGER column is a value a cross-repo
 		// query will average and rank on.
 		nullIfZeroInt(r.Trees), nullIfEmpty(r.ConcurrencyNote), nullIfEmpty(r.SharedDirs), r.ScanID,
-		r.Disposition, nullIfEmpty(r.Reason), r.PreflightState, r.Evidence,
+		fileDisposition(r), nullIfEmpty(r.Reason), r.PreflightState, r.Evidence,
 		nullIfEmpty(r.Detail), nullIfEmpty(r.Status),
 		r.CacheHit, r.ReusedFromScanID, nullIfEmpty(r.CacheKey), nullIfEmpty(r.ParentSHA256),
 		r.MutantsGraded, r.MutantsInvalid, r.MutantsTimedOut, r.MutantsDistinct, r.MutantsDistinctSurvived,

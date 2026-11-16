@@ -18,6 +18,7 @@ history of any release, `git log v0.3.4..v0.3.5`.
 ### Changed
 
 - **One-time cache miss.** `reposcan.VerdictGeneration` is now 43 (rc.33 shipped 42), so every cached verdict is measured once more: a cached Python verdict could carry a merged test that does not compile.
+- **`corral models rank` reads this machine's ledger by default.** A bare run used to read the old local bug-catching store, which `certify --repo` never writes to, so those runs were missing from it. It now reads the entries this machine's ledger holds, loading only the rows a ranking reads: on the ledger of the machine it was built on (40 entries) a bare run took 12.0 seconds, where loading the full view had taken 7 minutes 24 seconds on 39 entries. In a bare run "a run" now means one scan, where the old default counted one audited file, so per-run numbers are not comparable with earlier output. Critic precision, and `--local` history from before `certify --local` wrote ledger entries (rc.26), are shown only under `--source scorecard`, which gives the old view; `--db` names a ledger directory or warehouse and cannot be combined with `--source`, and a ledger that does not verify is refused.
 
 ## [v1.0.0-rc.33] — 2026-11-15
 

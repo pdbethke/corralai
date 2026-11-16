@@ -856,7 +856,10 @@ Takes no flags. Reads the same local findings store `corral certify --local` wri
 ## `corral models` flags
 
 ```
-usage: corral models rank [--db <dsn>] [--seat <role>] [--lang <name>] [--min-runs N] [--json]
+usage: corral models rank [--source ledger|scorecard] [--db <dir or dsn>] [--seat <role>] [--lang <name>] [--min-runs N] [--json]
+  A bare run reads this machine's ledger (the entries certify and review runs on this machine
+  wrote); --source scorecard reads the old local bug-catching store instead, and --db reads a
+  ledger directory or a pushed warehouse you name.
   seats: goal-deriver, mutant-generator, test-writer, test-critic, and — from a ledger directory's
   review entries — reviewer (claims that held, of those checked) and verifier (verdicts that agreed
   with the outcome; a person's adjudication is the outcome when there is one, execution otherwise),
@@ -877,7 +880,10 @@ usage: corral models rank [--db <dsn>] [--seat <role>] [--lang <name>] [--min-ru
 ## `corral models rank` flags
 
 ```
-usage: corral models rank [--db <dsn>] [--seat <role>] [--lang <name>] [--min-runs N] [--json]
+usage: corral models rank [--source ledger|scorecard] [--db <dir or dsn>] [--seat <role>] [--lang <name>] [--min-runs N] [--json]
+  A bare run reads this machine's ledger (the entries certify and review runs on this machine
+  wrote); --source scorecard reads the old local bug-catching store instead, and --db reads a
+  ledger directory or a pushed warehouse you name.
   seats: goal-deriver, mutant-generator, test-writer, test-critic, and — from a ledger directory's
   review entries — reviewer (claims that held, of those checked) and verifier (verdicts that agreed
   with the outcome; a person's adjudication is the outcome when there is one, execution otherwise),
@@ -896,15 +902,17 @@ usage: corral models rank [--db <dsn>] [--seat <role>] [--lang <name>] [--min-ru
 
 flags:
   -db md:<db>
-    	a pushed warehouse to read instead of the local bugcatch ledger: a DuckDB file path or an md:<db> MotherDuck DSN. Unreachable is a refusal, never a quiet fall back to a different body of evidence
+    	a ledger directory or pushed warehouse to read instead of this machine's ledger: a ledger directory, a DuckDB file path or an md:<db> MotherDuck DSN. Unreachable is a refusal, never a quiet fall back to a different body of evidence
   -json
     	emit the report as JSON
   -lang string
-    	rank only this language — needs evidence that records one (the local bugcatch ledger does not; a pushed warehouse does)
+    	rank only this language — needs evidence that records one: the machine ledger, a ledger directory and a pushed warehouse do; --source scorecard does not
   -min-runs int
     	the evidence floor (default 5): a model with fewer observations in a seat is still PRINTED, with its real numbers, but marked insufficient and never preferred (default 5)
   -seat string
     	rank only this seat: goal-deriver, mutant-generator, test-writer, test-critic, reviewer, verifier or committer
+  -source string
+    	where a run without --db reads its evidence: ledger (this machine's ledger, the default) or scorecard (the old local bug-catching store certify --local used to feed)
 ```
 
 ## `corral review` flags

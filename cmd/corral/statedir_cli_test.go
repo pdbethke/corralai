@@ -186,7 +186,7 @@ func TestCertifyRepoRefusesALegacyOnlyKeyBeforeAnySpend(t *testing.T) {
 // directory" opening its DuckDB file.
 func TestStoreOpenersWorkOnAFreshMachine(t *testing.T) {
 	home := isolateStateHome(t)
-	if _, err := defaultRankLoader(""); err != nil {
+	if _, err := defaultRankLoader(rankSource{Kind: rankSourceScorecard}); err != nil {
 		t.Fatalf("models rank on a fresh machine: %v", err)
 	}
 	root := filepath.Join(home, ".local", "state", "corral")

@@ -128,7 +128,7 @@ func PushLedgerDir(dir, target string, withSource, dryRun bool) (PushPlan, error
 			if err := requireStatements(b); err != nil {
 				return plan, err
 			}
-			if _, err := insertBundle(db, b, e.Pushed, e.ScanUID); err != nil {
+			if _, err := insertBundle(db, b, e.Pushed, e.ScanUID, loadFilter{}); err != nil {
 				return plan, fmt.Errorf("auditpush: pushing entry %.12s: %w", e.Hash, err)
 			}
 		case KindReview:

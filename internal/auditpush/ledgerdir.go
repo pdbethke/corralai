@@ -853,7 +853,28 @@ func ReadLedgerDir(dir string) ([]ledgerFile, error) {
 // warehouse's schema — the view. Every bundle is inserted under the
 // scan_uid and timestamp it was pushed with, so statement checks and joins
 // see the same identities a warehouse would.
-func LoadDir(dir string) (*sql.DB, error) {
+func LoadDir(dir string) (*sql.DB, error) { return loadDir(dir, loadFilter{}) }
+
+// LoadDirForRank is LoadDir's view cut to what a model ranking reads: every
+// scan, review, finding and adjudication row, but only the corral_audits
+// rows whose disposition is audited, and no mutant, model-call or event
+// rows. On the 39-entry machine ledger the full load took 7m24s, 77% of it
+// one INSERT per walked file; a ranking reads none of the excluded files, so
+// this is the same record at a fraction of the cost. The chain check, the
+// retraction filter, the schema and the attach name are LoadDir's: one
+// body, parameterised, so the two cannot drift.
+func LoadDirForRank(dir string) (*sql.DB, error) {
+	return loadDir(dir, loadFilter{auditedRowsOnly: true, skipRunDetail: true})
+}
+
+// loadFilter says which grains of a scan entry a load inserts. The zero
+// value inserts everything.
+type loadFilter struct {
+	auditedRowsOnly bool // corral_audits rows with a disposition other than audited are skipped
+	skipRunDetail   bool // corral_mutants, corral_model_calls and corral_events are skipped
+}
+
+func loadDir(dir string, filter loadFilter) (*sql.DB, error) {
 	// The record must not be SERVED from a chain that does not verify: this
 	// is what the UI, `verify --db` and every reader open. (R1, round four.)
 	if err := RequireIntactChain(dir); err != nil {
@@ -905,8 +926,8 @@ func LoadDir(dir string) (*sql.DB, error) {
 		}
 	}
 	files = ScanEntries(files)
-	for _, f := range files {
-		if _, err := insertBundle(db, f.Bundle, f.Pushed, f.ScanUID); err != nil {
+	for _, e := range files {
+		if _, err := insertBundle(db, e.Bundle, e.Pushed, e.ScanUID, filter); err != nil {
 			db.Close()
 			return nil, err
 		}

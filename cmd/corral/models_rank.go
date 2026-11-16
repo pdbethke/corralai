@@ -404,17 +404,30 @@ func bugcatchRankEvidence(ctx context.Context, store *bugcatch.Store, critic *cr
 func warehouseRankEvidence(db *sql.DB, dsn string) (rankEvidence, error) {
 	ev := rankEvidence{Source: "the pushed warehouse " + dsn + " (corral_audits; a run is one SCAN, not one audited file as in the local ledger)"}
 	// A file row reaches its scan through scan_uid, the identity every grain
-	// of one push shares. A scalar subquery rather than a join: a scan row can
-	// never multiply a file row, and a file with no scan row (an older push)
-	// reads as a scan that records no generation.
+	// of one push shares. attachWarehouse never migrates, and rank is
+	// read-only, so a warehouse pushed before scan_uid (schema 3) or
+	// verdict_generation existed lacks the column: it is probed, and an absent
+	// one reads as a scan that records no generation rather than failing a
+	// ranking that worked before.
+	auditCols, err := warehouseColumns(db, "corral_audits")
+	if err != nil {
+		return rankEvidence{}, err
+	}
+	scanUIDExpr := "''"
+	if auditCols["scan_uid"] {
+		scanUIDExpr = "COALESCE(a.scan_uid, '')"
+	}
+	genByUID, err := scanGenerationsByUID(db)
+	if err != nil {
+		return rankEvidence{}, err
+	}
 	rows, err := db.Query(`SELECT COALESCE(a.lang, ''), COALESCE(a.models_by_role, ''), COALESCE(a.seat_tools, ''), COALESCE(a.scan_id, 0),
 		COALESCE(a.path, ''), COALESCE(a.survivors, 0), COALESCE(a.proven_missed, 0),
 		COALESCE(a.mutants_planted, 0), COALESCE(a.mutants_graded, 0), COALESCE(a.mutants_invalid, 0),
 		COALESCE(a.cache_hit, false), a.reused_from_scan_id IS NOT NULL,
 		COALESCE(a.baseline_failed, false), COALESCE(a.timed_out, false),
 		COALESCE(a.test_writer_failed, false), COALESCE(a.pool_test_unsound, false),
-		COALESCE(a.scan_uid, ''),
-		COALESCE((SELECT max(s.verdict_generation) FROM corral_scans s WHERE s.scan_uid = a.scan_uid), '')
+		` + scanUIDExpr + `
 		FROM corral_audits a WHERE a.disposition = 'audited'`)
 	if err != nil {
 		return rankEvidence{}, fmt.Errorf("reading corral_audits from %s: %w", dsn, err)
@@ -424,12 +437,12 @@ func warehouseRankEvidence(db *sql.DB, dsn string) (rankEvidence, error) {
 	// none): only scans that put an observation into ev.Obs are in it.
 	scanGen := map[string]string{}
 	for rows.Next() {
-		var lang, byRole, toolsJSON, path, scanUID, gen string
+		var lang, byRole, toolsJSON, path, scanUID string
 		var scanID int64
 		var survivors, proven, planted, graded, invalid int
 		var cacheHit, reused, baselineFailed, timedOut, writerFailed, unsound bool
 		if err := rows.Scan(&lang, &byRole, &toolsJSON, &scanID, &path, &survivors, &proven, &planted, &graded, &invalid,
-			&cacheHit, &reused, &baselineFailed, &timedOut, &writerFailed, &unsound, &scanUID, &gen); err != nil {
+			&cacheHit, &reused, &baselineFailed, &timedOut, &writerFailed, &unsound, &scanUID); err != nil {
 			return rankEvidence{}, fmt.Errorf("scanning corral_audits from %s: %w", dsn, err)
 		}
 		if cacheHit || reused || baselineFailed || timedOut {
@@ -482,7 +495,7 @@ func warehouseRankEvidence(db *sql.DB, dsn string) (rankEvidence, error) {
 			if key == "" {
 				key = "id:" + run
 			}
-			scanGen[key] = gen
+			scanGen[key] = genByUID[scanUID]
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -490,6 +503,65 @@ func warehouseRankEvidence(db *sql.DB, dsn string) (rankEvidence, error) {
 	}
 	ev.Generations = summarizeGenerations(scanGen)
 	return ev, nil
+}
+
+// warehouseColumns is the column set a table has in the current catalog
+// (empty when the table is absent). duckdb_columns() with current_database(),
+// not information_schema, for the reason auditpush.migrateTable gives: the
+// warehouse is an ATTACHed catalog.
+func warehouseColumns(db *sql.DB, table string) (map[string]bool, error) {
+	rows, err := db.Query(`SELECT column_name FROM duckdb_columns()
+		WHERE database_name = current_database() AND table_name = ?`, table)
+	if err != nil {
+		return nil, fmt.Errorf("probing %s columns: %w", table, err)
+	}
+	defer rows.Close()
+	cols := map[string]bool{}
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			return nil, fmt.Errorf("probing %s columns: %w", table, err)
+		}
+		cols[n] = true
+	}
+	return cols, rows.Err()
+}
+
+// scanGenerationsByUID maps scan_uid to its recorded generation, empty when
+// the warehouse predates the column. Should one scan_uid carry several
+// corral_scans rows, the highest INTEGER wins, taken here in Go: a text max
+// over a VARCHAR would rank "9" above "40".
+func scanGenerationsByUID(db *sql.DB) (map[string]string, error) {
+	out := map[string]string{}
+	cols, err := warehouseColumns(db, "corral_scans")
+	if err != nil {
+		return nil, err
+	}
+	if !cols["scan_uid"] || !cols["verdict_generation"] {
+		return out, nil
+	}
+	rows, err := db.Query(`SELECT scan_uid, verdict_generation FROM corral_scans
+		WHERE scan_uid IS NOT NULL AND verdict_generation IS NOT NULL`)
+	if err != nil {
+		return nil, fmt.Errorf("reading corral_scans verdict_generation: %w", err)
+	}
+	defer rows.Close()
+	best := map[string]int{}
+	for rows.Next() {
+		var uid, gen string
+		if err := rows.Scan(&uid, &gen); err != nil {
+			return nil, fmt.Errorf("reading corral_scans verdict_generation: %w", err)
+		}
+		n, perr := strconv.Atoi(strings.TrimSpace(gen))
+		if perr != nil || n < 0 {
+			continue
+		}
+		if cur, ok := best[uid]; !ok || n > cur {
+			best[uid] = n
+			out[uid] = strconv.Itoa(n)
+		}
+	}
+	return out, rows.Err()
 }
 
 // summarizeGenerations folds per-scan generations into a range. They compare

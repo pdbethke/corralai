@@ -809,3 +809,78 @@ func TestRankPrintsTheGradingRulesLine(t *testing.T) {
 		t.Fatalf("no scans, no generations object:\n%s", js)
 	}
 }
+
+// editWarehouse opens a pushed warehouse file read-write for a test to damage
+// or extend it, then closes it so the reader under test can attach it.
+func editWarehouse(t *testing.T, path string, stmts ...string) {
+	t.Helper()
+	db, err := sql.Open("duckdb", path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	for _, s := range stmts {
+		if _, err := db.Exec(s); err != nil {
+			t.Fatalf("%s: %v", s, err)
+		}
+	}
+}
+
+func pushOneGenerationScan(t *testing.T, gen string) string {
+	t.Helper()
+	target := filepath.Join(t.TempDir(), "o.duckdb")
+	b := auditpush.Bundle{
+		Scan: auditpush.ScanRow{Repo: "o/r", ScanID: 1, Commit: "c", Host: "h", VerdictGeneration: gen},
+		Files: []auditpush.Row{{Repo: "o/r", Commit: "c", Path: "p.go", Lang: "go",
+			Disposition: "audited", ModelsByRole: `{"test-writer":"w1"}`, ScanID: 1, Survivors: 4, ProvenMissed: 2}},
+	}
+	if _, err := auditpush.PushBundle(target, b); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	return target
+}
+
+func readWarehouseEvidence(t *testing.T, target string) rankEvidence {
+	t.Helper()
+	db, err := attachWarehouse(target, true)
+	if err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	defer db.Close()
+	ev, err := warehouseRankEvidence(db, target)
+	if err != nil {
+		t.Fatalf("warehouseRankEvidence: %v", err)
+	}
+	return ev
+}
+
+// A warehouse pushed before corral_scans had verdict_generation (and
+// attachWarehouse never migrates) must still rank: every scan in it simply
+// records no generation.
+func TestWarehouseRankEvidenceSurvivesAWarehouseWithoutTheGenerationColumn(t *testing.T) {
+	target := pushOneGenerationScan(t, "40")
+	editWarehouse(t, target, `ALTER TABLE corral_scans DROP COLUMN verdict_generation`)
+	ev := readWarehouseEvidence(t, target)
+	if len(ev.Obs) != 1 {
+		t.Fatalf("obs = %d, want the one writer observation", len(ev.Obs))
+	}
+	if want := (generationRange{Scans: 1, Unrecorded: 1}); ev.Generations != want {
+		t.Fatalf("generations = %+v, want %+v", ev.Generations, want)
+	}
+	if got := ev.Generations.String(); got != "no scan records a generation" {
+		t.Fatalf("String() = %q", got)
+	}
+}
+
+// Two corral_scans rows under one scan_uid must resolve by integer, not by
+// text: a text max would pick "9" over "40".
+func TestWarehouseRankEvidenceTakesTheIntegerMaxOfDuplicateScanRows(t *testing.T) {
+	target := pushOneGenerationScan(t, "9")
+	editWarehouse(t, target,
+		`INSERT INTO corral_scans SELECT * FROM corral_scans`,
+		`UPDATE corral_scans SET verdict_generation = '40' WHERE rowid = (SELECT max(rowid) FROM corral_scans)`)
+	ev := readWarehouseEvidence(t, target)
+	if want := (generationRange{Min: "40", Max: "40", Scans: 1}); ev.Generations != want {
+		t.Fatalf("generations = %+v, want %+v", ev.Generations, want)
+	}
+}

@@ -457,6 +457,7 @@ var printedMetrics = map[string]printedRow{
 	"cmd/corral/scans.go:runScansShow":          {Fields: []string{"Row.Survivors", "Row.ProvenMissed", "Row.KillRate", "ScanRow.RekorLogIndex"}},
 	"cmd/corral/scans.go:authoredTestOutcome":   {Fields: []string{"Row.Survivors"}},
 	"cmd/corral/scans.go:scanFileSelectionWith": {Fields: []string{"Row.TestSelection", "Row.SelectedTests", "Row.SuiteTests", "Row.SelectionUnreported", "TestsPerMutantSpread.Min", "TestsPerMutantSpread.Max"}},
+	"cmd/corral/scans.go:collapsedLabel":        {Fields: []string{"Row.Files"}},
 	"cmd/corral/scans.go:excludedSuffix":        {Fields: []string{"Row.SelectionExcluded"}},
 	"cmd/corral/scans.go:formatKillRate":        {Fields: []string{"Row.KillRate"}},
 	"cmd/corral/scans.go:mutantSourceListing":   {Fields: []string{"MutantRow.Outcome", "MutantRow.Proven", "MutantRow.Source"}},

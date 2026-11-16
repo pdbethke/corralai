@@ -317,6 +317,13 @@ func (r Row) FileCount() int {
 	return 1
 }
 
+// FilesSQL is FileCount for a SQL reader: the files a corral_audits row
+// stands for, summed as SUM(FilesSQL). The warehouse stores NULL for a one-file
+// row, so the same "absent means one" rule lives here as COALESCE. A reader
+// that counts files in SQL uses this constant, never its own COALESCE, so the
+// Go rule and the SQL rule cannot drift (the pattern of seatrecord.ResolvedOnly).
+const FilesSQL = "COALESCE(files, 1)"
+
 // Link identifies the ledger scan and signed statement a pushed row belongs
 // to — the fields stampLink (internal/auditpush/bundle.go) writes onto every
 // row of every table from a single source, so a row and the statement it

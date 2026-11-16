@@ -214,10 +214,13 @@ func buildBrief(dir string, all []auditpush.LedgerEntry, paths []string, maxItem
 			b.Repo = e.Bundle.Scan.Repo
 		}
 		for _, r := range e.Bundle.Files {
-			if !under(r.Path) {
+			// A counted row stands for files the walk saw but no row names:
+			// a requested file inside its directory is answered by it, and it
+			// is labelled with its count so it is not read as one file.
+			if !under(r.Path) && !(r.Files > 0 && inCountedDir(r.Path, paths)) {
 				continue
 			}
-			bp := get(r.Path)
+			bp := get(collapsedLabel(r.Path, r.Lang, r.Reason, r.Files, r.FileCount()))
 			if !bp.NoScan {
 				continue // an older scan of a file already reported
 			}
@@ -461,4 +464,20 @@ func shortRef(ref string) string {
 		return h
 	}
 	return h + "#" + id
+}
+
+// inCountedDir reports whether any requested path lies inside dir, the
+// directory a counted row ("dist/") stands for. A path-less or root row never
+// matches here: only a whole-repository request reaches those (under).
+func inCountedDir(dir string, paths []string) bool {
+	dir = filepath.ToSlash(filepath.Clean(dir))
+	if dir == "." {
+		return false
+	}
+	for _, p := range paths {
+		if strings.HasPrefix(filepath.ToSlash(filepath.Clean(p)), dir+"/") {
+			return true
+		}
+	}
+	return false
 }

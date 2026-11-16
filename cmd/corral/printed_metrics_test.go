@@ -427,6 +427,8 @@ var printedMetrics = map[string]printedRow{
 	"cmd/corral/matrix.go:runMatrix":           {Fields: []string{"MutantRow.KilledBy", "MutantRow.Outcome"}},
 
 	"cmd/corral/models_rank.go:printRankReport":       {Fields: []string{"SeatRow.Catches", "SeatRow.Opportunities", "SeatRow.ParseRetries"}, Exempt: "registry model count and --min-runs threshold are the operator's inputs"},
+	"cmd/corral/models_rank.go:summarizeGenerations":  {Fields: []string{"ScanRow.VerdictGeneration"}, Exempt: "formats the lowest and highest recorded generation back to text; the scan count is the evidence-size count, not a record field"},
+	"cmd/corral/models_rank.go:String":                {Fields: []string{"ScanRow.VerdictGeneration"}, Exempt: "the scan count is how many scans contributed an observation; a count of the evidence, not a record field"},
 	"cmd/corral/models_rank.go:rankMetricCell":        {Fields: []string{"SeatRow.Catches", "SeatRow.Opportunities"}},
 	"cmd/corral/models_rank.go:bugcatchRankEvidence":  {Exempt: "formats a record id into an evidence key, not a measurement"},
 	"cmd/corral/models_rank.go:warehouseRankEvidence": {Exempt: "formats a scan id into an evidence key, not a measurement"},

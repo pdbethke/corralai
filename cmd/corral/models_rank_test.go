@@ -699,3 +699,113 @@ func TestRankGradesTheAuditedPartyFromTheLedger(t *testing.T) {
 		t.Fatalf("rows with no party recorded must grade nobody: %d %v", len(obs), err)
 	}
 }
+
+func TestGenerationRangeString(t *testing.T) {
+	for _, c := range []struct {
+		g    generationRange
+		want string
+	}{
+		{generationRange{Min: "40", Max: "43", Scans: 5}, "generations 40 to 43"},
+		{generationRange{Min: "42", Max: "42", Scans: 2}, "generation 42"},
+		{generationRange{Min: "40", Max: "43", Unrecorded: 2, Scans: 7}, "generations 40 to 43; 2 scan(s) record none"},
+		{generationRange{Min: "42", Max: "42", Unrecorded: 1, Scans: 3}, "generation 42; 1 scan(s) record none"},
+		{generationRange{Unrecorded: 3, Scans: 3}, "no scan records a generation"},
+		{generationRange{}, ""},
+	} {
+		if got := c.g.String(); got != c.want {
+			t.Errorf("%+v: got %q, want %q", c.g, got, c.want)
+		}
+	}
+}
+
+// pushThreeGenerationScans builds a warehouse of three scans whose grading
+// generations are "9", "40" and NULL, each with one audited file naming a writer.
+func pushThreeGenerationScans(t *testing.T) string {
+	t.Helper()
+	target := filepath.Join(t.TempDir(), "g.duckdb")
+	for i, gen := range []string{"9", "40", ""} {
+		b := auditpush.Bundle{
+			Scan: auditpush.ScanRow{Repo: "o/r", ScanID: int64(i + 1), Commit: fmt.Sprintf("c%d", i), Host: "h", VerdictGeneration: gen},
+			Files: []auditpush.Row{{Repo: "o/r", Commit: fmt.Sprintf("c%d", i), Path: "p.go", Lang: "go",
+				Disposition: "audited", ModelsByRole: `{"test-writer":"w1"}`, ScanID: int64(i + 1), Survivors: 4, ProvenMissed: 2}},
+		}
+		if _, err := auditpush.PushBundle(target, b); err != nil {
+			t.Fatalf("push %d: %v", i, err)
+		}
+	}
+	return target
+}
+
+func TestWarehouseRankEvidenceReportsTheGenerationRange(t *testing.T) {
+	target := pushThreeGenerationScans(t)
+	db, err := attachWarehouse(target, true)
+	if err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	defer db.Close()
+	ev, err := warehouseRankEvidence(db, target)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	want := generationRange{Min: "9", Max: "40", Unrecorded: 1, Scans: 3}
+	if ev.Generations != want {
+		t.Fatalf("generations = %+v, want %+v (compared as integers; the NULL scan's observation is still in ev.Obs)", ev.Generations, want)
+	}
+	if len(ev.Obs) != 3 {
+		t.Fatalf("obs = %d, want 3: an unrecorded scan still contributes evidence", len(ev.Obs))
+	}
+}
+
+func TestRankPrintsTheGradingRulesLine(t *testing.T) {
+	target := pushThreeGenerationScans(t)
+	load := func(string) (rankEvidence, error) {
+		db, err := attachWarehouse(target, true)
+		if err != nil {
+			return rankEvidence{}, err
+		}
+		defer db.Close()
+		return warehouseRankEvidence(db, target)
+	}
+	var out, errb bytes.Buffer
+	if rc := runModels([]string{"rank"}, t.TempDir(), load, &out, &errb); rc != 0 {
+		t.Fatalf("rc=%d %s", rc, errb.String())
+	}
+	if !strings.Contains(out.String(), "grading rules: generations 9 to 40; 1 scan(s) record none\n") {
+		t.Fatalf("missing grading rules line:\n%s", out.String())
+	}
+	if i, j := strings.Index(out.String(), "evidence:"), strings.Index(out.String(), "grading rules:"); i < 0 || j < i {
+		t.Fatalf("grading rules must follow the evidence line:\n%s", out.String())
+	}
+
+	out.Reset()
+	if rc := runModels([]string{"rank", "--json"}, t.TempDir(), load, &out, &errb); rc != 0 {
+		t.Fatalf("json rc=%d", rc)
+	}
+	var rep struct {
+		Mode        string `json:"mode"`
+		Generations *struct {
+			Min        string `json:"min"`
+			Max        string `json:"max"`
+			Unrecorded int    `json:"unrecorded"`
+			Scans      int    `json:"scans"`
+		} `json:"generations"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &rep); err != nil {
+		t.Fatalf("json: %v", err)
+	}
+	if rep.Mode == "" || rep.Generations == nil || rep.Generations.Min != "9" || rep.Generations.Max != "40" ||
+		rep.Generations.Unrecorded != 1 || rep.Generations.Scans != 3 {
+		t.Fatalf("generations object = %+v", rep.Generations)
+	}
+
+	// Evidence with no scans prints no line and no JSON object.
+	out.Reset()
+	rc, text, _ := runRank(t, nil, writerRuns("m", "", 6, 5, 10))
+	if rc != 0 || strings.Contains(text, "grading rules:") {
+		t.Fatalf("no scans, no line:\n%s", text)
+	}
+	rc, js, _ := runRank(t, []string{"--json"}, writerRuns("m", "", 6, 5, 10))
+	if rc != 0 || strings.Contains(js, "generations") {
+		t.Fatalf("no scans, no generations object:\n%s", js)
+	}
+}

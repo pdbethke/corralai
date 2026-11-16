@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 
@@ -32,6 +33,55 @@ import (
 type rankEvidence struct {
 	Obs    []modelrank.Observation
 	Source string
+	// Generations is which grading rules (VerdictGeneration) the scans behind
+	// Obs were graded under. Zero when the store records none (the local
+	// bugcatch ledger) or has no scans.
+	Generations generationRange
+}
+
+// generationRange says which grading-rule generations a body of evidence
+// spans. Ranking pools observations from scans graded under different rules;
+// a reader comparing two runs of `corral models rank` needs to know whether
+// the pool changed generation underneath them. Min and Max are integers
+// carried as text, as the column records them; Unrecorded counts scans whose
+// generation is absent or not an integer, which are never folded into the
+// range; Scans counts the distinct scans that contributed an observation.
+type generationRange struct {
+	Min, Max   string
+	Unrecorded int
+	Scans      int
+}
+
+func (g generationRange) String() string {
+	if g.Scans == 0 {
+		return ""
+	}
+	if g.Min == "" {
+		return "no scan records a generation"
+	}
+	s := "generation " + g.Min
+	if g.Min != g.Max {
+		s = "generations " + g.Min + " to " + g.Max
+	}
+	if g.Unrecorded > 0 {
+		s += fmt.Sprintf("; %d scan(s) record none", g.Unrecorded)
+	}
+	return s
+}
+
+// rankReportJSON is the report `--json` emits: the modelrank report as it
+// always was, plus the generations the evidence spans. It lives here, not in
+// internal/modelrank, which stays agnostic of where its evidence came from.
+type rankReportJSON struct {
+	modelrank.Report
+	Generations *generationJSON `json:"generations,omitempty"`
+}
+
+type generationJSON struct {
+	Min        string `json:"min"`
+	Max        string `json:"max"`
+	Unrecorded int    `json:"unrecorded"`
+	Scans      int    `json:"scans"`
 }
 
 // rankLoader reads evidence for a DSN. An EMPTY dsn means the local bugcatch
@@ -140,10 +190,14 @@ func runModelsRank(args []string, repoRoot string, load rankLoader, stdout, stde
 	if *asJSON {
 		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
-		_ = enc.Encode(rep)
+		out := rankReportJSON{Report: rep}
+		if g := ev.Generations; g.Scans > 0 {
+			out.Generations = &generationJSON{Min: g.Min, Max: g.Max, Unrecorded: g.Unrecorded, Scans: g.Scans}
+		}
+		_ = enc.Encode(out)
 		return 0
 	}
-	printRankReport(rep, reg, stdout)
+	printRankReport(rep, reg, ev.Generations, stdout)
 	return 0
 }
 
@@ -181,7 +235,7 @@ func declaredByModel(reg *models.Registry) map[string]string {
 	return out
 }
 
-func printRankReport(rep modelrank.Report, reg *models.Registry, w io.Writer) {
+func printRankReport(rep modelrank.Report, reg *models.Registry, gen generationRange, w io.Writer) {
 	fmt.Fprintln(w, "corral models rank — what corral's own recorded evidence says about each seat.")
 	switch rep.Mode {
 	case modelrank.ModeRegistry:
@@ -190,6 +244,9 @@ func printRankReport(rep modelrank.Report, reg *models.Registry, w io.Writer) {
 		fmt.Fprintln(w, "mode: evidence — this project declares no model registry, so the concrete models found in the evidence are ranked instead.")
 	}
 	fmt.Fprintf(w, "evidence: %s\n", rep.Source)
+	if g := gen.String(); g != "" {
+		fmt.Fprintf(w, "grading rules: %s\n", g)
+	}
 	fmt.Fprintf(w, "min-runs: %d — a row below it is printed with its real numbers, marked insufficient, and never preferred.\n", rep.MinRuns)
 	if !rep.LangDimension {
 		fmt.Fprintln(w, "language: this evidence records none, so every row is across all languages.")
@@ -346,24 +403,33 @@ func bugcatchRankEvidence(ctx context.Context, store *bugcatch.Store, critic *cr
 // generator's "per run" count is a different number under the two.
 func warehouseRankEvidence(db *sql.DB, dsn string) (rankEvidence, error) {
 	ev := rankEvidence{Source: "the pushed warehouse " + dsn + " (corral_audits; a run is one SCAN, not one audited file as in the local ledger)"}
-	rows, err := db.Query(`SELECT COALESCE(lang, ''), COALESCE(models_by_role, ''), COALESCE(seat_tools, ''), COALESCE(scan_id, 0),
-		COALESCE(path, ''), COALESCE(survivors, 0), COALESCE(proven_missed, 0),
-		COALESCE(mutants_planted, 0), COALESCE(mutants_graded, 0), COALESCE(mutants_invalid, 0),
-		COALESCE(cache_hit, false), reused_from_scan_id IS NOT NULL,
-		COALESCE(baseline_failed, false), COALESCE(timed_out, false),
-		COALESCE(test_writer_failed, false), COALESCE(pool_test_unsound, false)
-		FROM corral_audits WHERE disposition = 'audited'`)
+	// A file row reaches its scan through scan_uid, the identity every grain
+	// of one push shares. A scalar subquery rather than a join: a scan row can
+	// never multiply a file row, and a file with no scan row (an older push)
+	// reads as a scan that records no generation.
+	rows, err := db.Query(`SELECT COALESCE(a.lang, ''), COALESCE(a.models_by_role, ''), COALESCE(a.seat_tools, ''), COALESCE(a.scan_id, 0),
+		COALESCE(a.path, ''), COALESCE(a.survivors, 0), COALESCE(a.proven_missed, 0),
+		COALESCE(a.mutants_planted, 0), COALESCE(a.mutants_graded, 0), COALESCE(a.mutants_invalid, 0),
+		COALESCE(a.cache_hit, false), a.reused_from_scan_id IS NOT NULL,
+		COALESCE(a.baseline_failed, false), COALESCE(a.timed_out, false),
+		COALESCE(a.test_writer_failed, false), COALESCE(a.pool_test_unsound, false),
+		COALESCE(a.scan_uid, ''),
+		COALESCE((SELECT max(s.verdict_generation) FROM corral_scans s WHERE s.scan_uid = a.scan_uid), '')
+		FROM corral_audits a WHERE a.disposition = 'audited'`)
 	if err != nil {
 		return rankEvidence{}, fmt.Errorf("reading corral_audits from %s: %w", dsn, err)
 	}
 	defer rows.Close()
+	// scanGen maps each contributing scan to its recorded generation ("" when
+	// none): only scans that put an observation into ev.Obs are in it.
+	scanGen := map[string]string{}
 	for rows.Next() {
-		var lang, byRole, toolsJSON, path string
+		var lang, byRole, toolsJSON, path, scanUID, gen string
 		var scanID int64
 		var survivors, proven, planted, graded, invalid int
 		var cacheHit, reused, baselineFailed, timedOut, writerFailed, unsound bool
 		if err := rows.Scan(&lang, &byRole, &toolsJSON, &scanID, &path, &survivors, &proven, &planted, &graded, &invalid,
-			&cacheHit, &reused, &baselineFailed, &timedOut, &writerFailed, &unsound); err != nil {
+			&cacheHit, &reused, &baselineFailed, &timedOut, &writerFailed, &unsound, &scanUID, &gen); err != nil {
 			return rankEvidence{}, fmt.Errorf("scanning corral_audits from %s: %w", dsn, err)
 		}
 		if cacheHit || reused || baselineFailed || timedOut {
@@ -410,9 +476,42 @@ func warehouseRankEvidence(db *sql.DB, dsn string) (rankEvidence, error) {
 				o.MutantsPlanted, o.MutantsGraded, o.MutantsInvalid, o.MutantsSurvived = planted, graded, invalid, survivors
 			}
 			ev.Obs = append(ev.Obs, o)
+			// A scan with no uid (a pre-3 push) is keyed by its scan id, so
+			// it still counts once rather than vanishing from the range.
+			key := scanUID
+			if key == "" {
+				key = "id:" + run
+			}
+			scanGen[key] = gen
 		}
 	}
-	return ev, rows.Err()
+	if err := rows.Err(); err != nil {
+		return ev, err
+	}
+	ev.Generations = summarizeGenerations(scanGen)
+	return ev, nil
+}
+
+// summarizeGenerations folds per-scan generations into a range. They compare
+// as integers ("9" < "40"); a value that is not an integer is unrecorded,
+// because a range built on text order would put 9 above 40.
+func summarizeGenerations(scanGen map[string]string) generationRange {
+	g := generationRange{Scans: len(scanGen)}
+	lo, hi := -1, -1
+	for _, v := range scanGen {
+		n, err := strconv.Atoi(strings.TrimSpace(v))
+		if err != nil || n < 0 {
+			g.Unrecorded++
+			continue
+		}
+		if lo < 0 || n < lo {
+			lo, g.Min = n, strconv.Itoa(n)
+		}
+		if n > hi {
+			hi, g.Max = n, strconv.Itoa(n)
+		}
+	}
+	return g
 }
 
 // defaultRankLoader is the wiring `corral models rank` uses in production:

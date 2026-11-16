@@ -593,6 +593,8 @@ Not a slogan — the code refuses to do otherwise.
    process listing. And what a run keeps is explicit: its ledger entry under the
    audited repo's own `.corral/ledger/` (`--no-ledger` to skip it), `--push` for a
    warehouse you own, `--attest` for a signed statement a third party can check.
+   An entry counts files in skipped or ignored directories and test files rather
+   than listing each (`--record-every-file` lists them).
    Nothing leaves the box that you did not send, and nothing recorded is
    fabricated — see **[SECURITY.md](SECURITY.md)**.
 

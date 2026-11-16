@@ -138,7 +138,8 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// changes what an entry holds, and with no entry written (and no warehouse
 	// push to carry the rows) it would read as having worked. --dry-run is
 	// not refused: it writes no entry either way and already lists every file.
-	if *recordEveryFileFlag && *noLedgerFlag && strings.TrimSpace(*pushFlag) == "" && !*dryRun {
+	runRecords := runRecordsAnything(*dryRun, *noLedgerFlag, *pushFlag)
+	if *recordEveryFileFlag && !runRecords && !*dryRun {
 		fmt.Fprintln(stderr, "corral certify --repo: --record-every-file changes what is recorded, and this run records nothing (--no-ledger with no --push)")
 		return 2
 	}
@@ -1530,7 +1531,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintln(stdout, summary)
 	// Said once, right after the walk summary the counts belong to, and only
 	// when the record will actually hold counted rows: a dry run writes none.
-	if !*dryRun && !*recordEveryFileFlag {
+	if runRecords && !*recordEveryFileFlag {
 		if line := recordCountsLine(excl); line != "" {
 			fmt.Fprintln(stdout, line)
 		}

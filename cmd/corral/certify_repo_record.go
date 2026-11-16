@@ -568,6 +568,14 @@ func collapsedCounts(rows []scanstore.File) (inDirs, testFiles int) {
 // flag and the refusal that names it cannot drift.
 const recordEveryFileHelp = "record one ledger row for every file the scan walked. By default files in skipped or gitignored directories and test files are recorded as counts (one row per directory, one per language), which keeps an entry small; the totals are the same either way"
 
+// runRecordsAnything says whether a certify --repo run writes a record: not a
+// dry run, and either a ledger entry (no --no-ledger) or a --push. The
+// --record-every-file refusal and the scan header's "record:" line both ask
+// this, so neither can claim a record the run does not write.
+func runRecordsAnything(dryRun, noLedger bool, push string) bool {
+	return !dryRun && (!noLedger || strings.TrimSpace(push) != "")
+}
+
 // recordCountsLine is the scan header's disclosure that some files will be
 // recorded as counts, or "" when none will. It counts from the same
 // exclusions, through the same collapse, that buildScanFileRows applies, so

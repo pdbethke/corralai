@@ -364,6 +364,8 @@ runs:
         # push target): the CLI refuses the flag on a run that records nothing.
         if [ "${RECORD_EVERY_FILE:-}" = "true" ] && { [ -n "${LEDGER_DIR:-}" ] || [ -n "${PUSH_TARGET:-}" ]; }; then
           args+=(--record-every-file)
+        elif [ "${RECORD_EVERY_FILE:-}" = "true" ]; then
+          echo "::notice::record-every-file is set, but this run records nothing (no ledger directory and no push target), so it has no effect"
         fi
         [ -n "${PUSH_TARGET:-}" ] && args+=(--push "${PUSH_TARGET:-}")
         [ "${PUSH_SOURCE:-false}" = "true" ] && args+=(--push-source)

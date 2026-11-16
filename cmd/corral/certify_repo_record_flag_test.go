@@ -4,6 +4,8 @@ package main
 
 import (
 	"bytes"
+	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -53,6 +55,24 @@ func recordFlagScan(t *testing.T, root, goals string, extra ...string) (out stri
 	return o.String(), code, ledgerDir
 }
 
+// ledgerCollapsedCounts is what the written entry holds behind its counted
+// rows: files in skipped-dir and gitignored rows, and files in is-test rows.
+func ledgerCollapsedCounts(t *testing.T, dir string) (inDirs, testFiles int) {
+	t.Helper()
+	db, err := auditpush.LoadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.QueryRow(`SELECT
+		COALESCE(sum(CASE WHEN reason IN ('skipped-dir','gitignored') THEN COALESCE(files, 1) END), 0),
+		COALESCE(sum(CASE WHEN reason = 'is-test' THEN COALESCE(files, 1) END), 0)
+		FROM corral_audits`).Scan(&inDirs, &testFiles); err != nil {
+		t.Fatal(err)
+	}
+	return inDirs, testFiles
+}
+
 func ledgerRowCount(t *testing.T, dir string) (rows, files int) {
 	t.Helper()
 	db, err := auditpush.LoadDir(dir)
@@ -82,6 +102,11 @@ func TestCertifyRepoCollapsesByDefaultAndListsEveryFileWhenAsked(t *testing.T) {
 	if m[1] != "3" || m[2] != "2" {
 		t.Errorf("record: line counts %s in directories and %s test files, want 3 and 2", m[1], m[2])
 	}
+	// What the header says must be what the entry holds.
+	gotDirs, gotTests := ledgerCollapsedCounts(t, dirDef)
+	if fmt.Sprint(gotDirs) != m[1] || fmt.Sprint(gotTests) != m[2] {
+		t.Errorf("header says %s and %s, the entry records %d and %d", m[1], m[2], gotDirs, gotTests)
+	}
 	if strings.Contains(outAll, "record:") && re.MatchString(outAll) {
 		t.Errorf("--record-every-file printed the record: line:\n%s", outAll)
 	}
@@ -101,6 +126,23 @@ func TestCertifyRepoPrintsNoRecordLineWhenNothingCollapsed(t *testing.T) {
 	out, _, _ := recordFlagScan(t, root, goals)
 	if strings.Contains(out, "  record:") {
 		t.Errorf("nothing collapsed, yet a record: line was printed:\n%s", out)
+	}
+}
+
+// With --no-ledger and no --push nothing is recorded, so the header must not
+// say rows "are recorded as counts".
+func TestCertifyRepoPrintsNoRecordLineWhenNothingIsRecorded(t *testing.T) {
+	root, goals := recordFlagFixture(t, true)
+	var o, e bytes.Buffer
+	code := runCertifyRepo([]string{
+		"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off",
+		"--diff-base", gitRevParseHead(t, root), "--goals", goals, "--substrate", substrateWorkspace, "--no-ledger",
+	}, &o, &e)
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, e.String())
+	}
+	if strings.Contains(o.String(), "  record:") {
+		t.Errorf("--no-ledger records nothing, yet a record: line was printed:\n%s", o.String())
 	}
 }
 
@@ -136,9 +178,33 @@ func TestRecordEveryFileIsAcceptedOnADryRun(t *testing.T) {
 	var o, e bytes.Buffer
 	code := runCertifyRepo([]string{
 		"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off",
-		"--goals", goals, "--dry-run", "--record-every-file",
+		"--goals", goals, "--dry-run", "--record-every-file", "--ledger", filepath.Join(root, ".corral", "ledger"),
 	}, &o, &e)
 	if code != 0 {
 		t.Fatalf("exit %d, want 0: stderr=%s", code, e.String())
+	}
+	if strings.Contains(o.String(), "  record:") {
+		t.Errorf("a dry run printed a record: line:\n%s", o.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, ".corral", "ledger")); err == nil {
+		t.Errorf("a dry run wrote a ledger entry under %s", root)
+	}
+}
+
+// The Action must say so when record-every-file is asked for on a run that
+// records nothing, rather than ignoring it silently, and must pass the flag
+// on a run that does.
+func TestActionRecordEveryFileInputIsPassedOrSaid(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "action.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"args+=(--record-every-file)",
+		"::notice::record-every-file is set, but this run records nothing",
+	} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("action.yml lacks %q", want)
+		}
 	}
 }

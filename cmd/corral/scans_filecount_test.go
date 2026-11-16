@@ -16,7 +16,7 @@ import (
 	"github.com/pdbethke/corralai/internal/scanstore"
 )
 
-// recordWalk records collapseFixture's walk (56+... files) into a fresh ledger
+// recordWalk records collapseFixture's walk (72 files that are not paired tests: 54 in directories, 11 test files, 7 with no paired test) into a fresh ledger
 // directory, once collapsed and once with every file, as two entries, and
 // returns the entries read back.
 func recordWalk(t *testing.T) (collapsed, every auditpush.LedgerEntry, dir string) {

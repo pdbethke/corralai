@@ -347,9 +347,10 @@ func gap(what string, task string) string { return "GAP: " + what + "; fixed in 
 // printedMetrics is keyed "<package dir>/<file>:<func>". Later tasks that
 // record a number add or change the row of every function that prints it.
 var printedMetrics = map[string]printedRow{
-	"cmd/corral/brief.go:buildBrief":  {Exempt: exTruncation + " (--max-items): the entries hold the items"},
-	"cmd/corral/brief.go:spanText":    {Fields: []string{"MutantRow.SpanStart", "MutantRow.SpanEnd"}},
-	"cmd/corral/brief.go:renderBrief": {Fields: []string{"Row.KillRate", "Row.Survivors", "Row.ProvenMissed"}},
+	"cmd/corral/brief.go:buildBrief":    {Exempt: exTruncation + " (--max-items): the entries hold the items"},
+	"cmd/corral/brief.go:spanText":      {Fields: []string{"MutantRow.SpanStart", "MutantRow.SpanEnd"}},
+	"cmd/corral/brief.go:renderBrief":   {Fields: []string{"Row.KillRate", "Row.Survivors", "Row.ProvenMissed"}},
+	"cmd/corral/brief.go:countedRowFor": {Fields: []string{"Row.Files"}},
 
 	"cmd/corral/certify.go:runCertify":                        {Exempt: "key: the id and head hash of a certified build on the brain, not a measurement"},
 	"cmd/corral/certify_adversarial.go:runCertifyAdversarial": {Exempt: "key and error message: a brain run id and the poll timeout, not a measurement"},

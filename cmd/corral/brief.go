@@ -13,6 +13,9 @@ import (
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/auditpush"
+	"github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/pairing"
+	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/review"
 )
 
@@ -62,6 +65,10 @@ type BriefPath struct {
 	NoScan      bool          `json:"no_scan"`
 	NoReview    bool          `json:"no_review"`
 	Disposition string        `json:"disposition,omitempty"`
+	// note is one plain sentence on what a counted row cannot say about this
+	// file. Text only: the JSON already carries the row's disposition, reason
+	// and count through Scan and the label in Path.
+	note string
 }
 
 // BriefScan is the newest scan's verdict on the file.
@@ -248,6 +255,34 @@ func buildBrief(dir string, all []auditpush.LedgerEntry, paths []string, maxItem
 			}
 		}
 	}
+	// A requested file no row names may still sit under a counted row that
+	// stands for it among others; say so without claiming more than the record
+	// holds. Newest scan first, like the loop above.
+	for i := len(live) - 1; i >= 0; i-- {
+		e := live[i]
+		if !e.IsScan() {
+			continue
+		}
+		for _, rp := range paths {
+			rp = filepath.ToSlash(filepath.Clean(rp))
+			if rp == "." || namedByARow(e.Bundle.Files, rp) {
+				continue
+			}
+			r, note, ok := countedRowFor(e.Bundle.Files, rp)
+			if !ok {
+				continue
+			}
+			bp := get(collapsedLabel(r.Path, r.Lang, r.Reason, r.Files, r.FileCount()))
+			if !bp.NoScan {
+				continue
+			}
+			bp.NoScan, bp.note = false, note
+			commits[e.Bundle.Scan.Commit] = true
+			bp.Scan = &BriefScan{Commit: e.Bundle.Scan.Commit, Entry: e.Hash, Pushed: e.Pushed.UTC().Format("2006-01-02 15:04"),
+				Disposition: r.Disposition, Reason: r.Reason}
+			bp.Disposition = r.Disposition
+		}
+	}
 	// Reviews, newest first: every finding under the paths, with its outcome.
 	for i := len(live) - 1; i >= 0; i-- {
 		e := live[i]
@@ -373,6 +408,9 @@ func renderBrief(b Brief) string {
 				fmt.Fprintf(&w, " — %s", p.Scan.Reason)
 			}
 			w.WriteString("\n")
+			if p.note != "" {
+				fmt.Fprintf(&w, "  %s\n", p.note)
+			}
 		default:
 			fmt.Fprintf(&w, "  scan @ %s (%s): kill rate %.2f, %d survivor(s), %d proven gap(s)\n", shortHash(p.Scan.Commit), p.Scan.Pushed, *p.Scan.KillRate, p.Scan.Survivors, p.Scan.ProvenGaps)
 		}
@@ -480,4 +518,43 @@ func inCountedDir(dir string, paths []string) bool {
 		}
 	}
 	return false
+}
+
+// namedByARow reports whether any row of the entry is rp itself, lies under
+// rp, or is a counted directory row containing rp: the cases the main loop
+// already answers.
+func namedByARow(rows []auditpush.Row, rp string) bool {
+	for _, r := range rows {
+		if r.Files > 0 && r.Path == "" {
+			continue // a language row names no path
+		}
+		path := filepath.ToSlash(filepath.Clean(r.Path))
+		if path == rp || strings.HasPrefix(path, rp+"/") || (r.Files > 0 && inCountedDir(r.Path, []string{rp})) {
+			return true
+		}
+	}
+	return false
+}
+
+// countedRowFor finds the counted row that may stand for the requested file
+// rp, with the sentence saying what that row cannot tell. A test file is
+// matched to the is-test row of its own language, by the test-path rule the
+// walk itself applied (pairing.IsTest on the language's TestRules, as in
+// reposcan). A root-level file is matched to the "./" gitignored row.
+func countedRowFor(rows []auditpush.Row, rp string) (auditpush.Row, string, bool) {
+	if plug, ok := lang.Detect(rp); ok && pairing.IsTest(plug.TestRules(), rp) {
+		for _, r := range rows {
+			if r.Files > 0 && r.Reason == reposcan.ReasonIsTest && r.Path == "" && r.Lang == plug.Name() {
+				return r, "This record counts test files and does not list them, so it cannot say whether this exact file was among them; --record-every-file records each one.", true
+			}
+		}
+	}
+	if !strings.Contains(rp, "/") {
+		for _, r := range rows {
+			if r.Files > 0 && r.Reason == reposcan.ReasonGitignored && filepath.ToSlash(filepath.Clean(r.Path)) == "." {
+				return r, fmt.Sprintf("%d root-level gitignored file(s) are recorded as a count, not listed; this file may be one of them.", r.FileCount()), true
+			}
+		}
+	}
+	return auditpush.Row{}, "", false
 }

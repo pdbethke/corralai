@@ -43,6 +43,18 @@ var goUnitFilters = optionSet(`run skip list c`)
 // and CoverageCmd refuses it too: goTestShaped), "--", a .go file argument
 // (go test then builds one package from the named files), or a name filter.
 func goTestArgs(args []string) (opts, patterns []string, at int, ok bool) {
+	return goTestArgsRefusing(args, goUnitFilters)
+}
+
+// goNoTestRun are the go test options under which no test runs at all: -list
+// prints test names, -c builds the binary and stops. A -count has nothing to
+// replay there, so goEvidenceArgs leaves such a command as it is.
+var goNoTestRun = optionSet(`list c`)
+
+// goTestArgsRefusing is goTestArgs refusing the options in refused, rather
+// than goUnitFilters: a unit command must not narrow a package's tests, but
+// the grading command may (-run, -skip), and -count=1 is as needed there.
+func goTestArgsRefusing(args []string, refused map[string]bool) (opts, patterns []string, at int, ok bool) {
 	at = -1
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -60,7 +72,7 @@ func goTestArgs(args []string) (opts, patterns []string, at int, ok bool) {
 			continue
 		}
 		name, _, hasEq := strings.Cut(strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(a, "-"), "-"), "test."), "=")
-		if name == "args" || goUnitFilters[name] {
+		if name == "args" || refused[name] {
 			return nil, nil, 0, false
 		}
 		opts = append(opts, a)
@@ -161,8 +173,19 @@ var goEvidenceCache = &EvidenceCache{Env: "GOCACHE"}
 // evidence of a run that did not happen in this pass. -count=1 is go's own
 // switch for "never use a cached result" (go help testflag), and it
 // changes nothing else: the build cache is still used.
+//
+// It reads the grading command's shapes as well as a unit's: -run and
+// -skip are kept, since a filtered run is still a run and replays a cached
+// result as readily. -args ends go's own options, so -count=1 goes before
+// it and what follows is kept as the test binary's. A command that runs no
+// test (-list, -c) is refused, and so left unchanged by its callers: there
+// is no result to replay.
 func goEvidenceArgs(args []string) ([]string, bool) {
-	opts, patterns, at, ok := goTestArgs(args)
+	var tail []string
+	if i := slices.Index(args, "-args"); i >= 0 {
+		args, tail = args[:i], args[i:]
+	}
+	opts, patterns, at, ok := goTestArgsRefusing(args, goNoTestRun)
 	if !ok {
 		return nil, false
 	}
@@ -196,7 +219,7 @@ func goEvidenceArgs(args []string) ([]string, bool) {
 	if at >= len(opts) {
 		keptAt = len(kept)
 	}
-	return append(goWithPackages(kept, keptAt, patterns), "-count=1"), true
+	return append(append(goWithPackages(kept, keptAt, patterns), "-count=1"), tail...), true
 }
 
 // goTestEvidenceArgs is the go-test row's EvidenceArgs: goEvidenceArgs over

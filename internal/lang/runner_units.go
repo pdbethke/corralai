@@ -4,6 +4,7 @@ package lang
 
 import (
 	"encoding/json"
+	"io/fs"
 	"path"
 	"path/filepath"
 	"slices"
@@ -114,7 +115,8 @@ func UnitNoCoverageReason(p Plugin, inv Invocation) string {
 
 // EvidenceUnitCmd is unitCmd (a UnitRunCmd result) as the unit evidence
 // pass runs it: with the runner's evidence-only flags (Runner.EvidenceArgs),
-// or unchanged when its row has none. Grading never calls it.
+// or unchanged when its row has none. Grading goes through RunCacheCmd, which
+// is the same rewrite under its own name for the same row.
 func EvidenceUnitCmd(p Plugin, inv Invocation, unitCmd []string) []string {
 	r, ok := RunnerFor(p, inv)
 	if !ok || r.EvidenceArgs == nil {
@@ -123,9 +125,10 @@ func EvidenceUnitCmd(p Plugin, inv Invocation, unitCmd []string) []string {
 	return r.EvidenceArgs(slices.Clone(unitCmd))
 }
 
-// EvidenceCache is a tool cache the unit evidence pass shares among its
-// units (Runner.EvidenceCache). The pass warms it with its first unit, run
-// once with the cache writable, and every later unit sees it FROZEN: a
+// EvidenceCache is a tool cache a pass shares among its runs
+// (Runner.EvidenceCache): the unit evidence pass among its units, and grading
+// among its graded runs (RunCacheFor). The pass warms it with its first run,
+// made once with the cache writable, and every later run sees it FROZEN: a
 // copy-on-write overlay whose writes are discarded with the run, so no
 // unit's run can change what another unit reads. It lives at a fixed path
 // inside the jail. Env, when set, is the environment variable the jail
@@ -159,6 +162,49 @@ func TreeRel(rel string) (string, bool) {
 		return "", false
 	}
 	return clean, true
+}
+
+// runRowCache reports whether a runner row declares a cache a sandboxed run
+// can share: one that names the environment variable the jail points at it.
+// It is the one test behind both the run-cache parity capability and
+// RunCacheFor.
+func runRowCache(r Runner) bool { return r.EvidenceCache != nil && r.EvidenceCache.Env != "" }
+
+// RunCacheFor is the environment variable (GOCACHE) that points a sandboxed
+// run of argv's runner at the cache it shares; ok=false when the row
+// declares none, or declares one its Unsupported reason says this command
+// cannot take. Unsupported is asked of the command alone, with a tree that
+// reads as empty: no row that declares a cache has such a reason today, and
+// one that does would need this signature to carry the tree.
+func RunCacheFor(p Plugin, inv Invocation) (env string, ok bool) {
+	r, found := RunnerFor(p, inv)
+	if !found || !runRowCache(r) {
+		return "", false
+	}
+	if u := r.EvidenceCache.Unsupported; u != nil {
+		if u(inv.Argv, func(string) ([]byte, error) { return nil, fs.ErrNotExist }) != "" {
+			return "", false
+		}
+	}
+	return r.EvidenceCache.Env, true
+}
+
+// RunCacheCmd is cmd, a command grading hands the sandbox, with its runner
+// row's no-replay rewrite (Runner.EvidenceArgs): for go test and gotestsum,
+// -count=1, because a cache shared among runs also holds test RESULTS and go
+// replays one instead of running the test. It is applied to EVERY command
+// grading hands the sandbox, so a command that runs no test is returned as it
+// came: go vet, go build, and go test -c or -list (nothing runs, so nothing
+// replays). It reads cmd's words and cannot see inside a shell wrapper
+// (`sh -c 'go test ./...'`): that comes back unchanged, so an operator who
+// wraps the command gets no -count=1 from here. A row with no rewrite, or one
+// that cannot parse cmd, returns cmd unchanged. cmd is never modified.
+func RunCacheCmd(p Plugin, inv Invocation, cmd []string) []string {
+	r, ok := RunnerFor(p, inv)
+	if !ok || r.EvidenceArgs == nil {
+		return cmd
+	}
+	return r.EvidenceArgs(slices.Clone(cmd))
 }
 
 // EvidenceCacheFor is argv's runner's EvidenceCache, or nil when the row

@@ -149,7 +149,9 @@ type Runner struct {
 	// unit alone under coverage to learn what it executes, and a flag that
 	// changes how the runner schedules its workers can change what coverage
 	// those workers write without changing whether the tests pass. Grading
-	// never sees these flags. nil means the evidence pass runs the unit
+	// does not see the coverage flags; a row that declares an EvidenceCache
+	// also puts its no-replay flag here (go's -count=1), and grading
+	// applies those through RunCacheCmd. nil means the evidence pass runs the unit
 	// command unchanged; the field is optional per runner, so the parity
 	// table holds no entry for it. Callers go through EvidenceUnitCmd and
 	// EvidenceNote, never the field. It must also accept the operator's own
@@ -165,10 +167,13 @@ type Runner struct {
 	// recovered worker coverage for 30 and then 84 of 93 files on two runs
 	// of the same batch, so it is not a fix.
 	EvidenceArgs func(unitCmd []string) []string
-	// EvidenceCache is the tool cache the unit evidence pass shares among
-	// its units (EvidenceCache says how), or nil for none: each unit then
-	// starts from the empty cache a jailed run always had. Callers go
-	// through EvidenceCacheFor, never the field.
+	// EvidenceCache is the tool cache a pass shares among its runs
+	// (EvidenceCache says how), or nil for none: each run then starts from
+	// the empty cache a jailed run always had. The unit evidence pass reads
+	// it through EvidenceCacheFor, grading through RunCacheFor and
+	// RunCacheCmd, which also apply EvidenceArgs; the support page's
+	// run-cache row is this field. Callers go through those, never the
+	// field.
 	//
 	// go test and gotestsum set it to GOCACHE: every jailed unit rebuilt
 	// the standard library and the module's dependencies from nothing,

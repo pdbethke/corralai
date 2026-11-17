@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -188,8 +189,26 @@ const WorkTarget = "/corral-work"
 // these or be hidden by it. It must match what Wrap mounts in
 // isolator_linux.go and container.go (no single list there to derive it from:
 // the argv is built inline); the shared cache's own target is added per run.
+// TestJailOwnMountsCoversEveryMountWrapMakes reads every mount destination
+// out of bwrap's argv and fails on one this list does not cover.
 var jailOwnMounts = []string{
 	"/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc", "/var", "/proc", "/dev", "/tmp", "/home",
+}
+
+// placedDrops are the host variables a run whose workspace is placed
+// (Options.Target set) is not handed, whoever its caller is. TMPDIR names a
+// HOST directory (a caller makes the workspace under it): it used to work in
+// the jail only because the workspace was mounted at its own path, which
+// created TMPDIR's parents there. At a Target it names nothing in the jail,
+// and every tool that makes a temp file (`go test` first) fails; the jail has
+// its own /tmp, which the tools then use. The bwrap and container backends
+// both read this, through dropsHostVar, so the rule is not one caller's.
+var placedDrops = []string{"TMPDIR"}
+
+// dropsHostVar reports whether the host variable key is withheld from a run
+// with opts: only for a placed run, only placedDrops.
+func dropsHostVar(opts Options, key string) bool {
+	return opts.Target != "" && slices.Contains(placedDrops, key)
 }
 
 // within reports whether p is root or under it (both clean absolute paths).

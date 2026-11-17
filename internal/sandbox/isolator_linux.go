@@ -216,6 +216,9 @@ func (b bwrapIsolator) Wrap(command string, opts Options, env []string) ([]strin
 			if isPinned(kv[:i]) {
 				continue // pinned below, not inherited from the host
 			}
+			if dropsHostVar(opts, kv[:i]) {
+				continue // names a host path a placed run cannot see
+			}
 			if opts.Cache != nil && opts.Cache.Env != "" && kv[:i] == opts.Cache.Env {
 				continue // set below, to the shared cache
 			}

@@ -11,7 +11,6 @@ import (
 	"path"
 	"path/filepath"
 	"reflect"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -94,20 +93,6 @@ func withoutWorkTarget() JailOption {
 // sandbox.WorkTarget: the backend can place one and nothing turned it off.
 func (j bwrapJail) places() bool {
 	return !j.atHostPath && sandbox.PlacesWorkspace(j.backend)
-}
-
-// baseEnv is the environment a run starts from: sandbox.MinimalEnv, less
-// TMPDIR when the workspace is placed. TMPDIR names a HOST directory (the
-// workspace itself is made under it); it used to work in the jail only
-// because the workspace was mounted at its own path, which created TMPDIR's
-// parents there. At the fixed path it names nothing, and the jail has its own
-// /tmp, which the tools then use.
-func (j bwrapJail) baseEnv() []string {
-	env := sandbox.MinimalEnv()
-	if !j.places() {
-		return env
-	}
-	return slices.DeleteFunc(env, func(kv string) bool { return strings.HasPrefix(kv, "TMPDIR=") })
 }
 
 // jailPath is the path at which a run sees the workspace whose HOST
@@ -651,11 +636,13 @@ func (j bwrapJail) runIn(ctx context.Context, ws runWorkspace, cmd []string, max
 		Network:       false,
 		Timeout:       j.timeout,
 		ReadOnlyBinds: roBinds,
-		Env:           envWithDepBinPaths(j.baseEnv(), roBinds),
-		MaxOutput:     maxOutput, // 0 => sandbox.Run's own 16 KiB default
-		KeepTail:      keepTail,
-		SeedLower:     seedLower,
-		Cache:         ws.cache,
+		// The host's TMPDIR rides along; the sandbox withholds it from a
+		// placed run (sandbox.Options.Target), whose jail has its own /tmp.
+		Env:       envWithDepBinPaths(sandbox.MinimalEnv(), roBinds),
+		MaxOutput: maxOutput, // 0 => sandbox.Run's own 16 KiB default
+		KeepTail:  keepTail,
+		SeedLower: seedLower,
+		Cache:     ws.cache,
 	})
 	if err != nil {
 		if res.TimedOut {

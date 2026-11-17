@@ -198,6 +198,9 @@ func (c containerIsolator) Wrap(command string, opts Options, env []string) ([]s
 			if isPinned(kv[:i]) || kv[:i] == "PATH" {
 				continue // already pinned above, or owned by the image
 			}
+			if dropsHostVar(opts, kv[:i]) {
+				continue // names a host path a placed run cannot see
+			}
 			argv = append(argv, "-e", kv)
 		}
 	}

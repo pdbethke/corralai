@@ -1394,7 +1394,8 @@ func TestSeededRunSeesDependenciesAndPrivateWritesAtTheFixedPath(t *testing.T) {
 // fixed path it worked by accident (the workspace is made under TMPDIR and
 // was mounted at its own path, so TMPDIR's chain existed in the jail); at the
 // fixed path it names nothing there, and every tool that makes a temp file
-// (`go test` first) fails. A placed run therefore does not inherit it: the
+// (`go test` first) fails. A placed run therefore does not inherit it (the
+// sandbox withholds it whenever Options.Target is set): the
 // jail has its own /tmp.
 func TestPlacedRunDoesNotInheritAHostTMPDIR(t *testing.T) {
 	backend := placingJailOrSkip(t)

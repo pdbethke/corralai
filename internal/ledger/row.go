@@ -248,6 +248,12 @@ type Row struct {
 	// also holds it is withheld without --push-source. Omitted when empty, so
 	// every row written before it hashes as it did.
 	BaselineFlaky string `json:",omitempty"`
+	// RunCache is scanstore.File's: whether this file's grading runs shared a
+	// tool cache ("shared"), or why not ("unshared: <reason>"). The run's own
+	// account of itself. Omitted when empty (a runner with no run cache, an
+	// ungraded file, every row written before it), so those rows hash as they
+	// did.
+	RunCache string `json:",omitempty"`
 	// PromptShape mirrors scanstore.File.PromptShape / advpool.Verdict.PromptShape:
 	// "chunk" when every mutant-generator shard on this file's run saw only
 	// its own symbols' bodies plus the file's preamble, "file" when even one

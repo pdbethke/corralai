@@ -152,7 +152,7 @@ func buildFieldTiers() map[[2]string]FieldTier {
 	// declaration, exactly as ModelsByRole is corral's record of the named
 	// model; and not META: it is not the run's narrative about itself.
 	add("Row", TierMeasured, noteSeatProvider, "SeatProviders")
-	add("Row", TierMeta, noteRunAccount, "ConcurrencyNote Detail Reason")
+	add("Row", TierMeta, noteRunAccount, "ConcurrencyNote Detail Reason RunCache")
 	add("Row", TierMeta, "carries the run's full verdict document, critic opinion included: signed, but not verified as true", "VerdictJSON")
 	add("Row", TierMeta, noteModelOpinion, "VacuousFindings")
 	add("TestsPerMutantSpread", TierMeasured, "", "Min Median Max")

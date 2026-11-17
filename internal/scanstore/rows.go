@@ -272,6 +272,13 @@ type File struct {
 	// row says its baseline leaned on retries. "" when none did, and then
 	// omitted.
 	BaselineFlaky string `json:",omitempty"`
+	// RunCache is whether this file's grading runs shared a tool cache among
+	// themselves: "shared" (one frozen cache, warmed by the unmutated run,
+	// every command forbidding a cached test result), or "unshared: <reason>"
+	// (the backend could not overlay it, or the test command could not be
+	// given the flag that forbids a cached result). "" when the file's runner
+	// has no run cache or the file was not graded here; then omitted.
+	RunCache string `json:",omitempty"`
 	// TestSelection, SelectedTests and SuiteTests say WHICH MEASUREMENT this
 	// row's kill rate is: the tests coverage evidence showed execute this
 	// file ("coverage-context", SelectedTests of SuiteTests), rather than the

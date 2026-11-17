@@ -227,6 +227,21 @@ user-local install.
 
 **The jail is offline.** Anything needing the network fails inside it, by design.
 
+**A Go file's grading runs share a build cache, and one rule keeps that safe.** A
+cache shared among runs also holds test RESULTS, and `go` replays one instead of
+running the test. So `newGradingJail` (`cmd/corral/jail.go`, the ONE place a grading
+jail is built) shares the cache only when the command that warms it (the baseline on
+the unmutated code) comes back `lang.RunCacheRewritten` from `lang.RunCacheCmd`
+(`-count=1`); a shell wrapper, an env prefix or an unlisted flag is `unreadable` and
+gets no cache and no rewrite. Every command the grading jail is handed is rewritten
+through `JailScorer.CommandRewrite` / `JailValidator.CommandRewrite`: `adequacy.Score`
+by `baseScoreOpts`, the other doors (`CompliantRun`, the positive control, the compile
+check) by `rewriteCmd`. A new door that runs a command on that jail must call it. Only
+the warming run has the cache writable; the file's row records `RunCache` (`shared` or
+`unshared: <reason>`), a field of the file's result and not of the `Verdict`, whose
+shape is pinned to the verdict cache. `internal/adequacy/run_cache_replay_test.go`
+runs the safety argument against the real jail.
+
 ## Trying it quickly
 
 `corral demo --writer-model <m> --mutant-model <m> --critic-model <m>` writes a

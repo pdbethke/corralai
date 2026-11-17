@@ -1352,6 +1352,11 @@ isolated (under `--substrate workspace`, nothing is: see above):
   `CORRALAI_EXEC_IMAGE=python:3.12-bookworm`.
 - **Network off by default.** Opt a build step in only where it legitimately fetches
   deps.
+- **A shared build cache (Go, default sandbox).** A Go file's grading runs share one
+  `GOCACHE`, warmed by the run on the unmutated code and frozen for every other run, so
+  compiled dependencies are not rebuilt per mutant and nothing a fault writes is kept;
+  `-count=1` is added so a cached test result is never replayed, and the record's
+  `run_cache` column says whether a file's runs shared it.
 
 bwrap shares the host kernel — it stops casual damage, egress, and filesystem escape,
 **not** a kernel-exploit escape. For adversarial code use a stronger backend

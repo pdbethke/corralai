@@ -4,7 +4,6 @@ package advpool
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"github.com/pdbethke/corralai/internal/shadowpool"
 	"log"
@@ -2866,7 +2865,7 @@ func (d *Driver) tickPoolAdequacy(ctx context.Context, missionID int64, run *run
 	}
 	writerTest := d.Validator.ParseTest(tw.Result)
 
-	if cerr := d.Validator.CompileTest(ctx, run.rs.CodePath, run.rs.Code, writerTest); cerr != nil {
+	if cerr := d.checkAuthoredTest(ctx, run, writerTest); cerr != nil {
 		run.testWriterAttempts++
 		if run.testWriterAttempts < MaxTestWriterAttempts {
 			// CORRECTIVE retry: re-render the test-writer WITH the compiler error
@@ -2885,12 +2884,7 @@ func (d *Driver) tickPoolAdequacy(ctx context.Context, missionID int64, run *run
 				// Re-issue a FRESH prompt instead — a clean shot, not a repair.
 				newInstr = renderTestWriter(run.rs, run.sigs, run.devSurvivors)
 			} else {
-				var ce *CompileError
-				compileMsg := cerr.Error()
-				if errors.As(cerr, &ce) && strings.TrimSpace(ce.Output) != "" {
-					compileMsg = ce.Output
-				}
-				newInstr = renderTestWriterWithRepair(run.rs, run.sigs, run.devSurvivors, writerTest, compileMsg)
+				newInstr = renderTestWriterWithRepair(run.rs, run.sigs, run.devSurvivors, writerTest, writerFeedback(cerr))
 			}
 			newID, serr := d.Q.SupersedeTask(tw.ID, queue.TaskSpec{
 				Key:         RoleTestWriter,
@@ -2906,7 +2900,7 @@ func (d *Driver) tickPoolAdequacy(ctx context.Context, missionID int64, run *run
 			if _, perr := d.Q.PromoteReady(missionID); perr != nil {
 				return fmt.Errorf("advpool: promote test-writer after compile-feedback reissue: %w", perr)
 			}
-			return fmt.Errorf("advpool: test-writer result does not compile, reissued for retry (%d/%d): %w",
+			return fmt.Errorf("advpool: test-writer result rejected (did not compile, or names the sandbox's path), reissued for retry (%d/%d): %w",
 				run.testWriterAttempts, MaxTestWriterAttempts, cerr)
 		}
 		// Exhausted: STOP reopening. A hard survivor whose only authored tests

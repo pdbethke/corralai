@@ -420,8 +420,11 @@ package reposcan
 // grow from this, so a "43" verdict graded on a warmed jail (where a narrowed
 // command's compliant run could be far shorter than the warming run) may hold
 // a timeout kill this generation would grade by the run's own result, so it
-// is re-measured rather than reused. Behaviour bump; the
-// shape is unchanged.
+// is re-measured rather than reused. In the same generation, an authored
+// test that names that path (/corral-work) is refused and reissued to the
+// writer (advpool.checkAuthoredTest), since it passes in every jailed run and
+// fails on the developer's machine (it rides along: under "43" no run saw
+// that path, so such a test could not have passed). Behaviour bump; the shape is unchanged.
 const VerdictGeneration = "44"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every

@@ -44,6 +44,10 @@ inputs:
     description: "Fail the run if any audited file has MORE than this many PROVEN-MISSED gaps — survivors the herd then killed with a test it wrote and ran. Opt-in; leave empty for today's behaviour. Prefer this to min-kill-rate as the merge gate. A kill rate is a proportion of freshly generated mutants and moves between runs on unchanged code, so a threshold near a healthy value flaps red on good work and gets switched off; a proven gap is a specific demonstrated bug your tests miss, established by execution. '0' means any demonstrated gap fails the build. It fails CLOSED when the herd had survivors but could author no test that graded — a zero there means nothing was proven, not that the suite is clean."
     required: false
     default: ""
+  record-every-file:
+    description: "Record one ledger row for every file the scan walked. By default files in skipped or gitignored directories and test files are recorded as counts (one row per directory, one per language), which keeps each entry small; the totals are the same either way. Set to 'true' for the full listing. Ignored when there is neither a ledger directory nor a push target, since nothing is recorded then."
+    required: false
+    default: "false"
   top:
     description: "Audit at most this many of the highest-ranked candidate files, as a ceiling on what one run can cost. An audit costs roughly (mutants × your suite's whole runtime) PER FILE, and the file count comes from the PR's diff — a number the author picks, not you. On a repo whose suite takes a minute, a ten-file PR is a job measured in tens of hours, discovered only once it is running. Empty on a pull request (whenever a diff-base is in effect) means NO bound: every changed file that pairs with a test is audited, because the diff is the bound and corral's default of 25 applies only to a whole-repository run with no 'goals' file. Set it to cap a PR; the changed files it cuts are listed as not audited."
     required: false
@@ -242,6 +246,7 @@ runs:
         TESTS: ${{ inputs.tests }}
         MIN_KILL_RATE: ${{ inputs.min-kill-rate }}
         MAX_PROVEN_MISSED: ${{ inputs.max-proven-missed }}
+        RECORD_EVERY_FILE: ${{ inputs.record-every-file }}
         ATTEST: ${{ inputs.attest }}
         PUSH_TARGET: ${{ inputs.push }}
         PUSH_SOURCE: ${{ inputs.push-source }}
@@ -355,6 +360,13 @@ runs:
         [ -n "${TESTS:-}" ] && args+=(--tests "$TESTS")
         [ -n "$MIN_KILL_RATE" ] && args+=(--min-kill-rate "$MIN_KILL_RATE")
         [ -n "${MAX_PROVEN_MISSED:-}" ] && args+=(--max-proven-missed "${MAX_PROVEN_MISSED:-}")
+        # Passed only when something is recorded (a ledger directory or a
+        # push target): the CLI refuses the flag on a run that records nothing.
+        if [ "${RECORD_EVERY_FILE:-}" = "true" ] && { [ -n "${LEDGER_DIR:-}" ] || [ -n "${PUSH_TARGET:-}" ]; }; then
+          args+=(--record-every-file)
+        elif [ "${RECORD_EVERY_FILE:-}" = "true" ]; then
+          echo "::notice::record-every-file is set, but this run records nothing (no ledger directory and no push target), so it has no effect"
+        fi
         [ -n "${PUSH_TARGET:-}" ] && args+=(--push "${PUSH_TARGET:-}")
         [ "${PUSH_SOURCE:-false}" = "true" ] && args+=(--push-source)
         # The statement is written BEFORE the gate's exit code is honoured

@@ -133,7 +133,7 @@ func TestGoalReusedRoundTripsTheLedger(t *testing.T) {
 		Gradable: true,
 		Verdict:  advpool.Verdict{DevKillRate: 1, MutantsTotal: 1},
 	}}
-	files := buildScanFileRows(results, nil, reposcan.CoverageMap{}, "", dir, io.Discard)
+	files := buildScanFileRows(results, nil, reposcan.CoverageMap{}, "", dir, io.Discard, false)
 	if len(files) != 1 {
 		t.Fatalf("buildScanFileRows returned %d row(s), want 1", len(files))
 	}
@@ -158,7 +158,7 @@ func TestGoalReusedFalseNeverFabricated(t *testing.T) {
 		Gradable: true,
 		Verdict:  advpool.Verdict{DevKillRate: 1, MutantsTotal: 1},
 	}}
-	files := buildScanFileRows(results, nil, reposcan.CoverageMap{}, "", dir, io.Discard)
+	files := buildScanFileRows(results, nil, reposcan.CoverageMap{}, "", dir, io.Discard, false)
 	if files[0].GoalReused != nil {
 		t.Errorf("a file whose goal was not reused must carry a nil GoalReused, got %v", *files[0].GoalReused)
 	}

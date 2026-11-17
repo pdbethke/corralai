@@ -184,7 +184,12 @@ type Scan struct {
 // "your tests caught nothing here" about a file corral never graded — a
 // false accusation, persisted.
 type File struct {
-	Path           string
+	Path string
+	// Files is how many walked files this row stands for. 0 (and 1) means
+	// the row is one file, which is every row written before the field
+	// existed; omitempty keeps such a row's JSON byte-identical. Read it
+	// through FileCount, never as a raw int.
+	Files          int `json:",omitempty"`
 	Lang           string
 	Disposition    string // "audited" | "rejected"
 	Reason         string // populated when Disposition == "rejected"
@@ -573,6 +578,15 @@ type File struct {
 	TestsPerMutantMin    *int
 	TestsPerMutantMedian *int
 	TestsPerMutantMax    *int
+}
+
+// FileCount is how many files the row stands for: Files when it says so,
+// else one (ledger.Row.FileCount, same rule).
+func (f File) FileCount() int {
+	if f.Files > 0 {
+		return f.Files
+	}
+	return 1
 }
 
 // scanFilesMigrationCols is the additive set of columns this package has

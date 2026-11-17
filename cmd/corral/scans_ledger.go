@@ -235,7 +235,7 @@ func splitRepo(full string) (owner, repo string) {
 
 func fileFromRow(r auditpush.Row) scanstore.File {
 	f := scanstore.File{
-		Path: r.Path, Lang: r.Lang, Disposition: r.Disposition, Reason: r.Reason,
+		Path: r.Path, Lang: r.Lang, Files: r.Files, Disposition: r.Disposition, Reason: r.Reason,
 		KillRate: r.KillRate, Survivors: r.Survivors,
 		Gradable:       r.Disposition == "audited",
 		PreflightState: r.PreflightState, Evidence: r.Evidence, Detail: r.Detail,

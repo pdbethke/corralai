@@ -349,3 +349,21 @@ func TestDeriveNamesTheRootKey(t *testing.T) {
 		t.Fatalf("no key given, root keyid %q", d.RootKeyID)
 	}
 }
+
+// A collapsed record and an every-file record of one walk summarise
+// identically: a rejected row is never audited, whatever number of files it
+// stands for (Files).
+func TestSummaryCountsAreTheSameCollapsedOrNot(t *testing.T) {
+	audited := graded("a.go", 4, 0, 1, 1)
+	collapsed := ledger.Bundle{Files: []ledger.Row{audited,
+		{Path: "dist/", Disposition: "rejected", Reason: "skipped-dir", Files: 50},
+		{Lang: "python", Disposition: "rejected", Reason: "is-test", Files: 6}}}
+	every := ledger.Bundle{Files: []ledger.Row{audited}}
+	for i := 0; i < 56; i++ {
+		every.Files = append(every.Files, ledger.Row{Path: "x", Disposition: "rejected", Reason: "skipped-dir"})
+	}
+	a, b := ledger.Summarize([]ledger.Bundle{collapsed}), ledger.Summarize([]ledger.Bundle{every})
+	if !reflect.DeepEqual(a, b) || a.Totals.FilesAudited != 1 {
+		t.Errorf("collapsed %+v != every-file %+v", a.Totals, b.Totals)
+	}
+}

@@ -347,9 +347,10 @@ func gap(what string, task string) string { return "GAP: " + what + "; fixed in 
 // printedMetrics is keyed "<package dir>/<file>:<func>". Later tasks that
 // record a number add or change the row of every function that prints it.
 var printedMetrics = map[string]printedRow{
-	"cmd/corral/brief.go:buildBrief":  {Exempt: exTruncation + " (--max-items): the entries hold the items"},
-	"cmd/corral/brief.go:spanText":    {Fields: []string{"MutantRow.SpanStart", "MutantRow.SpanEnd"}},
-	"cmd/corral/brief.go:renderBrief": {Fields: []string{"Row.KillRate", "Row.Survivors", "Row.ProvenMissed"}},
+	"cmd/corral/brief.go:buildBrief":    {Exempt: exTruncation + " (--max-items): the entries hold the items"},
+	"cmd/corral/brief.go:spanText":      {Fields: []string{"MutantRow.SpanStart", "MutantRow.SpanEnd"}},
+	"cmd/corral/brief.go:renderBrief":   {Fields: []string{"Row.KillRate", "Row.Survivors", "Row.ProvenMissed"}},
+	"cmd/corral/brief.go:countedRowFor": {Fields: []string{"Row.Files"}},
 
 	"cmd/corral/certify.go:runCertify":                        {Exempt: "key: the id and head hash of a certified build on the brain, not a measurement"},
 	"cmd/corral/certify_adversarial.go:runCertifyAdversarial": {Exempt: "key and error message: a brain run id and the poll timeout, not a measurement"},
@@ -374,7 +375,8 @@ var printedMetrics = map[string]printedRow{
 	"cmd/corral/certify_repo.go:runCertifyRepo": {Fields: []string{
 		"ScanRow.Top", "ScanRow.Candidates", "ScanRow.Audited", "ScanRow.TotalFiles", "ScanRow.DiffBase", "ScanRow.AllCandidates",
 		"Row.PriorsApplied", "Row.MutantsFrom", "Row.Evidence", "ScanRow.ModelCalls", "ScanRow.Settings", "ScanRow.Inventory"},
-		Exempt: "counts in the 'ledger: entry written' and 'pushed' lines repeat the rows the entry holds"},
+		Exempt: "counts in the 'ledger: entry written' and 'pushed' lines repeat what the entry holds: files (the sum of Row.Files, one for an uncounted row) and rows"},
+	"cmd/corral/certify_repo_record.go:recordCountsLine": {Fields: []string{"Row.Files"}},
 	"cmd/corral/certify_repo.go:goalCacheDisclosureLine": {Fields: []string{"Row.GoalsDerived", "Row.GoalReused"}},
 	"cmd/corral/certify_repo.go:pickPreflightLanguage":   {Fields: []string{"ScanRow.PreflightNote"}},
 	"cmd/corral/certify_repo.go:selectionCmdDigest":      {Exempt: exDigestFrame},
@@ -457,6 +459,7 @@ var printedMetrics = map[string]printedRow{
 	"cmd/corral/scans.go:runScansShow":          {Fields: []string{"Row.Survivors", "Row.ProvenMissed", "Row.KillRate", "ScanRow.RekorLogIndex"}},
 	"cmd/corral/scans.go:authoredTestOutcome":   {Fields: []string{"Row.Survivors"}},
 	"cmd/corral/scans.go:scanFileSelectionWith": {Fields: []string{"Row.TestSelection", "Row.SelectedTests", "Row.SuiteTests", "Row.SelectionUnreported", "TestsPerMutantSpread.Min", "TestsPerMutantSpread.Max"}},
+	"cmd/corral/scans.go:collapsedLabel":        {Fields: []string{"Row.Files"}},
 	"cmd/corral/scans.go:excludedSuffix":        {Fields: []string{"Row.SelectionExcluded"}},
 	"cmd/corral/scans.go:formatKillRate":        {Fields: []string{"Row.KillRate"}},
 	"cmd/corral/scans.go:mutantSourceListing":   {Fields: []string{"MutantRow.Outcome", "MutantRow.Proven", "MutantRow.Source"}},

@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -127,7 +128,7 @@ func killRatePtr(v float64) *float64 {
 // `certify --repo` "never writes into --repo". It does.)
 //
 // A file that cannot be read gets "" rather than a fabricated hash.
-func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclusion, preflight reposcan.CoverageMap, mutantsFrom string, repoDir string, stderr io.Writer) []scanstore.File {
+func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclusion, preflight reposcan.CoverageMap, mutantsFrom string, repoDir string, stderr io.Writer, everyFile bool) []scanstore.File {
 	results = dedupeResultsByPath(results)
 	rows := make([]scanstore.File, 0, len(results)+len(excluded))
 	seen := make(map[string]bool, len(results)+len(excluded))
@@ -440,6 +441,30 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 		})
 	}
 
+	if !everyFile {
+		// One file is one file: drop what a job row or an earlier exclusion
+		// already accounts for BEFORE counting, so a directory row never
+		// counts a file twice (the per-file loop below does the same by
+		// `seen`). Collapsed rows carry no usable path, so they must not go
+		// through that map.
+		fresh := make([]reposcan.Exclusion, 0, len(excluded))
+		for _, e := range excluded {
+			if seen[e.Path] {
+				continue
+			}
+			seen[e.Path] = true
+			fresh = append(fresh, e)
+		}
+		var collapsed []scanstore.File
+		collapsed, excluded = collapsedExclusionRows(fresh)
+		rows = append(rows, collapsed...)
+		// rest was already de-duplicated above; clear the marks so the loop
+		// below does not skip it as "seen".
+		for _, e := range excluded {
+			delete(seen, e.Path)
+		}
+	}
+
 	for _, e := range excluded {
 		if seen[e.Path] {
 			continue
@@ -474,6 +499,112 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 		})
 	}
 	return rows
+}
+
+// collapsedExclusionRows stands one counted row for every skipped or
+// ignored directory ("<dir>/"), one per parent directory for loose ignored
+// files ("<parent>/*", "./*" at the root) and one per language for test
+// files, in place of one row per file. A scan that walks a repository with a checked-in build tree
+// otherwise signs one row per file that says only "not audited"; the
+// walk still sees every file (the exclusion list stays one entry per file),
+// only the record is reduced. Rows are ordered skipped-dir by path, then
+// gitignored by path, then is-test by language (empty first). rest is every
+// exclusion with any other reason, order preserved, for the per-file loop.
+// A collapsed row has no hash and no preflight state: it stands for files
+// nothing read.
+func collapsedExclusionRows(excluded []reposcan.Exclusion) (rows []scanstore.File, rest []reposcan.Exclusion) {
+	type key struct{ reason, name string }
+	counts := map[key]int{}
+	for _, e := range excluded {
+		switch e.Reason {
+		case reposcan.ReasonSkippedDir, reposcan.ReasonGitignored:
+			// A skipped or ignored DIRECTORY is "<dir>/" and says everything
+			// under it is not audited. A loose ignored file says nothing of
+			// its neighbours, so it is counted under "<parent>/*" ("./*" at
+			// the root): a reader can then tell the two apart.
+			name := e.Dir + "/"
+			if e.Loose {
+				name = e.Dir + "/*"
+			}
+			counts[key{e.Reason, name}]++
+		case reposcan.ReasonIsTest:
+			counts[key{e.Reason, detectLang(e.Path)}]++
+		default:
+			rest = append(rest, e)
+		}
+	}
+	order := map[string]int{reposcan.ReasonSkippedDir: 0, reposcan.ReasonGitignored: 1, reposcan.ReasonIsTest: 2}
+	keys := make([]key, 0, len(counts))
+	for k := range counts {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if order[keys[i].reason] != order[keys[j].reason] {
+			return order[keys[i].reason] < order[keys[j].reason]
+		}
+		return keys[i].name < keys[j].name
+	})
+	for _, k := range keys {
+		f := scanstore.File{
+			Disposition: "rejected", Reason: k.reason, Files: counts[k],
+			Gradable: false, Evidence: exclusionEvidence(k.reason, ""),
+		}
+		if k.reason == reposcan.ReasonIsTest {
+			f.Lang = k.name
+		} else {
+			f.Path = k.name
+		}
+		rows = append(rows, f)
+	}
+	return rows, rest
+}
+
+// collapsedCounts totals the files standing behind collapsed rows: those in
+// skipped or ignored directories, and those that are test files.
+func collapsedCounts(rows []scanstore.File) (inDirs, testFiles int) {
+	for _, r := range rows {
+		switch r.Reason {
+		case reposcan.ReasonSkippedDir, reposcan.ReasonGitignored:
+			inDirs += r.FileCount()
+		case reposcan.ReasonIsTest:
+			testFiles += r.FileCount()
+		}
+	}
+	return inDirs, testFiles
+}
+
+// recordEveryFileHelp is the --record-every-file help text, one place so the
+// flag and the refusal that names it cannot drift.
+const recordEveryFileHelp = "record one ledger row for every file the scan walked. By default files in skipped or gitignored directories and test files are recorded as counts (one row per directory, one per language), which keeps an entry small; the totals are the same either way"
+
+// runRecordsAnything says whether a certify --repo run writes a record: not a
+// dry run, and either a ledger entry (no --no-ledger) or a --push. The
+// --record-every-file refusal and the scan header's "record:" line both ask
+// this, so neither can claim a record the run does not write.
+func runRecordsAnything(dryRun, noLedger bool, push string) bool {
+	return !dryRun && (!noLedger || strings.TrimSpace(push) != "")
+}
+
+// recordCountsLine is the scan header's disclosure that some files will be
+// recorded as counts, or "" when none will. It counts from the same
+// exclusions, through the same collapse, that buildScanFileRows applies, so
+// the line and the entry cannot disagree.
+func recordCountsLine(excluded []reposcan.Exclusion) string {
+	seen := make(map[string]bool, len(excluded))
+	fresh := make([]reposcan.Exclusion, 0, len(excluded))
+	for _, e := range excluded {
+		if seen[e.Path] {
+			continue
+		}
+		seen[e.Path] = true
+		fresh = append(fresh, e)
+	}
+	rows, _ := collapsedExclusionRows(fresh)
+	inDirs, testFiles := collapsedCounts(rows)
+	if inDirs == 0 && testFiles == 0 {
+		return ""
+	}
+	return fmt.Sprintf("  record: %d file(s) in skipped or ignored directories and %d test file(s) are recorded as counts, not listed; --record-every-file lists them", inDirs, testFiles)
 }
 
 // ungradableEvidence decides the evidence label for a job that ran (or

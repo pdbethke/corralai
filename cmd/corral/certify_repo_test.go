@@ -552,7 +552,14 @@ func TestCertifyRepoRecordRoundTripsReportedFiles(t *testing.T) {
 	for _, m := range matches {
 		path, wantReason := m[1], m[2]
 		var disposition, gotReason string
-		row := db.QueryRow(`SELECT disposition, reason FROM corral_audits WHERE path = ?`, path)
+		query, arg := `SELECT disposition, reason FROM corral_audits WHERE path = ?`, path
+		if wantReason == reposcan.ReasonIsTest {
+			// The default record stands one counted row per language for
+			// test files, so the file has no row of its own; the row for its
+			// reason must exist and count at least this file.
+			query, arg = `SELECT disposition, reason FROM corral_audits WHERE reason = ? AND files >= 1 LIMIT 1`, wantReason
+		}
+		row := db.QueryRow(query, arg)
 		if err := row.Scan(&disposition, &gotReason); err != nil {
 			t.Fatalf("no corral_audits row for %s (printed as excluded with reason %s): %v", path, wantReason, err)
 		}
@@ -576,7 +583,7 @@ func TestBuildScanFileRowsCarriesProvenMissed(t *testing.T) {
 		{Job: reposcan.Job{Path: "src/flask/cli.py", Lang: "python"}, Gradable: true,
 			Verdict: advpool.Verdict{DevKillRate: 0.467, Survivors: 16, MutantsTotal: 30, ProvenMissed: 7, DevScored: true}},
 	}
-	rows := buildScanFileRows(results, nil, reposcan.CoverageMap{}, "", "", io.Discard)
+	rows := buildScanFileRows(results, nil, reposcan.CoverageMap{}, "", "", io.Discard, false)
 	if len(rows) != 1 {
 		t.Fatalf("buildScanFileRows returned %d rows, want 1", len(rows))
 	}
@@ -595,7 +602,7 @@ func TestBuildScanFileRowsCarriesPoolTestUnsound(t *testing.T) {
 		{Job: reposcan.Job{Path: "unsound.py", Lang: "python"}, Gradable: true,
 			Verdict: advpool.Verdict{DevKillRate: 0.5, Survivors: 4, MutantsTotal: 10, PoolTestUnsound: true, DevScored: true}},
 	}
-	rows := buildScanFileRows(results, nil, reposcan.CoverageMap{}, "", "", io.Discard)
+	rows := buildScanFileRows(results, nil, reposcan.CoverageMap{}, "", "", io.Discard, false)
 	if len(rows) != 1 {
 		t.Fatalf("buildScanFileRows returned %d rows, want 1", len(rows))
 	}
@@ -617,7 +624,7 @@ func TestBuildScanFileRowsCarriesConcurrency(t *testing.T) {
 			Verdict: advpool.Verdict{DevKillRate: 0.5, Survivors: 4, MutantsTotal: 10, DevScored: true,
 				Concurrency: advpool.Concurrency{Trees: 1, Note: "baseline failed in 3 private trees at once (the suite may not be concurrency-safe, or the copies lack something it needs — e.g. a Cargo workspace root outside --repo)"}}},
 	}
-	rows := buildScanFileRows(results, nil, reposcan.CoverageMap{}, "", "", io.Discard)
+	rows := buildScanFileRows(results, nil, reposcan.CoverageMap{}, "", "", io.Discard, false)
 	if len(rows) != 2 {
 		t.Fatalf("buildScanFileRows returned %d rows, want 2", len(rows))
 	}
@@ -922,7 +929,13 @@ func TestCertifyRepoRecordPreflightOverlayRoundTrips(t *testing.T) {
 		{"go.mod", ""},        // not a language-detected source file
 	} {
 		var got string
-		if err := db.QueryRow(`SELECT preflight_state FROM corral_audits WHERE path = ?`, tc.path).Scan(&got); err != nil {
+		query, arg := `SELECT preflight_state FROM corral_audits WHERE path = ?`, tc.path
+		if strings.HasSuffix(tc.path, "_test.go") {
+			// Test files are one collapsed row per language in the default
+			// record (no path of its own); it must carry no pre-flight state.
+			query, arg = `SELECT coalesce(preflight_state, '') FROM corral_audits WHERE reason = ? AND files >= 1 LIMIT 1`, reposcan.ReasonIsTest
+		}
+		if err := db.QueryRow(query, arg).Scan(&got); err != nil {
 			t.Fatalf("%s: no corral_audits row: %v", tc.path, err)
 		}
 		if got != tc.want {

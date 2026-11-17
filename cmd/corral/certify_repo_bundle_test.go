@@ -62,7 +62,7 @@ func twoFileLedgerRows(t *testing.T) (string, []scanstore.File, []scanstore.Muta
 			Detail:   "the suite did not pass on unmutated code",
 		},
 	}
-	return dir, buildScanFileRows(results, nil, reposcan.CoverageMap{}, "", dir, io.Discard),
+	return dir, buildScanFileRows(results, nil, reposcan.CoverageMap{}, "", dir, io.Discard, false),
 		buildScanMutantRows(0, results)
 }
 
@@ -467,7 +467,7 @@ func TestDisagreeingMutantParentsRecordNoHash(t *testing.T) {
 		},
 	}}
 	var stderr bytes.Buffer
-	files := buildScanFileRows(results, nil, reposcan.CoverageMap{}, "", dir, &stderr)
+	files := buildScanFileRows(results, nil, reposcan.CoverageMap{}, "", dir, &stderr, false)
 	if len(files) != 1 {
 		t.Fatalf("got %d row(s), want 1", len(files))
 	}

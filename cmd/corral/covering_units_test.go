@@ -32,7 +32,7 @@ func TestCoveringUnitsSurvivesCandidateToLedgerRow(t *testing.T) {
 		if !gradable {
 			res.Reason = reposcan.ReasonExecutorError
 		}
-		files := buildScanFileRows([]reposcan.FileResult{res}, nil, reposcan.CoverageMap{}, "", root, io.Discard)
+		files := buildScanFileRows([]reposcan.FileResult{res}, nil, reposcan.CoverageMap{}, "", root, io.Discard, false)
 		if len(files) != 1 || files[0].CoveringUnits == nil || *files[0].CoveringUnits != 3 {
 			t.Fatalf("gradable=%v: record row dropped CoveringUnits: %+v", gradable, files)
 		}

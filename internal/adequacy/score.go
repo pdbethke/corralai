@@ -10,7 +10,7 @@
 // wall-clock, only on what the Jail reports) and has no LLM or network calls.
 // It does read time.Now() once, around the compliant-baseline run, solely to
 // auto-derive a short per-mutant timeout from how long a healthy suite
-// actually took (see clampMutantTimeout) — that derived duration only ever
+// actually took (see mutantTimeoutCap) — that derived duration only ever
 // widens or narrows a timeout window, it never changes a kill/survive
 // verdict for a run that completes. The only external dependency for the
 // verdicts themselves is the injected Jail, which runs a test command
@@ -33,7 +33,7 @@ import (
 )
 
 // minMutantTimeout / maxMutantTimeout bound the auto-derived per-mutant
-// timeout (see scoreConfig.mutantTimeout / clampMutantTimeout): a floor so a
+// timeout (see scoreConfig.mutantTimeout / mutantTimeoutCap): a floor so a
 // pathologically fast healthy suite (sub-second) still gives a mutant enough
 // room to run at all, and a ceiling so a pathologically slow healthy suite
 // doesn't turn "3x baseline" into a per-mutant wait that is itself most of
@@ -54,22 +54,37 @@ const (
 	mutantTimeoutMultiple = 3
 )
 
-// clampMutantTimeout derives a per-mutant timeout from how long the
-// compliant run of THE SAME COMMAND took: mutantTimeoutMultiple x that,
-// clamped to [minMutantTimeout, maxMutantTimeout]. Auto-adapts to any
-// repo's suite with no operator tuning. Per command, not per file: under
-// per-mutant selection one mutant's command runs two tests and another's
-// three hundred, and a cap derived from the file's shared baseline gave the
-// two-test mutant five minutes to hang in.
-func clampMutantTimeout(baseDur time.Duration) time.Duration {
-	d := baseDur * mutantTimeoutMultiple
-	if d < minMutantTimeout {
-		return minMutantTimeout
-	}
-	if d > maxMutantTimeout {
-		return maxMutantTimeout
-	}
-	return d
+// mutantTimeoutCap derives a per-mutant timeout from how long the compliant
+// run of THE SAME COMMAND took (baseDur): mutantTimeoutMultiple x that,
+// clamped to [floor, maxMutantTimeout] (floor is minMutantTimeout outside
+// tests). Auto-adapts to any repo's suite with no operator tuning. Per
+// command, not per file: under per-mutant selection one mutant's command runs
+// two tests and another's three hundred, and a cap derived from the file's
+// shared baseline gave the two-test mutant five minutes to hang in.
+//
+// THE CAP ASSUMES THE BASELINE AND THE MUTANT DO THE SAME BUILD WORK. A
+// timed-out mutant is credited as a kill when the compliant code, re-run
+// under the same cap, passes (KillConfirmedReprobed), which reads "the box
+// finished the unmutated run in this budget, so the mutant hung". That held
+// while every run rebuilt the project at its own path. It does not hold on a
+// jail whose runs share a warmed build cache (RunCacheJail): there a frozen
+// compliant run of unchanged code is a full cache hit, while a mutant must
+// rebuild the package it changed and everything that depends on it —
+// measured outside the jail on this repository at 2.7× to 6.9× the cached
+// build, so past the multiple, and only the floor stood between a slow
+// rebuild and a credited kill. In the authored-test pass that kill becomes a
+// proven gap from a test that never ran.
+//
+// So warmDur, the duration of the jail's warming run (RunCacheJail.
+// WarmDuration: the one run that paid for a full build), floors the cap at
+// the same multiple: max(multiple x baseDur, multiple x warmDur, floor),
+// under the ceiling. Zero (no run cache, or never warmed) changes nothing,
+// and a cap can only grow from it. This is the ONE place a cap is derived
+// from a baseline; every budget in Score comes from it or from a cap it
+// returned.
+func mutantTimeoutCap(baseDur, warmDur, floor time.Duration) time.Duration {
+	d := max(baseDur, warmDur) * mutantTimeoutMultiple
+	return min(max(d, floor), maxMutantTimeout)
 }
 
 // ScoreOption configures a single Score call. The zero value of every option
@@ -795,7 +810,8 @@ func (r Report) KillRate() float64 {
 // common on iterator/loop-heavy code) can make the candidate suite hang
 // forever. Score protects against that by timing the compliant baseline and
 // deriving a short per-MUTANT timeout from it (mutantTimeoutMultiple x the
-// baseline's own wall-clock, clamped — see clampMutantTimeout), or by using
+// baseline's own wall-clock, floored at the same multiple of a warmed run
+// cache's warming run, clamped — see mutantTimeoutCap), or by using
 // the caller's explicit WithMutantTimeout override. A mutant run that times
 // out (Jail.RunTest returning an error matching ErrTestTimeout) is scored as
 // KILLED: non-termination is a detected divergence from the baseline's own
@@ -958,15 +974,21 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 		}
 	}
 
+	// clamp is every cap below: mutantTimeoutCap over a command's own
+	// baseline, floored by the jail's warming run when its cache was warmed.
+	// The warm duration is read from the jail at each cap, so a cap computed
+	// after the jail was warmed sees it.
+	floor := minMutantTimeout
+	if cfg.capFloor > 0 {
+		floor = cfg.capFloor
+	}
+	rcj, _ := j.(RunCacheJail)
 	clamp := func(d time.Duration) time.Duration {
-		if cfg.capFloor > 0 {
-			if x := d * mutantTimeoutMultiple; x < cfg.capFloor {
-				return cfg.capFloor
-			} else if x < minMutantTimeout {
-				return x
-			}
+		var warm time.Duration
+		if rcj != nil {
+			warm = rcj.WarmDuration()
 		}
-		return clampMutantTimeout(d)
+		return mutantTimeoutCap(d, warm, floor)
 	}
 	perMutant := cfg.mutantTimeout
 	if perMutant <= 0 {

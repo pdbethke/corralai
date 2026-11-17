@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/pdbethke/corralai/internal/sandbox"
 )
@@ -74,6 +75,9 @@ func (j runCacheJail) Warmed() bool {
 	}
 	return false
 }
+
+// WarmDuration is zero: these tests read which runs were made, not caps.
+func (j runCacheJail) WarmDuration() time.Duration { return 0 }
 
 func newRC(t *testing.T, script map[string][]scriptedResult) runCacheJail {
 	return runCacheJail{

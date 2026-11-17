@@ -191,6 +191,12 @@ type RunCacheJail interface {
 	// a WarmRun the once-only latch turned frozen. It is what a file's
 	// record is built from when the file's run ends.
 	Warmed() bool
+	// WarmDuration is how long the warming run took, measured around that
+	// run alone: the one run of a file that paid for a full build. Zero
+	// whenever Warmed is false. Score floors every per-mutant cap at the same
+	// multiple of it (mutantTimeoutCap), because a frozen run of unchanged
+	// code is a full cache hit and a mutant is not.
+	WarmDuration() time.Duration
 	// Close removes the cache directory. It is safe to call twice.
 	Close() error
 }
@@ -214,6 +220,8 @@ type runCache struct {
 	closed   bool
 	warmed   bool // a warming run has been issued: every later one is frozen
 	filled   bool // a warming run ran with the cache writable and finished
+	// warmDur is how long that run took, set once with filled.
+	warmDur time.Duration
 }
 
 // ensure makes the directory on first use, unless the jail is closed.
@@ -335,6 +343,20 @@ func (j bwrapJail) Warmed() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.filled && !c.closed
+}
+
+// WarmDuration is RunCacheJail.WarmDuration: zero whenever Warmed is false.
+func (j bwrapJail) WarmDuration() time.Duration {
+	c := j.runCache
+	if c == nil {
+		return 0
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.filled || c.closed {
+		return 0
+	}
+	return c.warmDur
 }
 
 // Close removes the run cache's directory. A second Close, and a jail with
@@ -566,12 +588,17 @@ func (j bwrapJail) runInJailCache(ctx context.Context, files map[string]string, 
 		defer release()
 		ws.cache = mount
 	}
+	start := time.Now()
 	res, err := j.runIn(ctx, ws, cmd, maxOutput, keepTail)
+	took := time.Since(start)
 	if err == nil && ws.cache != nil && !ws.cache.Frozen {
 		// The warming run was granted the cache writable and was carried
-		// out: only now is the cache known to have been filled.
+		// out: only now is the cache known to have been filled, and how long
+		// a full build took (WarmDuration). The latch grants writable once,
+		// so this is set once.
 		j.runCache.mu.Lock()
 		j.runCache.filled = true
+		j.runCache.warmDur = took
 		j.runCache.mu.Unlock()
 	}
 	return res, err

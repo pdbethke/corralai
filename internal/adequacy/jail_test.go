@@ -1138,20 +1138,27 @@ func TestWarmedMeansAWarmingRunRanWritable(t *testing.T) {
 	if ok, err := j.RunTest(context.Background(), files, []string{"true"}); err != nil || !ok {
 		t.Fatalf("RunTest: ok=%v err=%v", ok, err)
 	}
-	if j.Warmed() {
-		t.Error("a frozen run made the jail Warmed")
+	if j.Warmed() || j.WarmDuration() != 0 {
+		t.Errorf("a frozen run made the jail Warmed (%v) or gave it a warm duration (%v)", j.Warmed(), j.WarmDuration())
 	}
+	start := time.Now()
 	if ok, _, err := j.WarmRun(context.Background(), files, []string{"true"}); err != nil || !ok {
 		t.Fatalf("WarmRun: ok=%v err=%v", ok, err)
 	}
+	took := time.Since(start)
 	if !j.Warmed() {
 		t.Error("not Warmed after a WarmRun ran")
+	}
+	// WarmDuration is measured around the warming run itself: more than
+	// nothing, and no more than the call that made it.
+	if d := j.WarmDuration(); d <= 0 || d > took {
+		t.Errorf("WarmDuration = %v, want in (0, %v]", d, took)
 	}
 	if err := j.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if j.Warmed() {
-		t.Error("Warmed after Close: the cache is gone")
+	if j.Warmed() || j.WarmDuration() != 0 {
+		t.Errorf("after Close: Warmed %v, WarmDuration %v; the cache is gone", j.Warmed(), j.WarmDuration())
 	}
 }
 
@@ -1164,8 +1171,8 @@ func TestWarmedIsNotSetByALatchedWarmRun(t *testing.T) {
 	if _, _, err := j.WarmRun(context.Background(), files, nil); err == nil {
 		t.Fatal("an empty command ran")
 	}
-	if j.Warmed() {
-		t.Error("a warming run that never ran made the jail Warmed")
+	if j.Warmed() || j.WarmDuration() != 0 {
+		t.Errorf("a warming run that never ran made the jail Warmed (%v) or gave it a warm duration (%v)", j.Warmed(), j.WarmDuration())
 	}
 }
 

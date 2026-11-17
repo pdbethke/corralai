@@ -50,6 +50,11 @@ type bwrapJail struct {
 	// is bound instead of the run command's; see WithToolchainFrom.
 	toolchainFrom []string
 	toolchainSet  bool
+	// runCache, when set (WithRunCache), is the tool cache this jail's
+	// fresh-workspace runs share. It is a pointer because a bwrapJail is
+	// used by value and copied as options apply and as it is handed
+	// around: every copy must reach the one cache and the one lock.
+	runCache *runCache
 }
 
 // DepBind is a read-only dependency dir to mount into the jail: Host is the
@@ -100,6 +105,143 @@ func WithMaxOutput(n int) JailOption {
 // what every run mounts.
 func WithToolchainFrom(cmd []string) JailOption {
 	return func(j *bwrapJail) { j.toolchainFrom, j.toolchainSet = cmd, true }
+}
+
+// WithRunCache gives the jail one tool cache (env names the variable that
+// points a tool at it, GOCACHE for go) that its fresh-workspace runs share,
+// the way a seed shares its own (Seed): WarmRun fills it, and every other run
+// sees it frozen at sandbox.CacheTarget, a copy-on-write overlay whose writes
+// vanish with the run, so no run can change what another reads. Where the
+// backend cannot overlay the directory, or it cannot be made, the runs carry
+// no cache and no env (as a jail without this option), nothing is refused,
+// and RunCache says why. env "" asks for no cache. The directory is made on
+// the first of a run, WarmRun or RunCache; Close removes it. Each jail
+// the option is applied to gets its own cache, so one option value may be
+// reused.
+func WithRunCache(env string) JailOption {
+	return func(j *bwrapJail) {
+		if env == "" {
+			j.runCache = nil
+			return
+		}
+		j.runCache = &runCache{env: env}
+	}
+}
+
+// RunCacheJail is a Jail whose runs share a tool cache (WithRunCache).
+type RunCacheJail interface {
+	Jail
+	// WarmRun is RunTestDetailed with the cache writable: the run that
+	// fills it. It may be called again, and each call may add to the cache;
+	// the caller keeps it from overlapping the frozen runs it means to
+	// feed (it is serialised against them here, never run beside one).
+	WarmRun(ctx context.Context, files map[string]string, testCmd []string) (ok bool, output []byte, err error)
+	// RunCache says whether the cache is shared and, if not, why.
+	RunCache() sandbox.SharedCache
+	// Close removes the cache directory. It is safe to call twice.
+	Close() error
+}
+
+var _ RunCacheJail = bwrapJail{}
+
+// runCache is the state behind WithRunCache. once makes the directory (or
+// records why not) exactly once for every concurrent first caller; rw keeps
+// a warming run, which writes the directory, from overlapping a frozen run
+// that reads it (frozen runs share the read side).
+type runCache struct {
+	env string
+
+	once     sync.Once
+	dir      string
+	unshared string
+	shared   sandbox.SharedCache
+
+	rw     sync.RWMutex
+	mu     sync.Mutex // guards closed
+	closed bool
+}
+
+// ensure makes the directory on first use.
+func (c *runCache) ensure(backend sandbox.Isolator) {
+	c.once.Do(func() {
+		c.dir, c.unshared = makeSharedCacheDir(backend)
+		if c.dir != "" {
+			c.shared.Target = sandbox.CacheTarget
+		} else {
+			c.shared.Unshared = c.unshared
+		}
+	})
+}
+
+// acquire returns the mount one run sees (nil when the cache is unshared or
+// closed) and the release the run must call when it ends. A frozen run holds
+// the read side, the warming run the write side.
+func (c *runCache) acquire(backend sandbox.Isolator, frozen bool) (*sandbox.CacheMount, func()) {
+	c.ensure(backend)
+	lock, unlock := c.rw.RLock, c.rw.RUnlock
+	if !frozen {
+		lock, unlock = c.rw.Lock, c.rw.Unlock
+	}
+	lock()
+	c.mu.Lock()
+	closed := c.closed
+	c.mu.Unlock()
+	if c.dir == "" || closed {
+		return nil, unlock
+	}
+	return &sandbox.CacheMount{Host: c.dir, Target: sandbox.CacheTarget, Env: c.env, Frozen: frozen}, unlock
+}
+
+// makeSharedCacheDir makes a shared-cache directory, or says why there is
+// none. It is the one decision Seed and WithRunCache share. The directory
+// stays writable on the host (MkdirTemp's 0700, the jail's own uid): a
+// frozen run's read-only view comes from the overlay, and a go whose GOCACHE
+// directory is not writable fails with EACCES rather than building without
+// it (measured).
+func makeSharedCacheDir(backend sandbox.Isolator) (dir, unshared string) {
+	dir, err := os.MkdirTemp("", "corral-cache-*")
+	if err != nil {
+		return "", fmt.Sprintf("its directory could not be made: %v", err)
+	}
+	if !sandbox.OverlaysDir(backend, dir) {
+		os.RemoveAll(dir) // #nosec G104 -- best-effort cleanup of our own empty temp dir
+		return "", "this bwrap cannot overlay a directory on the filesystem of " + filepath.Dir(dir)
+	}
+	return dir, ""
+}
+
+// RunCache reports whether this jail's cache is shared, making its directory
+// if no run has yet, so a caller can ask before the first command and get
+// the answer the runs will use. A jail built without WithRunCache has none
+// and nothing to explain.
+func (j bwrapJail) RunCache() sandbox.SharedCache {
+	if j.runCache == nil {
+		return sandbox.SharedCache{}
+	}
+	j.runCache.ensure(j.backend)
+	return j.runCache.shared
+}
+
+// Close removes the run cache's directory. A second Close, and a jail with
+// no cache, do nothing. Runs after Close carry no cache.
+func (j bwrapJail) Close() error {
+	c := j.runCache
+	if c == nil {
+		return nil
+	}
+	c.rw.Lock() // wait out any run still holding the directory
+	defer c.rw.Unlock()
+	c.mu.Lock()
+	already := c.closed
+	c.closed = true
+	c.mu.Unlock()
+	if already || c.dir == "" {
+		return nil
+	}
+	if err := os.RemoveAll(c.dir); err != nil {
+		return fmt.Errorf("adequacy: remove the run cache %s: %w", c.dir, err)
+	}
+	return nil
 }
 
 // toolchainCmd is the command whose toolchain a run of cmd binds.
@@ -283,6 +425,13 @@ func (j bwrapJail) runInJail(ctx context.Context, files map[string]string, cmd [
 // deliberately so: the two capture policies must never become two different
 // runs.
 func (j bwrapJail) runInJailCapturing(ctx context.Context, files map[string]string, cmd []string, maxOutput int, keepTail bool) (sandbox.Result, error) {
+	return j.runInJailCache(ctx, files, cmd, maxOutput, keepTail, false)
+}
+
+// runInJailCache is runInJailCapturing with the run cache's side spelled
+// out: warm binds it writable, every other run sees it frozen. Without
+// WithRunCache neither mounts anything.
+func (j bwrapJail) runInJailCache(ctx context.Context, files map[string]string, cmd []string, maxOutput int, keepTail, warm bool) (sandbox.Result, error) {
 	if len(cmd) == 0 {
 		return sandbox.Result{}, errors.New("adequacy: empty command")
 	}
@@ -291,7 +440,13 @@ func (j bwrapJail) runInJailCapturing(ctx context.Context, files map[string]stri
 		return sandbox.Result{}, err
 	}
 	defer os.RemoveAll(dir) // #nosec G104 -- best-effort cleanup of our own disposable temp dir
-	return j.runIn(ctx, runWorkspace{dir: dir}, cmd, maxOutput, keepTail)
+	ws := runWorkspace{dir: dir}
+	if j.runCache != nil {
+		mount, release := j.runCache.acquire(j.backend, !warm)
+		defer release()
+		ws.cache = mount
+	}
+	return j.runIn(ctx, ws, cmd, maxOutput, keepTail)
 }
 
 // runWorkspace is where one jailed run's tree is: dir, written for this run
@@ -451,16 +606,12 @@ func (j bwrapJail) Seed(files map[string]string, cache *lang.EvidenceCache) (See
 // s.cache why there is none. The directory stays writable on the host
 // (MkdirTemp's 0700, the jail's own uid): a frozen run's read-only view
 // comes from the overlay, and a go whose GOCACHE directory is not writable
-// fails with EACCES rather than building without it (measured).
+// fails with EACCES rather than building without it (measured); that is
+// makeSharedCacheDir's, shared with WithRunCache.
 func (s *seededJail) shareCache(env string) {
-	dir, err := os.MkdirTemp("", "corral-cache-*")
-	if err != nil {
-		s.cache.Unshared = fmt.Sprintf("its directory could not be made: %v", err)
-		return
-	}
-	if !sandbox.OverlaysDir(s.j.backend, dir) {
-		os.RemoveAll(dir) // #nosec G104 -- best-effort cleanup of our own empty temp dir
-		s.cache.Unshared = "this bwrap cannot overlay a directory on the filesystem of " + filepath.Dir(dir)
+	dir, unshared := makeSharedCacheDir(s.j.backend)
+	if dir == "" {
+		s.cache.Unshared = unshared
 		return
 	}
 	s.cacheDir, s.cacheEnv = dir, env
@@ -682,6 +833,18 @@ func (j bwrapJail) RunTestVerbose(ctx context.Context, files map[string]string, 
 // Output rides along even on a non-nil error, exactly as RunTestVerbose does.
 func (j bwrapJail) RunTestDetailed(ctx context.Context, files map[string]string, testCmd []string) (bool, []byte, error) {
 	res, err := j.runInJailCapturing(ctx, files, testCmd, maxDetailedOutput, true)
+	out := tailBytes([]byte(res.Output), maxDetailedOutput)
+	if err != nil {
+		return false, out, err
+	}
+	return res.ExitCode == 0, out, nil
+}
+
+// WarmRun is RunTestDetailed with the run cache bound writable
+// (WithRunCache): the run that fills it. Without a shared cache it is
+// RunTestDetailed.
+func (j bwrapJail) WarmRun(ctx context.Context, files map[string]string, testCmd []string) (bool, []byte, error) {
+	res, err := j.runInJailCache(ctx, files, testCmd, maxDetailedOutput, true, true)
 	out := tailBytes([]byte(res.Output), maxDetailedOutput)
 	if err != nil {
 		return false, out, err

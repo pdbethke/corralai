@@ -46,11 +46,6 @@ func goTestArgs(args []string) (opts, patterns []string, at int, ok bool) {
 	return goTestArgsRefusing(args, goUnitFilters)
 }
 
-// goNoTestRun are the go test options under which no test runs at all: -list
-// prints test names, -c builds the binary and stops. A -count has nothing to
-// replay there, so goEvidenceArgs leaves such a command as it is.
-var goNoTestRun = optionSet(`list c`)
-
 // goTestArgsRefusing is goTestArgs refusing the options in refused, rather
 // than goUnitFilters: a unit command must not narrow a package's tests, but
 // the grading command may (-run, -skip), and -count=1 is as needed there.
@@ -173,25 +168,17 @@ var goEvidenceCache = &EvidenceCache{Env: "GOCACHE"}
 // evidence of a run that did not happen in this pass. -count=1 is go's own
 // switch for "never use a cached result" (go help testflag), and it
 // changes nothing else: the build cache is still used.
-//
-// It reads the grading command's shapes as well as a unit's: -run and
-// -skip are kept, since a filtered run is still a run and replays a cached
-// result as readily. -args ends go's own options, so -count=1 goes before
-// it and what follows is kept as the test binary's. A command that runs no
-// test (-list, -c) is refused, and so left unchanged by its callers: there
-// is no result to replay.
-func goEvidenceArgs(args []string) ([]string, bool) {
-	var tail []string
-	if i := slices.Index(args, "-args"); i >= 0 {
-		args, tail = args[:i], args[i:]
-	}
-	opts, patterns, at, ok := goTestArgsRefusing(args, goNoTestRun)
+func goEvidenceArgs(args []string) ([]string, bool) { return goCountOne(args, goTestArgs) }
+
+// goCountOne is args with -count=1 as the last word, in place of any -count
+// the operator gave, over whichever reading of the go test arguments parse
+// gives: the unit evidence pass reads them through goTestArgs, which refuses
+// every filter, and grading through goGradingArgs, which does not.
+func goCountOne(args []string, parse func([]string) (opts, patterns []string, at int, ok bool)) ([]string, bool) {
+	opts, patterns, at, ok := parse(args)
 	if !ok {
 		return nil, false
 	}
-	// goTestArgs keeps a flag's value as the next word of opts, so only a
-	// word starting with "-" is a flag: `-tags count` is the tag "count",
-	// never the -count flag.
 	var kept []string
 	keptAt := 0
 	for i := 0; i < len(opts); i++ {
@@ -219,7 +206,87 @@ func goEvidenceArgs(args []string) ([]string, bool) {
 	if at >= len(opts) {
 		keptAt = len(kept)
 	}
-	return append(append(goWithPackages(kept, keptAt, patterns), "-count=1"), tail...), true
+	return append(goWithPackages(kept, keptAt, patterns), "-count=1"), true
+}
+
+// goArgsMarker reports whether a go test word is the marker after which
+// everything is the test binary's own: go's flag parser takes -args and
+// --args alike.
+func goArgsMarker(a string) bool { return a == "-args" || a == "--args" }
+
+// goGradingArgs is goEvidenceArgs for the command grading hands the jail,
+// which unlike a unit command may carry -run and -skip (a filtered run
+// replays a cached result as readily) and a test-binary tail after the
+// -args marker. -count=1 goes before the marker and the tail is kept as it
+// was. It is a separate entry from goEvidenceArgs on purpose: the unit pass
+// must keep refusing those commands. A command that runs no test
+// (goRunsNoTest) is the caller's to tell apart first.
+func goGradingArgs(args []string) ([]string, bool) {
+	var tail []string
+	if i := slices.IndexFunc(args, goArgsMarker); i >= 0 {
+		args, tail = slices.Clone(args[:i]), args[i:]
+	}
+	out, ok := goCountOne(args, func(a []string) ([]string, []string, int, bool) {
+		return goTestArgsRefusing(a, map[string]bool{})
+	})
+	if !ok {
+		return nil, false
+	}
+	return append(out, tail...), true
+}
+
+// goRunsNoTest reports whether a go test argument list (after `go test`, or
+// after gotestsum's "--") builds or lists without running a test: -c and
+// -list. Only the words before the -args marker are options.
+func goRunsNoTest(args []string) bool {
+	for _, a := range args {
+		if goArgsMarker(a) {
+			return false
+		}
+		name, _, _ := strings.Cut(strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(a, "-"), "-"), "test."), "=")
+		if strings.HasPrefix(a, "-") && (name == "c" || name == "list") {
+			return true
+		}
+	}
+	return false
+}
+
+// goRunCacheArgs is the go rows' RunCacheArgs: what grading's rewrite did
+// with one command. Only a command positively recognised as running no test
+// is RunCacheNoTest (go vet, go build, go test or gotestsum with -c or
+// -list); a go test or gotestsum command it can read gets -count=1; every
+// other command — a shell wrapper, an env prefix, a .go file argument, a
+// flag go test does not list — is RunCacheUnreadable, because it cannot be
+// told from a test command it failed to read.
+func goRunCacheArgs(cmd []string) ([]string, RunCacheRewrite) {
+	switch {
+	case len(cmd) >= 2 && isGoBinary(cmd[0]) && (cmd[1] == "vet" || cmd[1] == "build"):
+		return cmd, RunCacheNoTest
+	case goTestCmd(cmd) && !cmdIsShellWrapped(cmd):
+		if goRunsNoTest(cmd[2:]) {
+			return cmd, RunCacheNoTest
+		}
+		args, ok := goGradingArgs(cmd[2:])
+		if !ok {
+			return cmd, RunCacheUnreadable
+		}
+		return append(slices.Clone(cmd[:2]), args...), RunCacheRewritten
+	}
+	head, goArgs, ok := gotestsumSplit(cmd)
+	if !ok {
+		return cmd, RunCacheUnreadable
+	}
+	if goRunsNoTest(goArgs) {
+		return cmd, RunCacheNoTest
+	}
+	if len(goArgs) == 0 {
+		goArgs = []string{"./..."}
+	}
+	args, ok := goGradingArgs(goArgs)
+	if !ok {
+		return cmd, RunCacheUnreadable
+	}
+	return append(append(slices.Clone(head), "--"), args...), RunCacheRewritten
 }
 
 // goTestEvidenceArgs is the go-test row's EvidenceArgs: goEvidenceArgs over

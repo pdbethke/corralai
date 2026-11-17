@@ -116,7 +116,7 @@ func UnitNoCoverageReason(p Plugin, inv Invocation) string {
 // EvidenceUnitCmd is unitCmd (a UnitRunCmd result) as the unit evidence
 // pass runs it: with the runner's evidence-only flags (Runner.EvidenceArgs),
 // or unchanged when its row has none. Grading goes through RunCacheCmd, which
-// is the same rewrite under its own name for the same row.
+// is a different rewrite for the same row (RunCacheArgs).
 func EvidenceUnitCmd(p Plugin, inv Invocation, unitCmd []string) []string {
 	r, ok := RunnerFor(p, inv)
 	if !ok || r.EvidenceArgs == nil {
@@ -189,22 +189,68 @@ func RunCacheFor(p Plugin, inv Invocation) (env string, ok bool) {
 	return r.EvidenceCache.Env, true
 }
 
-// RunCacheCmd is cmd, a command grading hands the sandbox, with its runner
-// row's no-replay rewrite (Runner.EvidenceArgs): for go test and gotestsum,
-// -count=1, because a cache shared among runs also holds test RESULTS and go
-// replays one instead of running the test. It is applied to EVERY command
-// grading hands the sandbox, so a command that runs no test is returned as it
-// came: go vet, go build, and go test -c or -list (nothing runs, so nothing
-// replays). It reads cmd's words and cannot see inside a shell wrapper
-// (`sh -c 'go test ./...'`): that comes back unchanged, so an operator who
-// wraps the command gets no -count=1 from here. A row with no rewrite, or one
-// that cannot parse cmd, returns cmd unchanged. cmd is never modified.
-func RunCacheCmd(p Plugin, inv Invocation, cmd []string) []string {
-	r, ok := RunnerFor(p, inv)
-	if !ok || r.EvidenceArgs == nil {
-		return cmd
+// RunCacheRewrite says what RunCacheCmd did with a command.
+type RunCacheRewrite int
+
+const (
+	// RunCacheNone: the runner row has no run cache; cmd is unchanged.
+	RunCacheNone RunCacheRewrite = iota
+	// RunCacheRewritten: cmd now forbids a cached result.
+	RunCacheRewritten
+	// RunCacheNoTest: cmd runs no test (vet, build, -c, -list); unchanged,
+	// nothing to replay.
+	RunCacheNoTest
+	// RunCacheUnreadable: a test command, or one that cannot be told from
+	// one, that could not be rewritten; unchanged.
+	RunCacheUnreadable
+)
+
+func (r RunCacheRewrite) String() string {
+	switch r {
+	case RunCacheRewritten:
+		return "rewritten"
+	case RunCacheNoTest:
+		return "no-test"
+	case RunCacheUnreadable:
+		return "unreadable"
 	}
-	return r.EvidenceArgs(slices.Clone(cmd))
+	return "none"
+}
+
+// RunCacheCmd is cmd, a command grading hands the sandbox, with its runner
+// row's no-replay rewrite (Runner.RunCacheArgs) and the state saying what
+// became of it. For go test and gotestsum the rewrite is -count=1, because a
+// cache shared among runs also holds test RESULTS and go replays one instead
+// of running the test. It is applied to EVERY command grading hands the
+// sandbox, which is why "unchanged" has two meanings the state tells apart:
+// RunCacheNoTest is returned only for a command positively recognised as
+// running no test (go vet, go build, go test -c or -list), and every other
+// command the row cannot read — a shell wrapper (`sh -c 'go test ./...'`),
+// an env prefix, a .go file argument, an unlisted flag, anything not go or
+// gotestsum — is RunCacheUnreadable. The rewrite reads cmd's words and cannot
+// see inside a wrapper, so an operator who wraps the command gets no -count=1.
+// cmd is never modified.
+//
+// What a caller must do: share the cache only when the command that WARMS it
+// comes back RunCacheRewritten. A frozen command that comes back
+// RunCacheUnreadable is run as given (the cache holds no result to replay
+// when the warm run forbade one), and when the warm command is not
+// RunCacheRewritten the caller records that the cache was not shared.
+func RunCacheCmd(p Plugin, inv Invocation, cmd []string) ([]string, RunCacheRewrite) {
+	r, ok := RunnerFor(p, inv)
+	if !ok || !runRowCache(r) || r.RunCacheArgs == nil {
+		return cmd, RunCacheNone
+	}
+	return r.RunCacheArgs(slices.Clone(cmd))
+}
+
+// RunCacheArgv is RunCacheCmd as a rewrite hook: the command it returns,
+// for a caller that has already decided on the state elsewhere.
+func RunCacheArgv(p Plugin, inv Invocation) func([]string) []string {
+	return func(cmd []string) []string {
+		out, _ := RunCacheCmd(p, inv, cmd)
+		return out
+	}
 }
 
 // EvidenceCacheFor is argv's runner's EvidenceCache, or nil when the row

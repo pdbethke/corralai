@@ -32,7 +32,7 @@ This table is what the code can do. What has been executed, and on which reposit
 5. jest and vitest keep transform caches, whose benefit is not yet measured; before one is shared each runner's flag for never serving a cached result must be verified
 6. not yet measured; it has no compile step, so little is expected
 7. measured on starlette (2026-11-16), a graded run took about half a second, and no cache worth sharing has been identified
-8. each sandboxed run builds from an empty target/ and Cargo cache, and that cost is not yet measured; before one is shared we must settle how a cached test result is kept from standing in for a run (libtest and nextest re-run tests) and how a shared target/ keeps one mutant's build output from being read by another's
+8. each sandboxed run builds from an empty target/ and Cargo cache, and that cost is not yet measured; before one is shared we must settle how a cached test result is kept from standing in for a run and how a shared target/ keeps one mutant's build output from being read by another's
 9. jest, vitest and the TypeScript compiler keep transform and type-check caches, whose benefit is not yet measured; before one is shared each runner's flag for never serving a cached result must be verified
 
 ## By runner

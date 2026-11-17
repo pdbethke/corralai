@@ -137,7 +137,7 @@ var ParityExemptions = []Exemption{
 
 	{"python", "units", "its evidence is per test, from one instrumented run (lang.TestEvidence), which the selection engine reads at test grain; a unit pass would be a second, coarser answer to the same question"},
 
-	{"rust", "run-cache", "each sandboxed run builds from an empty target/ and Cargo cache, and that cost is not yet measured; before one is shared we must settle how a cached test result is kept from standing in for a run (libtest and nextest re-run tests) and how a shared target/ keeps one mutant's build output from being read by another's"},
+	{"rust", "run-cache", "each sandboxed run builds from an empty target/ and Cargo cache, and that cost is not yet measured; before one is shared we must settle how a cached test result is kept from standing in for a run and how a shared target/ keeps one mutant's build output from being read by another's"},
 
 	{"javascript", "run-cache", "jest and vitest keep transform caches, whose benefit is not yet measured; before one is shared each runner's flag for never serving a cached result must be verified"},
 

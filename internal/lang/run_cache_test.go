@@ -39,8 +39,10 @@ func TestRunCacheForIsGoOnly(t *testing.T) {
 }
 
 // Grading shares a cache that also holds test RESULTS, so every command
-// grading hands the jail that RUNS tests must say -count=1, exactly once, and
-// every other command must be left alone.
+// grading hands the jail that RUNS tests must say -count=1, exactly once. A
+// command that runs no test is no-test; a command that cannot be told from a
+// test command is unreadable, never no-test: the state is what lets the
+// caller refuse to share a cache it cannot protect.
 func TestRunCacheCmdNeverLetsAResultReplay(t *testing.T) {
 	g, _ := ByName("go")
 	py, _ := ByName("python")
@@ -48,34 +50,89 @@ func TestRunCacheCmdNeverLetsAResultReplay(t *testing.T) {
 	sumInv := Invocation{Argv: []string{"gotestsum", "--", "./..."}}
 	pyInv := Invocation{Argv: []string{"python", "-m", "pytest", "tests"}}
 	for _, c := range []struct {
-		name string
-		p    Plugin
-		inv  Invocation
-		cmd  []string
-		want string
+		p     Plugin
+		inv   Invocation
+		cmd   []string
+		want  string
+		state RunCacheRewrite
 	}{
-		{"go test", g, goInv, []string{"go", "test", "./..."}, "go test ./... -count=1"},
-		{"one -count only", g, goInv, []string{"go", "test", "-count=5", "./..."}, "go test ./... -count=1"},
-		{"-run and -failfast kept", g, goInv, []string{"go", "test", "-run", "^TestX$", ".", "-failfast"}, "go test -run ^TestX$ . -failfast -count=1"},
-		{"-skip kept", g, goInv, []string{"go", "test", "-skip=Slow", "./pkg"}, "go test -skip=Slow ./pkg -count=1"},
-		{"-args stay the test binary's", g, goInv, []string{"go", "test", "./pkg", "-args", "-count=9"}, "go test ./pkg -count=1 -args -count=9"},
-		{"gotestsum -run after --", g, sumInv, []string{"gotestsum", "--", "-run", "^TestX$", "./pkg"}, "gotestsum -- -run ^TestX$ ./pkg -count=1"},
-		{"gotestsum -failfast", g, sumInv, []string{"gotestsum", "--", "-failfast", "./pkg"}, "gotestsum -- -failfast ./pkg -count=1"},
-		// A command that runs no test has no result to replay, and it is
-		// handed to the jail by the same door.
-		{"go vet", g, goInv, []string{"go", "vet", "./pkg"}, "go vet ./pkg"},
-		{"go build", g, goInv, []string{"go", "build", "./..."}, "go build ./..."},
-		// go test -c compiles the test binary and stops: no test runs, so
-		// there is nothing to replay and the command is left as written.
-		{"go test -c", g, goInv, []string{"go", "test", "-c", "./pkg"}, "go test -c ./pkg"},
-		{"go test -list", g, goInv, []string{"go", "test", "-list", ".", "./pkg"}, "go test -list . ./pkg"},
-		// The rewrite cannot read inside a shell wrapper.
-		{"sh -c wrapper", g, goInv, []string{"sh", "-c", "cd sub && go test ./..."}, "sh -c cd sub && go test ./..."},
-		{"a runner with no cache", py, pyInv, []string{"python", "-m", "pytest", "tests"}, "python -m pytest tests"},
+		{g, goInv, []string{"go", "test", "./..."}, "go test ./... -count=1", RunCacheRewritten},
+		{g, goInv, []string{"go", "test", "-count=5", "./..."}, "go test ./... -count=1", RunCacheRewritten},
+		{g, goInv, []string{"go", "test", "-count", "5", "./..."}, "go test ./... -count=1", RunCacheRewritten},
+		{g, goInv, []string{"go", "test", "./...", "-count=3"}, "go test ./... -count=1", RunCacheRewritten},
+		{g, goInv, []string{"go", "test", "-test.count=5", "./..."}, "go test ./... -count=1", RunCacheRewritten},
+		{g, goInv, []string{"go", "test", "-run", "^TestX$", ".", "-failfast"}, "go test -run ^TestX$ . -failfast -count=1", RunCacheRewritten},
+		{g, goInv, []string{"go", "test", "-run", "^Test A=b$", "."}, "go test -run ^Test A=b$ . -count=1", RunCacheRewritten},
+		{g, goInv, []string{"go", "test", "-skip=Slow", "./pkg"}, "go test -skip=Slow ./pkg -count=1", RunCacheRewritten},
+		{g, goInv, []string{"go", "test", "./...", "-args", "-count=9"}, "go test ./... -count=1 -args -count=9", RunCacheRewritten},
+		{g, goInv, []string{"go", "test", "./...", "--args", "-count=9"}, "go test ./... -count=1 --args -count=9", RunCacheRewritten},
+		{g, sumInv, []string{"gotestsum", "--", "-run", "^TestX$", "./pkg"}, "gotestsum -- -run ^TestX$ ./pkg -count=1", RunCacheRewritten},
+		{g, sumInv, []string{"gotestsum", "--", "-failfast", "./pkg"}, "gotestsum -- -failfast ./pkg -count=1", RunCacheRewritten},
+		// Commands positively known to run no test: nothing to replay.
+		{g, goInv, []string{"go", "vet", "./pkg"}, "go vet ./pkg", RunCacheNoTest},
+		{g, goInv, []string{"go", "build", "./..."}, "go build ./...", RunCacheNoTest},
+		{g, goInv, []string{"go", "test", "-c", "./pkg"}, "go test -c ./pkg", RunCacheNoTest},
+		{g, goInv, []string{"go", "test", "-list", ".", "./pkg"}, "go test -list . ./pkg", RunCacheNoTest},
+		{g, sumInv, []string{"go", "vet", "./pkg"}, "go vet ./pkg", RunCacheNoTest},
+		// Anything else the rewrite cannot read is unreadable, unchanged.
+		{g, goInv, []string{"sh", "-c", "go test ./..."}, "sh -c go test ./...", RunCacheUnreadable},
+		{g, goInv, []string{"env", "X=1", "go", "test", "./..."}, "env X=1 go test ./...", RunCacheUnreadable},
+		{g, goInv, []string{"go", "test", "./a.go"}, "go test ./a.go", RunCacheUnreadable},
+		{g, goInv, []string{"go", "test", "-nosuchflag", "x", "./..."}, "go test -nosuchflag x ./...", RunCacheUnreadable},
+		{g, goInv, []string{"make", "test"}, "make test", RunCacheUnreadable},
+		{g, sumInv, []string{"sh", "-c", "gotestsum ./..."}, "sh -c gotestsum ./...", RunCacheUnreadable},
+		{py, pyInv, []string{"python", "-m", "pytest", "tests"}, "python -m pytest tests", RunCacheNone},
 	} {
-		got := RunCacheCmd(c.p, c.inv, slices.Clone(c.cmd))
-		if strings.Join(got, " ") != c.want {
-			t.Errorf("%s: RunCacheCmd(%v) = %q; want %q", c.name, c.cmd, strings.Join(got, " "), c.want)
+		got, state := RunCacheCmd(c.p, c.inv, slices.Clone(c.cmd))
+		if strings.Join(got, " ") != c.want || state != c.state {
+			t.Errorf("RunCacheCmd(%v) = %q, %v; want %q, %v", c.cmd, strings.Join(got, " "), state, c.want, c.state)
+		}
+	}
+}
+
+func TestRunCacheRewriteStrings(t *testing.T) {
+	for st, want := range map[RunCacheRewrite]string{
+		RunCacheNone: "none", RunCacheRewritten: "rewritten", RunCacheNoTest: "no-test", RunCacheUnreadable: "unreadable",
+	} {
+		if st.String() != want {
+			t.Errorf("%d.String() = %q; want %q", int(st), st.String(), want)
+		}
+	}
+}
+
+// RunCacheArgv is the grader's rewrite hook: the command of RunCacheCmd.
+func TestRunCacheArgvIsTheRewrittenCommand(t *testing.T) {
+	g, _ := ByName("go")
+	f := RunCacheArgv(g, Invocation{Argv: []string{"go", "test", "./..."}})
+	if got := strings.Join(f([]string{"go", "test", "./pkg"}), " "); got != "go test ./pkg -count=1" {
+		t.Errorf("got %q", got)
+	}
+}
+
+// The widened handling is for grading only. The unit evidence pass reads the
+// operator's argv exactly as it did before grading shared a cache: a command
+// carrying -run, -skip or -args is left alone by EvidenceUnitCmd, named by no
+// EvidenceNote, and still refused by every unit function.
+func TestUnitEvidenceSideRefusesFiltersAsBefore(t *testing.T) {
+	g, _ := ByName("go")
+	for _, argv := range [][]string{
+		{"go", "test", "-run", "X", "./..."},
+		{"go", "test", "-skip", "X", "./..."},
+		{"go", "test", "./...", "-args", "-v"},
+		{"go", "test", "./...", "--args", "-v"},
+	} {
+		inv := Invocation{Argv: argv}
+		if got := EvidenceUnitCmd(g, inv, slices.Clone(argv)); !slices.Equal(got, argv) {
+			t.Errorf("%v: EvidenceUnitCmd = %v; want unchanged", argv, got)
+		}
+		if n := EvidenceNote(g, inv); n != "" {
+			t.Errorf("%v: EvidenceNote = %q; want empty", argv, n)
+		}
+		if _, ok := ListUnitsCmd(g, inv); ok {
+			t.Errorf("%v: ListUnitsCmd accepted it", argv)
+		}
+		if _, ok := UnitsRunCmd(g, inv, []string{"example.com/m/p"}); ok {
+			t.Errorf("%v: UnitsRunCmd accepted it", argv)
 		}
 	}
 }

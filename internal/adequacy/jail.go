@@ -250,6 +250,25 @@ func makeSharedCacheDir(backend sandbox.Isolator) (dir, unshared string) {
 	return dir, ""
 }
 
+// RunCacheShareable reports whether a jail built on backend with
+// WithRunCache would share its cache, by making a directory the way that jail
+// does (makeSharedCacheDir) and removing it. It exists for a caller that must
+// say so before any jail is built, such as the scan header: an earlier
+// header asked sandbox.Overlays, which does not check the temporary
+// directory's filesystem, and could claim a shared cache that every file then
+// reported as not shared.
+func RunCacheShareable(backend sandbox.Isolator) bool {
+	if backend == nil {
+		return false
+	}
+	dir, unshared := makeSharedCacheDir(backend)
+	if unshared != "" {
+		return false
+	}
+	os.RemoveAll(dir) // #nosec G104 -- best-effort cleanup of our own empty temp dir
+	return true
+}
+
 // RunCache reports whether this jail's cache is shared, making its directory
 // if no run has yet, so a caller can ask before the first command and get
 // the answer the runs will use. A jail built without WithRunCache has none

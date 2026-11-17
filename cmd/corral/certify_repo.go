@@ -3935,11 +3935,13 @@ func printRunDisclosures(w io.Writer, ex *localExecutor, jobs []reposcan.Job) {
 			if _, state := lang.RunCacheCmd(p, inv.WithArgv(base), base); state != lang.RunCacheRewritten {
 				continue
 			}
-			// And only on a backend that can overlay (sandbox.Overlays, the
-			// check the jail makes): one that cannot (--jail container,
-			// sandbox-exec, an older bwrap) shares no cache, and every file
-			// would then contradict this line with its own not-shared line.
-			if !sandbox.Overlays(ex.iso) {
+			// And only where a run-cache jail would share its cache
+			// (adequacy.RunCacheShareable, the jail's own decision, which also
+			// checks the temporary directory's filesystem): a backend that
+			// cannot overlay (--jail container, sandbox-exec, an older bwrap),
+			// or a temp directory an overlay cannot sit on, shares no cache,
+			// and every file would then contradict this line.
+			if !adequacy.RunCacheShareable(ex.iso) {
 				continue
 			}
 			if env, ok := lang.RunCacheFor(p, inv); ok {

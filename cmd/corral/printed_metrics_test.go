@@ -590,6 +590,7 @@ var printedMetrics = map[string]printedRow{
 	"cmd/corral/verify_attest.go:runVerifyAttest":                        {Exempt: "diagnostic text on stderr: causes, paths and names via %v or a string operand; no measured number"},
 	"cmd/corral/verify_attest.go:verifyTelemetry":                        {Exempt: "status text: names, paths, hashes and passthrough strings printed via %v or a string operand; no measured number"},
 	"internal/adequacy/fetch.go:readFetchStdout":                         {Exempt: "error message: the numbers are limits, ids, exit codes, offsets and counts inside a failure text, not an audit measurement"},
+	"cmd/corral/jail.go:closeGradingJail":                                {Exempt: "error message: names the cache directory that could not be removed; no measured number"},
 	"internal/adequacy/jail.go:makeSharedCacheDir":                       {Exempt: "status text: names, paths, hashes and passthrough strings printed via %v or a string operand; no measured number"},
 	"internal/adequacy/pool.go:Probe":                                    {Fields: []string{"Row.Trees", "Row.ConcurrencyNote"}},
 	"internal/adequacy/render_hunk.go:renderAnchoredHunk":                {Fields: []string{"MutantRow.SpanStart", "MutantRow.SpanEnd"}, Exempt: "prompt text for the test-writer: the line numbers of a survivor's hunk and a count of omitted unchanged lines"},

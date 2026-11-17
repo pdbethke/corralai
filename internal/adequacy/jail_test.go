@@ -894,8 +894,11 @@ func TestRunCacheUnsharedWhenTheBackendCannotOverlay(t *testing.T) {
 		seen = append(seen, o.Cache)
 	}}
 	j := NewJail(backend, time.Second, WithRunCache("CORRAL_TEST_CACHE")).(RunCacheJail)
-	if c := j.RunCache(); c.Target != "" || !strings.Contains(c.Unshared, "cannot overlay") {
-		t.Fatalf("RunCache = %+v, want unshared with a reason", c)
+	if c := j.RunCache(); c.Target != "" || !strings.HasPrefix(c.Unshared, "sandbox backend container cannot overlay a directory on the filesystem of ") {
+		t.Fatalf("RunCache = %+v, want unshared naming the backend", c)
+	}
+	if j.Warmed() {
+		t.Error("a jail with no cache reports Warmed before any run")
 	}
 	files := map[string]string{"a.txt": "x"}
 	if ok, err := j.RunTest(context.Background(), files, []string{"true"}); err != nil || !ok {
@@ -903,6 +906,9 @@ func TestRunCacheUnsharedWhenTheBackendCannotOverlay(t *testing.T) {
 	}
 	if ok, _, err := j.WarmRun(context.Background(), files, []string{"true"}); err != nil || !ok {
 		t.Errorf("WarmRun: ok=%v err=%v", ok, err)
+	}
+	if j.Warmed() {
+		t.Error("a WarmRun on an unshared cache reports Warmed: nothing was warmed")
 	}
 	if len(seen) != 2 {
 		t.Fatalf("the backend wrapped %d runs, want 2", len(seen))
@@ -1096,5 +1102,48 @@ func TestASecondWarmRunMountsTheCacheFrozen(t *testing.T) {
 	}
 	if got := runCacheOut(t, j, `ls "$CORRAL_TEST_CACHE"`); got != "a" {
 		t.Errorf("a later run sees %q, want only the first warm run's file a", got)
+	}
+}
+
+// Warmed is true only once a warming run ran with the cache writable: not
+// before any WarmRun, not for a frozen run, and not for a second WarmRun the
+// once-only latch turned frozen (it was already true from the first).
+func TestWarmedMeansAWarmingRunRanWritable(t *testing.T) {
+	j := runCacheJailOrSkip(t)
+	files := map[string]string{"a.txt": "x"}
+	if j.Warmed() {
+		t.Fatal("Warmed before any run")
+	}
+	if ok, err := j.RunTest(context.Background(), files, []string{"true"}); err != nil || !ok {
+		t.Fatalf("RunTest: ok=%v err=%v", ok, err)
+	}
+	if j.Warmed() {
+		t.Error("a frozen run made the jail Warmed")
+	}
+	if ok, _, err := j.WarmRun(context.Background(), files, []string{"true"}); err != nil || !ok {
+		t.Fatalf("WarmRun: ok=%v err=%v", ok, err)
+	}
+	if !j.Warmed() {
+		t.Error("not Warmed after a WarmRun ran")
+	}
+	if err := j.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if j.Warmed() {
+		t.Error("Warmed after Close: the cache is gone")
+	}
+}
+
+// A second WarmRun is frozen by the latch and must not be what makes a jail
+// Warmed: it is not, when the first never ran.
+func TestWarmedIsNotSetByALatchedWarmRun(t *testing.T) {
+	j := runCacheJailOrSkip(t)
+	files := map[string]string{"a.txt": "x"}
+	// A first warming run that cannot even start (empty command) is no warming.
+	if _, _, err := j.WarmRun(context.Background(), files, nil); err == nil {
+		t.Fatal("an empty command ran")
+	}
+	if j.Warmed() {
+		t.Error("a warming run that never ran made the jail Warmed")
 	}
 }

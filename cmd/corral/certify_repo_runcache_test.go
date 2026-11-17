@@ -22,14 +22,16 @@ import (
 // ReadLedgerDir -> fileFromRow, and -> LoadDir -> corral_audits.run_cache,
 // NULL for a file with nothing to say.
 func TestRunCacheSurvivesTheLedgerAndTheWarehouse(t *testing.T) {
-	const unshared = "unshared: this bwrap cannot overlay a directory on the filesystem of /tmp"
+	const unshared = "unshared: sandbox backend bwrap cannot overlay a directory on the filesystem of /tmp"
+	const neverWarmed = "unshared: never warmed (the dev suite's command could not be given the flag that forbids a cached result)"
 	results := []reposcan.FileResult{
 		{Job: reposcan.Job{Path: "a.go", Lang: "go"}, Gradable: true, RunCache: "shared"},
 		{Job: reposcan.Job{Path: "b.go", Lang: "go"}, Gradable: true, RunCache: unshared},
 		{Job: reposcan.Job{Path: "c.py", Lang: "python"}, Gradable: true},
+		{Job: reposcan.Job{Path: "d.go", Lang: "go"}, Gradable: true, RunCache: neverWarmed},
 	}
 	files := buildScanFileRows(results, nil, reposcan.CoverageMap{}, "", t.TempDir(), io.Discard, false)
-	want := map[string]string{"a.go": "shared", "b.go": unshared, "c.py": ""}
+	want := map[string]string{"a.go": "shared", "b.go": unshared, "c.py": "", "d.go": neverWarmed}
 	for _, f := range files {
 		if f.RunCache != want[f.Path] {
 			t.Errorf("buildScanFileRows: %s RunCache = %q, want %q", f.Path, f.RunCache, want[f.Path])
@@ -65,6 +67,9 @@ func TestRunCacheSurvivesTheLedgerAndTheWarehouse(t *testing.T) {
 	if err := db.QueryRow(`SELECT run_cache FROM corral_audits WHERE path = 'b.go'`).Scan(&col); err != nil || col != unshared {
 		t.Errorf("warehouse run_cache for b.go = %q, err %v, want %q", col, err, unshared)
 	}
+	if err := db.QueryRow(`SELECT run_cache FROM corral_audits WHERE path = 'd.go'`).Scan(&col); err != nil || col != neverWarmed {
+		t.Errorf("warehouse run_cache for d.go = %q, err %v, want %q", col, err, neverWarmed)
+	}
 	var nulls int
 	if err := db.QueryRow(`SELECT count(*) FROM corral_audits WHERE path = 'c.py' AND run_cache IS NULL`).Scan(&nulls); err != nil || nulls != 1 {
 		t.Errorf("a file with no run cache must write NULL (got %d NULL rows, err %v)", nulls, err)
@@ -92,7 +97,7 @@ func TestExecuteRecordsTheRunCacheAndSaysWhenItIsNotShared(t *testing.T) {
 		wantSay string
 	}{
 		{"shared", ""},
-		{"unshared: this bwrap cannot overlay a directory", "  build cache: not shared for src/p.go: this bwrap cannot overlay a directory\n"},
+		{"unshared: sandbox backend bwrap cannot overlay a directory", "  build cache: not shared for src/p.go: sandbox backend bwrap cannot overlay a directory\n"},
 		{"", ""},
 	} {
 		var buf bytes.Buffer
@@ -128,17 +133,29 @@ func TestExecuteRecordsTheRunCacheAndSaysWhenItIsNotShared(t *testing.T) {
 // the jail substrate: a language with none, and the workspace substrate, say
 // nothing.
 func TestTheScanSaysOnceWhichLanguagesShareARunCache(t *testing.T) {
+	iso := overlayingGoJailOrSkip(t)
 	jobs := []reposcan.Job{{Path: "a.go", Lang: "go"}, {Path: "b.go", Lang: "go"}, {Path: "c.py", Lang: "python"}}
 	var buf bytes.Buffer
-	printRunDisclosures(&buf, &localExecutor{repoDir: t.TempDir()}, jobs)
+	printRunDisclosures(&buf, &localExecutor{repoDir: t.TempDir(), iso: iso}, jobs)
 	const line = "  build cache: grading runs for go share a frozen GOCACHE, warmed by the unmutated run\n"
 	if strings.Count(buf.String(), line) != 1 || strings.Count(buf.String(), "build cache") != 1 {
 		t.Errorf("want exactly the go line once, got:\n%s", buf.String())
 	}
 	buf.Reset()
-	printRunDisclosures(&buf, &localExecutor{repoDir: t.TempDir(), substrate: substrateWorkspace}, jobs)
+	printRunDisclosures(&buf, &localExecutor{repoDir: t.TempDir(), substrate: substrateWorkspace, iso: iso}, jobs)
 	if strings.Contains(buf.String(), "build cache") {
 		t.Errorf("the workspace substrate has no jail and no run cache, got:\n%s", buf.String())
+	}
+}
+
+// A backend that cannot overlay (container, sandbox-exec, an older bwrap)
+// shares no cache, so the header must not say every go file shares one.
+func TestTheScanHeaderSaysNothingOnABackendThatCannotOverlay(t *testing.T) {
+	jobs := []reposcan.Job{{Path: "a.go", Lang: "go"}}
+	var buf bytes.Buffer
+	printRunDisclosures(&buf, &localExecutor{repoDir: t.TempDir(), checkArgv: []string{"go", "test", "./..."}, iso: &wrapRecordingIsolator{}}, jobs)
+	if strings.Contains(buf.String(), "build cache") {
+		t.Errorf("a backend that cannot overlay: the header claims a shared cache:\n%s", buf.String())
 	}
 }
 
@@ -190,16 +207,17 @@ func TestAFileThatWasNotGradedRecordsNoRunCache(t *testing.T) {
 // command can be rewritten to forbid a cached result; otherwise it says
 // nothing and the per-file lines speak.
 func TestTheScanHeaderSaysNothingForACommandTheRewriteCannotRead(t *testing.T) {
+	iso := overlayingGoJailOrSkip(t)
 	jobs := []reposcan.Job{{Path: "a.go", Lang: "go"}}
 	for _, argv := range [][]string{{"go", "test", "-no-such-flag", "./..."}, {"sh", "-c", "go test ./..."}, {"go", "vet", "./..."}} {
 		var buf bytes.Buffer
-		printRunDisclosures(&buf, &localExecutor{repoDir: t.TempDir(), checkArgv: argv}, jobs)
+		printRunDisclosures(&buf, &localExecutor{repoDir: t.TempDir(), checkArgv: argv, iso: iso}, jobs)
 		if strings.Contains(buf.String(), "build cache") {
 			t.Errorf("base command %v: the header claims a shared cache:\n%s", argv, buf.String())
 		}
 	}
 	var buf bytes.Buffer
-	printRunDisclosures(&buf, &localExecutor{repoDir: t.TempDir(), checkArgv: []string{"go", "test", "./..."}}, jobs)
+	printRunDisclosures(&buf, &localExecutor{repoDir: t.TempDir(), checkArgv: []string{"go", "test", "./..."}, iso: iso}, jobs)
 	if !strings.Contains(buf.String(), "build cache: grading runs for go share") {
 		t.Errorf("a readable go test command should say so:\n%s", buf.String())
 	}

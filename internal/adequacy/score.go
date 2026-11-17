@@ -30,7 +30,6 @@ import (
 	"time"
 
 	"github.com/pdbethke/corralai/internal/lang"
-	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
 // minMutantTimeout / maxMutantTimeout bound the auto-derived per-mutant
@@ -566,11 +565,6 @@ type Report struct {
 	// ordinary Python repos, which is why an estimate extrapolated from one
 	// repo is worthless. Recording it turns capacity planning into a query.
 	BaselineDuration time.Duration
-	// RunCache is the jail's shared tool cache as it stood after the baseline
-	// run (the run that warms it): Target says where every run saw it, and
-	// Unshared why a requested one is not shared. The zero value for a jail
-	// that has no run cache.
-	RunCache sandbox.SharedCache
 	// BaselineTimedOut reports that the compliant suite was killed at the
 	// run's bound rather than finishing red. Both leave CompliantPass false,
 	// and until this field the report could not tell them apart: REA's
@@ -925,18 +919,12 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 			// output rides along: "which test hung" is exactly the question a
 			// timed-out baseline leaves open.
 			trep := Report{CompliantPass: false, BaselineOutput: baseOut, BaselineDuration: baseDur, BaselineTimedOut: true}
-			if rj, ok := j.(RunCacheJail); ok {
-				trep.RunCache = rj.RunCache()
-			}
 			return trep, nil
 		}
 		return Report{}, err
 	}
 	rep := Report{CompliantPass: pass}
 	rep.BaselineDuration = baseDur
-	if rj, ok := j.(RunCacheJail); ok {
-		rep.RunCache = rj.RunCache()
-	}
 	if fr, ok := cfg.failureParser.(lang.FlakyReporter); ok && pass {
 		rep.BaselineFlaky = fr.FlakyTests([]byte(baseOut))
 	}

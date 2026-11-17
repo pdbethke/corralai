@@ -2905,6 +2905,11 @@ func (w *jailWiring) closeWithCleanup(jail adequacy.Jail, sink *string, gc gradi
 	prev := w.cleanup
 	w.cleanup = func() {
 		prev()
+		// The file's run has ended: record what the jail did, then (and only
+		// then) close it, which removes the cache the answer comes from.
+		if sink != nil {
+			*sink = gc.final(jail)
+		}
 		closeGradingJail(jail)
 	}
 }

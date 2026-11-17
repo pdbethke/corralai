@@ -113,6 +113,13 @@ func goCacheModule(t *testing.T) (repoDir string, seed repoSeed) {
 
 func wireGo(t *testing.T, iso sandbox.Isolator, repoDir string, seed *repoSeed, argv []string, langName string) jailWiring {
 	t.Helper()
+	return wireGoSink(t, iso, repoDir, seed, argv, langName, nil)
+}
+
+// wireGoSink is wireGo with the file row's RunCache sink, the value the
+// result builders read when the file's run ends.
+func wireGoSink(t *testing.T, iso sandbox.Isolator, repoDir string, seed *repoSeed, argv []string, langName string, sink *string) jailWiring {
+	t.Helper()
 	w, err := buildJailWiring(context.Background(), jailWiringInput{
 		iso: iso, timeout: 2 * time.Minute,
 		codePath: "p/p.go", testPath: "p/p_test.go", repoDir: repoDir, langName: langName,
@@ -120,7 +127,7 @@ func wireGo(t *testing.T, iso sandbox.Isolator, repoDir string, seed *repoSeed, 
 		code:      []byte(seed.files["p/p.go"]),
 		devTest:   []byte(seed.files["p/p_test.go"]),
 		checkArgv: argv, inv: lang.Cmd(argv),
-		stdout: io.Discard, seed: seed,
+		stdout: io.Discard, seed: seed, runCache: sink,
 	})
 	if err != nil {
 		t.Fatalf("buildJailWiring: %v", err)
@@ -167,8 +174,8 @@ func TestGoGradingRunsShareAFrozenRunCache(t *testing.T) {
 	if !rep.CompliantPass || len(rep.Killed) != 1 {
 		t.Fatalf("grading changed: pass=%v killed=%d, want a passing baseline and the mutant killed", rep.CompliantPass, len(rep.Killed))
 	}
-	if rep.RunCache.Target == "" {
-		t.Errorf("the report says the cache was not shared: %+v", rep.RunCache)
+	if !rec.Warmed() {
+		t.Error("the baseline was the warming run, but the jail does not say it was warmed")
 	}
 	var warm, frozen int
 	for _, r := range rec.runs {
@@ -240,7 +247,7 @@ func TestAnUnsharedRunCacheIsRecordedAndChangesNothingElse(t *testing.T) {
 	rec := recordRuns(t, &w)
 	defer w.cleanup()
 
-	if !strings.HasPrefix(w.runCache, "unshared: this bwrap cannot overlay") {
+	if !strings.HasPrefix(w.runCache, "unshared: sandbox backend bwrap cannot overlay a directory on the filesystem of ") {
 		t.Fatalf("recorded run cache = %q, want unshared with the jail's reason", w.runCache)
 	}
 	if w.scorer.CommandRewrite != nil || w.validator.CommandRewrite != nil {
@@ -282,7 +289,7 @@ func TestAnUnsharedRunCacheIsRecordedAndChangesNothingElse(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer prep.cleanup()
-	if !strings.Contains(out.String(), "  build cache: not shared for p/p.go: this bwrap cannot overlay") {
+	if !strings.Contains(out.String(), "  build cache: not shared for p/p.go: sandbox backend bwrap cannot overlay") {
 		t.Errorf("the file's output lacks the not-shared line:\n%s", out.String())
 	}
 }

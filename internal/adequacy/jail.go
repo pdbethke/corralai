@@ -139,6 +139,13 @@ type RunCacheJail interface {
 	WarmRun(ctx context.Context, files map[string]string, testCmd []string) (ok bool, output []byte, err error)
 	// RunCache says whether the cache is shared and, if not, why.
 	RunCache() sandbox.SharedCache
+	// Warmed reports whether a warming run actually ran with the cache
+	// writable and finished: the cache was shared, WarmRun was the first, and
+	// the run was carried out. It is false for a jail whose cache was never
+	// warmed (no WarmRun at all), whose cache is unshared or closed, and for
+	// a WarmRun the once-only latch turned frozen. It is what a file's
+	// record is built from when the file's run ends.
+	Warmed() bool
 	// Close removes the cache directory. It is safe to call twice.
 	Close() error
 }
@@ -161,6 +168,7 @@ type runCache struct {
 	unshared string
 	closed   bool
 	warmed   bool // a warming run has been issued: every later one is frozen
+	filled   bool // a warming run ran with the cache writable and finished
 }
 
 // ensure makes the directory on first use, unless the jail is closed.
@@ -233,7 +241,11 @@ func makeSharedCacheDir(backend sandbox.Isolator) (dir, unshared string) {
 	}
 	if !sandbox.OverlaysDir(backend, dir) {
 		os.RemoveAll(dir) // #nosec G104 -- best-effort cleanup of our own empty temp dir
-		return "", "this bwrap cannot overlay a directory on the filesystem of " + filepath.Dir(dir)
+		name := "(none)"  // a jail built with no backend (a test's) has no name to give
+		if backend != nil {
+			name = backend.Name()
+		}
+		return "", "sandbox backend " + name + " cannot overlay a directory on the filesystem of " + filepath.Dir(dir)
 	}
 	return dir, ""
 }
@@ -248,6 +260,17 @@ func (j bwrapJail) RunCache() sandbox.SharedCache {
 	}
 	j.runCache.ensure(j.backend)
 	return j.runCache.shared()
+}
+
+// Warmed is RunCacheJail.Warmed.
+func (j bwrapJail) Warmed() bool {
+	c := j.runCache
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.filled && !c.closed
 }
 
 // Close removes the run cache's directory. A second Close, and a jail with
@@ -478,7 +501,15 @@ func (j bwrapJail) runInJailCache(ctx context.Context, files map[string]string, 
 		defer release()
 		ws.cache = mount
 	}
-	return j.runIn(ctx, ws, cmd, maxOutput, keepTail)
+	res, err := j.runIn(ctx, ws, cmd, maxOutput, keepTail)
+	if err == nil && ws.cache != nil && !ws.cache.Frozen {
+		// The warming run was granted the cache writable and was carried
+		// out: only now is the cache known to have been filled.
+		j.runCache.mu.Lock()
+		j.runCache.filled = true
+		j.runCache.mu.Unlock()
+	}
+	return res, err
 }
 
 // runWorkspace is where one jailed run's tree is: dir, written for this run

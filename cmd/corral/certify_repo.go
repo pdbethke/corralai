@@ -3924,7 +3924,7 @@ func printRunDisclosures(w io.Writer, ex *localExecutor, jobs []reposcan.Job) {
 			fmt.Fprintf(w, "  %s\n", line)
 		}
 		// Said once per language, and only where there is a jail whose
-		// grading runs could share one: the workspace substrate runs the
+		// grading runs could share one (the backend must overlay too): the workspace substrate runs the
 		// checkout itself. A file that cannot share it says so on its own
 		// lines (runCacheUnsharedLine).
 		if ex.substrate != substrateWorkspace {
@@ -3933,6 +3933,13 @@ func printRunDisclosures(w io.Writer, ex *localExecutor, jobs []reposcan.Job) {
 			// cache, and the per-file lines say so.
 			base := ex.baseCmd(j)
 			if _, state := lang.RunCacheCmd(p, inv.WithArgv(base), base); state != lang.RunCacheRewritten {
+				continue
+			}
+			// And only on a backend that can overlay (sandbox.Overlays, the
+			// check the jail makes): one that cannot (--jail container,
+			// sandbox-exec, an older bwrap) shares no cache, and every file
+			// would then contradict this line with its own not-shared line.
+			if !sandbox.Overlays(ex.iso) {
 				continue
 			}
 			if env, ok := lang.RunCacheFor(p, inv); ok {

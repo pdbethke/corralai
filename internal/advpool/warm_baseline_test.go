@@ -51,6 +51,7 @@ func (j *warmRecordingJail) WarmRun(_ context.Context, f map[string]string, cmd 
 }
 func (j *warmRecordingJail) RunCache() sandbox.SharedCache { return sandbox.SharedCache{Target: "/c"} }
 func (j *warmRecordingJail) Close() error                  { return nil }
+func (j *warmRecordingJail) Warmed() bool                  { return j.warms() > 0 }
 
 func (j *warmRecordingJail) warms() (n int) {
 	for _, r := range j.runs {

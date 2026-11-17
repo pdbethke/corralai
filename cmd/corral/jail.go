@@ -5,8 +5,10 @@ package main
 import (
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
@@ -44,9 +46,38 @@ type gradingRunCache struct {
 	// JailValidator CommandRewrite). nil unless the cache is shared: an
 	// unshared run keeps the operator's command byte for byte.
 	Rewrite func(cmd []string) []string
-	// Record is the file row's RunCache: "shared"; "unshared: <reason>"; or
-	// "" when the runner has no run cache at all.
+	// Record is the DECISION made before any run: "shared"; "unshared:
+	// <reason>"; or "" when the runner has no run cache at all. It is not what
+	// the file row records: a cache decided shared may never be warmed. The
+	// row's RunCache is final(jail), read when the file's run ends.
 	Record string
+	// warmRejected is set by the warm check when the dev pass's own command
+	// is one the rewrite cannot give the flag that forbids a cached result,
+	// the one reason a decided-shared cache goes unwarmed with a dev pass.
+	// nil unless the cache is decided shared.
+	warmRejected *atomic.Bool
+}
+
+// runCacheShared is the record of a file whose cache was shared AND warmed.
+const runCacheShared = "shared"
+
+// final is the RunCache the file's row records, read when the file's run
+// ends and BEFORE its jail is closed: what the jail did, not what was decided.
+// A cache decided shared is "shared" only if a warming run actually ran on it;
+// otherwise the cache was mounted but never warmed, every run saw it empty,
+// and the record says why. Every other record is the decision, unchanged.
+func (gc gradingRunCache) final(j adequacy.Jail) string {
+	if gc.Record != runCacheShared {
+		return gc.Record
+	}
+	if rj, ok := j.(adequacy.RunCacheJail); ok && rj.Warmed() {
+		return runCacheShared
+	}
+	why := "no dev pass ran"
+	if gc.warmRejected != nil && gc.warmRejected.Load() {
+		why = "the dev suite's command could not be given the flag that forbids a cached result"
+	}
+	return "unshared: never warmed (" + why + ")"
 }
 
 // newGradingJail is the ONE place that decides whether a file's grading shares
@@ -88,7 +119,7 @@ func newGradingJail(iso sandbox.Isolator, timeout time.Duration, depBinds []adeq
 	if c := rj.RunCache(); c.Unshared != "" {
 		return jail, gradingRunCache{Record: "unshared: " + c.Unshared}
 	}
-	return jail, gradingRunCache{Rewrite: lang.RunCacheArgv(plug, inv), Record: "shared"}
+	return jail, gradingRunCache{Rewrite: lang.RunCacheArgv(plug, inv), Record: runCacheShared, warmRejected: new(atomic.Bool)}
 }
 
 // warmCheckFor is JailScorer.WarmCheck for a file whose cache is shared (nil
@@ -103,12 +134,18 @@ func warmCheckFor(plug lang.Plugin, inv lang.Invocation, gc gradingRunCache) fun
 	}
 	return func(cmd []string) bool {
 		_, state := lang.RunCacheCmd(plug, inv.WithArgv(cmd), cmd)
-		return state == lang.RunCacheRewritten
+		if state != lang.RunCacheRewritten {
+			if gc.warmRejected != nil {
+				gc.warmRejected.Store(true)
+			}
+			return false
+		}
+		return true
 	}
 }
 
-// fileRunCache is the RunCache a file's row records: what its wiring decided,
-// but only for a file that was graded here. A baseline that failed
+// fileRunCache is the RunCache a file's row records: what its jail did
+// (gradingRunCache.final), but only for a file that was graded here. A baseline that failed
 // (COULD-NOT-GRADE), a suite that never touches the file, and a file never
 // graded record "", whatever the wiring had decided before the baseline ran.
 // The one rule behind the --repo result (Execute), the --local result
@@ -131,9 +168,15 @@ func runCacheUnsharedLine(path, record string) string {
 }
 
 // closeGradingJail removes a grading jail's cache directory, if it has one.
+// A directory that could not be removed is said on stderr, once, naming it
+// (the error carries the path): it changes no exit code, since the audit's
+// verdict does not depend on it, but a leftover directory in the temporary
+// directory must not go unmentioned.
 func closeGradingJail(j adequacy.Jail) {
 	if rj, ok := j.(adequacy.RunCacheJail); ok {
-		_ = rj.Close()
+		if err := rj.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "corral: could not remove a build cache directory: %v\n", err)
+		}
 	}
 }
 

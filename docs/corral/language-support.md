@@ -28,7 +28,7 @@ This table is what the code can do. What has been executed, and on which reposit
 4. its evidence is per test, from one instrumented run (lang.TestEvidence), which the selection engine reads at test grain; a unit pass would be a second, coarser answer to the same question
 5. jest and vitest keep transform caches, whose benefit is not yet measured; before one is shared each runner's flag for never serving a cached result must be verified
 6. not yet measured; it has no compile step, so little is expected
-7. measured on starlette (2026-11-16), a graded run took about half a second, and no cache worth sharing has been identified
+7. in the 2026-11-16 audit of Kludex/starlette (public ledger entry 20261116T171749Z-271c277da0ff-ae082f706b21) the median, across the 25 files graded, of each file's median time to grade one fault was 516 ms (range 358 ms to 7,377 ms), and no cache worth sharing has been identified
 8. each sandboxed run builds from an empty target/ and Cargo cache, and that cost is not yet measured; before one is shared we must settle how a cached test result is kept from standing in for a run and how a shared target/ keeps one mutant's build output from being read by another's
 9. jest, vitest and the TypeScript compiler keep transform and type-check caches, whose benefit is not yet measured; before one is shared each runner's flag for never serving a cached result must be verified
 

@@ -232,7 +232,8 @@ cache shared among runs also holds test RESULTS, and `go` replays one instead of
 running the test. So `newGradingJail` (`cmd/corral/jail.go`, the ONE place a grading
 jail is built) shares the cache only when the command that warms it (the baseline on
 the unmutated code) comes back `lang.RunCacheRewritten` from `lang.RunCacheCmd`
-(`-count=1`); a shell wrapper, an env prefix or an unlisted flag is `unreadable` and
+(`-count=1`, added only when the operator gave no `-count` of their own: any explicit
+`-count` already stops go storing or replaying a result, and is kept as given); a shell wrapper, an env prefix or an unlisted flag is `unreadable` and
 gets no cache and no rewrite. Every command the grading jail is handed is rewritten
 through `JailScorer.CommandRewrite` / `JailValidator.CommandRewrite`: `adequacy.Score`
 by `baseScoreOpts`, the other doors (`CompliantRun`, the positive control, the compile
@@ -243,10 +244,17 @@ tests on the unmutated tree (`JailScorer.ScoreDevReport` adds
 command as `RunCacheRewritten`). `adequacy.Score` never warms unasked, `baseScoreOpts`
 must not carry the option, and a jail warms at most once, so a run that includes a test
 corral wrote (authored, salvage, critic checks, matrix) can never write what later runs
-read. A shared cache costs one build cache's worth of temporary disk space per file
-being audited at once, removed when that file's run ends. The file's row records `RunCache` (`shared` or
-`unshared: <reason>`, `""` for a file not graded), a field of the file's result and not of the `Verdict`, whose
-shape is pinned to the verdict cache. `internal/adequacy/run_cache_replay_test.go`
+read. What the cache reuses is the compiled standard library only: Go keys the project's own
+packages and its dependencies on their directory, and every jailed run has its own copy
+of the tree, so those are rebuilt per run. A shared cache costs one build cache's worth
+of temporary disk space per file being audited at once, removed when that file's run
+ends; a corral process killed outright (kill -9, out of memory) can leave
+`corral-cache-*` directories in the temporary directory, which nothing removes. The
+file's row records `RunCache`, read when the file's run ends and from what the jail did
+(`gradingRunCache.final`, `RunCacheJail.Warmed`): `shared` only if a warming run ran on
+the cache, `unshared: never warmed (<why>)` if it was mounted and never filled,
+`unshared: <reason>` otherwise, `""` for a file not graded. It is a field of the file's
+result and not of the `Verdict`, whose shape is pinned to the verdict cache. `internal/adequacy/run_cache_replay_test.go`
 runs the safety argument against the real jail.
 
 ## Trying it quickly

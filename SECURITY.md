@@ -51,6 +51,12 @@ blocked it). Do not run an audit there with API keys exported in other shells, o
   strictly either way, so it can say only *sound*, *vacuous* or *dead check*.
 - **Review claims are demoted unless their script reproduces**, and a second seat tries to
   refute what stands; both seats are graded by what held.
+- **A shared build cache is written by your unmodified project and by nothing else.** When a
+  Go file's grading runs share a build cache, it is written only by one run of your project's
+  own tests on its unmodified code, never by a planted fault or a test corral wrote. Every later
+  run of that file reads it through a copy-on-write layer that discards the run's writes. So the
+  unmodified project is trusted not to plant a doctored build artifact for its own audit, which
+  it could already do by making its tests detect a changed source file.
 
 ## The record
 
@@ -235,6 +241,10 @@ Honesty is part of the model.
   by advisory-only semantics, TTLs, and revocation, not prevented.
 - **It assumes a single trust domain.** Coordination between daemons assumes every participating
   daemon belongs to one owner; it is not multi-tenant isolation.
+- **It does not clean up after a killed process.** A shared build cache lives in a
+  `corral-cache-*` directory in the temporary directory and is removed when the file's run ends;
+  a corral process killed outright (kill -9, out of memory) can leave it behind, and nothing
+  removes it.
 - **`--substrate workspace` is not sandboxed**, for `certify --repo` and `corral review` alike
   (see "What runs where"); both verbs' default substrate is.
 - **It has not been battle-tested at scale.** The properties are proven by design review and the

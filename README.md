@@ -1354,9 +1354,11 @@ isolated (under `--substrate workspace`, nothing is: see above):
   deps.
 - **A shared build cache (Go, default sandbox).** A Go file's grading runs share one
   `GOCACHE`, written only by the developer's own tests on the unmutated code and frozen for every other run, so
-  compiled dependencies are not rebuilt per mutant and nothing a fault writes is kept;
-  `-count=1` is added so a cached test result is never replayed, and the record's
-  `run_cache` column says whether a file's runs shared it.
+  the compiled standard library (the packages outside the audited tree) is reused and nothing a fault writes is
+  kept. The project's own packages and its dependencies are still rebuilt on each run: Go keys them on their
+  directory, and each run has its own copy of the tree. `-count=1` is added when you gave no `-count`, so a
+  cached test result is never replayed, and the record's `run_cache` column says whether a file's runs
+  shared it. What that trusts is in [SECURITY.md](SECURITY.md).
 
 bwrap shares the host kernel — it stops casual damage, egress, and filesystem escape,
 **not** a kernel-exploit escape. For adversarial code use a stronger backend

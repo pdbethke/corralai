@@ -143,7 +143,7 @@ var ParityExemptions = []Exemption{
 
 	{"typescript", "run-cache", "jest, vitest and the TypeScript compiler keep transform and type-check caches, whose benefit is not yet measured; before one is shared each runner's flag for never serving a cached result must be verified"},
 
-	{"python", "run-cache", "measured on starlette (2026-11-16), a graded run took about half a second, and no cache worth sharing has been identified"},
+	{"python", "run-cache", "in the 2026-11-16 audit of Kludex/starlette (public ledger entry 20261116T171749Z-271c277da0ff-ae082f706b21) the median, across the 25 files graded, of each file's median time to grade one fault was 516 ms (range 358 ms to 7,377 ms), and no cache worth sharing has been identified"},
 
 	{"ruby", "run-cache", "not yet measured; it has no compile step, so little is expected"},
 

@@ -381,6 +381,31 @@ type JailScorer struct {
 	// FailureParser is: the ONE place that resolves a plugin for a run also
 	// decides whether the operator asked for this at all.
 	FailFast adequacy.FailFastFor
+	// CommandRewrite, when non-nil, rewrites EVERY command this scorer hands
+	// its Jail, through one helper (rewriteCmd): Score's own commands by way
+	// of adequacy.WithCommandRewrite in baseScoreOpts, and the commands the
+	// other doors run (CompliantRun, the positive control). It is set when the
+	// Jail shares a tool cache among its runs, because such a cache also holds
+	// test RESULTS and a command that reached the jail unrewritten could
+	// replay one instead of running the test. nil — every existing
+	// JailScorer{} literal, the daemon's included — hands the jail the
+	// operator's command byte for byte.
+	//
+	// Passed in rather than derived from Lang here for the reason
+	// FailureParser is: the ONE place that builds the grading jail also
+	// decides whether it shares a cache at all, and an unshared run must keep
+	// the operator's command.
+	CommandRewrite func(cmd []string) []string
+}
+
+// rewriteCmd is cmd as the jail is handed it: through f when f is set, else
+// untouched. The one helper behind every door that runs a command outside
+// adequacy.Score, so a door cannot be added that forgets the rewrite.
+func rewriteCmd(f func([]string) []string, cmd []string) []string {
+	if f == nil {
+		return cmd
+	}
+	return f(slices.Clone(cmd))
 }
 
 // scoreOpts is the option list every adequacy.Score call in this file shares.
@@ -394,6 +419,7 @@ func (s JailScorer) baseScoreOpts() []adequacy.ScoreOption {
 		adequacy.WithFailureParser(s.FailureParser),
 		adequacy.WithKillConfirmer(s.KillerCmd),
 		adequacy.WithMutantFailFast(s.FailFast),
+		adequacy.WithCommandRewrite(s.CommandRewrite),
 	}
 }
 
@@ -735,7 +761,7 @@ func (s JailScorer) CompliantRun(ctx context.Context, codePath, code, test, test
 	// The UNMUTATED code: this asks "why does your test fail on software that
 	// is correct", which is the only question worth feeding back.
 	ws[codePath] = code
-	return vj.RunTestVerbose(ctx, ws, cmd)
+	return vj.RunTestVerbose(ctx, ws, rewriteCmd(s.CommandRewrite, cmd))
 }
 
 // authoredWorkspace builds the repo-aware scoring workspace with `content`
@@ -786,7 +812,7 @@ func (s JailScorer) authoredWorkspace(codePath, content string) map[string]strin
 //     reaches=false.
 func (s JailScorer) verifyAuthoredTestReaches(ctx context.Context, codePath string, cmd []string) (bool, error) {
 	ws := s.authoredWorkspace(codePath, adequacy.CanaryCode)
-	passed, err := s.Jail.RunTest(ctx, ws, cmd)
+	passed, err := s.Jail.RunTest(ctx, ws, rewriteCmd(s.CommandRewrite, cmd))
 	if err != nil {
 		if errors.Is(err, adequacy.ErrTestTimeout) {
 			return true, nil // hung on invalid source at the authored test's path -> it reacted
@@ -1205,6 +1231,11 @@ type JailValidator struct {
 	// same reason: ParseTest lands the writer's body for it, and CompileTest
 	// composes it there.
 	Landing AuthoredLanding
+	// CommandRewrite mirrors JailScorer.CommandRewrite and MUST be the same
+	// value: the compile check runs in the same jail, and a command that
+	// reached a cache-sharing jail unrewritten could replay a cached test
+	// result. nil hands the jail the plugin's command untouched.
+	CommandRewrite func(cmd []string) []string
 }
 
 // CompileError is returned by CompileTest when the authored test builds a
@@ -1355,6 +1386,7 @@ func outputNamesFile(output, path string) bool {
 // when the jail can surface it (verboseJail) and without otherwise — still a
 // correct pass/fail, just nothing to feed back to the writer.
 func (v JailValidator) runCompileCmd(ctx context.Context, ws map[string]string, cmd []string) (bool, string, error) {
+	cmd = rewriteCmd(v.CommandRewrite, cmd)
 	if vj, ok := v.Jail.(verboseJail); ok {
 		return vj.RunTestVerbose(ctx, ws, cmd)
 	}

@@ -208,9 +208,10 @@ func (c *captureIsolator) Name() string {
 
 // TestJailResolvesDepBindsToWorkspaceTarget pins the KEY design point of the
 // bind-mount-deps feature: DepBind.Rel is repo-relative and is resolved to an
-// ABSOLUTE sandbox.Bind.Target under the per-run temp workspace inside
-// RunTest itself — never a static path — because only RunTest knows the
-// per-run dir.
+// ABSOLUTE sandbox.Bind.Target under the workspace AS THE RUN SEES IT inside
+// the jail (sandbox.WorkTarget where the backend places a workspace, the host
+// path where it cannot) — never a static host path, because only the run
+// knows where its workspace is.
 func TestJailResolvesDepBindsToWorkspaceTarget(t *testing.T) {
 	// Host must be a REAL, non-symlink directory — resolveBinds lstat-refuses a
 	// symlinked/missing bind source (the TOCTOU hardening).
@@ -218,6 +219,7 @@ func TestJailResolvesDepBindsToWorkspaceTarget(t *testing.T) {
 	if err := os.Mkdir(host, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// A backend that cannot place a workspace keeps the host path.
 	var got sandbox.Options
 	fake := &captureIsolator{name: "bwrap", onWrap: func(o sandbox.Options) { got = o }}
 	j := NewJail(fake, time.Second, WithReadOnlyBinds([]DepBind{{Host: host, Rel: "node_modules"}}))
@@ -229,9 +231,19 @@ func TestJailResolvesDepBindsToWorkspaceTarget(t *testing.T) {
 	if b.Host != host {
 		t.Fatalf("host = %q, want %q", b.Host, host)
 	}
-	// Target is the PER-RUN temp workspace joined with Rel — not a static path.
-	if b.Target != got.Workspace+"/node_modules" {
-		t.Fatalf("target = %q, want %q (per-run workspace + Rel)", b.Target, got.Workspace+"/node_modules")
+	if b.Target != got.Workspace+"/node_modules" || got.Target != "" {
+		t.Fatalf("target = %q (Options.Target %q), want %q: the host workspace + Rel", b.Target, got.Target, got.Workspace+"/node_modules")
+	}
+
+	// A backend that places one resolves it under the fixed path.
+	real := placingJailOrSkip(t)
+	rj := NewJail(real, time.Second, WithReadOnlyBinds([]DepBind{{Host: host, Rel: "node_modules"}})).(bwrapJail)
+	binds, err := rj.resolveBinds("/some/host/dir")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(binds) != 1 || binds[0].Target != sandbox.WorkTarget+"/node_modules" {
+		t.Fatalf("binds = %+v, want one at %s/node_modules", binds, sandbox.WorkTarget)
 	}
 }
 
@@ -562,18 +574,27 @@ func TestSeededJailRefusesAnotherMap(t *testing.T) {
 	}
 }
 
-// The run's working directory is the seed's own host path, so every path a
-// run prints is the path a fresh copy at that location would print.
+// The run's working directory is the fixed in-jail path, and the seed's host
+// path is not in the jail; the seed on the host is where it always was.
 func TestSeededJailPathUnchanged(t *testing.T) {
 	e := NewEnumerator(overlayJailOrSkip(t), 30*time.Second)
 	files := map[string]string{"a.txt": "x"}
 	s := seedOrFatal(t, e, files)
-	out, err := s.Enumerate(context.Background(), files, []string{"pwd"})
+	sj := s.(*seededJail)
+	out, err := s.Enumerate(context.Background(), files, []string{"sh", "-c", "pwd; test ! -e " + sj.dir + " && echo hostpath-absent"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := s.(*seededJail).dir; strings.TrimSpace(out) != want {
-		t.Errorf("pwd = %q, want the seed's host path %q", strings.TrimSpace(out), want)
+	want := sandbox.WorkTarget + "\nhostpath-absent"
+	if sandbox.PlacesWorkspace(sj.j.backend) {
+		if strings.TrimSpace(out) != want {
+			t.Errorf("output = %q, want %q", strings.TrimSpace(out), want)
+		}
+	} else if strings.TrimSpace(out) != sj.dir {
+		t.Errorf("pwd = %q, want the seed's host path %q (this backend cannot place a workspace)", strings.TrimSpace(out), sj.dir)
+	}
+	if b, err := os.ReadFile(filepath.Join(sj.dir, "a.txt")); err != nil || string(b) != "x" {
+		t.Errorf("the seed on the host changed: %q, %v", b, err)
 	}
 }
 
@@ -1145,5 +1166,211 @@ func TestWarmedIsNotSetByALatchedWarmRun(t *testing.T) {
 	}
 	if j.Warmed() {
 		t.Error("a warming run that never ran made the jail Warmed")
+	}
+}
+
+// placingJailOrSkip is the real backend, skipped unless it places a workspace
+// at a fixed path.
+func placingJailOrSkip(t *testing.T) sandbox.Isolator {
+	t.Helper()
+	backend, err := sandbox.Resolve(sandbox.Config{})
+	if err != nil || backend == nil {
+		t.Skipf("no sandbox backend available (bwrap): %v", err)
+	}
+	if !sandbox.PlacesWorkspace(backend) {
+		t.Skipf("%s cannot place a workspace at a fixed path", backendVersion(backend))
+	}
+	return backend
+}
+
+// The script every fixed-path test runs: where am I, and is the HOST
+// directory (a corral-adequacy-* temp dir under /tmp, fresh copy or seed) in
+// the jail at all? It must not be: nothing the run can see names it.
+const fixedPathProbe = `pwd; if ls -d /tmp/corral-adequacy-* >/dev/null 2>&1; then echo HOSTPATH-VISIBLE; fi`
+
+// A RunTest, an Enumerate and a seeded run each see their workspace at
+// /corral-work, and none of them sees the host directory.
+func TestJailRunsSeeTheWorkspaceAtTheFixedPath(t *testing.T) {
+	backend := placingJailOrSkip(t)
+	files := map[string]string{"a.txt": "x"}
+	cmd := []string{"sh", "-c", fixedPathProbe}
+
+	_, out, err := NewJail(backend, 30*time.Second).(VerboseJail).RunTestVerbose(context.Background(), files, cmd)
+	if err != nil || strings.TrimSpace(out) != sandbox.WorkTarget {
+		t.Errorf("RunTest: output %q, err %v; want exactly %s", strings.TrimSpace(out), err, sandbox.WorkTarget)
+	}
+	out, err = NewEnumerator(backend, 30*time.Second).Enumerate(context.Background(), files, cmd)
+	if err != nil || strings.TrimSpace(out) != sandbox.WorkTarget {
+		t.Errorf("Enumerate: output %q, err %v; want exactly %s", strings.TrimSpace(out), err, sandbox.WorkTarget)
+	}
+	if !sandbox.Overlays(backend) {
+		t.Log("seeded run unexercised: this backend cannot overlay")
+		return
+	}
+	s := seedOrFatal(t, NewEnumerator(backend, 30*time.Second), files)
+	out, err = s.Enumerate(context.Background(), files, cmd)
+	if err != nil || strings.TrimSpace(out) != sandbox.WorkTarget {
+		t.Errorf("seeded: output %q, err %v; want exactly %s", strings.TrimSpace(out), err, sandbox.WorkTarget)
+	}
+}
+
+// Eight runs at once, each over its own tree: each reads its own marker at
+// /corral-work/marker and never another's.
+func TestConcurrentRunsEachSeeTheirOwnFixedPathWorkspace(t *testing.T) {
+	backend := placingJailOrSkip(t)
+	j := NewJail(backend, 30*time.Second).(VerboseJail)
+	const n = 8
+	var wg sync.WaitGroup
+	errs := make([]string, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			want := fmt.Sprintf("tree-%d", i)
+			// The sleep keeps all eight in the jail at the same time.
+			_, out, err := j.RunTestVerbose(context.Background(),
+				map[string]string{"marker": want},
+				[]string{"sh", "-c", "sleep 0.5; cat " + sandbox.WorkTarget + "/marker"})
+			if err != nil || strings.TrimSpace(out) != want {
+				errs[i] = fmt.Sprintf("run %d read %q (err %v), want %q", i, strings.TrimSpace(out), err, want)
+			}
+		}(i)
+	}
+	wg.Wait()
+	for _, e := range errs {
+		if e != "" {
+			t.Error(e)
+		}
+	}
+}
+
+// A node_modules dependency bind is at /corral-work/node_modules with its
+// entries unwritable to the host, and its .bin is on PATH there.
+func TestDependencyBindsFollowTheFixedPath(t *testing.T) {
+	backend := placingJailOrSkip(t)
+	nm := filepath.Join(t.TempDir(), "node_modules")
+	if err := os.MkdirAll(filepath.Join(nm, "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(nm, ".bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pkgFile := filepath.Join(nm, "pkg", "index.js")
+	if err := os.WriteFile(pkgFile, []byte("dep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nm, ".bin", "mytool"), []byte("#!/bin/sh\necho tool-ran\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	j := NewJail(backend, 30*time.Second, WithReadOnlyBinds([]DepBind{{Host: nm, Rel: "node_modules"}})).(VerboseJail)
+	script := `cat /corral-work/node_modules/pkg/index.js; echo; echo "$PATH" | tr ':' '\n' | head -1; mytool; ` +
+		`echo changed > /corral-work/node_modules/pkg/index.js 2>/dev/null; ` + fixedPathProbe
+	_, out, err := j.RunTestVerbose(context.Background(), map[string]string{"a.js": "1"}, []string{"sh", "-c", script})
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	want := "dep\n" + sandbox.WorkTarget + "/node_modules/.bin\ntool-ran\n" + sandbox.WorkTarget
+	if strings.TrimSpace(out) != want {
+		t.Errorf("output = %q, want %q", strings.TrimSpace(out), want)
+	}
+	// Whatever the jail let the run write, none of it reached the host.
+	if b, _ := os.ReadFile(pkgFile); string(b) != "dep" {
+		t.Errorf("the dependency on the host was changed to %q", b)
+	}
+}
+
+// A backend that cannot place a workspace: no Target is set, and every in-jail
+// path (the workspace, a dependency bind, the .bin on PATH) is the host path,
+// as before.
+func TestJailKeepsTheHostPathWhereTheBackendCannotPlaceIt(t *testing.T) {
+	host := filepath.Join(t.TempDir(), "node_modules")
+	if err := os.Mkdir(host, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var got sandbox.Options
+	fake := &captureIsolator{name: "bwrap", onWrap: func(o sandbox.Options) { got = o }}
+	if sandbox.PlacesWorkspace(fake) {
+		t.Fatal("the fake claims to place a workspace")
+	}
+	j := NewEnumerator(fake, time.Second, WithReadOnlyBinds([]DepBind{{Host: host, Rel: "node_modules"}}))
+	_, _ = j.Enumerate(context.Background(), map[string]string{"a.js": "1"}, []string{"true"})
+	if got.Target != "" {
+		t.Errorf("Target = %q on a backend that cannot place a workspace", got.Target)
+	}
+	if len(got.ReadOnlyBinds) != 1 || got.ReadOnlyBinds[0].Target != got.Workspace+"/node_modules" {
+		t.Errorf("binds = %+v, want one at %s/node_modules", got.ReadOnlyBinds, got.Workspace)
+	}
+	var path string
+	for _, kv := range got.Env {
+		if strings.HasPrefix(kv, "PATH=") {
+			path = kv
+		}
+	}
+	if !strings.Contains(path, got.Workspace+"/node_modules/.bin") {
+		t.Errorf("PATH = %q, want the host-path .bin", path)
+	}
+}
+
+// The test-only option runs the same tree at its host path, which is how a
+// comparison of one tree at both paths is made; the default stays the fixed
+// path.
+func TestWithoutWorkTargetRunsAtTheHostPath(t *testing.T) {
+	backend := placingJailOrSkip(t)
+	files := map[string]string{"a.txt": "x"}
+	out, err := NewEnumerator(backend, 30*time.Second, withoutWorkTarget()).Enumerate(context.Background(), files, []string{"pwd"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(out); got == sandbox.WorkTarget || !strings.HasPrefix(got, os.TempDir()+"/corral-adequacy-") {
+		t.Errorf("pwd = %q, want the host workspace path", got)
+	}
+}
+
+// A seeded run with a dependency directory sees it under the fixed path too,
+// and the seed's overlay at the target is private to the run.
+func TestSeededRunSeesDependenciesAndPrivateWritesAtTheFixedPath(t *testing.T) {
+	backend := overlayJailOrSkip(t)
+	if !sandbox.PlacesWorkspace(backend) {
+		t.Skip("this backend cannot place a workspace")
+	}
+	nm := filepath.Join(t.TempDir(), "node_modules")
+	if err := os.MkdirAll(filepath.Join(nm, "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nm, "pkg", "index.js"), []byte("dep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e := NewEnumerator(backend, 30*time.Second, WithReadOnlyBinds([]DepBind{{Host: nm, Rel: "node_modules"}}))
+	files := map[string]string{"a.txt": "x"}
+	s := seedOrFatal(t, e, files)
+	out, err := s.Enumerate(context.Background(), files, []string{"sh", "-c", "cat /corral-work/node_modules/pkg/index.js; echo; echo w > /corral-work/scratch; ls /corral-work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(out); got != "dep\na.txt\nnode_modules\nscratch" {
+		t.Errorf("output = %q", got)
+	}
+	out, err = s.Enumerate(context.Background(), files, []string{"sh", "-c", "ls /corral-work"})
+	if err != nil || strings.Contains(out, "scratch") {
+		t.Errorf("a later run saw an earlier run's write: %q, %v", out, err)
+	}
+	if _, err := os.Stat(filepath.Join(s.(*seededJail).dir, "scratch")); err == nil {
+		t.Error("the write reached the seed on the host")
+	}
+}
+
+// The host's TMPDIR names a HOST directory. Before the workspace moved to a
+// fixed path it worked by accident (the workspace is made under TMPDIR and
+// was mounted at its own path, so TMPDIR's chain existed in the jail); at the
+// fixed path it names nothing there, and every tool that makes a temp file
+// (`go test` first) fails. A placed run therefore does not inherit it: the
+// jail has its own /tmp.
+func TestPlacedRunDoesNotInheritAHostTMPDIR(t *testing.T) {
+	backend := placingJailOrSkip(t)
+	t.Setenv("TMPDIR", t.TempDir())
+	_, out, err := NewJail(backend, 30*time.Second).(VerboseJail).RunTestVerbose(context.Background(),
+		map[string]string{"a.txt": "x"}, []string{"sh", "-c", `f=$(mktemp) && echo made && test -z "$TMPDIR" && echo unset`})
+	if err != nil || strings.TrimSpace(out) != "made\nunset" {
+		t.Errorf("output %q, err %v; want a temp file made and TMPDIR unset", strings.TrimSpace(out), err)
 	}
 }

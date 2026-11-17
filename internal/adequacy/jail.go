@@ -11,6 +11,7 @@ import (
 	"path"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -55,6 +56,9 @@ type bwrapJail struct {
 	// used by value and copied as options apply and as it is handed
 	// around: every copy must reach the one cache and the one lock.
 	runCache *runCache
+	// atHostPath, set only by withoutWorkTarget, runs every workspace at its
+	// host path as a backend that cannot place one does.
+	atHostPath bool
 }
 
 // DepBind is a read-only dependency dir to mount into the jail: Host is the
@@ -76,6 +80,47 @@ type JailOption func(*bwrapJail)
 // per call.
 func WithReadOnlyBinds(binds []DepBind) JailOption {
 	return func(j *bwrapJail) { j.binds = binds }
+}
+
+// withoutWorkTarget makes the jail see each workspace at its host path
+// instead of sandbox.WorkTarget. FOR TESTS ONLY, and unexported on purpose:
+// a test that compares one tree run at the fixed path with the same tree run
+// at the host path needs it, and nothing else may turn the fixed path off.
+func withoutWorkTarget() JailOption {
+	return func(j *bwrapJail) { j.atHostPath = true }
+}
+
+// places reports whether this jail's runs see their workspace at
+// sandbox.WorkTarget: the backend can place one and nothing turned it off.
+func (j bwrapJail) places() bool {
+	return !j.atHostPath && sandbox.PlacesWorkspace(j.backend)
+}
+
+// baseEnv is the environment a run starts from: sandbox.MinimalEnv, less
+// TMPDIR when the workspace is placed. TMPDIR names a HOST directory (the
+// workspace itself is made under it); it used to work in the jail only
+// because the workspace was mounted at its own path, which created TMPDIR's
+// parents there. At the fixed path it names nothing, and the jail has its own
+// /tmp, which the tools then use.
+func (j bwrapJail) baseEnv() []string {
+	env := sandbox.MinimalEnv()
+	if !j.places() {
+		return env
+	}
+	return slices.DeleteFunc(env, func(kv string) bool { return strings.HasPrefix(kv, "TMPDIR=") })
+}
+
+// jailPath is the path at which a run sees the workspace whose HOST
+// directory is hostDir: sandbox.WorkTarget where the jail places workspaces,
+// hostDir itself where it cannot. It is the one place this file names a path
+// the run will see (dependency targets, the .bin entries on PATH); host-side
+// operations (writing, reading back, removing the workspace, the cache
+// directory) keep hostDir.
+func (j bwrapJail) jailPath(hostDir string) string {
+	if j.places() {
+		return sandbox.WorkTarget
+	}
+	return hostDir
 }
 
 // WithMaxOutput raises (or lowers) the combined stdout+stderr cap for every
@@ -352,7 +397,8 @@ func NewEnumerator(backend sandbox.Isolator, timeout time.Duration, opts ...Jail
 }
 
 // resolveBinds resolves the jail's constant repo-relative DepBinds into
-// absolute sandbox.Bind targets under this run's temp workspace dir. Shared
+// absolute sandbox.Bind targets under the workspace as the run sees it
+// (jailPath of this run's host dir). Shared
 // by RunTest and Enumerate so the two never drift.
 func (j bwrapJail) resolveBinds(dir string) ([]sandbox.Bind, error) {
 	var roBinds []sandbox.Bind
@@ -379,7 +425,7 @@ func (j bwrapJail) resolveBinds(dir string) ([]sandbox.Bind, error) {
 		// Nothing is copied either way — this is the same mounts, one level down.
 		roBinds = append(roBinds, sandbox.Bind{
 			Host:     b.Host,
-			Target:   filepath.Join(dir, filepath.FromSlash(b.Rel)),
+			Target:   filepath.Join(j.jailPath(dir), filepath.FromSlash(b.Rel)),
 			PerEntry: true,
 		})
 	}
@@ -564,13 +610,21 @@ func (j bwrapJail) runIn(ctx context.Context, ws runWorkspace, cmd []string, max
 		return sandbox.Result{}, terr
 	}
 	roBinds = append(roBinds, tbs...)
+	// Target is where the run sees the workspace; Workspace stays the HOST
+	// directory (what is mounted, and the host process's own cwd). Empty
+	// where the backend cannot place one: the run sees the host path.
+	target := ""
+	if j.places() {
+		target = j.jailPath(dir)
+	}
 	res, err := sandbox.RunGuarded(ctx, shellJoin(cmd), sandbox.Options{
 		Workspace:     dir,
+		Target:        target,
 		Backend:       j.backend,
 		Network:       false,
 		Timeout:       j.timeout,
 		ReadOnlyBinds: roBinds,
-		Env:           envWithDepBinPaths(sandbox.MinimalEnv(), roBinds),
+		Env:           envWithDepBinPaths(j.baseEnv(), roBinds),
 		MaxOutput:     maxOutput, // 0 => sandbox.Run's own 16 KiB default
 		KeepTail:      keepTail,
 		SeedLower:     seedLower,

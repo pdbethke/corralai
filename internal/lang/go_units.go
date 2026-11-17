@@ -214,14 +214,35 @@ func goCountOne(args []string, parse func([]string) (opts, patterns []string, at
 // --args alike.
 func goArgsMarker(a string) bool { return a == "-args" || a == "--args" }
 
-// goGradingArgs is goEvidenceArgs for the command grading hands the jail,
-// which unlike a unit command may carry -run and -skip (a filtered run
-// replays a cached result as readily) and a test-binary tail after the
-// -args marker. -count=1 goes before the marker and the tail is kept as it
-// was. It is a separate entry from goEvidenceArgs on purpose: the unit pass
-// must keep refusing those commands. A command that runs no test
+// goGradingArgs is what grading hands the jail for go test arguments:
+// the arguments with a result-forbidding -count in them, and ok false when
+// go's own parsing cannot read them. Unlike goEvidenceArgs it accepts -run
+// and -skip (a filtered run replays a cached result as readily) and a
+// test-binary tail after the -args marker.
+//
+// An explicit -count of the operator's, in any spelling go reads (-count=N,
+// -count N, -test.count=N, --count), is KEPT exactly as given: go stores and
+// replays a test result only for a command with no -count at all, so any
+// explicit one forbids both, and replacing -count=3 (an operator's way to
+// catch a test that leaks state between runs) by -count=1 would change what
+// is graded for nothing. -count=1 is added, before the marker, only when the
+// operator gave none; a -count after the marker belongs to the test binary
+// and is not the operator's. It is a separate entry from goEvidenceArgs on
+// purpose: the unit pass must keep refusing those commands, and keeps its
+// own rule of replacing any -count. A command that runs no test
 // (goRunsNoTest) is the caller's to tell apart first.
 func goGradingArgs(args []string) ([]string, bool) {
+	own := args
+	if i := slices.IndexFunc(args, goArgsMarker); i >= 0 {
+		own = args[:i]
+	}
+	opts, _, _, ok := goTestArgsRefusing(own, map[string]bool{})
+	if !ok {
+		return nil, false
+	}
+	if goHasCount(opts) {
+		return slices.Clone(args), true
+	}
 	var tail []string
 	if i := slices.IndexFunc(args, goArgsMarker); i >= 0 {
 		args, tail = slices.Clone(args[:i]), args[i:]
@@ -235,26 +256,62 @@ func goGradingArgs(args []string) ([]string, bool) {
 	return append(out, tail...), true
 }
 
-// goRunsNoTest reports whether a go test argument list (after `go test`, or
-// after gotestsum's "--") builds or lists without running a test: -c and
-// -list. Only the words before the -args marker are options.
-func goRunsNoTest(args []string) bool {
-	for _, a := range args {
-		if goArgsMarker(a) {
-			return false
+// goHasCount reports whether the options goTestArgsRefusing read carry a
+// -count of the operator's: a flag word spelled count (-count, --count,
+// -test.count), not the value of another flag.
+func goHasCount(opts []string) bool {
+	for i := 0; i < len(opts); i++ {
+		if !strings.HasPrefix(opts[i], "-") {
+			continue // a value already stepped over, never reached as a flag
 		}
-		name, _, _ := strings.Cut(strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(a, "-"), "-"), "test."), "=")
-		if strings.HasPrefix(a, "-") && (name == "c" || name == "list") {
+		name, _, hasEq := strings.Cut(strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(opts[i], "-"), "-"), "test."), "=")
+		if name == "count" {
 			return true
+		}
+		if value, _ := goTestOption(opts[i]); value && !hasEq {
+			i++ // its value
 		}
 	}
 	return false
 }
 
+// goRunsNoTest reports whether a go test argument list (after `go test`, or
+// after gotestsum's "--") builds or lists without running a test: -c and
+// -list. Only the words before the -args marker are options, and a word that
+// is the VALUE of a flag that takes one (-run -c, -tags -c, -o -c) is not the
+// flag it spells. readable is false when the scan meets a flag go test does
+// not list before it has found -c or -list: it cannot say whether the next
+// word is that flag's value, so the command is not one it can place (the
+// caller's RunCacheUnreadable), and noTest is false.
+func goRunsNoTest(args []string) (noTest, readable bool) {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if goArgsMarker(a) {
+			return false, true
+		}
+		if !strings.HasPrefix(a, "-") {
+			continue
+		}
+		name, _, hasEq := strings.Cut(strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(a, "-"), "-"), "test."), "=")
+		if name == "c" || name == "list" {
+			return true, true
+		}
+		value, known := goTestOption(strings.SplitN(a, "=", 2)[0])
+		if !known {
+			return false, false
+		}
+		if value && !hasEq {
+			i++ // its value, whatever it is spelled like
+		}
+	}
+	return false, true
+}
+
 // goRunCacheArgs is the go rows' RunCacheArgs: what grading's rewrite did
 // with one command. Only a command positively recognised as running no test
 // is RunCacheNoTest (go vet, go build, go test or gotestsum with -c or
-// -list); a go test or gotestsum command it can read gets -count=1; every
+// -list); a go test or gotestsum command it can read gets -count=1 unless it
+// carries a -count of its own (kept as given); every
 // other command — a shell wrapper, an env prefix, a .go file argument, a
 // flag go test does not list — is RunCacheUnreadable, because it cannot be
 // told from a test command it failed to read.
@@ -263,7 +320,11 @@ func goRunCacheArgs(cmd []string) ([]string, RunCacheRewrite) {
 	case len(cmd) >= 2 && isGoBinary(cmd[0]) && (cmd[1] == "vet" || cmd[1] == "build"):
 		return cmd, RunCacheNoTest
 	case goTestCmd(cmd) && !cmdIsShellWrapped(cmd):
-		if goRunsNoTest(cmd[2:]) {
+		noTest, readable := goRunsNoTest(cmd[2:])
+		if !readable {
+			return cmd, RunCacheUnreadable
+		}
+		if noTest {
 			return cmd, RunCacheNoTest
 		}
 		args, ok := goGradingArgs(cmd[2:])
@@ -276,7 +337,11 @@ func goRunCacheArgs(cmd []string) ([]string, RunCacheRewrite) {
 	if !ok {
 		return cmd, RunCacheUnreadable
 	}
-	if goRunsNoTest(goArgs) {
+	noTest, readable := goRunsNoTest(goArgs)
+	if !readable {
+		return cmd, RunCacheUnreadable
+	}
+	if noTest {
 		return cmd, RunCacheNoTest
 	}
 	if len(goArgs) == 0 {

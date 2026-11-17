@@ -195,7 +195,9 @@ type RunCacheRewrite int
 const (
 	// RunCacheNone: the runner row has no run cache; cmd is unchanged.
 	RunCacheNone RunCacheRewrite = iota
-	// RunCacheRewritten: cmd now forbids a cached result.
+	// RunCacheRewritten: cmd now forbids a cached result: it was changed to
+	// say so, or it already did (an explicit -count of the operator's is
+	// kept as given).
 	RunCacheRewritten
 	// RunCacheNoTest: cmd runs no test (vet, build, -c, -list); unchanged,
 	// nothing to replay.
@@ -219,7 +221,9 @@ func (r RunCacheRewrite) String() string {
 
 // RunCacheCmd is cmd, a command grading hands the sandbox, with its runner
 // row's no-replay rewrite (Runner.RunCacheArgs) and the state saying what
-// became of it. For go test and gotestsum the rewrite is -count=1, because a
+// became of it. For go test and gotestsum the rewrite is -count=1, added only
+// when the command has no -count of its own (any explicit one already forbids
+// a replay and is kept as given), because a
 // cache shared among runs also holds test RESULTS and go replays one instead
 // of running the test. It is applied to EVERY command grading hands the
 // sandbox, which is why "unchanged" has two meanings the state tells apart:

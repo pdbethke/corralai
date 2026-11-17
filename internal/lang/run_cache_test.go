@@ -57,10 +57,18 @@ func TestRunCacheCmdNeverLetsAResultReplay(t *testing.T) {
 		state RunCacheRewrite
 	}{
 		{g, goInv, []string{"go", "test", "./..."}, "go test ./... -count=1", RunCacheRewritten},
-		{g, goInv, []string{"go", "test", "-count=5", "./..."}, "go test ./... -count=1", RunCacheRewritten},
-		{g, goInv, []string{"go", "test", "-count", "5", "./..."}, "go test ./... -count=1", RunCacheRewritten},
-		{g, goInv, []string{"go", "test", "./...", "-count=3"}, "go test ./... -count=1", RunCacheRewritten},
-		{g, goInv, []string{"go", "test", "-test.count=5", "./..."}, "go test ./... -count=1", RunCacheRewritten},
+		// An explicit -count of the operator's, in any spelling, already forbids
+		// a cached result: kept exactly as given, never replaced by -count=1.
+		{g, goInv, []string{"go", "test", "-count=5", "./..."}, "go test -count=5 ./...", RunCacheRewritten},
+		{g, goInv, []string{"go", "test", "-count", "5", "./..."}, "go test -count 5 ./...", RunCacheRewritten},
+		{g, goInv, []string{"go", "test", "./...", "-count=3"}, "go test ./... -count=3", RunCacheRewritten},
+		{g, goInv, []string{"go", "test", "-test.count=5", "./..."}, "go test -test.count=5 ./...", RunCacheRewritten},
+		{g, goInv, []string{"go", "test", "--count=2", "./..."}, "go test --count=2 ./...", RunCacheRewritten},
+		{g, goInv, []string{"go", "test", "--count", "2", "./..."}, "go test --count 2 ./...", RunCacheRewritten},
+		{g, sumInv, []string{"gotestsum", "--", "-count=4", "./pkg"}, "gotestsum -- -count=4 ./pkg", RunCacheRewritten},
+		// A -count after -args belongs to the test binary, so -count=1 is still added.
+		// A word that is the VALUE of another flag is never the flag it spells.
+		{g, goInv, []string{"go", "test", "-run", "-count", "."}, "go test -run -count .", RunCacheUnreadable},
 		{g, goInv, []string{"go", "test", "-run", "^TestX$", ".", "-failfast"}, "go test -run ^TestX$ . -failfast -count=1", RunCacheRewritten},
 		{g, goInv, []string{"go", "test", "-run", "^Test A=b$", "."}, "go test -run ^Test A=b$ . -count=1", RunCacheRewritten},
 		{g, goInv, []string{"go", "test", "-skip=Slow", "./pkg"}, "go test -skip=Slow ./pkg -count=1", RunCacheRewritten},
@@ -74,6 +82,17 @@ func TestRunCacheCmdNeverLetsAResultReplay(t *testing.T) {
 		{g, goInv, []string{"go", "test", "-c", "./pkg"}, "go test -c ./pkg", RunCacheNoTest},
 		{g, goInv, []string{"go", "test", "-list", ".", "./pkg"}, "go test -list . ./pkg", RunCacheNoTest},
 		{g, sumInv, []string{"go", "vet", "./pkg"}, "go vet ./pkg", RunCacheNoTest},
+		// A -c or -list that is another flag's VALUE is not the flag, so it is
+		// never no-test. The argument reader refuses a flag value that itself
+		// begins with a dash, so the command is unreadable (unchanged, no
+		// cache shared): the safe answer for a command it cannot place.
+		{g, goInv, []string{"go", "test", "-run", "-c", "."}, "go test -run -c .", RunCacheUnreadable},
+		{g, goInv, []string{"go", "test", "-tags", "-c", "."}, "go test -tags -c .", RunCacheUnreadable},
+		{g, goInv, []string{"go", "test", "-o", "-c", "."}, "go test -o -c .", RunCacheUnreadable},
+		{g, goInv, []string{"go", "test", "-run", "-list", "."}, "go test -run -list .", RunCacheUnreadable},
+		{g, sumInv, []string{"gotestsum", "--", "-run", "-c", "."}, "gotestsum -- -run -c .", RunCacheUnreadable},
+		// An unlisted flag before a -c: not readable, so unreadable, not no-test.
+		{g, goInv, []string{"go", "test", "-nosuchflag", "-c", "."}, "go test -nosuchflag -c .", RunCacheUnreadable},
 		// Anything else the rewrite cannot read is unreadable, unchanged.
 		{g, goInv, []string{"sh", "-c", "go test ./..."}, "sh -c go test ./...", RunCacheUnreadable},
 		{g, goInv, []string{"env", "X=1", "go", "test", "./..."}, "env X=1 go test ./...", RunCacheUnreadable},

@@ -244,9 +244,14 @@ tests on the unmutated tree (`JailScorer.ScoreDevReport` adds
 command as `RunCacheRewritten`). `adequacy.Score` never warms unasked, `baseScoreOpts`
 must not carry the option, and a jail warms at most once, so a run that includes a test
 corral wrote (authored, salvage, critic checks, matrix) can never write what later runs
-read. What the cache reuses is the compiled standard library only: Go keys the project's own
-packages and its dependencies on their directory, and every jailed run has its own copy
-of the tree, so those are rebuilt per run. A shared cache costs one build cache's worth
+read. Go keys the project's own packages and its dependencies on their directory, so
+the cache reuses them only because a jailed run on bwrap or the container backend sees
+its workspace at the fixed path `/corral-work` (`sandbox.WorkTarget`), whatever host
+directory holds it; the compiled standard library is reused either way. Where the
+workspace is not placed (macOS `sandbox-exec`, or a bwrap that fails the start-up
+probe) the run keeps its host path and only the standard library is reused. A placed
+run's `TMPDIR` is the jail's own `/tmp`, not the host's, which names a directory the
+jail does not have. A shared cache costs one build cache's worth
 of temporary disk space per file being audited at once, removed when that file's run
 ends; a corral process killed outright (kill -9, out of memory) can leave
 `corral-cache-*` directories in the temporary directory, which nothing removes. The

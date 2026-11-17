@@ -575,7 +575,9 @@ func TestSeededJailRefusesAnotherMap(t *testing.T) {
 }
 
 // The run's working directory is the fixed in-jail path, and the seed's host
-// path is not in the jail; the seed on the host is where it always was.
+// path is absent from the jail's filesystem (the kernel's mount table inside
+// the jail, /proc/self/mountinfo, still names it as the overlay's source, as
+// it did before); the seed on the host is where it always was.
 func TestSeededJailPathUnchanged(t *testing.T) {
 	e := NewEnumerator(overlayJailOrSkip(t), 30*time.Second)
 	files := map[string]string{"a.txt": "x"}
@@ -1191,8 +1193,11 @@ func placingJailOrSkip(t *testing.T) sandbox.Isolator {
 }
 
 // fixedPathProbe is the script every fixed-path test runs: where am I, and
-// is the HOST directory in the jail at all? It must not be: nothing the run
-// can see names it. The workspace is made under TMPDIR, so the probe points
+// is the HOST directory in the jail's filesystem at all? It must not be: no
+// path the run can open names it. What this proves is that the path is
+// absent from the jail's filesystem, and no more: the kernel's mount table
+// inside the jail (/proc/self/mountinfo) still names the bind's source
+// directory, as it did before the workspace was placed. The workspace is made under TMPDIR, so the probe points
 // TMPDIR at a directory of the test's own, and asks about that directory and
 // the workspace in it: whatever the host's TMPDIR really is, the probe names
 // the run's actual host path, never a /tmp pattern that a TMPDIR outside /tmp

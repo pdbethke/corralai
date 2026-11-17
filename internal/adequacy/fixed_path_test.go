@@ -303,8 +303,22 @@ func failCases(t *testing.T) []failCase {
 		{name: "python", lang: "python", tool: "python3", probe: []string{"python3", "-c", "import pytest"},
 			cmd: []string{"python3", "-m", "pytest", "-q", "-p", "no:cacheprovider"}, want: "test_boom",
 			files: map[string]string{"test_f.py": "def test_ok():\n    pass\n\ndef test_boom():\n    assert 1 == 2\n"}},
+		// PHPUnit's own command, as the runner row reads it (the `phpunit`
+		// word); the fixture is the runner table's failing suite.
+		{name: "php", lang: "php", tool: "phpunit", probe: []string{"phpunit", "--version"},
+			cmd: []string{"phpunit", "fail/tests/FTest.php"}, files: runners("fail/tests/FTest.php"), want: "FTest::test"},
+		{name: "rust", lang: "rust", tool: "cargo", probe: rustInJailProbe,
+			cmd: []string{"cargo", "test"}, want: "boom",
+			files: map[string]string{
+				"Cargo.toml": "[package]\nname = \"failfix\"\nversion = \"0.1.0\"\nedition = \"2021\"\npublish = false\n\n[dependencies]\n",
+				"src/lib.rs": "#[cfg(test)]\nmod tests {\n    #[test]\n    fn ok() {}\n    #[test]\n    fn boom() {\n        assert_eq!(1, 2);\n    }\n}\n",
+			}},
 	}
 }
+
+// rustInJailProbe is the Rust toolchain answering INSIDE the jail: cargo on
+// the host is not enough (the jail sees the system-wide rustup only).
+var rustInJailProbe = []string{"sh", "-c", "cargo --version && rustc --version"}
 
 // The failing test a runner's own failure parser names from a failing run
 // is the same at both placements, and it names one (a run that names no
@@ -345,6 +359,7 @@ func TestUnitListingsAreTheSameAtTheFixedPath(t *testing.T) {
 	backend := placingJailOrSkip(t)
 	for _, tc := range []struct {
 		name, lang, tool string
+		probe            []string
 		cmd              []string
 		files            map[string]string
 		want             string
@@ -352,14 +367,28 @@ func TestUnitListingsAreTheSameAtTheFixedPath(t *testing.T) {
 		{name: "go", lang: "go", tool: "go", cmd: []string{"go", "test", "./..."}, files: goTree(), want: "p"},
 		{name: "javascript", lang: "javascript", tool: "node", cmd: []string{"node", "--test"},
 			files: map[string]string{"a.test.js": "const t = require('node:test');\nt.test('x', () => {});\n"}, want: "a.test.js"},
+		// Ruby lists through rspec; minitest, Ruby's other runner, has no
+		// listing in the runner table (lang/runner.go: "no unit evidence: no
+		// listing command"), so it has no case here.
+		{name: "ruby", lang: "ruby", tool: "rspec", probe: []string{"rspec", "--version"}, cmd: []string{"rspec"},
+			files: fixtureTree(t, "runners", "src", "units", "rspec"), want: "spec/a_spec.rb"},
+		{name: "php", lang: "php", tool: "phpunit", probe: []string{"phpunit", "--version"}, cmd: []string{"phpunit"},
+			files: fixtureTree(t, "runners", "src", "units", "phpunit"), want: "ATest.php"},
+		// pytest has no ListUnits in the runner table (Python's unit evidence
+		// is not built), so ListUnitsCmd answers no and this case SKIPS,
+		// naming it: it is here so the gap is reported, not silently absent.
+		{name: "python", lang: "python", tool: "python3", probe: []string{"python3", "-c", "import pytest"},
+			cmd: []string{"python3", "-m", "pytest", "-q"}, files: map[string]string{"test_a.py": "def test_a():\n    pass\n"}, want: "test_a.py"},
+		{name: "rust", lang: "rust", tool: "cargo", probe: rustInJailProbe, cmd: []string{"cargo", "test", "--workspace"},
+			files: fixtureTree(t, "runners", "src", "units", "cargo"), want: "units-a"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			requireTool(t, backend, tc.tool, nil)
+			requireTool(t, backend, tc.tool, tc.probe)
 			p, _ := lang.ByName(tc.lang)
 			inv := lang.Cmd(tc.cmd)
 			list, ok := lang.ListUnitsCmd(p, inv)
 			if !ok {
-				t.Skipf("SKIP %s: no unit listing for %q", tc.lang, tc.cmd)
+				t.Skipf("SKIP %s: the runner table has no unit listing for %q", tc.lang, tc.cmd)
 			}
 			got := map[string][]string{}
 			for name, j := range placements(backend) {

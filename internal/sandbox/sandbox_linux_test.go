@@ -105,7 +105,10 @@ func TestBwrapRunAtTargetWritesThroughToTheHostDir(t *testing.T) {
 	r := Run(context.Background(), "pwd; echo hi > made.txt; test ! -e '"+ws+"'", Options{Workspace: ws, Target: WorkTarget, Backend: iso})
 	if r.ExitCode != 0 || r.Err != "" {
 		// A non-zero exit here may be the host workspace path existing
-		// inside the jail (test ! -e): the host path must not be visible.
+		// inside the jail (test ! -e): the host path must be absent from
+		// the jail's filesystem. Only that: /proc/self/mountinfo inside the
+		// jail still names the bind's source directory, as it did before
+		// the workspace could be placed.
 		t.Fatalf("run at the target failed: %+v", r)
 	}
 	if strings.TrimSpace(r.Output) != WorkTarget {

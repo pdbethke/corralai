@@ -591,7 +591,9 @@ func (j bwrapJail) runInJailCache(ctx context.Context, files map[string]string, 
 
 // runWorkspace is where one jailed run's tree is: dir, written for this run
 // alone (a fresh copy, bound writable), or a seed several runs share
-// (seeded: overlaid copy-on-write at its own path, see Seed).
+// (seeded: overlaid copy-on-write where the run sees its workspace, at
+// sandbox.WorkTarget where the jail places workspaces and at the seed's own
+// host path where it cannot; see Seed).
 type runWorkspace struct {
 	dir    string
 	seeded bool
@@ -708,11 +710,12 @@ var ErrNoOverlay = sandbox.ErrNoOverlay
 type SeededJail = sandbox.SeededRunner
 
 // Seed writes files once into a seed directory and returns the runs over
-// it. Each run sees the seed overlaid copy-on-write at the seed's own path
-// (sandbox.Options.SeedLower): what it writes lands in its own tmpfs upper
-// layer and is gone when it ends, so runs never see each other's writes and
-// may run concurrently, and every path a run prints is what a fresh copy at
-// that path prints. Per run, that saves writing the whole tree (91 MiB of
+// it. Each run sees the seed overlaid copy-on-write where it sees its
+// workspace (sandbox.Options.SeedLower): at sandbox.WorkTarget where the jail
+// places workspaces, at the seed's own host path where it cannot (jailPath).
+// What a run writes lands in its own tmpfs upper layer and is gone when it
+// ends, so runs never see each other's writes and may run concurrently, and
+// every path a run prints is what a fresh copy at that same path prints. Per run, that saves writing the whole tree (91 MiB of
 // text for REA) and removing it again, and the tmpfs space and inodes those
 // copies held at once: at 12 or more workers a copy per run exhausted
 // REA's tmpfs, and every unit failed ENOSPC.

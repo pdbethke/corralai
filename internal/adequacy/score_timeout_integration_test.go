@@ -74,7 +74,7 @@ func TestScoreJSNonTerminatingMutantIsKilledFast(t *testing.T) {
 		t.Skipf("jail did not pass a known-correct test against compliant code — treating as jail/toolchain unavailable rather than a test bug: %+v", rep)
 	}
 
-	// The per-mutant timeout is auto-derived as clampMutantTimeout(baseDur):
+	// The per-mutant timeout is auto-derived as mutantTimeoutCap(baseDur, 0, minMutantTimeout):
 	// at most 5 minutes even in the worst case, but for a sub-second node:test
 	// baseline it floors at 30s. Either way the WHOLE Score call — baseline
 	// plus one hanging mutant — must complete well inside a couple of

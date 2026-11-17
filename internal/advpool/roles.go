@@ -322,9 +322,18 @@ func cleanFailureRepairBlock(prevTest, cleanFailure string) string {
 // compileRepairBlock is the repair prompt for a test that did not build.
 // Empty when there is no compiler error to feed back. See
 // cleanFailureRepairBlock for why both live here rather than inline.
+//
+// A test refused for naming the sandbox's working directory
+// (checkAuthoredTest) arrives here too, through the same repair channel, but
+// it DID compile, and saying otherwise would send the writer hunting for a
+// compiler error that is not there. Its feedback opens with
+// workTargetRejection, and it gets its own block.
 func compileRepairBlock(prevTest, compileErr string) string {
 	if strings.TrimSpace(compileErr) == "" {
 		return ""
+	}
+	if strings.HasPrefix(strings.TrimSpace(compileErr), workTargetRejection) {
+		return fmt.Sprintf("\n\n--- YOUR PREVIOUS ATTEMPT WAS REJECTED ---\nYou wrote:\n%s\n\nIt was not run, because %s\n\nReturn a corrected FULL test file that names no absolute path to the project: reach files by a path relative to the test file or the repository, as the project's own tests do.", prevTest, strings.TrimSpace(compileErr))
 	}
 	return fmt.Sprintf("\n\n--- YOUR PREVIOUS ATTEMPT DID NOT COMPILE ---\nYou wrote:\n%s\n\nThe compiler reported:\n%s\n\nReturn a corrected FULL test file that compiles cleanly. Fix exactly what the compiler flagged; if it is a redeclared/duplicate identifier, rename yours to something unique.", prevTest, strings.TrimSpace(compileErr))
 }

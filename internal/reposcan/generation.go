@@ -407,7 +407,25 @@ package reposcan
 // such a file carries a merged test that does not compile and a together
 // result that describes the merge, not the tests, so it is re-measured
 // rather than reused. Behaviour bump; the shape is unchanged.
-const VerdictGeneration = "43"
+// "44" (2026-11-17): a timed-out mutant on a warmed run cache is graded under
+// a cap floored at the warming run. Since a jailed run sees its tree at one
+// path (sandbox.WorkTarget), a frozen compliant run of a Go file is a full
+// build-cache hit while a mutant rebuilds its package and every dependent
+// (2.7× to 6.9× the cached build, measured outside the jail on this
+// repository), so the per-mutant cap, 3× the compliant run with a 30s floor,
+// could time out a mutant that was only rebuilding, and the compliant
+// re-probe then credited it as a kill (KillConfirmedReprobed); in the
+// authored pass, a proven gap from a test that never ran. The cap is now also
+// at least 3× the warming run (adequacy.mutantTimeoutCap). A cap can only
+// grow from this, so a "43" verdict graded on a warmed jail (where a narrowed
+// command's compliant run could be far shorter than the warming run) may hold
+// a timeout kill this generation would grade by the run's own result, so it
+// is re-measured rather than reused. In the same generation, an authored
+// test that names that path (/corral-work) is refused and reissued to the
+// writer (advpool.checkAuthoredTest), since it passes in every jailed run and
+// fails on the developer's machine (it rides along: under "43" no run saw
+// that path, so such a test could not have passed). Behaviour bump; the shape is unchanged.
+const VerdictGeneration = "44"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

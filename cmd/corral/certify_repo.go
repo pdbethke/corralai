@@ -3894,6 +3894,15 @@ func repoScanExitCode(r reposcan.RepoReport, nothingInScope bool, unpairableInDi
 // withheld. Nothing is silently dropped; the counts still add up.
 const maxListedExclusions = 20
 
+// runCacheShareable and placesWorkspace are the two backend questions the
+// scan header asks (adequacy.RunCacheShareable, sandbox.PlacesWorkspace),
+// named so a test can answer them for a fake backend: the sandbox's
+// capabilities are unexported methods no fake outside it can claim.
+var (
+	runCacheShareable = adequacy.RunCacheShareable
+	placesWorkspace   = sandbox.PlacesWorkspace
+)
+
 // printSearchPairings discloses every candidate whose test pairing came from
 // the recursive fallback (reposcan.Candidate.ViaSearch) rather than from the
 // language plugin's own naming convention — a test that EXISTS but that no
@@ -3907,6 +3916,7 @@ const maxListedExclusions = 20
 // once per language is enough.
 func printRunDisclosures(w io.Writer, ex *localExecutor, jobs []reposcan.Job) {
 	seen := map[string]bool{}
+	placementSaid := false
 	for _, j := range jobs {
 		if seen[j.Lang] {
 			continue
@@ -3941,11 +3951,20 @@ func printRunDisclosures(w io.Writer, ex *localExecutor, jobs []reposcan.Job) {
 			// cannot overlay (--jail container, sandbox-exec, an older bwrap),
 			// or a temp directory an overlay cannot sit on, shares no cache,
 			// and every file would then contradict this line.
-			if !adequacy.RunCacheShareable(ex.iso) {
+			if !runCacheShareable(ex.iso) {
 				continue
 			}
 			if env, ok := lang.RunCacheFor(p, inv); ok {
 				fmt.Fprintf(w, "  build cache: grading runs for %s share a frozen %s, warmed by the unmutated run\n", j.Lang, env)
+				// SAY IT ONCE when the cache is shared but the workspace is
+				// not placed (a bubblewrap whose start-up probe could overlay
+				// a directory at its own path and not at /corral-work): each
+				// run keeps its own path, so Go rebuilds the project's own
+				// packages every run, and nothing else would say why.
+				if !placementSaid && !placesWorkspace(ex.iso) {
+					placementSaid = true
+					fmt.Fprintf(w, "  sandbox: this bubblewrap cannot place a workspace at %s, so runs keep their own paths and a shared build cache reuses only the standard library\n", sandbox.WorkTarget)
+				}
 			}
 		}
 	}

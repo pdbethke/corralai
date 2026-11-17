@@ -21,6 +21,115 @@ func bwrapOrSkip(t *testing.T) Isolator {
 	return b
 }
 
+// overlayingBwrapOrSkip is the real bwrap isolator as Resolve builds it, with
+// its construction-time probes run, skipped (and so printed by the CI census)
+// when bwrap is unusable or cannot overlay at all.
+func overlayingBwrapOrSkip(t *testing.T) Isolator {
+	t.Helper()
+	iso, err := newBwrapIsolator()
+	if err != nil {
+		t.Skipf("bwrap unavailable: %v", err)
+	}
+	if !Overlays(iso) {
+		t.Skip("this bwrap cannot overlay (older than 0.10, or overlayfs refused in a user namespace); seeded path unexercised")
+	}
+	return iso
+}
+
+// Review Focus 2: a seed overlaid at a target that is not its own path. The
+// run reads the seed at /corral-work, its writes (a new file and a change to
+// a seed file) land in its private upper layer, the seed on the host is
+// unchanged, and a second run of the same seed sees none of the first's
+// writes. A bwrap that overlays at a directory's own path but not at a target
+// must say so (PlacesWorkspace false) and refuse, never bind the seed
+// writable.
+func TestBwrapSeedOverlaidAtTargetKeepsTheSeedUnchanged(t *testing.T) {
+	iso := overlayingBwrapOrSkip(t)
+	seed := t.TempDir()
+	if err := os.WriteFile(filepath.Join(seed, "seedfile"), []byte("hello\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	opts := Options{Workspace: seed, SeedLower: seed, Target: WorkTarget, Backend: iso}
+	if !PlacesWorkspace(iso) {
+		r := Run(context.Background(), "echo x > leaked", opts)
+		if r.Err == "" || r.ExitCode != -1 {
+			t.Errorf("a bwrap that cannot overlay at a target ran a seeded run there: %+v", r)
+		}
+		assertSeedUnchanged(t, seed)
+		t.Skip("this bwrap overlays only at a directory's own path; the refusal is checked, the seeded-at-target path unexercised")
+	}
+
+	r := Run(context.Background(), "pwd; cat seedfile; echo one > written; echo changed > seedfile; cat written seedfile", opts)
+	if r.ExitCode != 0 || r.Err != "" {
+		t.Fatalf("first seeded run failed: %+v", r)
+	}
+	for _, want := range []string{WorkTarget + "\n", "hello\n", "one\nchanged"} {
+		if !strings.Contains(r.Output+"\n", want) {
+			t.Errorf("first run output %q lacks %q", r.Output, want)
+		}
+	}
+	assertSeedUnchanged(t, seed)
+
+	r = Run(context.Background(), "pwd; cat seedfile; test -e written && echo LEAKED || echo clean", opts)
+	if r.ExitCode != 0 || !strings.Contains(r.Output, "hello") || !strings.Contains(r.Output, "clean") || strings.Contains(r.Output, "LEAKED") {
+		t.Errorf("second run saw the first run's writes or lost the seed: %+v", r)
+	}
+	assertSeedUnchanged(t, seed)
+}
+
+// assertSeedUnchanged: the seed holds exactly seedfile, with "hello\n".
+func assertSeedUnchanged(t *testing.T, seed string) {
+	t.Helper()
+	ents, err := os.ReadDir(seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ents) != 1 || ents[0].Name() != "seedfile" {
+		names := []string{}
+		for _, e := range ents {
+			names = append(names, e.Name())
+		}
+		t.Errorf("the seed on the host changed: it holds %v", names)
+	}
+	if b, err := os.ReadFile(filepath.Join(seed, "seedfile")); err != nil || string(b) != "hello\n" {
+		t.Errorf("the seed's file changed on the host: %q, %v", b, err)
+	}
+}
+
+// A run placed at /corral-work sees its workspace there: pwd says so, and a
+// write lands in the HOST Workspace directory, which is also the directory
+// the host process (bwrap itself) was started in.
+func TestBwrapRunAtTargetWritesThroughToTheHostDir(t *testing.T) {
+	iso := bwrapOrSkip(t)
+	ws := t.TempDir()
+	r := Run(context.Background(), "pwd; echo hi > made.txt; test ! -e '"+ws+"'", Options{Workspace: ws, Target: WorkTarget, Backend: iso})
+	if r.ExitCode != 0 || r.Err != "" {
+		// A non-zero exit here may be the host workspace path existing
+		// inside the jail (test ! -e): the host path must be absent from
+		// the jail's filesystem. Only that: /proc/self/mountinfo inside the
+		// jail still names the bind's source directory, as it did before
+		// the workspace could be placed.
+		t.Fatalf("run at the target failed: %+v", r)
+	}
+	if strings.TrimSpace(r.Output) != WorkTarget {
+		t.Errorf("pwd in the jail = %q, want %s", r.Output, WorkTarget)
+	}
+	if b, err := os.ReadFile(filepath.Join(ws, "made.txt")); err != nil || string(b) != "hi\n" {
+		t.Errorf("the write did not reach the host workspace: %q, %v", b, err)
+	}
+	if _, err := os.Stat(WorkTarget); err == nil {
+		t.Errorf("%s exists on the host; the target must exist only in the jail", WorkTarget)
+	}
+
+	// The host process runs in the HOST workspace (cmd.Dir), never at the
+	// in-jail target: an isolator that runs its argv on the host as is
+	// prints the directory it was started in.
+	r = Run(context.Background(), "pwd", Options{Workspace: ws, Target: WorkTarget, Backend: hostPwdIsolator{}})
+	if r.ExitCode != 0 || strings.TrimSpace(r.Output) != ws {
+		t.Errorf("the host process ran in %q, want the host workspace %s (%+v)", r.Output, ws, r)
+	}
+}
+
 func TestBwrapConfinesWritesAndReads(t *testing.T) {
 	iso := bwrapOrSkip(t)
 	ws := t.TempDir()

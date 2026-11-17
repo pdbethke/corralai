@@ -87,3 +87,16 @@ func TestSandboxExecDeniesSharedTmpWrite(t *testing.T) {
 		t.Fatalf("command must redirect TMPDIR to a per-run dir under the workspace:\n%s", shCommand)
 	}
 }
+
+// sandbox-exec has no mount namespace: it cannot present the workspace at
+// any path but its own, so it refuses a Target naming itself, and
+// PlacesWorkspace says it cannot.
+func TestSandboxExecRefusesATarget(t *testing.T) {
+	_, err := sandboxExecIsolator{}.Wrap("true", Options{Workspace: "/tmp/ws", Target: WorkTarget}, nil)
+	if err == nil || !strings.Contains(err.Error(), "sandbox-exec") {
+		t.Errorf("Wrap = %v, want a refusal naming sandbox-exec", err)
+	}
+	if PlacesWorkspace(sandboxExecIsolator{}) {
+		t.Error("PlacesWorkspace(sandbox-exec) = true")
+	}
+}

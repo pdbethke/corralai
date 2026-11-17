@@ -55,6 +55,9 @@ type bwrapJail struct {
 	// used by value and copied as options apply and as it is handed
 	// around: every copy must reach the one cache and the one lock.
 	runCache *runCache
+	// atHostPath, set only by withoutWorkTarget, runs every workspace at its
+	// host path as a backend that cannot place one does.
+	atHostPath bool
 }
 
 // DepBind is a read-only dependency dir to mount into the jail: Host is the
@@ -76,6 +79,33 @@ type JailOption func(*bwrapJail)
 // per call.
 func WithReadOnlyBinds(binds []DepBind) JailOption {
 	return func(j *bwrapJail) { j.binds = binds }
+}
+
+// withoutWorkTarget makes the jail see each workspace at its host path
+// instead of sandbox.WorkTarget. FOR TESTS ONLY, and unexported on purpose:
+// a test that compares one tree run at the fixed path with the same tree run
+// at the host path needs it, and nothing else may turn the fixed path off.
+func withoutWorkTarget() JailOption {
+	return func(j *bwrapJail) { j.atHostPath = true }
+}
+
+// places reports whether this jail's runs see their workspace at
+// sandbox.WorkTarget: the backend can place one and nothing turned it off.
+func (j bwrapJail) places() bool {
+	return !j.atHostPath && sandbox.PlacesWorkspace(j.backend)
+}
+
+// jailPath is the path at which a run sees the workspace whose HOST
+// directory is hostDir: sandbox.WorkTarget where the jail places workspaces,
+// hostDir itself where it cannot. It is the one place this file names a path
+// the run will see (dependency targets, the .bin entries on PATH); host-side
+// operations (writing, reading back, removing the workspace, the cache
+// directory) keep hostDir.
+func (j bwrapJail) jailPath(hostDir string) string {
+	if j.places() {
+		return sandbox.WorkTarget
+	}
+	return hostDir
 }
 
 // WithMaxOutput raises (or lowers) the combined stdout+stderr cap for every
@@ -146,6 +176,12 @@ type RunCacheJail interface {
 	// a WarmRun the once-only latch turned frozen. It is what a file's
 	// record is built from when the file's run ends.
 	Warmed() bool
+	// WarmDuration is how long the warming run took, measured around that
+	// run alone: the one run of a file that paid for a full build. Zero
+	// whenever Warmed is false. Score floors every per-mutant cap at the same
+	// multiple of it (mutantTimeoutCap), because a frozen run of unchanged
+	// code is a full cache hit and a mutant is not.
+	WarmDuration() time.Duration
 	// Close removes the cache directory. It is safe to call twice.
 	Close() error
 }
@@ -169,6 +205,8 @@ type runCache struct {
 	closed   bool
 	warmed   bool // a warming run has been issued: every later one is frozen
 	filled   bool // a warming run ran with the cache writable and finished
+	// warmDur is how long that run took, set once with filled.
+	warmDur time.Duration
 }
 
 // ensure makes the directory on first use, unless the jail is closed.
@@ -292,6 +330,20 @@ func (j bwrapJail) Warmed() bool {
 	return c.filled && !c.closed
 }
 
+// WarmDuration is RunCacheJail.WarmDuration: zero whenever Warmed is false.
+func (j bwrapJail) WarmDuration() time.Duration {
+	c := j.runCache
+	if c == nil {
+		return 0
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.filled || c.closed {
+		return 0
+	}
+	return c.warmDur
+}
+
 // Close removes the run cache's directory. A second Close, and a jail with
 // no cache, do nothing. Runs after Close carry no cache.
 func (j bwrapJail) Close() error {
@@ -352,7 +404,8 @@ func NewEnumerator(backend sandbox.Isolator, timeout time.Duration, opts ...Jail
 }
 
 // resolveBinds resolves the jail's constant repo-relative DepBinds into
-// absolute sandbox.Bind targets under this run's temp workspace dir. Shared
+// absolute sandbox.Bind targets under the workspace as the run sees it
+// (jailPath of this run's host dir). Shared
 // by RunTest and Enumerate so the two never drift.
 func (j bwrapJail) resolveBinds(dir string) ([]sandbox.Bind, error) {
 	var roBinds []sandbox.Bind
@@ -379,7 +432,7 @@ func (j bwrapJail) resolveBinds(dir string) ([]sandbox.Bind, error) {
 		// Nothing is copied either way — this is the same mounts, one level down.
 		roBinds = append(roBinds, sandbox.Bind{
 			Host:     b.Host,
-			Target:   filepath.Join(dir, filepath.FromSlash(b.Rel)),
+			Target:   filepath.Join(j.jailPath(dir), filepath.FromSlash(b.Rel)),
 			PerEntry: true,
 		})
 	}
@@ -520,12 +573,17 @@ func (j bwrapJail) runInJailCache(ctx context.Context, files map[string]string, 
 		defer release()
 		ws.cache = mount
 	}
+	start := time.Now()
 	res, err := j.runIn(ctx, ws, cmd, maxOutput, keepTail)
+	took := time.Since(start)
 	if err == nil && ws.cache != nil && !ws.cache.Frozen {
 		// The warming run was granted the cache writable and was carried
-		// out: only now is the cache known to have been filled.
+		// out: only now is the cache known to have been filled, and how long
+		// a full build took (WarmDuration). The latch grants writable once,
+		// so this is set once.
 		j.runCache.mu.Lock()
 		j.runCache.filled = true
+		j.runCache.warmDur = took
 		j.runCache.mu.Unlock()
 	}
 	return res, err
@@ -533,7 +591,9 @@ func (j bwrapJail) runInJailCache(ctx context.Context, files map[string]string, 
 
 // runWorkspace is where one jailed run's tree is: dir, written for this run
 // alone (a fresh copy, bound writable), or a seed several runs share
-// (seeded: overlaid copy-on-write at its own path, see Seed).
+// (seeded: overlaid copy-on-write where the run sees its workspace, at
+// sandbox.WorkTarget where the jail places workspaces and at the seed's own
+// host path where it cannot; see Seed).
 type runWorkspace struct {
 	dir    string
 	seeded bool
@@ -564,17 +624,27 @@ func (j bwrapJail) runIn(ctx context.Context, ws runWorkspace, cmd []string, max
 		return sandbox.Result{}, terr
 	}
 	roBinds = append(roBinds, tbs...)
+	// Target is where the run sees the workspace; Workspace stays the HOST
+	// directory (what is mounted, and the host process's own cwd). Empty
+	// where the backend cannot place one: the run sees the host path.
+	target := ""
+	if j.places() {
+		target = j.jailPath(dir)
+	}
 	res, err := sandbox.RunGuarded(ctx, shellJoin(cmd), sandbox.Options{
 		Workspace:     dir,
+		Target:        target,
 		Backend:       j.backend,
 		Network:       false,
 		Timeout:       j.timeout,
 		ReadOnlyBinds: roBinds,
-		Env:           envWithDepBinPaths(sandbox.MinimalEnv(), roBinds),
-		MaxOutput:     maxOutput, // 0 => sandbox.Run's own 16 KiB default
-		KeepTail:      keepTail,
-		SeedLower:     seedLower,
-		Cache:         ws.cache,
+		// The host's TMPDIR rides along; the sandbox withholds it from a
+		// placed run (sandbox.Options.Target), whose jail has its own /tmp.
+		Env:       envWithDepBinPaths(sandbox.MinimalEnv(), roBinds),
+		MaxOutput: maxOutput, // 0 => sandbox.Run's own 16 KiB default
+		KeepTail:  keepTail,
+		SeedLower: seedLower,
+		Cache:     ws.cache,
 	})
 	if err != nil {
 		if res.TimedOut {
@@ -640,11 +710,12 @@ var ErrNoOverlay = sandbox.ErrNoOverlay
 type SeededJail = sandbox.SeededRunner
 
 // Seed writes files once into a seed directory and returns the runs over
-// it. Each run sees the seed overlaid copy-on-write at the seed's own path
-// (sandbox.Options.SeedLower): what it writes lands in its own tmpfs upper
-// layer and is gone when it ends, so runs never see each other's writes and
-// may run concurrently, and every path a run prints is what a fresh copy at
-// that path prints. Per run, that saves writing the whole tree (91 MiB of
+// it. Each run sees the seed overlaid copy-on-write where it sees its
+// workspace (sandbox.Options.SeedLower): at sandbox.WorkTarget where the jail
+// places workspaces, at the seed's own host path where it cannot (jailPath).
+// What a run writes lands in its own tmpfs upper layer and is gone when it
+// ends, so runs never see each other's writes and may run concurrently, and
+// every path a run prints is what a fresh copy at that same path prints. Per run, that saves writing the whole tree (91 MiB of
 // text for REA) and removing it again, and the tmpfs space and inodes those
 // copies held at once: at 12 or more workers a copy per run exhausted
 // REA's tmpfs, and every unit failed ENOSPC.

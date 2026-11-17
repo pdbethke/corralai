@@ -3,6 +3,7 @@
 package sandbox
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -230,6 +231,70 @@ func TestRunRefusesACacheOnABackendThatCannotOverlay(t *testing.T) {
 		}
 		if _, err := os.Stat(filepath.Join(ws, "ran")); err == nil {
 			t.Errorf("frozen=%v: the command ran", frozen)
+		}
+	}
+}
+
+// hostPwdIsolator runs its command on the host, unwrapped, and says it can
+// place a workspace: what it prints is the host process's own directory.
+type hostPwdIsolator struct{}
+
+func (hostPwdIsolator) Name() string          { return "host-pwd" }
+func (hostPwdIsolator) Preflight() error      { return nil }
+func (hostPwdIsolator) placesWorkspace() bool { return true }
+func (hostPwdIsolator) Wrap(command string, _ Options, _ []string) ([]string, error) {
+	return []string{"sh", "-c", command}, nil
+}
+
+// PlacesWorkspace: bwrap (that can place every workspace it can run) and the
+// container can; sandbox-exec, none and an isolator that does not say it can
+// cannot.
+func TestPlacesWorkspace(t *testing.T) {
+	for _, c := range []struct {
+		iso  Isolator
+		want bool
+	}{
+		{containerIsolator{runtime: "docker", image: "img"}, true},
+		{noneIsolator{}, false},
+		{hostPwdIsolator{}, true},
+		{fakeIsolator{}, false},
+	} {
+		if got := PlacesWorkspace(c.iso); got != c.want {
+			t.Errorf("PlacesWorkspace(%s) = %v, want %v", c.iso.Name(), got, c.want)
+		}
+	}
+}
+
+// fakeIsolator knows nothing of Target.
+type fakeIsolator struct{}
+
+func (fakeIsolator) Name() string     { return "fake" }
+func (fakeIsolator) Preflight() error { return nil }
+func (fakeIsolator) Wrap(command string, _ Options, _ []string) ([]string, error) {
+	return []string{"sh", "-c", command}, nil
+}
+
+// A Target given to a backend that cannot place a workspace is refused before
+// the command runs: a backend that knows nothing of Target would run it at
+// the host path, while the caller believes it ran at the target.
+func TestRunRefusesATargetOnABackendThatCannotPlaceIt(t *testing.T) {
+	ws := t.TempDir()
+	for _, iso := range []Isolator{noneIsolator{}, fakeIsolator{}} {
+		for name, run := range map[string]func() Result{
+			"Run": func() Result {
+				return Run(context.Background(), "echo x > ran", Options{Workspace: ws, Target: WorkTarget, Backend: iso})
+			},
+			"RunInteractive": func() Result {
+				return RunInteractive(context.Background(), "echo x > ran", Options{Workspace: ws, Target: WorkTarget, Backend: iso}, &bytes.Buffer{})
+			},
+		} {
+			r := run()
+			if r.Err == "" || r.ExitCode != -1 || !strings.Contains(r.Err, iso.Name()) {
+				t.Errorf("%s on %s = %+v, want a refusal naming the backend", name, iso.Name(), r)
+			}
+			if _, err := os.Stat(filepath.Join(ws, "ran")); err == nil {
+				t.Errorf("%s on %s: the command ran", name, iso.Name())
+			}
 		}
 	}
 }

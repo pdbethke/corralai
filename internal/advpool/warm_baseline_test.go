@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/sandbox"
@@ -52,6 +53,9 @@ func (j *warmRecordingJail) WarmRun(_ context.Context, f map[string]string, cmd 
 func (j *warmRecordingJail) RunCache() sandbox.SharedCache { return sandbox.SharedCache{Target: "/c"} }
 func (j *warmRecordingJail) Close() error                  { return nil }
 func (j *warmRecordingJail) Warmed() bool                  { return j.warms() > 0 }
+
+// WarmDuration is zero: these tests read which run warmed, not caps.
+func (j *warmRecordingJail) WarmDuration() time.Duration { return 0 }
 
 func (j *warmRecordingJail) warms() (n int) {
 	for _, r := range j.runs {

@@ -13,6 +13,7 @@ import (
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/reposcan"
+	"github.com/pdbethke/corralai/internal/sandbox"
 	"github.com/pdbethke/corralai/internal/scanstore"
 )
 
@@ -220,5 +221,54 @@ func TestTheScanHeaderSaysNothingForACommandTheRewriteCannotRead(t *testing.T) {
 	printRunDisclosures(&buf, &localExecutor{repoDir: t.TempDir(), checkArgv: []string{"go", "test", "./..."}, iso: iso}, jobs)
 	if !strings.Contains(buf.String(), "build cache: grading runs for go share") {
 		t.Errorf("a readable go test command should say so:\n%s", buf.String())
+	}
+}
+
+// fakeCapabilities makes the header's two backend questions answer as a
+// backend that overlays (so a run cache is shared) and does or does not place
+// a workspace, whatever this host's real bwrap can do. The sandbox's
+// capabilities are unexported methods, so a fake backend cannot claim them
+// itself.
+func fakeCapabilities(t *testing.T, shares, places bool) {
+	t.Helper()
+	oldShare, oldPlace := runCacheShareable, placesWorkspace
+	t.Cleanup(func() { runCacheShareable, placesWorkspace = oldShare, oldPlace })
+	runCacheShareable = func(sandbox.Isolator) bool { return shares }
+	placesWorkspace = func(sandbox.Isolator) bool { return places }
+}
+
+// A bubblewrap that overlays but cannot place a workspace at /corral-work
+// shares a cache whose project packages are rebuilt on every run, because
+// each run keeps its own path. The header says so, once per scan, beside the
+// build-cache line, and only then.
+func TestTheScanSaysOnceWhenTheSandboxCannotPlaceAWorkspace(t *testing.T) {
+	const line = "  sandbox: this bubblewrap cannot place a workspace at /corral-work, so runs keep their own paths and a shared build cache reuses only the standard library\n"
+	jobs := []reposcan.Job{{Path: "a.go", Lang: "go"}, {Path: "b.go", Lang: "go"}, {Path: "c.py", Lang: "python"}}
+	argv := []string{"go", "test", "./..."}
+	header := func(ex *localExecutor) string {
+		var buf bytes.Buffer
+		printRunDisclosures(&buf, ex, jobs)
+		return buf.String()
+	}
+
+	fakeCapabilities(t, true, false)
+	got := header(&localExecutor{repoDir: t.TempDir(), checkArgv: argv, iso: &wrapRecordingIsolator{}})
+	if strings.Count(got, line) != 1 || !strings.Contains(got, "build cache: grading runs for go share") {
+		t.Errorf("overlays, cannot place: want the build-cache line and the sandbox line once:\n%s", got)
+	}
+	if got := header(&localExecutor{repoDir: t.TempDir(), checkArgv: argv, substrate: substrateWorkspace, iso: &wrapRecordingIsolator{}}); strings.Contains(got, "sandbox:") {
+		t.Errorf("the workspace substrate shares no cache, and said:\n%s", got)
+	}
+	if got := header(&localExecutor{repoDir: t.TempDir(), checkArgv: []string{"sh", "-c", "go test ./..."}, iso: &wrapRecordingIsolator{}}); strings.Contains(got, "sandbox:") {
+		t.Errorf("a command the rewrite cannot read shares no cache, and said:\n%s", got)
+	}
+
+	fakeCapabilities(t, true, true)
+	if got := header(&localExecutor{repoDir: t.TempDir(), checkArgv: argv, iso: &wrapRecordingIsolator{}}); strings.Contains(got, "sandbox:") {
+		t.Errorf("a backend that places a workspace said:\n%s", got)
+	}
+	fakeCapabilities(t, false, false)
+	if got := header(&localExecutor{repoDir: t.TempDir(), checkArgv: argv, iso: &wrapRecordingIsolator{}}); strings.Contains(got, "sandbox:") || strings.Contains(got, "build cache") {
+		t.Errorf("a backend that shares no cache said:\n%s", got)
 	}
 }

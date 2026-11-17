@@ -974,3 +974,109 @@ func TestFrozenRunCacheServesConcurrentRuns(t *testing.T) {
 		t.Error(e)
 	}
 }
+
+// After Close nothing makes a cache directory: RunCache says the jail is
+// closed, and a run carries no cache and leaves nothing behind.
+func TestRunCacheNeverCreatedAfterClose(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	var seen []*sandbox.CacheMount
+	var mu sync.Mutex
+	backend := &captureIsolator{onWrap: func(o sandbox.Options) {
+		mu.Lock()
+		defer mu.Unlock()
+		seen = append(seen, o.Cache)
+	}}
+	j := NewJail(backend, time.Second, WithRunCache("CORRAL_TEST_CACHE")).(RunCacheJail)
+	if err := j.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if c := j.RunCache(); c.Target != "" || !strings.Contains(c.Unshared, "closed") {
+		t.Errorf("RunCache after Close = %+v, want unshared naming the closed jail", c)
+	}
+	if ok, err := j.RunTest(context.Background(), map[string]string{"a.txt": "x"}, []string{"true"}); err != nil || !ok {
+		t.Errorf("RunTest after Close: ok=%v err=%v", ok, err)
+	}
+	if len(seen) != 1 || seen[0] != nil {
+		t.Errorf("a run after Close carried a cache: %v", seen)
+	}
+	if err := j.Close(); err != nil {
+		t.Errorf("second Close = %v", err)
+	}
+	if left, _ := filepath.Glob(filepath.Join(tmp, "corral-cache-*")); len(left) != 0 {
+		t.Errorf("cache directories left behind: %v", left)
+	}
+}
+
+// Close racing the first run: no data race, no directory left in any round.
+func TestRunCacheCloseRacesFirstRun(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	backend := overlayJailOrSkip(t)
+	for i := 0; i < 50; i++ {
+		j := NewJail(backend, 30*time.Second, WithRunCache("CORRAL_TEST_CACHE")).(RunCacheJail)
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_, _ = j.RunTest(context.Background(), map[string]string{"a.txt": "x"}, []string{"true"})
+		}()
+		go func() { defer wg.Done(); _ = j.Close() }()
+		wg.Wait()
+		_ = j.Close()
+		if left, _ := filepath.Glob(filepath.Join(tmp, "corral-cache-*")); len(left) != 0 {
+			t.Fatalf("round %d left %v", i, left)
+		}
+	}
+}
+
+// Enumerate and EnumerateDetailed see the cache frozen too.
+func TestEnumerateSeesTheRunCacheFrozen(t *testing.T) {
+	j := runCacheJailOrSkip(t)
+	files := map[string]string{"a.txt": "x"}
+	if ok, _, err := j.WarmRun(context.Background(), files, []string{"sh", "-c", `echo warm > "$CORRAL_TEST_CACHE/warm"`}); err != nil || !ok {
+		t.Fatalf("WarmRun: ok=%v err=%v", ok, err)
+	}
+	cmd := []string{"sh", "-c", `cat "$CORRAL_TEST_CACHE/warm" && echo leak > "$CORRAL_TEST_CACHE/leak"`}
+	out, err := j.(bwrapJail).Enumerate(context.Background(), files, cmd)
+	if err != nil || strings.TrimSpace(out) != "warm" {
+		t.Fatalf("Enumerate = %q, %v, want the warm file", out, err)
+	}
+	res, err := j.(bwrapJail).EnumerateDetailed(context.Background(), files, cmd)
+	if err != nil || strings.TrimSpace(res.Output) != "warm" {
+		t.Fatalf("EnumerateDetailed = %+v, %v, want the warm file", res, err)
+	}
+	if got := runCacheOut(t, j, `ls "$CORRAL_TEST_CACHE"`); got != "warm" {
+		t.Errorf("the next run sees %q, want only warm (an Enumerate write leaked)", got)
+	}
+}
+
+// A WarmRun issued while frozen runs are in flight completes, and so do
+// they: the lock serialises, it does not deadlock.
+func TestWarmRunWaitsForFrozenRunsWithoutDeadlock(t *testing.T) {
+	j := runCacheJailOrSkip(t)
+	files := map[string]string{"a.txt": "x"}
+	done := make(chan string, 5)
+	for i := 0; i < 4; i++ {
+		go func() {
+			ok, err := j.RunTest(context.Background(), files, []string{"sh", "-c", "sleep 0.3"})
+			done <- fmt.Sprintf("frozen ok=%v err=%v", ok, err)
+		}()
+	}
+	time.Sleep(100 * time.Millisecond)
+	go func() {
+		ok, _, err := j.WarmRun(context.Background(), files, []string{"sh", "-c", `echo w > "$CORRAL_TEST_CACHE/w"`})
+		done <- fmt.Sprintf("warm ok=%v err=%v", ok, err)
+	}()
+	timeout := time.After(20 * time.Second)
+	for i := 0; i < 5; i++ {
+		select {
+		case got := <-done:
+			if !strings.Contains(got, "ok=true err=<nil>") {
+				t.Errorf("%s", got)
+			}
+		case <-timeout:
+			t.Fatal("deadlock: a warm run and frozen runs did not all finish")
+		}
+	}
+}

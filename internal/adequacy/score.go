@@ -77,6 +77,10 @@ func clampMutantTimeout(baseDur time.Duration) time.Duration {
 type ScoreOption func(*scoreConfig)
 
 type scoreConfig struct {
+	// warmBaseline routes the baseline through RunCacheJail.WarmRun, the one
+	// run that may write the jail's shared cache. Off by default: see
+	// WithWarmBaseline.
+	warmBaseline bool
 	// capFloor overrides minMutantTimeout for this Score call. Unexported,
 	// test-only: the per-command cap derivation is invisible under the 30s
 	// floor unless a baseline exceeds 10s, and a test that sleeps 12s to
@@ -106,6 +110,9 @@ type scoreConfig struct {
 	// nil does NOT turn confirmation off: every candidate kill is still
 	// confirmed, by repeating its grading run (step B). There is no off.
 	killConfirmer KillerCmdFor
+	// rewrite, when set, is applied to a COPY of every command Score hands
+	// the jail, at the one point it does so (see toJail in Score).
+	rewrite func(cmd []string) []string
 }
 
 // The values of MutantGrading.KillConfirmation: what the confirmation of a
@@ -204,6 +211,19 @@ func WithMutantCompileCheck(cmds [][]string) ScoreOption {
 	return func(c *scoreConfig) { c.mutantCompileCheck = cmds }
 }
 
+// WithWarmBaseline makes this Score call's baseline, the run on the unmutated
+// code, the run that WARMS the jail's shared cache (RunCacheJail.WarmRun, the
+// cache writable). Without it, even a RunCacheJail runs its baseline frozen
+// like any other run, exactly as a jail with no run cache would.
+//
+// OPT-IN, because the warming run writes what every later run reads: only a
+// caller that knows the tree holds the project's own code and tests, and no
+// test a model wrote, may ask for it. Score cannot tell, so it never warms on
+// its own.
+func WithWarmBaseline() ScoreOption {
+	return func(c *scoreConfig) { c.warmBaseline = true }
+}
+
 // WithFailureParser names, for each KILLED mutant, the first test the runner
 // reported as failing — best effort, and only ever the id the output itself
 // printed (see lang.FailureParser).
@@ -244,6 +264,18 @@ func WithFailureParser(p lang.FailureParser) ScoreOption {
 // proportional to the mutant count.
 func WithMutantFailFast(f FailFastFor) ScoreOption {
 	return func(c *scoreConfig) { c.failFast = f }
+}
+
+// WithCommandRewrite rewrites EVERY command Score hands the jail: the
+// baseline, the fail-fast probe, each mutant's command (after selection and
+// fail-fast arguments are added), each confirmation command (alone or
+// repeated), the compile gate and the canary. It is applied in the one place
+// commands reach the jail, to a copy, after the command is fully assembled, so
+// f never sees the same slice twice and never mutates the caller's. Grading
+// keys (the per-command timeout cap) stay on the raw command. nil is no
+// rewrite.
+func WithCommandRewrite(f func(cmd []string) []string) ScoreOption {
+	return func(c *scoreConfig) { c.rewrite = f }
 }
 
 // WithConcurrency scores up to n mutants at once. The default (and anything
@@ -779,13 +811,25 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 		o(&cfg)
 	}
 
+	// toJail is THE door every grading command passes through on its way to
+	// the jail: runCmd, runCmdDetailed, runCmdVerbose and baselineRun below all
+	// call it as their last step, and there is no other call of the jail in
+	// this function. It hands the rewrite a copy, so the rewrite never sees
+	// the caller's slice nor one it has already seen.
+	toJail := func(cmd []string) []string {
+		if cfg.rewrite == nil {
+			return cmd
+		}
+		return cfg.rewrite(append([]string(nil), cmd...))
+	}
+
 	runCmd := func(rctx context.Context, code string, cmd []string) (bool, error) {
 		files := make(map[string]string, len(base)+1)
 		for k, v := range base {
 			files[k] = v
 		}
 		files[codePath] = code
-		return j.RunTest(rctx, files, cmd)
+		return j.RunTest(rctx, files, toJail(cmd))
 	}
 
 	run := func(rctx context.Context, code string) (bool, error) {
@@ -804,7 +848,7 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 			files[k] = v
 		}
 		files[codePath] = code
-		return dj.RunTestDetailed(rctx, files, cmd)
+		return dj.RunTestDetailed(rctx, files, toJail(cmd))
 	}
 
 	// runCmdVerbose keeps the checker's OUTPUT when the Jail can report it.
@@ -822,7 +866,7 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 			files[k] = v
 		}
 		files[codePath] = code
-		return vj.RunTestVerbose(rctx, files, cmd)
+		return vj.RunTestVerbose(rctx, files, toJail(cmd))
 	}
 
 	// The BASELINE run alone keeps its output when the jail can: it is a
@@ -841,8 +885,19 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 			files[k] = v
 		}
 		files[codePath] = code
+		// WARM THE RUN CACHE with this run, only when the caller asked
+		// (WithWarmBaseline): the warming run writes what every later run
+		// reads, so it must be a run of the project's own code and tests. A
+		// caller whose tree holds a test a model wrote does not ask, and its
+		// baseline is a frozen run like any other. Taken whether or not the
+		// cache is shared (an unshared jail's WarmRun is a detailed run), so
+		// no branch on RunCache() here.
+		if rj, ok := j.(RunCacheJail); ok && cfg.warmBaseline {
+			p, out, err := rj.WarmRun(rctx, files, toJail(testCmd))
+			return p, string(out), err
+		}
 		if dj, ok := j.(DetailedJail); ok {
-			p, out, err := dj.RunTestDetailed(rctx, files, testCmd)
+			p, out, err := dj.RunTestDetailed(rctx, files, toJail(testCmd))
 			return p, string(out), err
 		}
 		vj, ok := j.(VerboseJail)
@@ -850,7 +905,7 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 			p, err := run(rctx, code)
 			return p, "", err
 		}
-		return vj.RunTestVerbose(rctx, files, testCmd)
+		return vj.RunTestVerbose(rctx, files, toJail(testCmd))
 	}
 
 	start := time.Now()
@@ -863,7 +918,8 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 			// score mutants against a baseline that can't even pass. The
 			// output rides along: "which test hung" is exactly the question a
 			// timed-out baseline leaves open.
-			return Report{CompliantPass: false, BaselineOutput: baseOut, BaselineDuration: baseDur, BaselineTimedOut: true}, nil
+			trep := Report{CompliantPass: false, BaselineOutput: baseOut, BaselineDuration: baseDur, BaselineTimedOut: true}
+			return trep, nil
 		}
 		return Report{}, err
 	}

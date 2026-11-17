@@ -368,7 +368,7 @@ func readFileRows(db *sql.DB, where string, args ...any) ([]Row, error) {
 		symbols, symbols_probed, decisions, decisions_probed,
 		mutants_unplaced, mutants_unmeasured, mutants_duplicate, writer_attempts,
 		challenger_mutants, challenger_survived_writer, challenger_survived_shadow, challenger_union, challenger_shared,
-		priors_applied, prior_digest, computed_at, mutants_from, authored_landing, baseline_flaky, seat_tools, covering_units, seat_providers, files
+		priors_applied, prior_digest, computed_at, mutants_from, authored_landing, baseline_flaky, seat_tools, covering_units, seat_providers, files, run_cache
 	   FROM corral_audits WHERE `+where, args...) // #nosec G202 -- where is a constant clause from readGrains; every value is a bound parameter
 	if err != nil {
 		return nil, err
@@ -404,6 +404,7 @@ func readFileRows(db *sql.DB, where string, args ...any) ([]Row, error) {
 		var priorDigest sql.NullString
 		var coveringTests, coveringUnits sql.NullInt64
 		var files sql.NullInt64
+		var runCache sql.NullString
 		var mutantsFrom, authoredLanding, baselineFlaky, seatTools, seatProviders sql.NullString
 		var computedAt sql.NullTime
 		var importOnly sql.NullBool
@@ -434,7 +435,7 @@ func readFileRows(db *sql.DB, where string, args ...any) ([]Row, error) {
 			&symbols, &symbolsProbed, &decisions, &decisionsProbed,
 			&mutantsUnplaced, &mutantsUnmeasured, &mutantsDuplicate, &writerAttempts,
 			&chMutants, &chSurvW, &chSurvS, &chUnion, &chShared,
-			&priorsApplied, &priorDigest, &computedAt, &mutantsFrom, &authoredLanding, &baselineFlaky, &seatTools, &coveringUnits, &seatProviders, &files,
+			&priorsApplied, &priorDigest, &computedAt, &mutantsFrom, &authoredLanding, &baselineFlaky, &seatTools, &coveringUnits, &seatProviders, &files, &runCache,
 		); err != nil {
 			return nil, err
 		}
@@ -507,6 +508,7 @@ func readFileRows(db *sql.DB, where string, args ...any) ([]Row, error) {
 		r.SeatTools = seatTools.String
 		r.SeatProviders = seatProviders.String
 		r.Files = int(files.Int64)
+		r.RunCache = runCache.String
 
 		out = append(out, r)
 	}

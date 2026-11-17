@@ -74,6 +74,13 @@ type FileResult struct {
 	// verdict's seats were measured by the run that produced it, and that
 	// run's entry already holds them.
 	Telemetry advpool.RunTelemetry
+	// RunCache is whether THIS run of the file shared a tool cache among its
+	// grading runs: "shared", "unshared: <reason>", or "" when its runner has
+	// no run cache or nothing was graded. Like Telemetry it is what this run
+	// did, not part of the verdict (the Verdict's shape is pinned to the
+	// verdict cache's generation) and not cached: a reused verdict was graded
+	// by the run that produced it, and that run's entry holds the answer.
+	RunCache string
 }
 
 // Executor runs one job to a verdict. The CLI supplies an adapter over the

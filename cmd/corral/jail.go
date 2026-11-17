@@ -5,11 +5,15 @@ package main
 import (
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
+	"github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
@@ -30,8 +34,150 @@ import (
 // identically to omitting the option — WithReadOnlyBinds(nil) leaves the
 // jail's binds unset — so this is always safe to call unconditionally,
 // bare mode included.
-func newRunJail(iso sandbox.Isolator, timeout time.Duration, depBinds []adequacy.DepBind) adequacy.Jail {
-	return adequacy.NewJail(iso, timeout, adequacy.WithReadOnlyBinds(depBinds))
+func newRunJail(iso sandbox.Isolator, timeout time.Duration, depBinds []adequacy.DepBind, opts ...adequacy.JailOption) adequacy.Jail {
+	return adequacy.NewJail(iso, timeout, append([]adequacy.JailOption{adequacy.WithReadOnlyBinds(depBinds)}, opts...)...)
+}
+
+// gradingRunCache is what newGradingJail decided about a file's shared tool
+// cache, and the one value every consumer reads it from.
+type gradingRunCache struct {
+	// Rewrite is the command rewrite that forbids a cached test result, for
+	// every command the grading jail is handed (advpool.JailScorer and
+	// JailValidator CommandRewrite). nil unless the cache is shared: an
+	// unshared run keeps the operator's command byte for byte.
+	Rewrite func(cmd []string) []string
+	// Record is the DECISION made before any run: "shared"; "unshared:
+	// <reason>"; or "" when the runner has no run cache at all. It is not what
+	// the file row records: a cache decided shared may never be warmed. The
+	// row's RunCache is final(jail), read when the file's run ends.
+	Record string
+	// warmRejected is set by the warm check when the dev pass's own command
+	// is one the rewrite cannot give the flag that forbids a cached result,
+	// the one reason a decided-shared cache goes unwarmed with a dev pass.
+	// nil unless the cache is decided shared.
+	warmRejected *atomic.Bool
+}
+
+// runCacheShared is the record of a file whose cache was shared AND warmed.
+const runCacheShared = "shared"
+
+// final is the RunCache the file's row records, read when the file's run
+// ends and BEFORE its jail is closed: what the jail did, not what was decided.
+// A cache decided shared is "shared" only if a warming run actually ran on it;
+// otherwise the cache was mounted but never warmed, every run saw it empty,
+// and the record says why. Every other record is the decision, unchanged.
+func (gc gradingRunCache) final(j adequacy.Jail) string {
+	if gc.Record != runCacheShared {
+		return gc.Record
+	}
+	if rj, ok := j.(adequacy.RunCacheJail); ok && rj.Warmed() {
+		return runCacheShared
+	}
+	why := "no dev pass ran"
+	if gc.warmRejected != nil && gc.warmRejected.Load() {
+		why = "the dev suite's command could not be given the flag that forbids a cached result"
+	}
+	return "unshared: never warmed (" + why + ")"
+}
+
+// newGradingJail is the ONE place that decides whether a file's grading shares
+// a tool cache, for every site that builds a grading jail (never call
+// newRunJail with WithRunCache anywhere else).
+//
+// THE SAFETY RULE. A cache shared among runs also holds test RESULTS, and go
+// replays one instead of running the test. So a file shares a cache only when
+// the command that WARMS it (baseline, the command Score runs on the
+// unmutated code) forbids a cached result: lang.RunCacheCmd must say it
+// rewrote it. Then the warming run stores no result, frozen runs cannot store
+// one for each other, and every other command is rewritten the same way.
+// Anything else — a shell wrapper, an env prefix, an unlisted flag, a command
+// that runs no test — gets no cache and no rewrite: today's run, with the
+// reason on the record. A jail that then reports its cache unshared (a backend
+// that cannot overlay, a directory that cannot be made) drops the rewrite too.
+//
+// The caller closes a returned jail that is an adequacy.RunCacheJail when the
+// file's run ends (it removes the cache directory); closing a jail with no
+// cache is a no-op.
+func newGradingJail(iso sandbox.Isolator, timeout time.Duration, depBinds []adequacy.DepBind, plug lang.Plugin, inv lang.Invocation, baseline []string) (adequacy.Jail, gradingRunCache) {
+	if plug == nil {
+		return newRunJail(iso, timeout, depBinds), gradingRunCache{}
+	}
+	env, ok := lang.RunCacheFor(plug, inv)
+	if !ok {
+		return newRunJail(iso, timeout, depBinds), gradingRunCache{}
+	}
+	if _, state := lang.RunCacheCmd(plug, inv, baseline); state != lang.RunCacheRewritten {
+		return newRunJail(iso, timeout, depBinds), gradingRunCache{
+			Record: "unshared: the test command cannot be given the flag that forbids a cached result (" + state.String() + ")",
+		}
+	}
+	jail := newRunJail(iso, timeout, depBinds, adequacy.WithRunCache(env))
+	rj, isRunCache := jail.(adequacy.RunCacheJail)
+	if !isRunCache {
+		return jail, gradingRunCache{Record: "unshared: the jail cannot share a cache"}
+	}
+	if c := rj.RunCache(); c.Unshared != "" {
+		return jail, gradingRunCache{Record: "unshared: " + c.Unshared}
+	}
+	return jail, gradingRunCache{Rewrite: lang.RunCacheArgv(plug, inv), Record: runCacheShared, warmRejected: new(atomic.Bool)}
+}
+
+// warmCheckFor is JailScorer.WarmCheck for a file whose cache is shared (nil
+// otherwise, so nothing warms): true for exactly the commands lang.RunCacheCmd
+// rewrites to forbid a cached result. The dev pass asks it of its own baseline
+// command, at the point that command is known, so a shape the row cannot read
+// (RunCacheUnreadable, RunCacheNoTest) never warms, whatever the file's
+// recorded command was.
+func warmCheckFor(plug lang.Plugin, inv lang.Invocation, gc gradingRunCache) func(cmd []string) bool {
+	if gc.Rewrite == nil {
+		return nil
+	}
+	return func(cmd []string) bool {
+		_, state := lang.RunCacheCmd(plug, inv.WithArgv(cmd), cmd)
+		if state != lang.RunCacheRewritten {
+			if gc.warmRejected != nil {
+				gc.warmRejected.Store(true)
+			}
+			return false
+		}
+		return true
+	}
+}
+
+// fileRunCache is the RunCache a file's row records: what its jail did
+// (gradingRunCache.final), but only for a file that was graded here. A baseline that failed
+// (COULD-NOT-GRADE), a suite that never touches the file, and a file never
+// graded record "", whatever the wiring had decided before the baseline ran.
+// The one rule behind the --repo result (Execute), the --local result
+// (localFileResult) and the row builder.
+func fileRunCache(r reposcan.FileResult) string {
+	if !r.Gradable {
+		return ""
+	}
+	return r.RunCache
+}
+
+// runCacheUnsharedLine is the line a file's own output carries when its
+// grading shares no cache, "" when it does, or has none to share.
+func runCacheUnsharedLine(path, record string) string {
+	reason, ok := strings.CutPrefix(record, "unshared: ")
+	if !ok {
+		return ""
+	}
+	return "build cache: not shared for " + path + ": " + reason
+}
+
+// closeGradingJail removes a grading jail's cache directory, if it has one.
+// A directory that could not be removed is said on stderr, once, naming it
+// (the error carries the path): it changes no exit code, since the audit's
+// verdict does not depend on it, but a leftover directory in the temporary
+// directory must not go unmentioned.
+func closeGradingJail(j adequacy.Jail) {
+	if rj, ok := j.(adequacy.RunCacheJail); ok {
+		if err := rj.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "corral: could not remove a build cache directory: %v\n", err)
+		}
+	}
 }
 
 // newRunEnumerator is newRunJail's Enumerator-returning sibling — same

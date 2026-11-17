@@ -91,6 +91,13 @@ func scoreSalvaged(ctx context.Context, scorer Scorer, codePath, code, test stri
 	return scoreAuthored(ctx, scorer, codePath, code, test, mutants, deselectedCmd)
 }
 
+// DevWarmingScorer is the optional Scorer extension for the run's DEV-suite
+// pass, the one pass that may warm a jail's shared cache (see
+// JailScorer.ScoreDevReport). A nil cmdFor is the run's single shared command.
+type DevWarmingScorer interface {
+	ScoreDevReport(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string, cmdFor adequacy.CommandFor) (adequacy.Report, error)
+}
+
 // PerMutantScorer is the optional RICHER contract: a Scorer that can grade
 // each mutant with its OWN command — the tests that actually reach the lines
 // that mutant changed — instead of the one command the whole file shares.
@@ -120,6 +127,11 @@ type PerMutantScorer interface {
 // is a statement about the exam, not about which command the run chose.
 func scoreDevReport(ctx context.Context, scorer Scorer, rs RunSpec, mutants []adequacy.Mutant) (adequacy.Report, bool, error) {
 	cmd := DevCommand(rs)
+	if dw, ok := scorer.(DevWarmingScorer); ok {
+		cmdFor := DevCommandFor(rs)
+		rep, err := dw.ScoreDevReport(ctx, rs.CodePath, rs.Code, rs.DevTestCode, mutants, cmd, cmdFor)
+		return rep, cmdFor != nil, err
+	}
 	if pm, ok := scorer.(PerMutantScorer); ok {
 		if cmdFor := DevCommandFor(rs); cmdFor != nil {
 			rep, err := pm.ScoreReportFor(ctx, rs.CodePath, rs.Code, rs.DevTestCode, mutants, cmd, cmdFor)

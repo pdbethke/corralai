@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -804,5 +805,345 @@ func TestFrozenGoCacheNeverReplaysAResult(t *testing.T) {
 	fresh, err := s.EnumerateDetailed(context.Background(), files, evidence)
 	if err != nil || fresh.ExitCode != 0 || strings.Contains(fresh.Output, "(cached)") || ran(fresh.Output) == "" || ran(fresh.Output) == ran(warm.Output) {
 		t.Errorf("the evidence command replayed a cached result: %+v err=%v (warm printed %q)", fresh, err, ran(warm.Output))
+	}
+}
+
+// runCacheJailOrSkip builds a jail with a run cache on a backend that can
+// share one here, or skips: a bwrap that cannot overlay the temp directory
+// leaves the frozen-cache path unexercised. TMPDIR is the test's own, so a
+// cache a test leaves behind is seen by the test that made it.
+func runCacheJailOrSkip(t *testing.T) RunCacheJail {
+	t.Helper()
+	backend := overlayJailOrSkip(t)
+	t.Setenv("TMPDIR", t.TempDir())
+	j := NewJail(backend, 30*time.Second, WithRunCache("CORRAL_TEST_CACHE")).(RunCacheJail)
+	t.Cleanup(func() { _ = j.Close() })
+	if c := j.RunCache(); c.Target == "" {
+		t.Skipf("no shared cache on this host (%s); frozen-cache path unexercised", c.Unshared)
+	}
+	return j
+}
+
+func runCacheOut(t *testing.T, j Jail, script string) string {
+	t.Helper()
+	_, out, err := j.(bwrapJail).RunTestVerbose(context.Background(), map[string]string{"a.txt": "x"}, []string{"sh", "-c", script})
+	if err != nil {
+		t.Fatalf("run %q: %v", script, err)
+	}
+	return strings.TrimSpace(out)
+}
+
+// WarmRun writes into the cache; a later RunTest sees that file, and its own
+// write is not visible to the next RunTest.
+func TestRunCacheIsWarmedOnceAndFrozenAfter(t *testing.T) {
+	j := runCacheJailOrSkip(t)
+	files := map[string]string{"a.txt": "x"}
+	ok, out, err := j.WarmRun(context.Background(), files, []string{"sh", "-c", `echo warm > "$CORRAL_TEST_CACHE/warm" && echo "$CORRAL_TEST_CACHE"`})
+	if err != nil || !ok || strings.TrimSpace(string(out)) != sandbox.CacheTarget {
+		t.Fatalf("WarmRun = (%v, %q, %v), want ok with the cache at %s", ok, out, err, sandbox.CacheTarget)
+	}
+	ok, err = j.RunTest(context.Background(), files, []string{"sh", "-c", `test "$(cat "$CORRAL_TEST_CACHE/warm")" = warm && echo leak > "$CORRAL_TEST_CACHE/leak"`})
+	if err != nil || !ok {
+		t.Fatalf("a frozen run did not see the warm file: ok=%v err=%v", ok, err)
+	}
+	if got := runCacheOut(t, j, `ls "$CORRAL_TEST_CACHE"`); got != "warm" {
+		t.Errorf("the next run sees %q, want only the warm file (a frozen run's write leaked)", got)
+	}
+}
+
+// No WarmRun at all: the cache is there, empty, and a write to it does not
+// survive to the next run.
+func TestRunCacheNeverWarmedBehavesAsAnEmptyCache(t *testing.T) {
+	j := runCacheJailOrSkip(t)
+	if got := runCacheOut(t, j, `test -d "$CORRAL_TEST_CACHE" && ls -A "$CORRAL_TEST_CACHE" | wc -l && echo w > "$CORRAL_TEST_CACHE/w"`); got != "0" {
+		t.Fatalf("an unwarmed cache lists %q entries, want 0", got)
+	}
+	if got := runCacheOut(t, j, `ls -A "$CORRAL_TEST_CACHE" | wc -l`); got != "0" {
+		t.Errorf("a write by a run with no warm survived: %q entries", got)
+	}
+}
+
+// Two jails never share a cache directory.
+func TestTwoJailsDoNotShareARunCache(t *testing.T) {
+	a := runCacheJailOrSkip(t)
+	b := runCacheJailOrSkip(t)
+	if a.(bwrapJail).runCache.dir == b.(bwrapJail).runCache.dir {
+		t.Fatal("two jails share one cache directory")
+	}
+	if ok, _, err := a.WarmRun(context.Background(), map[string]string{"a.txt": "x"}, []string{"sh", "-c", `echo a > "$CORRAL_TEST_CACHE/fromA"`}); err != nil || !ok {
+		t.Fatalf("WarmRun: ok=%v err=%v", ok, err)
+	}
+	if got := runCacheOut(t, b, `ls -A "$CORRAL_TEST_CACHE" | wc -l`); got != "0" {
+		t.Errorf("jail b sees %q entries of jail a's warm run", got)
+	}
+	if got := runCacheOut(t, a, `ls "$CORRAL_TEST_CACHE"`); got != "fromA" {
+		t.Errorf("jail a sees %q, want its own warm file", got)
+	}
+}
+
+// A backend that cannot overlay: RunCache says why, runs and WarmRun still
+// run with no cache and no env, and no directory is left behind.
+func TestRunCacheUnsharedWhenTheBackendCannotOverlay(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	var seen []*sandbox.CacheMount
+	var mu sync.Mutex
+	backend := &captureIsolator{name: "container", onWrap: func(o sandbox.Options) {
+		mu.Lock()
+		defer mu.Unlock()
+		seen = append(seen, o.Cache)
+	}}
+	j := NewJail(backend, time.Second, WithRunCache("CORRAL_TEST_CACHE")).(RunCacheJail)
+	if c := j.RunCache(); c.Target != "" || !strings.HasPrefix(c.Unshared, "sandbox backend container cannot overlay a directory on the filesystem of ") {
+		t.Fatalf("RunCache = %+v, want unshared naming the backend", c)
+	}
+	if j.Warmed() {
+		t.Error("a jail with no cache reports Warmed before any run")
+	}
+	files := map[string]string{"a.txt": "x"}
+	if ok, err := j.RunTest(context.Background(), files, []string{"true"}); err != nil || !ok {
+		t.Errorf("RunTest: ok=%v err=%v", ok, err)
+	}
+	if ok, _, err := j.WarmRun(context.Background(), files, []string{"true"}); err != nil || !ok {
+		t.Errorf("WarmRun: ok=%v err=%v", ok, err)
+	}
+	if j.Warmed() {
+		t.Error("a WarmRun on an unshared cache reports Warmed: nothing was warmed")
+	}
+	if len(seen) != 2 {
+		t.Fatalf("the backend wrapped %d runs, want 2", len(seen))
+	}
+	for i, c := range seen {
+		if c != nil {
+			t.Errorf("run %d carried a cache mount %+v", i, c)
+		}
+	}
+	if left, _ := filepath.Glob(filepath.Join(tmp, "corral-cache-*")); len(left) != 0 {
+		t.Errorf("cache directories left behind: %v", left)
+	}
+}
+
+// Close removes the directory, twice is fine, and a jail with no cache closes.
+func TestRunCacheIsRemovedOnClose(t *testing.T) {
+	j := runCacheJailOrSkip(t)
+	dir := j.(bwrapJail).runCache.dir
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("the cache %s is not there before Close: %v", dir, err)
+	}
+	if err := j.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("the cache %s outlived Close: %v", dir, err)
+	}
+	if err := j.Close(); err != nil {
+		t.Errorf("second Close = %v, want nil", err)
+	}
+	if err := NewJail(nil, time.Second).(RunCacheJail).Close(); err != nil {
+		t.Errorf("Close without a cache = %v, want nil", err)
+	}
+}
+
+// A jail without WithRunCache sets no env and mounts nothing.
+func TestNoRunCacheMeansNoMount(t *testing.T) {
+	j := NewJail(overlayJailOrSkip(t), 30*time.Second).(bwrapJail)
+	if c := j.RunCache(); c != (sandbox.SharedCache{}) {
+		t.Errorf("RunCache = %+v, want zero", c)
+	}
+	if got := runCacheOut(t, j, `test -z "$CORRAL_TEST_CACHE" && test ! -e `+sandbox.CacheTarget+` && echo none`); got != "none" {
+		t.Errorf("a jail with no run cache saw one: %q", got)
+	}
+}
+
+// Eight concurrent runs after one warm all see the warm file (run with -race).
+func TestFrozenRunCacheServesConcurrentRuns(t *testing.T) {
+	j := runCacheJailOrSkip(t)
+	files := map[string]string{"a.txt": "x"}
+	if ok, _, err := j.WarmRun(context.Background(), files, []string{"sh", "-c", `echo warm > "$CORRAL_TEST_CACHE/warm"`}); err != nil || !ok {
+		t.Fatalf("WarmRun: ok=%v err=%v", ok, err)
+	}
+	var wg sync.WaitGroup
+	errs := make(chan string, 8)
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ok, err := j.RunTest(context.Background(), files, []string{"sh", "-c", `test "$(cat "$CORRAL_TEST_CACHE/warm")" = warm`})
+			if err != nil || !ok {
+				errs <- fmt.Sprintf("ok=%v err=%v", ok, err)
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for e := range errs {
+		t.Error(e)
+	}
+}
+
+// After Close nothing makes a cache directory: RunCache says the jail is
+// closed, and a run carries no cache and leaves nothing behind.
+func TestRunCacheNeverCreatedAfterClose(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	var seen []*sandbox.CacheMount
+	var mu sync.Mutex
+	backend := &captureIsolator{onWrap: func(o sandbox.Options) {
+		mu.Lock()
+		defer mu.Unlock()
+		seen = append(seen, o.Cache)
+	}}
+	j := NewJail(backend, time.Second, WithRunCache("CORRAL_TEST_CACHE")).(RunCacheJail)
+	if err := j.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if c := j.RunCache(); c.Target != "" || !strings.Contains(c.Unshared, "closed") {
+		t.Errorf("RunCache after Close = %+v, want unshared naming the closed jail", c)
+	}
+	if ok, err := j.RunTest(context.Background(), map[string]string{"a.txt": "x"}, []string{"true"}); err != nil || !ok {
+		t.Errorf("RunTest after Close: ok=%v err=%v", ok, err)
+	}
+	if len(seen) != 1 || seen[0] != nil {
+		t.Errorf("a run after Close carried a cache: %v", seen)
+	}
+	if err := j.Close(); err != nil {
+		t.Errorf("second Close = %v", err)
+	}
+	if left, _ := filepath.Glob(filepath.Join(tmp, "corral-cache-*")); len(left) != 0 {
+		t.Errorf("cache directories left behind: %v", left)
+	}
+}
+
+// Close racing the first run: no data race, no directory left in any round.
+func TestRunCacheCloseRacesFirstRun(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	backend := overlayJailOrSkip(t)
+	for i := 0; i < 50; i++ {
+		j := NewJail(backend, 30*time.Second, WithRunCache("CORRAL_TEST_CACHE")).(RunCacheJail)
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_, _ = j.RunTest(context.Background(), map[string]string{"a.txt": "x"}, []string{"true"})
+		}()
+		go func() { defer wg.Done(); _ = j.Close() }()
+		wg.Wait()
+		_ = j.Close()
+		if left, _ := filepath.Glob(filepath.Join(tmp, "corral-cache-*")); len(left) != 0 {
+			t.Fatalf("round %d left %v", i, left)
+		}
+	}
+}
+
+// Enumerate and EnumerateDetailed see the cache frozen too.
+func TestEnumerateSeesTheRunCacheFrozen(t *testing.T) {
+	j := runCacheJailOrSkip(t)
+	files := map[string]string{"a.txt": "x"}
+	if ok, _, err := j.WarmRun(context.Background(), files, []string{"sh", "-c", `echo warm > "$CORRAL_TEST_CACHE/warm"`}); err != nil || !ok {
+		t.Fatalf("WarmRun: ok=%v err=%v", ok, err)
+	}
+	cmd := []string{"sh", "-c", `cat "$CORRAL_TEST_CACHE/warm" && echo leak > "$CORRAL_TEST_CACHE/leak"`}
+	out, err := j.(bwrapJail).Enumerate(context.Background(), files, cmd)
+	if err != nil || strings.TrimSpace(out) != "warm" {
+		t.Fatalf("Enumerate = %q, %v, want the warm file", out, err)
+	}
+	res, err := j.(bwrapJail).EnumerateDetailed(context.Background(), files, cmd)
+	if err != nil || strings.TrimSpace(res.Output) != "warm" {
+		t.Fatalf("EnumerateDetailed = %+v, %v, want the warm file", res, err)
+	}
+	if got := runCacheOut(t, j, `ls "$CORRAL_TEST_CACHE"`); got != "warm" {
+		t.Errorf("the next run sees %q, want only warm (an Enumerate write leaked)", got)
+	}
+}
+
+// A WarmRun issued while frozen runs are in flight completes, and so do
+// they: the lock serialises, it does not deadlock.
+func TestWarmRunWaitsForFrozenRunsWithoutDeadlock(t *testing.T) {
+	j := runCacheJailOrSkip(t)
+	files := map[string]string{"a.txt": "x"}
+	done := make(chan string, 5)
+	for i := 0; i < 4; i++ {
+		go func() {
+			ok, err := j.RunTest(context.Background(), files, []string{"sh", "-c", "sleep 0.3"})
+			done <- fmt.Sprintf("frozen ok=%v err=%v", ok, err)
+		}()
+	}
+	time.Sleep(100 * time.Millisecond)
+	go func() {
+		ok, _, err := j.WarmRun(context.Background(), files, []string{"sh", "-c", `echo w > "$CORRAL_TEST_CACHE/w"`})
+		done <- fmt.Sprintf("warm ok=%v err=%v", ok, err)
+	}()
+	timeout := time.After(20 * time.Second)
+	for i := 0; i < 5; i++ {
+		select {
+		case got := <-done:
+			if !strings.Contains(got, "ok=true err=<nil>") {
+				t.Errorf("%s", got)
+			}
+		case <-timeout:
+			t.Fatal("deadlock: a warm run and frozen runs did not all finish")
+		}
+	}
+}
+
+// A jail warms at most once: a second WarmRun still runs and returns its
+// result, but mounts the cache frozen, so what it writes is not kept.
+func TestASecondWarmRunMountsTheCacheFrozen(t *testing.T) {
+	j := runCacheJailOrSkip(t)
+	files := map[string]string{"a.txt": "x"}
+	ctx := context.Background()
+	if ok, _, err := j.WarmRun(ctx, files, []string{"sh", "-c", `echo a > "$CORRAL_TEST_CACHE/a"`}); err != nil || !ok {
+		t.Fatalf("first WarmRun: ok=%v err=%v", ok, err)
+	}
+	ok, _, err := j.WarmRun(ctx, files, []string{"sh", "-c", `echo b > "$CORRAL_TEST_CACHE/b"`})
+	if err != nil || !ok {
+		t.Fatalf("second WarmRun must still run and succeed: ok=%v err=%v", ok, err)
+	}
+	if got := runCacheOut(t, j, `ls "$CORRAL_TEST_CACHE"`); got != "a" {
+		t.Errorf("a later run sees %q, want only the first warm run's file a", got)
+	}
+}
+
+// Warmed is true only once a warming run ran with the cache writable: not
+// before any WarmRun, not for a frozen run, and not for a second WarmRun the
+// once-only latch turned frozen (it was already true from the first).
+func TestWarmedMeansAWarmingRunRanWritable(t *testing.T) {
+	j := runCacheJailOrSkip(t)
+	files := map[string]string{"a.txt": "x"}
+	if j.Warmed() {
+		t.Fatal("Warmed before any run")
+	}
+	if ok, err := j.RunTest(context.Background(), files, []string{"true"}); err != nil || !ok {
+		t.Fatalf("RunTest: ok=%v err=%v", ok, err)
+	}
+	if j.Warmed() {
+		t.Error("a frozen run made the jail Warmed")
+	}
+	if ok, _, err := j.WarmRun(context.Background(), files, []string{"true"}); err != nil || !ok {
+		t.Fatalf("WarmRun: ok=%v err=%v", ok, err)
+	}
+	if !j.Warmed() {
+		t.Error("not Warmed after a WarmRun ran")
+	}
+	if err := j.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if j.Warmed() {
+		t.Error("Warmed after Close: the cache is gone")
+	}
+}
+
+// A second WarmRun is frozen by the latch and must not be what makes a jail
+// Warmed: it is not, when the first never ran.
+func TestWarmedIsNotSetByALatchedWarmRun(t *testing.T) {
+	j := runCacheJailOrSkip(t)
+	files := map[string]string{"a.txt": "x"}
+	// A first warming run that cannot even start (empty command) is no warming.
+	if _, _, err := j.WarmRun(context.Background(), files, nil); err == nil {
+		t.Fatal("an empty command ran")
+	}
+	if j.Warmed() {
+		t.Error("a warming run that never ran made the jail Warmed")
 	}
 }

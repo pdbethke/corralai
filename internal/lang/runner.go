@@ -149,7 +149,8 @@ type Runner struct {
 	// unit alone under coverage to learn what it executes, and a flag that
 	// changes how the runner schedules its workers can change what coverage
 	// those workers write without changing whether the tests pass. Grading
-	// never sees these flags. nil means the evidence pass runs the unit
+	// never sees these flags; its own no-replay rewrite is RunCacheArgs.
+	// nil means the evidence pass runs the unit
 	// command unchanged; the field is optional per runner, so the parity
 	// table holds no entry for it. Callers go through EvidenceUnitCmd and
 	// EvidenceNote, never the field. It must also accept the operator's own
@@ -165,10 +166,13 @@ type Runner struct {
 	// recovered worker coverage for 30 and then 84 of 93 files on two runs
 	// of the same batch, so it is not a fix.
 	EvidenceArgs func(unitCmd []string) []string
-	// EvidenceCache is the tool cache the unit evidence pass shares among
-	// its units (EvidenceCache says how), or nil for none: each unit then
-	// starts from the empty cache a jailed run always had. Callers go
-	// through EvidenceCacheFor, never the field.
+	// EvidenceCache is the tool cache a pass shares among its runs
+	// (EvidenceCache says how), or nil for none: each run then starts from
+	// the empty cache a jailed run always had. The unit evidence pass reads
+	// it through EvidenceCacheFor, grading through RunCacheFor and
+	// RunCacheCmd (RunCacheArgs); the support page's
+	// run-cache row is this field. Callers go through those, never the
+	// field.
 	//
 	// go test and gotestsum set it to GOCACHE: every jailed unit rebuilt
 	// the standard library and the module's dependencies from nothing,
@@ -176,6 +180,13 @@ type Runner struct {
 	// 15.07 s against 11.13 s for another (n=3 each, one worker). Their
 	// EvidenceArgs add -count=1 for the same reason: see goEvidenceArgs.
 	EvidenceCache *EvidenceCache
+	// RunCacheArgs is what grading does to a command it hands the jail when
+	// the row's cache is shared: the no-replay rewrite and what became of
+	// the command (RunCacheRewrite). Optional, and meaningful only with an
+	// EvidenceCache; callers go through RunCacheCmd. It is not EvidenceArgs:
+	// grading's commands carry filters and a test-binary tail a unit
+	// command never does, and a command it cannot read must say so.
+	RunCacheArgs func(cmd []string) ([]string, RunCacheRewrite)
 	// VersionCmd is argv with everything after the runner's own binary
 	// replaced by its version flag: the command that prints the version of the
 	// runner argv runs, in the form argv launches it (the entry script behind
@@ -238,7 +249,7 @@ var runners = []Runner{
 		FirstFailure: goFirstFailure, FailedTests: goFailedTests, DeselectCmd: goDeselectCmd, KillerCmd: goKillerCmd,
 		ListUnits: goTestListUnits, ParseUnits: goParseUnits, UnitCmd: oneUnit(goTestUnitsCmd),
 		UnitsCmd: goTestUnitsCmd, UnitForFile: goUnitForFile, UnitNoun: "packages",
-		EvidenceArgs: goTestEvidenceArgs, EvidenceCache: goEvidenceCache,
+		EvidenceArgs: goTestEvidenceArgs, EvidenceCache: goEvidenceCache, RunCacheArgs: goRunCacheArgs,
 		Note: "one-package and several-package runs and their `go list` listing verified on go 1.26; the unit evidence pass runs each package with -count=1 over one GOCACHE the pass shares, warmed by its first package and frozen for the rest, so a cached test result is never read as a run",
 	},
 	{
@@ -247,7 +258,7 @@ var runners = []Runner{
 		FirstFailure: goFirstFailure,
 		ListUnits:    gotestsumListUnits, ParseUnits: goParseUnits, UnitCmd: oneUnit(gotestsumUnitsCmd),
 		UnitsCmd: gotestsumUnitsCmd, UnitForFile: goUnitForFile, UnitNoun: "packages",
-		EvidenceArgs: gotestsumEvidenceArgs, EvidenceCache: goEvidenceCache,
+		EvidenceArgs: gotestsumEvidenceArgs, EvidenceCache: goEvidenceCache, RunCacheArgs: goRunCacheArgs,
 		Note: "listing and one-test runs use `go test` itself; the killing test is read from `--- FAIL:` lines, which gotestsum passes through for a failed test but was not run here; units are listed with `go list` and one or several packages run through gotestsum, verified on gotestsum 1.13; the unit evidence pass adds -count=1 after its `--` and shares one GOCACHE as for go test (not run through gotestsum)",
 	},
 	{

@@ -85,6 +85,10 @@ var Capabilities = []Capability{
 	rowCapability("fail-fast", "Stop at the first failure", func(r Runner) bool { return len(r.FailFast) > 0 }),
 	rowCapability("salvage", "Keep the passing part of an authored test", func(r Runner) bool { return r.FailedTests != nil && r.DeselectCmd != nil }),
 	rowCapability("units", "Run one test unit", func(r Runner) bool { return r.ListUnits != nil && r.UnitCmd != nil }),
+	// A runner row that declares a cache grading can share (go test's GOCACHE).
+	// Judged on the same row test RunCacheFor reads, so the page cannot claim
+	// a cache the code does not hand the sandbox.
+	rowCapability("run-cache", "Share a build cache between sandboxed runs", runRowCache),
 	{Key: "coverage", Title: "Coverage pre-flight", Has: func(p Plugin) bool { _, ok := p.(CoverageReporter); return ok }},
 	// Row and Stock as a row capability's, so the support page names the
 	// runners that select when the stock command's does not (Ruby's stock
@@ -132,4 +136,16 @@ var ParityExemptions = []Exemption{
 	{"rust", "salvage", "libtest --skip and nextest filtersets are not yet verified for salvage (runner table Phase 5)"},
 
 	{"python", "units", "its evidence is per test, from one instrumented run (lang.TestEvidence), which the selection engine reads at test grain; a unit pass would be a second, coarser answer to the same question"},
+
+	{"rust", "run-cache", "each sandboxed run builds from an empty target/ and Cargo cache, and that cost is not yet measured; before one is shared we must settle how a cached test result is kept from standing in for a run and how a shared target/ keeps one mutant's build output from being read by another's"},
+
+	{"javascript", "run-cache", "jest and vitest keep transform caches, whose benefit is not yet measured; before one is shared each runner's flag for never serving a cached result must be verified"},
+
+	{"typescript", "run-cache", "jest, vitest and the TypeScript compiler keep transform and type-check caches, whose benefit is not yet measured; before one is shared each runner's flag for never serving a cached result must be verified"},
+
+	{"python", "run-cache", "in the 2026-11-16 audit of Kludex/starlette (public ledger entry 20261116T171749Z-271c277da0ff-ae082f706b21) the median, across the 25 files graded, of each file's median time to grade one fault was 516 ms (range 358 ms to 7,377 ms), and no cache worth sharing has been identified"},
+
+	{"ruby", "run-cache", "not yet measured; it has no compile step, so little is expected"},
+
+	{"php", "run-cache", "not yet measured; it has no compile step, so little is expected"},
 }

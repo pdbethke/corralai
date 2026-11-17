@@ -3923,6 +3923,29 @@ func printRunDisclosures(w io.Writer, ex *localExecutor, jobs []reposcan.Job) {
 		for _, line := range lang.RunDisclosures(p, ex.repoDir, inv) {
 			fmt.Fprintf(w, "  %s\n", line)
 		}
+		// Said once per language, and only where there is a jail whose
+		// grading runs could share one (the backend must overlay too): the workspace substrate runs the
+		// checkout itself. A file that cannot share it says so on its own
+		// lines (runCacheUnsharedLine).
+		if ex.substrate != substrateWorkspace {
+			// And only when the scan's base command is one the rewrite
+			// reads (RunCacheRewritten): a command it cannot read shares no
+			// cache, and the per-file lines say so.
+			base := ex.baseCmd(j)
+			if _, state := lang.RunCacheCmd(p, inv.WithArgv(base), base); state != lang.RunCacheRewritten {
+				continue
+			}
+			// And only on a backend that can overlay (sandbox.Overlays, the
+			// check the jail makes): one that cannot (--jail container,
+			// sandbox-exec, an older bwrap) shares no cache, and every file
+			// would then contradict this line with its own not-shared line.
+			if !sandbox.Overlays(ex.iso) {
+				continue
+			}
+			if env, ok := lang.RunCacheFor(p, inv); ok {
+				fmt.Fprintf(w, "  build cache: grading runs for %s share a frozen %s, warmed by the unmutated run\n", j.Lang, env)
+			}
+		}
 	}
 }
 
@@ -5781,6 +5804,10 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 	// only, so N concurrent files never append into one shared slice.
 	var measured advpool.RunTelemetry
 	in.telemetry = func(t advpool.RunTelemetry) { measured = t }
+	// And for what its jail wiring decides about a shared tool cache: written
+	// by buildJailWiring through the pointer (the input travels by value),
+	// read back below onto this job's result only.
+	in.runCache = new(string)
 	// The job owns its private trees for as long as the job lasts — through
 	// the baseline-stability check AND the audit, which is the whole point of
 	// hanging them here rather than on the wiring's own cleanup (that one is
@@ -5841,6 +5868,9 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 	// the wall clock. Silent when nothing was measured (the jail substrate,
 	// which builds no trees).
 	l.noteConcurrency(j.Path, in.concurrency)
+	if line := runCacheUnsharedLine(j.Path, *in.runCache); line != "" {
+		l.note("%s\n", line)
+	}
 	// Deferred, not called inline: a panic in CheckBaselineStable or in the
 	// jail beneath it would otherwise leak the vendor staging dir. Released
 	// explicitly before l.audit too, since the audit builds its own jail and
@@ -6028,6 +6058,7 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 	// "terrible tests". (Scan re-asserts this; setting it here means the
 	// adapter is honest on its own, for any caller.)
 	res := reposcan.FileResult{Verdict: v, Gradable: !v.BaselineFailed && !v.SuiteIgnoresFile, Telemetry: measured}
+	res.RunCache = fileRunCache(reposcan.FileResult{Gradable: res.Gradable, RunCache: *in.runCache})
 	// Checked BEFORE BaselineFailed so the more specific diagnosis wins: a
 	// suite that passes on invalid source is not broken, it is pointed at
 	// something other than this file, and an operator told "baseline failed"

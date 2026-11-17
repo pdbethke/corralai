@@ -466,6 +466,9 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 	// seedSkipped is what the jail's copy left out as not text, handed back
 	// by the audit (localAuditInput.seedSink) for the ledger entry.
 	var seedSkipped []seedSkip
+	// runCache is what the jail wiring decided about a shared tool cache
+	// (localAuditInput.runCache), for the file row of the ledger entry.
+	runCache := new(string)
 	// toolCounts is the file's account of --mutants-from's report, handed
 	// back by the audit (localAuditInput.toolSink) for the scan row.
 	var toolCounts []ledger.ToolMutantCounts
@@ -559,6 +562,7 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 		presetMutants: presetMutants, mutantSink: mutantSink,
 		toolSources: toolSources,
 		seedSink:    func(s []seedSkip) { seedSkipped = s },
+		runCache:    runCache,
 		toolSink:    func(c ledger.ToolMutantCounts) { toolCounts = append(toolCounts, c) },
 		prior:       loadedPrior,
 
@@ -796,6 +800,14 @@ type localAuditInput struct {
 	// nil records nothing, which is every caller that is not on the workspace
 	// substrate: the jail builds no trees and has nothing to disclose.
 	concurrency *adequacy.Disclosure
+
+	// runCache, when non-nil, is where the jail wiring RECORDS whether this
+	// file's grading runs share a tool cache (gradingRunCache.Record: "shared",
+	// "unshared: <reason>", or ""). A pointer sink for the reason concurrency
+	// is: the input travels by value, so a value field would be written on a
+	// copy. It is NOT part of the verdict (the Verdict's shape is pinned to the
+	// verdict cache's generation); it rides on the file's own result.
+	runCache *string
 
 	// selectionDuration is how long the SCAN's single instrumented coverage
 	// run took (cmd/corral's collectSelection), handed down so this file's
@@ -1338,9 +1350,13 @@ func prepareAuditJail(ctx context.Context, in localAuditInput, plug lang.Plugin,
 		bindDirFlag: in.bindDirs, noBindDepsFlag: in.noBindDeps, seedLimit: in.seedLimit, stdout: stdout,
 		seed: in.seed, seedSink: in.seedSink, substrate: in.substrate, mutantConcurrency: in.mutantConcurrency,
 		concurrency: in.concurrency, pool: in.pool, noFailFast: in.noFailFast,
+		runCache: in.runCache,
 	})
 	if err != nil {
 		return p, auditUsageErr("%v", err)
+	}
+	if line := runCacheUnsharedLine(in.codePath, wiring.runCache); line != "" {
+		fmt.Fprintf(stdout, "  %s\n", line)
 	}
 
 	// Derive the test-writer's real import fact NOW, while a real filesystem
@@ -2478,6 +2494,9 @@ type jailWiringInput struct {
 	// filled in here on first use and closed by the job's owner. nil means
 	// this wiring builds and owns a pool of its own.
 	pool *workspacePool
+	// runCache is localAuditInput.runCache, threaded through: where the
+	// wiring records what it decided about the run cache. nil records nothing.
+	runCache *string
 }
 
 // Substrate names for jailWiringInput.substrate / localAuditInput.substrate,
@@ -2563,6 +2582,11 @@ type jailWiring struct {
 	codeKey    string
 	devTestKey string
 	depBinds   []adequacy.DepBind
+	// runCache is the file row's RunCache (see gradingRunCache.Record): what
+	// newGradingJail decided about sharing a tool cache among this file's
+	// grading runs. "" on a substrate with no jail and for a runner with no
+	// run cache.
+	runCache string
 	// cleanup releases any temp staging dir created for dependency vendoring
 	// (see ensureVendored). Always non-nil; a no-op when nothing was staged.
 	// The caller MUST defer it after the run completes — the jail bind-mounts
@@ -2818,7 +2842,8 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 			w.codeKey:    string(in.code),
 			w.devTestKey: string(in.devTest),
 		})
-		jail := newRunJail(in.iso, in.timeout, depBinds)
+		jail, gc := newGradingJail(in.iso, in.timeout, depBinds, gradingPlugin(in.langName), in.inv.WithArgv(in.checkArgv), in.checkArgv)
+		w.closeWithCleanup(jail, in.runCache, gc)
 		// enumerator backs the tests×mutants matrix's test-listing step
 		// (--matrix). Wired unconditionally off the SAME backend/timeout/binds
 		// as jail (bwrapJail satisfies both interfaces) — a nil
@@ -2826,8 +2851,8 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		// RunSpec.Matrix, so wiring it here costs nothing when --matrix is off
 		// (the flag is the real gate).
 		enumerator := newRunEnumerator(in.iso, in.timeout, depBinds)
-		w.scorer = advpool.JailScorer{Jail: jail, RepoDir: in.repoDir, BaseFiles: repoFiles, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Landing: w.landing, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, KillerCmd: killerCmd, FailFast: failFast}
-		w.validator = advpool.JailValidator{Jail: jail, RepoDir: in.repoDir, BaseFiles: repoFiles, DevTestPath: w.devTestKey, Landing: w.landing}
+		w.scorer = advpool.JailScorer{Jail: jail, RepoDir: in.repoDir, BaseFiles: repoFiles, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Landing: w.landing, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, KillerCmd: killerCmd, FailFast: failFast, CommandRewrite: gc.Rewrite, WarmCheck: warmCheckFor(gradingPlugin(in.langName), in.inv, gc)}
+		w.validator = advpool.JailValidator{Jail: jail, RepoDir: in.repoDir, BaseFiles: repoFiles, DevTestPath: w.devTestKey, Landing: w.landing, CommandRewrite: gc.Rewrite}
 		w.jailEnum = advpool.JailEnumerator{Jail: enumerator, BaseFiles: repoFiles}
 		if len(depBinds) > 0 {
 			names := make([]string, 0, len(depBinds))
@@ -2839,13 +2864,54 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 	} else {
 		w.codeKey = filepath.Base(in.codePath)
 		w.devTestKey = filepath.Base(in.testPath)
-		jail := newRunJail(in.iso, in.timeout, nil)
+		// The single-file scorer runs the plugin's own command when the run
+		// names none (scoreWorkspace), so that is the warming command here.
+		plug := gradingPlugin(in.langName)
+		warm := in.checkArgv
+		if len(warm) == 0 && plug != nil {
+			warm = plug.TestCmd()
+		}
+		jail, gc := newGradingJail(in.iso, in.timeout, nil, plug, in.inv.WithArgv(warm), warm)
+		w.closeWithCleanup(jail, in.runCache, gc)
 		enumerator := newRunEnumerator(in.iso, in.timeout, nil)
-		w.scorer = advpool.JailScorer{Jail: jail, MutantTimeout: in.testTimeout, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, KillerCmd: killerCmd, FailFast: failFast}
-		w.validator = advpool.JailValidator{Jail: jail}
+		w.scorer = advpool.JailScorer{Jail: jail, MutantTimeout: in.testTimeout, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, KillerCmd: killerCmd, FailFast: failFast, CommandRewrite: gc.Rewrite, WarmCheck: warmCheckFor(plug, in.inv, gc)}
+		w.validator = advpool.JailValidator{Jail: jail, CommandRewrite: gc.Rewrite}
 		w.jailEnum = advpool.JailEnumerator{Jail: enumerator}
 	}
 	return w, nil
+}
+
+// gradingPlugin is the language plugin for a wiring's langName, nil when the
+// name resolves to none (a run with no plugin has no run cache).
+func gradingPlugin(langName string) lang.Plugin {
+	p, ok := lang.ByName(langName)
+	if !ok {
+		return nil
+	}
+	return p
+}
+
+// closeWithCleanup files gc's decision on the wiring and makes the file's
+// cleanup remove the jail's cache directory, after whatever cleanup the
+// wiring already holds (a vendor staging dir). buildJailWiring's own deferred
+// cleanup covers a wiring that fails after this point, and the caller defers
+// w.cleanup on every other path, so the directory is removed on success,
+// COULD-NOT-GRADE, timeout, cancel and panic alike.
+func (w *jailWiring) closeWithCleanup(jail adequacy.Jail, sink *string, gc gradingRunCache) {
+	w.runCache = gc.Record
+	if sink != nil {
+		*sink = gc.Record
+	}
+	prev := w.cleanup
+	w.cleanup = func() {
+		prev()
+		// The file's run has ended: record what the jail did, then (and only
+		// then) close it, which removes the cache the answer comes from.
+		if sink != nil {
+			*sink = gc.final(jail)
+		}
+		closeGradingJail(jail)
+	}
 }
 
 // depMountWords is how iso mounts the dependency directory at host, for the

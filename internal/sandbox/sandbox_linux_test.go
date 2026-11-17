@@ -102,8 +102,10 @@ func assertSeedUnchanged(t *testing.T, seed string) {
 func TestBwrapRunAtTargetWritesThroughToTheHostDir(t *testing.T) {
 	iso := bwrapOrSkip(t)
 	ws := t.TempDir()
-	r := Run(context.Background(), "pwd; echo hi > made.txt", Options{Workspace: ws, Target: WorkTarget, Backend: iso})
+	r := Run(context.Background(), "pwd; echo hi > made.txt; test ! -e '"+ws+"'", Options{Workspace: ws, Target: WorkTarget, Backend: iso})
 	if r.ExitCode != 0 || r.Err != "" {
+		// A non-zero exit here may be the host workspace path existing
+		// inside the jail (test ! -e): the host path must not be visible.
 		t.Fatalf("run at the target failed: %+v", r)
 	}
 	if strings.TrimSpace(r.Output) != WorkTarget {

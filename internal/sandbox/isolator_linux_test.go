@@ -623,3 +623,60 @@ func TestPlacesWorkspaceBwrap(t *testing.T) {
 		}
 	}
 }
+
+// A Target that collides with a mount the jail makes itself is refused, naming
+// what it collides with: the workspace would hide that mount or be hidden by
+// it. The worst is the cache's own target, where the run would execute inside
+// the shared cache.
+func TestBwrapRefusesATargetThatCollidesWithTheJailsOwnMounts(t *testing.T) {
+	cache := &CacheMount{Host: "/tmp/cache", Target: CacheTarget, Frozen: false}
+	for _, bad := range []string{
+		"/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc", "/var", "/proc", "/dev", "/tmp", "/home",
+		"/usr/x", "/etc/ssl", "/tmp/work", "/home/agent", "/var/lib/gems",
+		CacheTarget, CacheTarget + "/inner",
+	} {
+		_, err := overlayAtIso().Wrap("true", Options{Workspace: "/tmp/ws", Target: bad, Cache: cache}, nil)
+		if err == nil {
+			t.Errorf("Target %q collides with a jail mount and was accepted", bad)
+		} else if !strings.Contains(err.Error(), bad) {
+			t.Errorf("the refusal for %q does not name it: %v", bad, err)
+		}
+	}
+	// An ancestor of the cache target ("/" is refused already; a parent of a
+	// cache that is not at the root is the case).
+	deep := &CacheMount{Host: "/tmp/cache", Target: "/corral-work/cache", Frozen: false}
+	if _, err := overlayAtIso().Wrap("true", Options{Workspace: "/tmp/ws", Target: WorkTarget, Cache: deep}, nil); err == nil {
+		t.Error("a Target that is an ancestor of the cache target was accepted")
+	}
+	// The fixed target is accepted, with a cache and without one.
+	for _, c := range []*CacheMount{nil, cache} {
+		if _, err := overlayAtIso().Wrap("true", Options{Workspace: "/tmp/ws", Target: WorkTarget, Cache: c}, nil); err != nil {
+			t.Errorf("%s was refused (cache %v): %v", WorkTarget, c != nil, err)
+		}
+	}
+}
+
+// A dependency bind whose target is under the HOST workspace, when the
+// workspace is seen elsewhere, would be mounted where the run never looks: a
+// stale caller fails rather than mounting invisibly.
+func TestBindUnderTheHostWorkspaceIsRefusedWhenATargetIsSet(t *testing.T) {
+	stale := []Bind{{Host: "/deps/nm", Target: "/tmp/ws/node_modules", PerEntry: true}}
+	_, err := overlayAtIso().Wrap("true", Options{Workspace: "/tmp/ws", Target: WorkTarget, ReadOnlyBinds: stale}, nil)
+	if err == nil || !strings.Contains(err.Error(), "/tmp/ws/node_modules") {
+		t.Errorf("bwrap: a stale bind was not refused by name: %v", err)
+	}
+	c := containerIsolator{runtime: "docker", image: "img"}
+	_, err = c.Wrap("true", Options{Workspace: "/tmp/ws", Target: WorkTarget, ReadOnlyBinds: stale}, nil)
+	if err == nil || !strings.Contains(err.Error(), "/tmp/ws/node_modules") {
+		t.Errorf("container: a stale bind was not refused by name: %v", err)
+	}
+	// Without a Target the host path IS where the run looks.
+	if _, err := overlayAtIso().Wrap("true", Options{Workspace: "/tmp/ws", ReadOnlyBinds: stale}, nil); err != nil {
+		t.Errorf("a bind under the workspace without a Target was refused: %v", err)
+	}
+	// A bind at the target is the right one.
+	ok := []Bind{{Host: "/deps/nm", Target: WorkTarget + "/node_modules", PerEntry: true}}
+	if _, err := overlayAtIso().Wrap("true", Options{Workspace: "/tmp/ws", Target: WorkTarget, ReadOnlyBinds: ok}, nil); err != nil {
+		t.Errorf("a bind at the target was refused: %v", err)
+	}
+}

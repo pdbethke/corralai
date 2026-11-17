@@ -181,12 +181,35 @@ const CacheTarget = "/corral-cache"
 // whatever temp directory holds it on the host.
 const WorkTarget = "/corral-work"
 
+// jailOwnMounts are the paths the jail mounts for itself, in every backend
+// that places a workspace: the read-only root and its symlinks, the system
+// files, /proc, /dev, and the tmpfs /tmp and /home. A workspace Target may not
+// equal, sit under, or be an ancestor of any of them: it would hide one of
+// these or be hidden by it. It must match what Wrap mounts in
+// isolator_linux.go and container.go (no single list there to derive it from:
+// the argv is built inline); the shared cache's own target is added per run.
+var jailOwnMounts = []string{
+	"/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc", "/var", "/proc", "/dev", "/tmp", "/home",
+}
+
+// within reports whether p is root or under it (both clean absolute paths).
+func within(p, root string) bool {
+	return p == root || strings.HasPrefix(p, strings.TrimSuffix(root, "/")+"/")
+}
+
 // jailWorkspace is the path at which the run sees its workspace inside the
 // jail: opts.Target when set, opts.Workspace (the host path) otherwise. A
 // Target that is not an absolute, clean path other than "/" is refused: the
 // mount's target and --chdir must name one directory, and "/" would put the
-// workspace over the jail's root. Every backend that places a workspace
-// derives every in-jail workspace path from this, and from nothing else.
+// workspace over the jail's root. So is one that collides with the jail's own
+// mounts (jailOwnMounts) or with the run's cache target: the worst case, the
+// cache mount would hide the workspace and the run would execute inside the
+// shared cache. And so is a dependency bind whose target is under the HOST
+// workspace when a Target is set: it would be mounted where the run never
+// looks, so a caller that still computes targets from the host path fails
+// instead of running without its dependencies. Every backend that places a
+// workspace derives every in-jail workspace path from this, and from nothing
+// else.
 func jailWorkspace(opts Options) (string, error) {
 	t := opts.Target
 	if t == "" {
@@ -194,6 +217,20 @@ func jailWorkspace(opts Options) (string, error) {
 	}
 	if !path.IsAbs(t) || path.Clean(t) != t || t == "/" {
 		return "", fmt.Errorf("the workspace target %q is not an absolute, clean path other than /", t)
+	}
+	reserved := jailOwnMounts
+	if opts.Cache != nil && opts.Cache.Target != "" {
+		reserved = append(append([]string(nil), reserved...), opts.Cache.Target)
+	}
+	for _, r := range reserved {
+		if within(t, r) || within(r, t) {
+			return "", fmt.Errorf("the workspace target %q collides with the jail's own mount %s", t, r)
+		}
+	}
+	for _, b := range opts.ReadOnlyBinds {
+		if within(b.Target, opts.Workspace) {
+			return "", fmt.Errorf("the dependency bind at %q is under the host workspace %s, but the workspace is seen at %s: it would be mounted where the run never looks", b.Target, opts.Workspace, t)
+		}
 	}
 	return t, nil
 }

@@ -391,16 +391,27 @@ func TestUnitListingsAreTheSameAtTheFixedPath(t *testing.T) {
 				t.Skipf("SKIP %s: the runner table has no unit listing for %q", tc.lang, tc.cmd)
 			}
 			got := map[string][]string{}
+			outs := map[string]string{}
 			for name, j := range placements(backend) {
 				out, err := j.Enumerate(context.Background(), tc.files, list)
 				if err != nil {
 					t.Fatalf("%s: %v", name, err)
 				}
-				units := lang.ParseUnitList(p, inv, out)
+				got[name], outs[name] = lang.ParseUnitList(p, inv, out), out
+			}
+			// A listing that is empty at BOTH placements says nothing about
+			// the placement: the runner on this machine listed nothing either
+			// way (on CI's image PHP prints hundreds of SNMP start-up lines
+			// and the listing is lost past the output cap). That is a
+			// could-not-measure, said by name, never a pass. Empty at ONE
+			// placement is the defect this test exists to find.
+			if len(got["fixed"]) == 0 && len(got["host"]) == 0 {
+				t.Skipf("SKIP %s: the listing is empty at both placements, so this machine cannot measure it; output ends:\n%s", tc.lang, tail(outs["fixed"], 600))
+			}
+			for name, units := range got {
 				if !slices.ContainsFunc(units, func(u string) bool { return strings.Contains(u, tc.want) }) {
-					t.Fatalf("%s: units %q name no %q (an empty listing proves nothing)\n%s", name, units, tc.want, out)
+					t.Fatalf("%s: units %q name no %q (the other placement listed %d)\n%s", name, units, tc.want, len(got["fixed"])+len(got["host"])-len(units), tail(outs[name], 600))
 				}
-				got[name] = units
 			}
 			if !slices.Equal(got["fixed"], got["host"]) {
 				t.Errorf("units differ by placement:\nfixed %q\nhost  %q", got["fixed"], got["host"])

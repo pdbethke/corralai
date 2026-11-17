@@ -1355,10 +1355,15 @@ isolated (under `--substrate workspace`, nothing is: see above):
 - **A shared build cache (Go, default sandbox).** A Go file's grading runs share one
   `GOCACHE`, written only by the developer's own tests on the unmutated code and frozen for every other run, so
   the compiled standard library (the packages outside the audited tree) is reused and nothing a fault writes is
-  kept. With `bwrap` or the container backend a run sees its files at `/corral-work` whatever directory holds
-  them, so Go also reuses the project's own compiled packages and its vendored dependencies, which it keys on
-  their directory. Where a workspace cannot be placed there (macOS `sandbox-exec`, or a `bwrap` that fails the
-  start-up check) only the standard library is reused. A run's `TMPDIR` is the jail's own. `-count=1` is added when you gave no `-count`, so a
+  kept. Only `bwrap` that can overlay a directory shares the cache. With it, a run sees its files at
+  `/corral-work` whatever directory holds them, so the shared cache serves the project's own compiled packages
+  and its vendored dependencies (which Go keys on their directory) as well as the standard library. A `bwrap`
+  that overlays but fails the start-up check of placing a workspace keeps each run's host path, and its shared
+  cache reuses only the standard library; the scan header says so. The container backend places the workspace
+  at `/corral-work` (checked on its command line only, never run) and shares no build cache; macOS
+  (`sandbox-exec`) keeps the host path and shares none. A placed run's `TMPDIR` is the jail's own. An authored
+  test that names `/corral-work` is refused and sent back to the writer, since that path exists only in the
+  sandbox. `-count=1` is added when you gave no `-count`, so a
   cached test result is never replayed, and the record's `run_cache` column says whether a file's runs
   shared it. What that trusts is in [SECURITY.md](SECURITY.md).
 

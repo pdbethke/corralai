@@ -78,6 +78,10 @@ func clampMutantTimeout(baseDur time.Duration) time.Duration {
 type ScoreOption func(*scoreConfig)
 
 type scoreConfig struct {
+	// warmBaseline routes the baseline through RunCacheJail.WarmRun, the one
+	// run that may write the jail's shared cache. Off by default: see
+	// WithWarmBaseline.
+	warmBaseline bool
 	// capFloor overrides minMutantTimeout for this Score call. Unexported,
 	// test-only: the per-command cap derivation is invisible under the 30s
 	// floor unless a baseline exceeds 10s, and a test that sleeps 12s to
@@ -206,6 +210,19 @@ func WithMutantTimeout(d time.Duration) ScoreOption {
 // python, ruby, javascript and typescript.
 func WithMutantCompileCheck(cmds [][]string) ScoreOption {
 	return func(c *scoreConfig) { c.mutantCompileCheck = cmds }
+}
+
+// WithWarmBaseline makes this Score call's baseline, the run on the unmutated
+// code, the run that WARMS the jail's shared cache (RunCacheJail.WarmRun, the
+// cache writable). Without it, even a RunCacheJail runs its baseline frozen
+// like any other run, exactly as a jail with no run cache would.
+//
+// OPT-IN, because the warming run writes what every later run reads: only a
+// caller that knows the tree holds the project's own code and tests, and no
+// test a model wrote, may ask for it. Score cannot tell, so it never warms on
+// its own.
+func WithWarmBaseline() ScoreOption {
+	return func(c *scoreConfig) { c.warmBaseline = true }
 }
 
 // WithFailureParser names, for each KILLED mutant, the first test the runner
@@ -874,12 +891,14 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 			files[k] = v
 		}
 		files[codePath] = code
-		// WARM THE RUN CACHE with this run: the baseline is the first run on
-		// the unmutated code and the only one that executes everything, so it
-		// is the run that fills the cache every later run reads frozen. Taken
-		// whether or not the cache is shared (an unshared jail's WarmRun is a
-		// detailed run), so no branch on RunCache() here.
-		if rj, ok := j.(RunCacheJail); ok {
+		// WARM THE RUN CACHE with this run, only when the caller asked
+		// (WithWarmBaseline): the warming run writes what every later run
+		// reads, so it must be a run of the project's own code and tests. A
+		// caller whose tree holds a test a model wrote does not ask, and its
+		// baseline is a frozen run like any other. Taken whether or not the
+		// cache is shared (an unshared jail's WarmRun is a detailed run), so
+		// no branch on RunCache() here.
+		if rj, ok := j.(RunCacheJail); ok && cfg.warmBaseline {
 			p, out, err := rj.WarmRun(rctx, files, toJail(testCmd))
 			return p, string(out), err
 		}

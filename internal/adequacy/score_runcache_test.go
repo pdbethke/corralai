@@ -84,7 +84,7 @@ func TestScoreWarmsTheRunCacheWithTheBaselineOnly(t *testing.T) {
 		scriptKey(confirmCode, confirmK):           {rPass},
 	}))
 	rep, err := Score(context.Background(), j, nil, "a.py", confirmCode, oneMutant(), confirmSuite,
-		WithFailureParser(pythonFailureParser(t)), WithKillConfirmer(testConfirmer))
+		WithFailureParser(pythonFailureParser(t)), WithKillConfirmer(testConfirmer), WithWarmBaseline())
 	if err != nil {
 		t.Fatalf("Score: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestScoreWarmsTheRunCacheWithTheBaselineOnly(t *testing.T) {
 func TestScoreWithAFailingBaselineStillReportsAsBefore(t *testing.T) {
 	script := map[string][]scriptedResult{scriptKey(confirmCode, confirmSuite): {rFail}}
 	j := newRC(t, script)
-	rep, err := Score(context.Background(), j, nil, "a.py", confirmCode, oneMutant(), confirmSuite)
+	rep, err := Score(context.Background(), j, nil, "a.py", confirmCode, oneMutant(), confirmSuite, WithWarmBaseline())
 	if err != nil {
 		t.Fatalf("Score: %v", err)
 	}
@@ -251,5 +251,32 @@ func TestScoreIsUnchangedForAJailWithoutARunCache(t *testing.T) {
 	// The baseline stays on the detailed run it used before this task.
 	if a.calls[0].method != "RunTestDetailed" {
 		t.Errorf("first call = %v, want RunTestDetailed", a.calls[0])
+	}
+}
+
+// Score never warms on its own: a RunCacheJail asked for no warm baseline
+// gets zero WarmRun calls, and its baseline is a frozen detailed run, as for
+// a jail with no run cache. The warming run writes what every later run
+// reads, so only a caller that knows the tree is the project's own asks.
+func TestScoreWithoutWarmBaselineNeverWarms(t *testing.T) {
+	j := newRC(t, baseScript(map[string][]scriptedResult{
+		scriptKey(confirmMutantCode, confirmSuite): {rFail},
+		scriptKey(confirmCode, confirmK):           {rPass},
+	}))
+	rep, err := Score(context.Background(), j, nil, "a.py", confirmCode, oneMutant(), confirmSuite,
+		WithFailureParser(pythonFailureParser(t)), WithKillConfirmer(testConfirmer))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range j.seen() {
+		if c.method == "WarmRun" {
+			t.Errorf("a Score call that did not ask to warm made a WarmRun: %v", j.seen())
+		}
+	}
+	if first := j.seen()[0]; first.method != "RunTestDetailed" {
+		t.Errorf("baseline was %v, want a frozen RunTestDetailed", first)
+	}
+	if want := (sandbox.SharedCache{Target: "/cache"}); rep.RunCache != want {
+		t.Errorf("Report.RunCache = %+v, want %+v (still read after the baseline)", rep.RunCache, want)
 	}
 }

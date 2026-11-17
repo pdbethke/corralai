@@ -8,6 +8,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/auditpush"
@@ -142,3 +143,64 @@ func TestTheScanSaysOnceWhichLanguagesShareARunCache(t *testing.T) {
 }
 
 var _ = scanstore.File{}
+
+// A file that was not graded records nothing: a baseline that failed
+// (COULD-NOT-GRADE) says "" on both the --repo and the --local paths, through
+// one helper, however the wiring had decided before the baseline ran.
+func TestAFileThatWasNotGradedRecordsNoRunCache(t *testing.T) {
+	failed := advpool.Verdict{BaselineFailed: true}
+	if got := fileRunCache(reposcan.FileResult{Verdict: failed, Gradable: false, RunCache: "shared"}); got != "" {
+		t.Errorf("fileRunCache for an ungraded file = %q, want empty", got)
+	}
+	if got := fileRunCache(reposcan.FileResult{Gradable: true, RunCache: "shared"}); got != "shared" {
+		t.Errorf("fileRunCache for a graded file = %q, want shared", got)
+	}
+
+	// --repo: Execute on a file whose audit baseline failed.
+	ex := localExecutor{
+		baselineRuns: 2,
+		newBaseline: func(_ context.Context, in localAuditInput) (reposcan.BaselineRunner, func(), error) {
+			*in.runCache = "shared"
+			return flakyBaseline{}, func() {}, nil
+		},
+		audit: func(_ context.Context, in localAuditInput) (advpool.Verdict, error) {
+			*in.runCache = "shared"
+			return failed, nil
+		},
+	}
+	res, err := ex.Execute(context.Background(), reposcan.Job{Path: "src/p.go", Lang: "go", Goal: reposcan.Goal{Text: "g"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := buildScanFileRows([]reposcan.FileResult{res}, nil, reposcan.CoverageMap{}, "", t.TempDir(), io.Discard, false)
+	for _, r := range rows {
+		if r.RunCache != "" {
+			t.Errorf("--repo row for a file whose baseline failed records RunCache %q", r.RunCache)
+		}
+	}
+
+	// --local: localFileResult.
+	rc := "shared"
+	if got := localFileResult(localAuditInput{runCache: &rc, codePath: "p.go"}, failed, advpool.RunTelemetry{}, time.Now()); got.RunCache != "" {
+		t.Errorf("--local result for a file whose baseline failed records RunCache %q", got.RunCache)
+	}
+}
+
+// The scan header says grading runs share a cache only when the scan's base
+// command can be rewritten to forbid a cached result; otherwise it says
+// nothing and the per-file lines speak.
+func TestTheScanHeaderSaysNothingForACommandTheRewriteCannotRead(t *testing.T) {
+	jobs := []reposcan.Job{{Path: "a.go", Lang: "go"}}
+	for _, argv := range [][]string{{"go", "test", "-no-such-flag", "./..."}, {"sh", "-c", "go test ./..."}, {"go", "vet", "./..."}} {
+		var buf bytes.Buffer
+		printRunDisclosures(&buf, &localExecutor{repoDir: t.TempDir(), checkArgv: argv}, jobs)
+		if strings.Contains(buf.String(), "build cache") {
+			t.Errorf("base command %v: the header claims a shared cache:\n%s", argv, buf.String())
+		}
+	}
+	var buf bytes.Buffer
+	printRunDisclosures(&buf, &localExecutor{repoDir: t.TempDir(), checkArgv: []string{"go", "test", "./..."}}, jobs)
+	if !strings.Contains(buf.String(), "build cache: grading runs for go share") {
+		t.Errorf("a readable go test command should say so:\n%s", buf.String())
+	}
+}

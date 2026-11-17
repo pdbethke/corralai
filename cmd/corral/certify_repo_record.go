@@ -228,7 +228,7 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 				// Whether this run shared a tool cache among its grading
 				// runs: the file's own result, not the verdict (a reused
 				// verdict was graded by an earlier run and says nothing here).
-				RunCache: r.RunCache,
+				RunCache: fileRunCache(r),
 				// ModelsByRole is canonicalized the same way the scan-wide
 				// model_set is (reposcan.CanonicalKV), so a per-file role
 				// assignment is byte-comparable with it rather than a second,

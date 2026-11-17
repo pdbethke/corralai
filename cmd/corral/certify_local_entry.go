@@ -97,7 +97,7 @@ func localFileResult(in localAuditInput, v advpool.Verdict, t advpool.RunTelemet
 		ComputedAt: at, Telemetry: t,
 	}
 	if in.runCache != nil {
-		res.RunCache = *in.runCache
+		res.RunCache = fileRunCache(reposcan.FileResult{Gradable: res.Gradable, RunCache: *in.runCache})
 	}
 	switch {
 	case v.SuiteIgnoresFile:

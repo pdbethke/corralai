@@ -160,7 +160,7 @@ func TestGoGradingRunsShareAFrozenRunCache(t *testing.T) {
 	if w.runCache != "shared" {
 		t.Fatalf("recorded run cache = %q, want %q", w.runCache, "shared")
 	}
-	rep, err := w.scorer.ScoreReport(context.Background(), w.codeKey, string(seed.files["p/p.go"]), "", oneMutant, "go test ./...")
+	rep, err := w.scorer.ScoreDevReport(context.Background(), w.codeKey, string(seed.files["p/p.go"]), "", oneMutant, "go test ./...", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -338,5 +338,64 @@ func TestRunCacheIsRemovedWhenARunIsCancelled(t *testing.T) {
 	w.cleanup()
 	if left, _ := filepath.Glob(filepath.Join(os.TempDir(), "corral-cache-*")); len(left) != 0 {
 		t.Errorf("a cancelled run left cache directories behind: %v", left)
+	}
+}
+
+// A file whose audit runs a dev pass AND an authored pass, through the real
+// wiring and the real jail: exactly one run is the warming run (the only one
+// that mounts the cache writable), it is the dev pass's baseline and the first
+// run, and the authored pass (whose tree holds a test a model wrote) warms
+// nothing. The jail mounts writable only for WarmRun, so the recorded
+// warm/frozen split is the mount.
+func TestOnlyTheDevPassBaselineMountsTheRunCacheWritable(t *testing.T) {
+	iso := overlayingGoJailOrSkip(t)
+	repoDir, seed := goCacheModule(t)
+	w := wireGo(t, iso, repoDir, &seed, []string{"go", "test", "./..."}, "go")
+	defer w.cleanup()
+	rec := recordRuns(t, &w)
+	ctx := context.Background()
+	code := seed.files["p/p.go"]
+
+	if _, err := w.scorer.ScoreDevReport(ctx, w.codeKey, code, "", oneMutant, "go test ./...", nil); err != nil {
+		t.Fatal(err)
+	}
+	devRuns := len(rec.runs)
+	authored := "package p\n\nimport \"testing\"\n\nfunc TestAuthored(t *testing.T) { if One() != 1 { t.Fatal(\"x\") } }\n"
+	if _, err := w.scorer.ScoreAuthoredReport(ctx, w.codeKey, code, authored, oneMutant, "go test ./..."); err != nil {
+		t.Fatal(err)
+	}
+	var warm []int
+	for i, r := range rec.runs {
+		if r.warm {
+			warm = append(warm, i)
+		}
+	}
+	if len(warm) != 1 || warm[0] != 0 {
+		t.Fatalf("writable mounts at runs %v of %d, want exactly run 0 (the dev baseline)", warm, len(rec.runs))
+	}
+	if len(rec.runs) <= devRuns {
+		t.Fatal("the authored pass ran nothing")
+	}
+	if !slices.Contains(rec.runs[0].cmd, "-count=1") {
+		t.Errorf("the warming command %v lacks -count=1", rec.runs[0].cmd)
+	}
+}
+
+// The same wiring, a dev-pass baseline the row cannot read at that point:
+// no writable mount at all, though the file's own command was readable.
+func TestADevBaselineTheRowCannotReadMountsNothingWritable(t *testing.T) {
+	iso := overlayingGoJailOrSkip(t)
+	repoDir, seed := goCacheModule(t)
+	w := wireGo(t, iso, repoDir, &seed, []string{"go", "test", "./..."}, "go")
+	defer w.cleanup()
+	rec := recordRuns(t, &w)
+	_, _ = w.scorer.ScoreDevReport(context.Background(), w.codeKey, seed.files["p/p.go"], "", oneMutant, "go test -no-such-flag ./...", nil)
+	if len(rec.runs) == 0 {
+		t.Fatal("nothing ran")
+	}
+	for i, r := range rec.runs {
+		if r.warm {
+			t.Errorf("run %d (%v) mounted the cache writable for a command the row cannot read", i, r.cmd)
+		}
 	}
 }

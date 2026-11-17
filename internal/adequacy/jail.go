@@ -132,9 +132,10 @@ func WithRunCache(env string) JailOption {
 type RunCacheJail interface {
 	Jail
 	// WarmRun is RunTestDetailed with the cache writable: the run that
-	// fills it. It may be called again, and each call may add to the cache;
-	// the caller keeps it from overlapping the frozen runs it means to
-	// feed (it is serialised against them here, never run beside one).
+	// fills it. A jail warms at most ONCE: after the first WarmRun has been
+	// issued, every later WarmRun on the same jail runs and returns its
+	// result but mounts the cache FROZEN, so what it writes is not kept. The first call is
+	// serialised against the frozen runs here, never run beside one.
 	WarmRun(ctx context.Context, files map[string]string, testCmd []string) (ok bool, output []byte, err error)
 	// RunCache says whether the cache is shared and, if not, why.
 	RunCache() sandbox.SharedCache
@@ -159,6 +160,7 @@ type runCache struct {
 	dir      string
 	unshared string
 	closed   bool
+	warmed   bool // a warming run has been issued: every later one is frozen
 }
 
 // ensure makes the directory on first use, unless the jail is closed.
@@ -191,6 +193,19 @@ func (c *runCache) shared() sandbox.SharedCache {
 // lock is held, so a Close that ran in between is seen.
 func (c *runCache) acquire(backend sandbox.Isolator, frozen bool) (*sandbox.CacheMount, func()) {
 	c.ensure(backend)
+	// A jail warms at most ONCE. The first writable request is granted; any
+	// later one mounts the cache frozen (it still runs and returns its
+	// result), so a caller that warms twice, or warms a tree it should not,
+	// cannot change what the frozen runs read after the first.
+	if !frozen {
+		c.mu.Lock()
+		if c.warmed {
+			frozen = true
+		} else {
+			c.warmed = true
+		}
+		c.mu.Unlock()
+	}
 	lock, unlock := c.rw.RLock, c.rw.RUnlock
 	if !frozen {
 		lock, unlock = c.rw.Lock, c.rw.Unlock

@@ -1080,3 +1080,21 @@ func TestWarmRunWaitsForFrozenRunsWithoutDeadlock(t *testing.T) {
 		}
 	}
 }
+
+// A jail warms at most once: a second WarmRun still runs and returns its
+// result, but mounts the cache frozen, so what it writes is not kept.
+func TestASecondWarmRunMountsTheCacheFrozen(t *testing.T) {
+	j := runCacheJailOrSkip(t)
+	files := map[string]string{"a.txt": "x"}
+	ctx := context.Background()
+	if ok, _, err := j.WarmRun(ctx, files, []string{"sh", "-c", `echo a > "$CORRAL_TEST_CACHE/a"`}); err != nil || !ok {
+		t.Fatalf("first WarmRun: ok=%v err=%v", ok, err)
+	}
+	ok, _, err := j.WarmRun(ctx, files, []string{"sh", "-c", `echo b > "$CORRAL_TEST_CACHE/b"`})
+	if err != nil || !ok {
+		t.Fatalf("second WarmRun must still run and succeed: ok=%v err=%v", ok, err)
+	}
+	if got := runCacheOut(t, j, `ls "$CORRAL_TEST_CACHE"`); got != "a" {
+		t.Errorf("a later run sees %q, want only the first warm run's file a", got)
+	}
+}

@@ -11,6 +11,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
@@ -88,6 +89,35 @@ func newGradingJail(iso sandbox.Isolator, timeout time.Duration, depBinds []adeq
 		return jail, gradingRunCache{Record: "unshared: " + c.Unshared}
 	}
 	return jail, gradingRunCache{Rewrite: lang.RunCacheArgv(plug, inv), Record: "shared"}
+}
+
+// warmCheckFor is JailScorer.WarmCheck for a file whose cache is shared (nil
+// otherwise, so nothing warms): true for exactly the commands lang.RunCacheCmd
+// rewrites to forbid a cached result. The dev pass asks it of its own baseline
+// command, at the point that command is known, so a shape the row cannot read
+// (RunCacheUnreadable, RunCacheNoTest) never warms, whatever the file's
+// recorded command was.
+func warmCheckFor(plug lang.Plugin, inv lang.Invocation, gc gradingRunCache) func(cmd []string) bool {
+	if gc.Rewrite == nil {
+		return nil
+	}
+	return func(cmd []string) bool {
+		_, state := lang.RunCacheCmd(plug, inv.WithArgv(cmd), cmd)
+		return state == lang.RunCacheRewritten
+	}
+}
+
+// fileRunCache is the RunCache a file's row records: what its wiring decided,
+// but only for a file that was graded here. A baseline that failed
+// (COULD-NOT-GRADE), a suite that never touches the file, and a file never
+// graded record "", whatever the wiring had decided before the baseline ran.
+// The one rule behind the --repo result (Execute), the --local result
+// (localFileResult) and the row builder.
+func fileRunCache(r reposcan.FileResult) string {
+	if !r.Gradable {
+		return ""
+	}
+	return r.RunCache
 }
 
 // runCacheUnsharedLine is the line a file's own output carries when its

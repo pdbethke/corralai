@@ -237,8 +237,15 @@ gets no cache and no rewrite. Every command the grading jail is handed is rewrit
 through `JailScorer.CommandRewrite` / `JailValidator.CommandRewrite`: `adequacy.Score`
 by `baseScoreOpts`, the other doors (`CompliantRun`, the positive control, the compile
 check) by `rewriteCmd`. A new door that runs a command on that jail must call it. Only
-the warming run has the cache writable; the file's row records `RunCache` (`shared` or
-`unshared: <reason>`), a field of the file's result and not of the `Verdict`, whose
+ONE run ever has the cache writable: the dev pass's baseline, the developer's own
+tests on the unmutated tree (`JailScorer.ScoreDevReport` adds
+`adequacy.WithWarmBaseline`, only when `WarmCheck` clears that pass's exact baseline
+command as `RunCacheRewritten`). `adequacy.Score` never warms unasked, `baseScoreOpts`
+must not carry the option, and a jail warms at most once, so a run that includes a test
+corral wrote (authored, salvage, critic checks, matrix) can never write what later runs
+read. A shared cache costs one build cache's worth of temporary disk space per file
+being audited at once, removed when that file's run ends. The file's row records `RunCache` (`shared` or
+`unshared: <reason>`, `""` for a file not graded), a field of the file's result and not of the `Verdict`, whose
 shape is pinned to the verdict cache. `internal/adequacy/run_cache_replay_test.go`
 runs the safety argument against the real jail.
 

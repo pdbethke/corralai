@@ -396,6 +396,36 @@ type JailScorer struct {
 	// decides whether it shares a cache at all, and an unshared run must keep
 	// the operator's command.
 	CommandRewrite func(cmd []string) []string
+	// WarmCheck, when non-nil, says whether the DEV pass's own baseline
+	// command forbids a cached test result once rewritten (cmd/corral sets it
+	// from lang.RunCacheCmd: true only for RunCacheRewritten). The dev pass,
+	// and only the dev pass (ScoreDevReport), asks it of the exact command it
+	// is about to run on the unmutated tree, and warms the jail's shared
+	// cache with that baseline only when it answers true. nil — every
+	// existing JailScorer{} literal, the daemon's included — never warms.
+	WarmCheck func(cmd []string) bool
+}
+
+// ScoreDevReport is ScoreReport / ScoreReportFor for the run's DEV-suite
+// pass, the one pass that may warm the grading jail's shared cache: it runs
+// the developer's own tests on the unmutated tree, so what its baseline writes
+// to the cache is the project's own build. WarmCheck is asked of the exact
+// baseline command here, where it is known. A nil cmdFor is ScoreReport.
+func (s JailScorer) ScoreDevReport(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string, cmdFor adequacy.CommandFor) (adequacy.Report, error) {
+	scoreBase, cmd := s.scoreWorkspace(codePath, test, testCmd)
+
+	opts := s.gatedScoreOpts(codePath, scoreBase)
+	if cmdFor != nil {
+		opts = append(opts, adequacy.WithCommandFor(cmdFor))
+	}
+	if s.WarmCheck != nil && s.WarmCheck(cmd) {
+		opts = append(opts, adequacy.WithWarmBaseline())
+	}
+	rep, err := adequacy.Score(ctx, s.Jail, scoreBase, codePath, code, mutants, cmd, opts...)
+	if err != nil {
+		return adequacy.Report{}, fmt.Errorf("advpool: score dev report: %w", err)
+	}
+	return rep, nil
 }
 
 // rewriteCmd is cmd as the jail is handed it: through f when f is set, else
@@ -412,6 +442,12 @@ func rewriteCmd(f func([]string) []string, cmd []string) []string {
 // Factored out because there are three such calls with identical options and a
 // fourth would be added by the next feature — a per-call copy is exactly how
 // one path silently keeps scoring sequentially while the others parallelize.
+//
+// WithWarmBaseline is deliberately NOT in this list. Every Score call shares
+// it, and most of them run a tree that holds a test a model wrote (the
+// authored and salvage passes) or are not the developer's own suite (the
+// critic's checks, the matrix); warming writes the cache every later run
+// reads. It is added at ONE call site, ScoreDevReport.
 func (s JailScorer) baseScoreOpts() []adequacy.ScoreOption {
 	return []adequacy.ScoreOption{
 		adequacy.WithMutantTimeout(s.MutantTimeout),

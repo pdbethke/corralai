@@ -138,15 +138,29 @@ type Options struct {
 	// discarded with the run.
 	ReadOnlyBinds []Bind
 
+	// Target, when set, is the path at which the run sees Workspace (and
+	// SeedLower) inside the jail: an absolute, clean path other than "/",
+	// such as WorkTarget. Empty, the run sees Workspace at its own host path,
+	// as every run did before Target existed. Workspace itself stays the HOST
+	// directory either way: it is what is mounted, and the directory the host
+	// process (bwrap, docker) is started in. Only the mount's in-jail side and
+	// the command's working directory move to Target; a ReadOnlyBinds target
+	// is the caller's to place under it. Only a backend that PlacesWorkspace
+	// may be given one; Run refuses any other, naming it, because a backend
+	// that knows nothing of Target would run the command at the host path.
+	Target string
+
 	// SeedLower, when set, is a seed directory the run sees through a
 	// copy-on-write overlay in place of a writable bind: the run reads the
 	// seed, and everything it writes lands in a private tmpfs upper layer
 	// that is gone when the run ends, so one seed serves any number of runs,
 	// concurrently, and none of them sees another's writes. It must equal
-	// Workspace: the jail sees the seed at its own host path, so every path
-	// a run prints (coverage reports above all) is what a fresh copy at that
-	// path prints. Only a backend that Overlays may be given one; Run refuses
-	// any other, because there the run would write into the seed itself.
+	// Workspace (the HOST path), and it is overlaid where the run sees the
+	// workspace: at Target when set, at its own host path otherwise, so every
+	// path a run prints (coverage reports above all) is what a fresh copy at
+	// that path prints. Only a backend that Overlays may be given one; Run
+	// refuses any other, because there the run would write into the seed
+	// itself.
 	SeedLower string
 
 	// Cache, when set, is a tool cache shared by several runs (the unit
@@ -159,6 +173,30 @@ type Options struct {
 // at. Fixed, not the host path, so every run of a pass names the cache the
 // same way whatever temp directory holds it on the host.
 const CacheTarget = "/corral-cache"
+
+// WorkTarget is the fixed path inside the jail a placed workspace is seen at
+// (Options.Target). Fixed, not the host path, for the reason CacheTarget is:
+// a tool that keys its caches on the source directory (Go's build cache keys
+// a package on its directory) sees every run's tree at the same path,
+// whatever temp directory holds it on the host.
+const WorkTarget = "/corral-work"
+
+// jailWorkspace is the path at which the run sees its workspace inside the
+// jail: opts.Target when set, opts.Workspace (the host path) otherwise. A
+// Target that is not an absolute, clean path other than "/" is refused: the
+// mount's target and --chdir must name one directory, and "/" would put the
+// workspace over the jail's root. Every backend that places a workspace
+// derives every in-jail workspace path from this, and from nothing else.
+func jailWorkspace(opts Options) (string, error) {
+	t := opts.Target
+	if t == "" {
+		return opts.Workspace, nil
+	}
+	if !path.IsAbs(t) || path.Clean(t) != t || t == "/" {
+		return "", fmt.Errorf("the workspace target %q is not an absolute, clean path other than /", t)
+	}
+	return t, nil
+}
 
 // CacheMount is a shared cache directory and how one run sees it. Frozen,
 // the run sees Host through a copy-on-write overlay at Target: it reads
@@ -226,6 +264,26 @@ type overlayer interface{ overlays() bool }
 func Overlays(iso Isolator) bool {
 	o, ok := iso.(overlayer)
 	return ok && o.overlays()
+}
+
+// placer is the optional Isolator capability Options.Target needs.
+type placer interface{ placesWorkspace() bool }
+
+// PlacesWorkspace reports whether iso can run a workspace at a Target
+// (Options.Target) for every run it can run at all. bwrap and the container
+// backend can (mount namespaces); sandbox-exec, none and any isolator that
+// does not say it can cannot, and refuse a Target. A bwrap that overlays a
+// seed only at the seed's own path (its construction probes say which)
+// reports false: it would refuse a seeded run at a target.
+func PlacesWorkspace(iso Isolator) bool {
+	p, ok := iso.(placer)
+	return ok && p.placesWorkspace()
+}
+
+// errCannotPlace is the refusal of a Target by a backend that cannot place a
+// workspace, naming the backend.
+func errCannotPlace(backend, target string) error {
+	return fmt.Errorf("%s backend: cannot run the workspace at %s: it can present the workspace only at its own host path", backend, target)
 }
 
 // dirOverlayer is the optional capability OverlaysDir reads.
@@ -464,6 +522,11 @@ func Run(ctx context.Context, command string, opts Options) Result {
 		// run without it, and a frozen one has no overlay to freeze it.
 		return Result{ExitCode: -1, Err: opts.Backend.Name() + " backend: cannot mount a shared cache: " + ErrNoOverlay.Error()}
 	}
+	if opts.Target != "" && !PlacesWorkspace(opts.Backend) {
+		// As for SeedLower: a backend that knows nothing of Target would run
+		// the command at the host path while the caller believes otherwise.
+		return Result{ExitCode: -1, Err: errCannotPlace(opts.Backend.Name(), opts.Target).Error()}
+	}
 	argv, werr := opts.Backend.Wrap(command, opts, env)
 	if werr != nil {
 		return Result{ExitCode: -1, Err: werr.Error()}
@@ -473,6 +536,7 @@ func Run(ctx context.Context, command string, opts Options) Result {
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...) // #nosec G204 -- corral re-execs its own binary / bwrap by design; argv is constructed by the sandbox layer from server-controlled config, not raw agent input; agent command execution is separately sandboxed (bwrap)
+	// The HOST directory, never Target: see Options.Target.
 	cmd.Dir = opts.Workspace
 	cmd.Env = env
 	// Process group + Cancel + WaitDelay, so a timeout kills the command AND
@@ -639,6 +703,10 @@ func RunInteractive(ctx context.Context, command string, opts Options, ws io.Rea
 
 	if opts.Backend == nil {
 		return Result{ExitCode: -1, Err: "execution disabled: no isolation backend"}
+	}
+	if opts.Target != "" && !PlacesWorkspace(opts.Backend) {
+		// As in Run.
+		return Result{ExitCode: -1, Err: errCannotPlace(opts.Backend.Name(), opts.Target).Error()}
 	}
 	argv, werr := opts.Backend.Wrap(command, opts, env)
 	if werr != nil {

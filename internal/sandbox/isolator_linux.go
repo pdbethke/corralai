@@ -35,6 +35,14 @@ type bwrapIsolator struct {
 	// copy-on-write overlay instead of one --ro-bind per entry, and a
 	// seeded workspace (Options.SeedLower) can be run at all.
 	overlay bool
+	// overlayAt is whether this host's bwrap also overlays a seed at a
+	// target that is NOT the seed's own path (Options.Target), in the jail's
+	// own root, as Wrap mounts it: set once by probeOverlayAt when the
+	// isolator is built, and only when overlay is. probeOverlay proves the
+	// overlay at a directory's own path only, so this is its own probe. A
+	// bwrap with overlay and not overlayAt refuses a seeded run at a target
+	// and reports PlacesWorkspace false; it never binds the seed writable.
+	overlayAt bool
 	// lowers answers, per filesystem, whether a dependency directory there
 	// can be an overlay's lower layer. The probe above proves overlayfs on
 	// the temp dir's filesystem only, and a repository's node_modules can sit
@@ -47,6 +55,13 @@ type bwrapIsolator struct {
 func (bwrapIsolator) Name() string { return "bwrap" }
 
 func (b bwrapIsolator) overlays() bool { return b.overlay }
+
+// placesWorkspace: a bwrap places every workspace it can run at a target. A
+// workspace bind at a target needs only the mount namespace every bwrap has;
+// a seeded workspace needs the overlay at a target, which a bwrap that
+// overlays at all must have proved (overlayAt). One that cannot overlay at
+// all runs no seeded workspace, so it places all it runs.
+func (b bwrapIsolator) placesWorkspace() bool { return !b.overlay || b.overlayAt }
 
 // overlaysDir reports whether a PerEntry bind of host is one overlay: the
 // bwrap overlays at all, host can be listed (the overlay's cache masks are
@@ -158,6 +173,13 @@ func (b bwrapIsolator) Wrap(command string, opts Options, env []string) ([]strin
 	if b.overlay && b.lowers == nil {
 		return nil, errors.New("bwrap: an overlaying isolator built without its per-filesystem probe")
 	}
+	// work is where the run sees its workspace: Target, or the host path.
+	// Every in-jail workspace path below is work; opts.Workspace appears only
+	// as the HOST side of a mount.
+	work, err := jailWorkspace(opts)
+	if err != nil {
+		return nil, fmt.Errorf("bwrap: %w", err)
+	}
 	if c := opts.Cache; c != nil {
 		if c.Host == "" || c.Target == "" {
 			return nil, errors.New("bwrap: a shared cache needs its host directory and its target")
@@ -173,7 +195,11 @@ func (b bwrapIsolator) Wrap(command string, opts Options, env []string) ([]strin
 			return nil, fmt.Errorf("bwrap: %w", ErrNoOverlay)
 		}
 		if opts.SeedLower != opts.Workspace {
-			return nil, fmt.Errorf("bwrap: a seed is overlaid at its own path; seed %q is not the workspace %q", opts.SeedLower, opts.Workspace)
+			return nil, fmt.Errorf("bwrap: a seed is overlaid where the workspace is seen; seed %q is not the workspace %q", opts.SeedLower, opts.Workspace)
+		}
+		if opts.Target != "" && !b.overlayAt {
+			// Never a writable bind of the seed in its place.
+			return nil, fmt.Errorf("bwrap: this bwrap overlays a seed only at its own path, not at %s: %w", opts.Target, ErrNoOverlay)
 		}
 	}
 	argv := []string{"bwrap",
@@ -277,15 +303,17 @@ func (b bwrapIsolator) Wrap(command string, opts Options, env []string) ([]strin
 		"--tmpfs", "/home/agent",
 	)
 	// The workspace mount comes AFTER the tmpfs above so a /tmp workspace
-	// survives. A seeded workspace is the seed overlaid at its own path: the
+	// survives. It is mounted at work: Options.Target when set (bwrap
+	// creates the mountpoint in the jail's own root, never on the host), the
+	// host path otherwise. A seeded workspace is the seed overlaid there: the
 	// run reads the seed and writes into a private tmpfs upper layer, so the
 	// seed stays what it was for every other run (Options.SeedLower).
 	if opts.SeedLower != "" {
-		argv = append(argv, "--overlay-src", opts.SeedLower, "--tmp-overlay", opts.Workspace)
+		argv = append(argv, "--overlay-src", opts.SeedLower, "--tmp-overlay", work)
 	} else {
-		argv = append(argv, "--bind", opts.Workspace, opts.Workspace)
+		argv = append(argv, "--bind", opts.Workspace, work)
 	}
-	argv = append(argv, "--chdir", opts.Workspace)
+	argv = append(argv, "--chdir", work)
 	for _, bnd := range opts.ReadOnlyBinds {
 		// A PerEntry bind leaves its target a writable directory a toolchain
 		// can create its cache in. With overlay support it is ONE
@@ -351,6 +379,7 @@ func newBwrapIsolator() (Isolator, error) {
 		return nil, err
 	}
 	b.overlay = probeOverlay()
+	b.overlayAt = b.overlay && probeOverlayAt()
 	b.lowers = newLowerCache(probeLower)
 	return b, nil
 }
@@ -397,6 +426,48 @@ func probeOverlay() bool {
 		"--overlay-src", dir, "--tmp-overlay", dir, "--chdir", dir,
 		"--", "sh", "-c", "test -f lower && echo y > upper")
 	if cmd.Run() != nil {
+		return false
+	}
+	// The write must have stayed in the run's upper layer.
+	_, err = os.Stat(filepath.Join(dir, "upper"))
+	return os.IsNotExist(err)
+}
+
+// overlayAtMarker is what probeOverlayAt's command prints once it has read
+// the lower through the overlay and written beside it.
+const overlayAtMarker = "corral-overlay-at-ok"
+
+// probeOverlayAt reports whether this host's bwrap can do what a seeded run
+// placed at a target does (Options.Target): overlay a directory at WorkTarget,
+// a path that is not its own and does not exist until bwrap makes it in the
+// jail's own root, with the root built as Wrap builds it (no host root bound,
+// /usr read-only, a /tmp tmpfs); start the command there; read the lower
+// through it; and keep a write out of it. It is probeOverlay's question asked
+// of the other shape, run once when the isolator is built. Any failure, a
+// timeout, or a bwrap that exits 0 without the command having printed its
+// marker is false, and the isolator then refuses a seeded run at a target
+// (PlacesWorkspace false) rather than bind the seed writable.
+func probeOverlayAt() bool {
+	dir, err := os.MkdirTemp("", "corral-overlay-at-probe-*")
+	if err != nil {
+		return false
+	}
+	defer os.RemoveAll(dir) // #nosec G104 -- best-effort cleanup of our own probe dir
+	if err := os.WriteFile(filepath.Join(dir, "lower"), []byte("x"), 0o600); err != nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "bwrap", "--unshare-all", "--die-with-parent", "--new-session", // #nosec G204 -- fixed argv; dir is our own MkdirTemp
+		"--ro-bind", "/usr", "/usr",
+		"--symlink", "usr/bin", "/bin",
+		"--symlink", "usr/lib", "/lib",
+		"--symlink", "usr/lib64", "/lib64",
+		"--tmpfs", "/tmp",
+		"--overlay-src", dir, "--tmp-overlay", WorkTarget, "--chdir", WorkTarget,
+		"--", "sh", "-c", "test \"$(pwd)\" = "+WorkTarget+" && test -f lower && echo y > upper && test -f upper && echo "+overlayAtMarker)
+	out, err := cmd.Output()
+	if err != nil || strings.TrimSpace(string(out)) != overlayAtMarker {
 		return false
 	}
 	// The write must have stayed in the run's upper layer.

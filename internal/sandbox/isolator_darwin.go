@@ -49,6 +49,12 @@ func (sandboxExecIsolator) Wrap(command string, opts Options, env []string) ([]s
 	if opts.Workspace == "" {
 		return nil, errors.New("sandbox-exec: workspace required")
 	}
+	if opts.Target != "" {
+		// No mount namespace: the SBPL rules below grant the workspace at its
+		// host path, and nothing can present it anywhere else. Run refuses
+		// first (PlacesWorkspace is false here); this is the backend's own.
+		return nil, errCannotPlace("sandbox-exec", opts.Target)
+	}
 
 	// HOME comes from the (already minimal, secret-free) env. We deny reads of
 	// it below so a command can't lift the operator's credentials.

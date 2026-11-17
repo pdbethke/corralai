@@ -25,6 +25,10 @@ type containerIsolator struct {
 
 func (c containerIsolator) Name() string { return "container" }
 
+// placesWorkspace: a volume's container side is any path, so the container
+// backend places every workspace it runs (it runs no seeded workspace).
+func (containerIsolator) placesWorkspace() bool { return true }
+
 // Preflight verifies image is set and the container runtime is on PATH.
 // It deliberately does NOT pull or start a container — startup latency and
 // registry auth are the caller's concern.
@@ -113,6 +117,11 @@ func (c containerIsolator) Wrap(command string, opts Options, env []string) ([]s
 	if c.image == "" {
 		return nil, errors.New("container: image required")
 	}
+	// work is where the run sees its workspace: Target, or the host path.
+	work, err := jailWorkspace(opts)
+	if err != nil {
+		return nil, fmt.Errorf("container: %w", err)
+	}
 
 	network := "none"
 	if opts.Network {
@@ -193,8 +202,8 @@ func (c containerIsolator) Wrap(command string, opts Options, env []string) ([]s
 		}
 	}
 	argv = append(argv,
-		"-v", opts.Workspace+":"+opts.Workspace,
-		"-w", opts.Workspace,
+		"-v", opts.Workspace+":"+work,
+		"-w", work,
 	)
 	for _, bnd := range opts.ReadOnlyBinds {
 		// PerEntry here as in the bwrap backend: one read-only mount per

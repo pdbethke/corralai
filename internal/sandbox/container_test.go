@@ -133,3 +133,27 @@ func TestContainerWrapHonoursPerEntryBinds(t *testing.T) {
 		t.Errorf("a dot-entry other than .bin must not be mounted: %s", joined)
 	}
 }
+
+// A workspace placed at a target on the container backend: the volume's
+// container side and the working directory are the target, never the host
+// path. Dependency binds keep the targets the caller gave them.
+func TestContainerArgvPlacesTheWorkspaceAtItsTarget(t *testing.T) {
+	c := containerIsolator{runtime: "docker", image: "img"}
+	argv, err := c.Wrap("true", Options{Workspace: "/ws", Target: WorkTarget,
+		ReadOnlyBinds: []Bind{{Host: "/deps/vendor", Target: WorkTarget + "/vendor"}}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !argvHas(argv, "-v", "/ws:/corral-work", "-w", "/corral-work") {
+		t.Errorf("want -v /ws:/corral-work -w /corral-work: %v", argv)
+	}
+	if argvHas(argv, "-v", "/ws:/ws") || argvHas(argv, "-w", "/ws") {
+		t.Errorf("the host path leaked into the container: %v", argv)
+	}
+	if !argvHas(argv, "-v", "/deps/vendor:/corral-work/vendor:ro") {
+		t.Errorf("the dependency bind lost its target: %v", argv)
+	}
+	if _, err := c.Wrap("true", Options{Workspace: "/ws", Target: "relative"}, nil); err == nil {
+		t.Error("a relative Target was accepted")
+	}
+}

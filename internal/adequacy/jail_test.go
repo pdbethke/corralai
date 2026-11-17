@@ -1183,17 +1183,35 @@ func placingJailOrSkip(t *testing.T) sandbox.Isolator {
 	return backend
 }
 
-// The script every fixed-path test runs: where am I, and is the HOST
-// directory (a corral-adequacy-* temp dir under /tmp, fresh copy or seed) in
-// the jail at all? It must not be: nothing the run can see names it.
-const fixedPathProbe = `pwd; if ls -d /tmp/corral-adequacy-* >/dev/null 2>&1; then echo HOSTPATH-VISIBLE; fi`
+// fixedPathProbe is the script every fixed-path test runs: where am I, and
+// is the HOST directory in the jail at all? It must not be: nothing the run
+// can see names it. The workspace is made under TMPDIR, so the probe points
+// TMPDIR at a directory of the test's own, and asks about that directory and
+// the workspace in it: whatever the host's TMPDIR really is, the probe names
+// the run's actual host path, never a /tmp pattern that a TMPDIR outside /tmp
+// would sidestep.
+func fixedPathProbe(t *testing.T) string {
+	t.Helper()
+	host := t.TempDir()
+	t.Setenv("TMPDIR", host)
+	return "pwd; if test -e " + host + " || ls -d " + host + "/corral-adequacy-* >/dev/null 2>&1; then echo HOSTPATH-VISIBLE; fi"
+}
 
 // A RunTest, an Enumerate and a seeded run each see their workspace at
 // /corral-work, and none of them sees the host directory.
 func TestJailRunsSeeTheWorkspaceAtTheFixedPath(t *testing.T) {
 	backend := placingJailOrSkip(t)
 	files := map[string]string{"a.txt": "x"}
-	cmd := []string{"sh", "-c", fixedPathProbe}
+	probe := fixedPathProbe(t)
+	cmd := []string{"sh", "-c", probe}
+
+	// The control: where the workspace keeps its host path, the same probe
+	// sees it, so a clean answer below is the placement's doing and not a
+	// probe that cannot see.
+	hostOut, err := NewEnumerator(backend, 30*time.Second, withoutWorkTarget()).Enumerate(context.Background(), files, cmd)
+	if err != nil || !strings.Contains(hostOut, "HOSTPATH-VISIBLE") {
+		t.Fatalf("control: at the host path the probe printed %q (err %v), want it to see the host directory", hostOut, err)
+	}
 
 	_, out, err := NewJail(backend, 30*time.Second).(VerboseJail).RunTestVerbose(context.Background(), files, cmd)
 	if err != nil || strings.TrimSpace(out) != sandbox.WorkTarget {
@@ -1264,7 +1282,7 @@ func TestDependencyBindsFollowTheFixedPath(t *testing.T) {
 	}
 	j := NewJail(backend, 30*time.Second, WithReadOnlyBinds([]DepBind{{Host: nm, Rel: "node_modules"}})).(VerboseJail)
 	script := `cat /corral-work/node_modules/pkg/index.js; echo; echo "$PATH" | tr ':' '\n' | head -1; mytool; ` +
-		`echo changed > /corral-work/node_modules/pkg/index.js 2>/dev/null; ` + fixedPathProbe
+		`echo changed > /corral-work/node_modules/pkg/index.js 2>/dev/null; ` + fixedPathProbe(t)
 	_, out, err := j.RunTestVerbose(context.Background(), map[string]string{"a.js": "1"}, []string{"sh", "-c", script})
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
@@ -1287,6 +1305,8 @@ func TestJailKeepsTheHostPathWhereTheBackendCannotPlaceIt(t *testing.T) {
 	if err := os.Mkdir(host, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
 	var got sandbox.Options
 	fake := &captureIsolator{name: "bwrap", onWrap: func(o sandbox.Options) { got = o }}
 	if sandbox.PlacesWorkspace(fake) {
@@ -1308,6 +1328,10 @@ func TestJailKeepsTheHostPathWhereTheBackendCannotPlaceIt(t *testing.T) {
 	}
 	if !strings.Contains(path, got.Workspace+"/node_modules/.bin") {
 		t.Errorf("PATH = %q, want the host-path .bin", path)
+	}
+	// TMPDIR is passed through as before: only a placed run drops it.
+	if !slices.Contains(got.Env, "TMPDIR="+tmp) {
+		t.Errorf("env = %q, want TMPDIR=%s passed through on a backend that cannot place a workspace", got.Env, tmp)
 	}
 }
 

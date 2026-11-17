@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
 // minMutantTimeout / maxMutantTimeout bound the auto-derived per-mutant
@@ -106,6 +107,9 @@ type scoreConfig struct {
 	// nil does NOT turn confirmation off: every candidate kill is still
 	// confirmed, by repeating its grading run (step B). There is no off.
 	killConfirmer KillerCmdFor
+	// rewrite, when set, is applied to a COPY of every command Score hands
+	// the jail, at the one point it does so (see toJail in Score).
+	rewrite func(cmd []string) []string
 }
 
 // The values of MutantGrading.KillConfirmation: what the confirmation of a
@@ -244,6 +248,18 @@ func WithFailureParser(p lang.FailureParser) ScoreOption {
 // proportional to the mutant count.
 func WithMutantFailFast(f FailFastFor) ScoreOption {
 	return func(c *scoreConfig) { c.failFast = f }
+}
+
+// WithCommandRewrite rewrites EVERY command Score hands the jail: the
+// baseline, the fail-fast probe, each mutant's command (after selection and
+// fail-fast arguments are added), each confirmation command (alone or
+// repeated), the compile gate and the canary. It is applied in the one place
+// commands reach the jail, to a copy, after the command is fully assembled, so
+// f never sees the same slice twice and never mutates the caller's. Grading
+// keys (the per-command timeout cap) stay on the raw command. nil is no
+// rewrite.
+func WithCommandRewrite(f func(cmd []string) []string) ScoreOption {
+	return func(c *scoreConfig) { c.rewrite = f }
 }
 
 // WithConcurrency scores up to n mutants at once. The default (and anything
@@ -533,6 +549,11 @@ type Report struct {
 	// ordinary Python repos, which is why an estimate extrapolated from one
 	// repo is worthless. Recording it turns capacity planning into a query.
 	BaselineDuration time.Duration
+	// RunCache is the jail's shared tool cache as it stood after the baseline
+	// run (the run that warms it): Target says where every run saw it, and
+	// Unshared why a requested one is not shared. The zero value for a jail
+	// that has no run cache.
+	RunCache sandbox.SharedCache
 	// BaselineTimedOut reports that the compliant suite was killed at the
 	// run's bound rather than finishing red. Both leave CompliantPass false,
 	// and until this field the report could not tell them apart: REA's
@@ -779,13 +800,25 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 		o(&cfg)
 	}
 
+	// toJail is THE door every grading command passes through on its way to
+	// the jail: runCmd, runCmdDetailed, runCmdVerbose and baselineRun below all
+	// call it as their last step, and there is no other call of the jail in
+	// this function. It hands the rewrite a copy, so the rewrite never sees
+	// the caller's slice nor one it has already seen.
+	toJail := func(cmd []string) []string {
+		if cfg.rewrite == nil {
+			return cmd
+		}
+		return cfg.rewrite(append([]string(nil), cmd...))
+	}
+
 	runCmd := func(rctx context.Context, code string, cmd []string) (bool, error) {
 		files := make(map[string]string, len(base)+1)
 		for k, v := range base {
 			files[k] = v
 		}
 		files[codePath] = code
-		return j.RunTest(rctx, files, cmd)
+		return j.RunTest(rctx, files, toJail(cmd))
 	}
 
 	run := func(rctx context.Context, code string) (bool, error) {
@@ -804,7 +837,7 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 			files[k] = v
 		}
 		files[codePath] = code
-		return dj.RunTestDetailed(rctx, files, cmd)
+		return dj.RunTestDetailed(rctx, files, toJail(cmd))
 	}
 
 	// runCmdVerbose keeps the checker's OUTPUT when the Jail can report it.
@@ -822,7 +855,7 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 			files[k] = v
 		}
 		files[codePath] = code
-		return vj.RunTestVerbose(rctx, files, cmd)
+		return vj.RunTestVerbose(rctx, files, toJail(cmd))
 	}
 
 	// The BASELINE run alone keeps its output when the jail can: it is a
@@ -841,8 +874,17 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 			files[k] = v
 		}
 		files[codePath] = code
+		// WARM THE RUN CACHE with this run: the baseline is the first run on
+		// the unmutated code and the only one that executes everything, so it
+		// is the run that fills the cache every later run reads frozen. Taken
+		// whether or not the cache is shared (an unshared jail's WarmRun is a
+		// detailed run), so no branch on RunCache() here.
+		if rj, ok := j.(RunCacheJail); ok {
+			p, out, err := rj.WarmRun(rctx, files, toJail(testCmd))
+			return p, string(out), err
+		}
 		if dj, ok := j.(DetailedJail); ok {
-			p, out, err := dj.RunTestDetailed(rctx, files, testCmd)
+			p, out, err := dj.RunTestDetailed(rctx, files, toJail(testCmd))
 			return p, string(out), err
 		}
 		vj, ok := j.(VerboseJail)
@@ -850,7 +892,7 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 			p, err := run(rctx, code)
 			return p, "", err
 		}
-		return vj.RunTestVerbose(rctx, files, testCmd)
+		return vj.RunTestVerbose(rctx, files, toJail(testCmd))
 	}
 
 	start := time.Now()
@@ -863,12 +905,19 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 			// score mutants against a baseline that can't even pass. The
 			// output rides along: "which test hung" is exactly the question a
 			// timed-out baseline leaves open.
-			return Report{CompliantPass: false, BaselineOutput: baseOut, BaselineDuration: baseDur, BaselineTimedOut: true}, nil
+			trep := Report{CompliantPass: false, BaselineOutput: baseOut, BaselineDuration: baseDur, BaselineTimedOut: true}
+			if rj, ok := j.(RunCacheJail); ok {
+				trep.RunCache = rj.RunCache()
+			}
+			return trep, nil
 		}
 		return Report{}, err
 	}
 	rep := Report{CompliantPass: pass}
 	rep.BaselineDuration = baseDur
+	if rj, ok := j.(RunCacheJail); ok {
+		rep.RunCache = rj.RunCache()
+	}
 	if fr, ok := cfg.failureParser.(lang.FlakyReporter); ok && pass {
 		rep.BaselineFlaky = fr.FlakyTests([]byte(baseOut))
 	}

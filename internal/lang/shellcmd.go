@@ -27,3 +27,23 @@ func cmdIsShellWrapped(cmd []string) bool {
 	}
 	return false
 }
+
+// shellWrappedBefore reports whether cmd runs a shell `-c` wrapper starting
+// at any word before index at (len(cmd) when at < 0): the `sh -c` shape at
+// argv[0], or behind a prefix (`env A=1 sh -c pytest`, `xvfb-run sh -c ...`),
+// which cmdIsShellWrapped, reading argv[0] only, does not see. A word
+// appended to such a command is the script's $1, never the runner's option.
+// It is the one refusal every function that appends to a runner's command
+// shares (ReportCmd, FailFastArgsFor), so they cannot disagree about which
+// commands they can read.
+func shellWrappedBefore(cmd []string, at int) bool {
+	if at < 0 || at > len(cmd) {
+		at = len(cmd)
+	}
+	for i := range at {
+		if cmdIsShellWrapped(cmd[i:]) {
+			return true
+		}
+	}
+	return false
+}

@@ -78,3 +78,25 @@ func TestAppendFailFastIsIdempotentAndAppends(t *testing.T) {
 		t.Errorf("got %v — the flag must be APPENDED (an insert after argv[0] would break `python -m pytest`)", got)
 	}
 }
+
+// A shell behind a prefix is a wrapper too: `env A=1 sh -c pytest` + -x
+// makes -x the script's $1, not pytest's option. FailFastArgsFor refuses it
+// by the rule ReportCmd uses (shellWrappedBefore).
+func TestFailFastRefusesAShellBehindAPrefix(t *testing.T) {
+	p, _ := ByName("python")
+	for _, argv := range [][]string{
+		{"env", "A=1", "sh", "-c", "pytest"},
+		{"xvfb-run", "bash", "-e", "-c", "python3 -m pytest tests"},
+	} {
+		if args, ok := FailFastArgsFor(p, Cmd(argv)); ok {
+			t.Errorf("%v got fail-fast %v: a shell behind a prefix reads no appended flag", argv, args)
+		}
+		if _, ok := ReportCmd(p, Cmd(argv), argv); ok {
+			t.Errorf("%v got report flags: the two functions must refuse the same wrappers", argv)
+		}
+	}
+	// A prefix with no shell is still read as before.
+	if args, ok := FailFastArgsFor(p, Cmd([]string{"env", "A=1", "pytest", "tests"})); !ok || strings.Join(args, " ") != "-x" {
+		t.Errorf("env A=1 pytest tests: got %v ok=%v, want -x", args, ok)
+	}
+}

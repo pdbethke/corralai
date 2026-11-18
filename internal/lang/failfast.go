@@ -88,6 +88,12 @@ func FailFastArgsFor(p Plugin, inv Invocation) ([]string, bool) {
 	if !ok || len(r.FailFast) == 0 || (inv.Runner != "" && r.ID != inv.Runner) {
 		return nil, false
 	}
+	// A shell behind a prefix (`env A=1 sh -c pytest`) is a wrapper too, by
+	// the rule ReportCmd uses: the flag would be the script's $1. A row
+	// detected without a word (go test) is checked over the whole command.
+	if shellWrappedBefore(words, runnerWordIndex(words, r)) {
+		return nil, false
+	}
 	if inv.Script != nil && inv.Pass != "" && !slices.Contains(inv.Argv, inv.Pass) {
 		// Through a launcher the flag reaches the script only after its
 		// separator: `npm test -- --bail`.

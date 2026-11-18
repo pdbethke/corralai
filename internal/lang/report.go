@@ -59,12 +59,9 @@ func ReportCmd(p Plugin, inv Invocation, cmd []string) ([]string, bool) {
 	if at < 0 {
 		return cmd, false
 	}
-	// A shell behind a prefix (`env A=1 sh -c pytest`) is a wrapper too:
-	// cmdIsShellWrapped reads argv[0] only.
-	for i := range at {
-		if cmdIsShellWrapped(cmd[i:]) {
-			return cmd, false
-		}
+	// A shell behind a prefix (`env A=1 sh -c pytest`) is a wrapper too.
+	if shellWrappedBefore(cmd, at) {
+		return cmd, false
 	}
 	end := len(cmd)
 	if i := slices.Index(cmd[at+1:], "--"); i >= 0 {

@@ -385,13 +385,16 @@ type JailScorer struct {
 	// its Jail, through one helper (rewriteCmd): Score's own commands by way
 	// of adequacy.WithCommandRewrite in baseScoreOpts, and the commands the
 	// other doors run (CompliantRun, the positive control). cmd/corral sets
-	// it (gradingRewrite) to two rewrites, either of which may be absent: the
-	// runner row's report flags (lang.ReportArgv: pytest's -rfE, without
-	// which a project's own -r setting hides the lines FailureParser and
-	// salvage read), on the jail and on the workspace substrate alike; then,
+	// it (gradingRewrite) to two rewrites, either of which may be absent:
 	// when the Jail shares a tool cache among its runs, the no-replay rewrite,
 	// because such a cache also holds test RESULTS and a command that reached
-	// the jail unrewritten could replay one instead of running the test. nil
+	// the jail unrewritten could replay one instead of running the test; then,
+	// last, the runner row's report rewrite (lang.ReportArgv: pytest's -rfE
+	// and its failure hook's `sh -c` wrapper, without which a project's own
+	// report settings hide what FailureParser and salvage read), on the jail
+	// and on the workspace substrate alike. Because that wrapper is a command
+	// nothing can narrow, every door derives its command from the operator's
+	// own words and calls this as its last step before the Jail. nil
 	// — every existing JailScorer{} literal, the daemon's included — hands
 	// the jail the operator's command byte for byte.
 	//

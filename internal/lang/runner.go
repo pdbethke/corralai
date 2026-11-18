@@ -292,6 +292,7 @@ var runners = []Runner{
 		FirstFailure: pyFirstFailure, FailedTests: pyFailedTests, DeselectCmd: pyDeselectCmd, KillerCmd: pyKillerCmd,
 		CollectionBase: stripPyCollectionTargets, TestsCmd: pyTestsCmd, TestUnit: pyTestUnit, CarryArgs: deselectArgs,
 		VersionCmd: versionAtWord("pytest"),
+		Note:       "-rfE is added to every graded run, after the project's own options, because a project's -r setting (addopts) replaces pytest's default and hides the `FAILED` lines corral reads the killing test from; pytest keeping the last -r it is given was verified on pytest 5.4.3, 6.2.5, 9.1.1 and 9.2.0",
 	},
 	{
 		// No salvage: unittest exits 2 on pytest's --deselect, so a rerun

@@ -333,6 +333,9 @@ func TestPytestReadersFallBackWithoutACompleteBlock(t *testing.T) {
 		failed           []string
 	}{
 		{"no block", printed, "tests/a.py::test_printed", []string{"tests/a.py::test_printed"}},
+		// The printed lines cannot say where an id with a space ends: the
+		// second source cuts it there, which is why it is the second.
+		{"no block, spaced id", "FAILED tests/a.py::test_p[a b] - boom\n", "tests/a.py::test_p[a", []string{"tests/a.py::test_p[a"}},
 		{"begin without end", printed + "corral-report-begin\ncorral-report failed tests/a.py::test_hook\n",
 			"tests/a.py::test_printed", []string{"tests/a.py::test_printed"}},
 		{"end without begin (the cap cut the block's head)", printed + "corral-report failed tests/a.py::test_hook\ncorral-report-end\n",

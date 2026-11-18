@@ -69,7 +69,11 @@ const (
 // the project's (-r, --no-summary, -p no:terminal) can hide it.
 //
 // Everything it writes goes into its OWN directory (the directory of its
-// file), so no path is exported in the environment for a test to read:
+// file), so no variable names the record. That is not the same as hiding it:
+// the directory is the last entry of PYTHONPATH and the module is in
+// sys.modules, so a test can find the report file and replace it, and a
+// block forged that way is read like any other. The defence is the one named
+// under "WHAT A TEST CAN FORGE": the confirmation run, unchanged.
 //
 //   - `loaded`, at import. The wrapper reads it to tell a run in which the
 //     plugin never loaded (and which it then repeats without the hook) from
@@ -157,21 +161,61 @@ def pytest_configure(config):
 // plugin is loaded through the environment (PYTEST_PLUGINS, appended to the
 // operator's own), so those words are the same with and without the hook.
 //
-// THE GUARANTEE is that the hook failing never changes what the run's exit
-// code would have been without it, and so never fails a baseline:
+// THE GUARANTEE is that the hook never changes what the run's exit code
+// would have been without it, and so never fails a baseline:
 //
-//   - if the hook cannot be set up (no mktemp, an unwritable temporary
-//     directory), the command is run exactly as it would run without the
-//     hook, and its exit code is the script's;
-//   - if the hooked run exits non-zero and the plugin never recorded that it
-//     loaded, the command is run once more without the hook's environment,
-//     one line says so, and THAT run's exit code is the script's. This is
-//     what covers a command that does not carry the environment to pytest
-//     (python -I or -E, `env -u PYTHONPATH`, a container, tox), where pytest
-//     fails at start-up on a plugin it cannot import, and a project that
-//     owns a module of the plugin's name;
-//   - when the plugin loaded, the run is never repeated: its exit code is
-//     pytest's own.
+//   - if the hook cannot be set up (no awk, no mktemp or mkfifo, an
+//     unwritable temporary directory), the command is run exactly as it would
+//     run without the hook, and its exit code is the script's;
+//   - if pytest could not import the plugin, it exits non-zero BEFORE RUNNING
+//     ANY TEST, having said so on its error stream. Then, and only then, the
+//     command is run once more without the hook's environment, one line says
+//     so, and that run's exit code is the script's. This covers a command
+//     that carries PYTEST_PLUGINS to pytest but not PYTHONPATH (python -I or
+//     -E, `env -u PYTHONPATH`), and a project module of the plugin's name
+//     that raises when imported;
+//   - in every other case the run is never repeated and its exit code is
+//     pytest's own. That includes every run in which the plugin did not load
+//     but the tests ran: a command that drops PYTEST_PLUGINS (pytest runs
+//     unhooked), a project module of the plugin's name that imports cleanly
+//     (it is loaded in the plugin's place). Their exit codes are genuine,
+//     and a second run could differ from the first.
+//
+// (The first version repeated whenever the run failed and the plugin had not
+// recorded that it loaded. A review ran a test that fails on its first run
+// only, under `env -u PYTEST_PLUGINS`: exit 1 plain, exit 0 wrapped.)
+//
+// HOW THE START-UP FAILURE IS RECOGNISED. All three must hold: the run
+// exited non-zero; the plugin's `loaded` file is absent; and pytest's error
+// stream carried the line it prints for a plugin it cannot import. That line
+// is, for a module it cannot find,
+//
+//	ImportError: Error importing plugin "<module>": No module named '<module>'
+//
+// and for a module that raises anything but ImportError, a Python traceback
+// frame naming the module's own file,
+//
+//	File ".../<module>.py", line N, in <module>
+//
+// (both measured on pytest 9.1.1, on stderr; a test runs pytest and fails if
+// either changes). The stream is watched as it goes by, not saved: stderr
+// passes through an awk filter that copies every line through and drops a
+// flag file when it sees one of those. Standard output is not touched. The
+// doors that run graded commands capture the two streams as one, so the only
+// effect is that a line pytest writes to stderr can arrive a moment later
+// relative to its stdout than it would have; awk also ends a final line with
+// a newline where the stream had none.
+//
+// The filter reads a FIFO and stops at a sentinel line the script writes
+// after pytest has exited, never at end of file: a process a test leaves
+// running holds the stream open, and a filter that waited for it to close
+// would hold the whole run until that process died.
+//
+// WHAT A HOSTILE TEST CAN STILL DO. A test that prints one of those lines on
+// its error stream AND removes the plugin's `loaded` file AND fails can force
+// a repeat, and a test that prints the sentinel (which names the temporary
+// directory) can stop the filter early. Both need a test written to do
+// exactly that, knowing this file.
 //
 // A repeated run's output follows the first one's, and carries no block, so
 // its failures are read from pytest's printed lines.
@@ -188,15 +232,34 @@ def pytest_configure(config):
 //     win an import from them.
 //   - The blank line before the block keeps the begin marker on a line of
 //     its own when pytest's last line had no newline.
-const pyReportScript = `if d=$(mktemp -d 2>/dev/null) && cat > "$d/` + pyReportModule + `.py" 2>/dev/null <<'CORRAL_PY'
+const pyReportScript = `if command -v awk >/dev/null 2>&1 && d=$(mktemp -d 2>/dev/null) && mkfifo "$d/err" 2>/dev/null && cat > "$d/` + pyReportModule + `.py" 2>/dev/null <<'CORRAL_PY'
 ` + pyReportPlugin + `CORRAL_PY
 then
   trap 'rm -rf "$d"' EXIT
-  PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$d" PYTEST_PLUGINS="${PYTEST_PLUGINS:+$PYTEST_PLUGINS,}` + pyReportModule + `" "$@"
+  stop="corral-report-stderr-end $d"
+  LC_ALL=C awk -v flag="$d/noimport" -v stop="$stop" '{
+    i = index($0, stop)
+    if (i > 0 && substr($0, i) == stop) {
+      if (i > 1) printf "%s", substr($0, 1, i - 1)
+      exit
+    }
+    print
+    fflush()
+    if (index($0, "` + pyImportErrorLine + `") || (index($0, "` + pyImportFrameLine + `") && index($0, ", in <module>"))) {
+      printf "" > flag
+      close(flag)
+    }
+  }' < "$d/err" >&2 &
+  filter=$!
+  exec 9> "$d/err"
+  PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$d" PYTEST_PLUGINS="${PYTEST_PLUGINS:+$PYTEST_PLUGINS,}` + pyReportModule + `" "$@" 2>&9 9>&-
   rc=$?
-  if [ "$rc" -ne 0 ] && [ ! -f "$d/loaded" ]; then
+  ( printf '%s\n' "$stop" >&9 ) 2>/dev/null
+  exec 9>&-
+  wait "$filter"
+  if [ "$rc" -ne 0 ] && [ -f "$d/noimport" ] && [ ! -f "$d/loaded" ]; then
     echo
-    echo "corral: its pytest failure hook did not load in the run above (exit $rc), so the command is run again without the hook; the result is the run below"
+    echo "corral: pytest could not import corral's failure hook and ran no test (exit $rc), so the command is run again without the hook; the result is the run below"
     "$@"
     exit $?
   fi
@@ -204,9 +267,20 @@ then
   exit "$rc"
 fi
 [ -n "$d" ] && rm -rf "$d"
-echo 'corral: its pytest failure hook could not be set up (mktemp -d, or writing into the directory it made, failed), so the command is run without the hook' >&2
+echo 'corral: its pytest failure hook could not be set up (it needs awk, mktemp -d and mkfifo, and a temporary directory it can write), so the command is run without the hook' >&2
 "$@"
 `
+
+// pyImportErrorLine and pyImportFrameLine are what pytest's error stream
+// carries when it cannot import the plugin (see "HOW THE START-UP FAILURE IS
+// RECOGNISED"): the ImportError pytest raises for a module it cannot find,
+// and the traceback frame of a module of that name that raised at import
+// (with ", in <module>" on the same line). Written with the quotes escaped,
+// as they sit inside an awk string.
+const (
+	pyImportErrorLine = `Error importing plugin \"` + pyReportModule + `\"`
+	pyImportFrameLine = pyReportModule + `.py\", line `
+)
 
 // pyReportHook is the pytest row's ReportHook: cmd run through
 // pyReportScript, its words unchanged.
@@ -231,17 +305,26 @@ var pyReportHook = &ReportHook{
 // environment, in which the plugin could not load.
 //
 // THIS LIST IS A COST SAVING, NOT THE CORRECTNESS GUARANTEE. A command it
-// misses is still graded right, by the wrapper's fallback (pyReportScript):
-// the hooked run fails at start-up, and the command is run again without the
-// hook. That costs a failed start and a repeat on every graded run, which is
-// what this avoids for the shapes known to need it, so the list need not be
-// complete: tox and nox (their own virtualenv and environment), docker and
-// podman (a container sees neither the temporary directory nor the
-// variables), and a Python interpreter given -I or -E, which ignores
-// PYTHONPATH. A command it refuses keeps the report flags and nothing else.
+// misses is still graded right, by the wrapper's fallback (pyReportScript).
+// What a miss costs depends on what the launcher does with the environment:
+// one that drops PYTEST_PLUGINS, or everything (a container, tox, `env -i`),
+// runs pytest unhooked at no cost but the wrapper's own; one that carries
+// PYTEST_PLUGINS and not PYTHONPATH (python -I or -E) makes pytest fail at
+// start-up and the command run again, on every graded run. So the list need
+// not be complete: tox and nox (their own virtualenv and environment),
+// docker and podman (a container sees neither the temporary directory nor
+// the variables), and a Python interpreter given -I or -E. A command it
+// refuses keeps the report flags and nothing else.
+//
+// -W and -X take an argument, attached (-Werror::EncodingWarning) or as the
+// next word; neither is a cluster of flags, so their letters are not read.
 func pyReportWraps(cmd []string, at int) bool {
-	python := false
+	python, skip := false, false
 	for _, w := range cmd[:at] {
+		if skip {
+			skip = false
+			continue
+		}
 		base := filepath.Base(w)
 		switch base {
 		case "tox", "nox", "docker", "podman":
@@ -251,9 +334,20 @@ func pyReportWraps(cmd []string, at int) bool {
 			python = true
 			continue
 		}
-		// A short-option cluster of the interpreter's holding I or E
-		// (-I, -E, -sE): isolated mode, or ignore the PYTHON* variables.
-		if python && strings.HasPrefix(w, "-") && !strings.HasPrefix(w, "--") && strings.ContainsAny(w[1:], "IE") {
+		if !python || !strings.HasPrefix(w, "-") || strings.HasPrefix(w, "--") {
+			continue
+		}
+		// The interpreter's own short options. A cluster runs up to the
+		// first option that takes an argument (W, X), whose argument is the
+		// rest of the word or, when the word ends there, the next word.
+		cluster := w[1:]
+		if i := strings.IndexAny(cluster, "WX"); i >= 0 {
+			skip = i == len(cluster)-1
+			cluster = cluster[:i]
+		}
+		// -I (isolated) and -E (ignore PYTHON* variables), alone or in a
+		// cluster (-sE): PYTHONPATH is not read.
+		if strings.ContainsAny(cluster, "IE") {
 			return false
 		}
 	}

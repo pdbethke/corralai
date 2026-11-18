@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pdbethke/corralai/internal/clip"
 )
@@ -559,28 +560,106 @@ func TestRunDisclosuresSayWhenTheHookWraps(t *testing.T) {
 	}
 }
 
-// THE GUARANTEE: the hook failing to load never changes what the run's exit
-// code would have been without it, and never fails a baseline. Each case is
-// a command or a project the hook cannot load in, run for real with a passing
-// suite (exit 0) and a failing one (exit 1, the killing test still named,
-// from the printed lines where the hook recorded nothing).
-func TestPytestHookNeverChangesAResultWhenItCannotLoad(t *testing.T) {
+// onceFixture is a pytest project whose one test FAILS ON ITS FIRST RUN ONLY
+// (it leaves a marker file) and appends a line to runs.txt each time it
+// runs: a run of it repeated behind the operator's back turns exit 1 into
+// exit 0, and the count shows how many times the tests really ran. extra is
+// more of the test's body, run before it fails.
+func onceFixture(t *testing.T, extra string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "tests"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	test := "import os, shutil, sys\n\n\ndef test_first_run_only():\n    with open('runs.txt', 'a') as out:\n        out.write('run\\n')\n" +
+		extra + "    first = not os.path.exists('ran-before')\n    open('ran-before', 'w').close()\n    assert not first\n"
+	if err := os.WriteFile(filepath.Join(dir, "tests", "test_once.py"), []byte(test), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func testRuns(t *testing.T, dir string) int {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(dir, "runs.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Count(string(raw), "run\n")
+}
+
+// THE REPEAT CAN ONLY FOLLOW A START-UP FAILURE. A run in which the plugin
+// never loaded is not thereby a run that failed to start: where the command
+// drops PYTEST_PLUGINS, a project module of the plugin's name loads in its
+// place, or a test deletes the plugin's directory, the tests RAN, and their
+// exit code is the genuine one. Each case here has a test that fails on its
+// first run only: the wrapped command exits 1 as the operator's own does, and
+// the tests ran once. (Repeating whenever "loaded" was absent turned these
+// into exit 0.)
+func TestPytestHookNeverRepeatsARunWhoseTestsRan(t *testing.T) {
+	py := pytestFor(t)
+	cases := []struct {
+		name  string
+		argv  []string
+		extra string
+		file  map[string]string
+	}{
+		{"the command drops PYTEST_PLUGINS", []string{"env", "-u", "PYTEST_PLUGINS", py, "-m", "pytest"}, "", nil},
+		{"a project module of the plugin's name loads instead", []string{py, "-m", "pytest"}, "",
+			map[string]string{pyReportModule + ".py": "# the project's own module of that name\n"}},
+		{"a test deletes the plugin's directory", []string{py, "-m", "pytest"},
+			"    hook = sys.modules.get('" + pyReportModule + "')\n    if hook is not None:\n        shutil.rmtree(os.path.dirname(hook.__file__))\n", nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			plainDir := onceFixture(t, c.extra)
+			dir := onceFixture(t, c.extra)
+			for name, body := range c.file {
+				for _, d := range []string{plainDir, dir} {
+					if err := os.WriteFile(filepath.Join(d, name), []byte(body), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			operator := append(slices.Clone(c.argv), "tests", "-p", "no:cacheprovider")
+			if plain, code := runIn(t, plainDir, operator); code != 1 {
+				t.Fatalf("control: the operator's own command exited %d, want 1:\n%s", code, plain)
+			}
+			out, code := runIn(t, dir, rewritten(t, operator))
+			if code != 1 {
+				t.Errorf("the graded command exited %d, the operator's own exits 1:\n%s", code, out)
+			}
+			if n := testRuns(t, dir); n != 1 {
+				t.Errorf("the tests ran %d times, want once:\n%s", n, out)
+			}
+			if strings.Contains(out, "run again without the hook") {
+				t.Errorf("the run was repeated:\n%s", out)
+			}
+		})
+	}
+}
+
+// THE FALLBACK: pytest could not import the plugin, said so, and exited
+// before running any test; the command is then run once more without the
+// hook and that run's exit code is the script's. The launcher gate
+// (pyReportWraps) would decline python -I and -E, so the wrapper is applied
+// directly here: this exercises the fallback itself, which is the guarantee
+// for every shape the gate does not list. Each case with a passing suite
+// (exit 0, no failed baseline) and a failing one (exit 1, the failing test
+// named from the repeat's printed lines), and the tests ran exactly once.
+func TestPytestHookFallsBackWhenPytestCannotImportIt(t *testing.T) {
 	py := pytestFor(t)
 	cases := []struct {
 		name string
-		argv []string          // before the test path
-		env  []string          // extra environment
-		file map[string]string // extra project files
+		argv []string
+		file map[string]string
 	}{
-		{"python -I ignores PYTHONPATH", []string{py, "-I", "-m", "pytest"}, nil, nil},
-		{"python -E ignores PYTHONPATH", []string{py, "-E", "-m", "pytest"}, nil, nil},
-		{"env -u PYTHONPATH drops it", []string{"env", "-u", "PYTHONPATH", py, "-m", "pytest"}, nil, nil},
-		{"env -u PYTEST_PLUGINS drops it", []string{"env", "-u", "PYTEST_PLUGINS", py, "-m", "pytest"}, nil, nil},
-		{"a project file shadows the plugin's module", []string{py, "-m", "pytest"}, nil,
-			map[string]string{pyReportModule + ".py": "# the project's own module of that name\n"}},
-		{"no temporary directory", []string{py, "-m", "pytest"}, []string{"TMPDIR=/nonexistent/corral"}, nil},
+		{"python -I ignores PYTHONPATH", []string{py, "-I", "-m", "pytest"}, nil},
+		{"python -E ignores PYTHONPATH", []string{py, "-E", "-m", "pytest"}, nil},
+		{"env -u PYTHONPATH drops it", []string{"env", "-u", "PYTHONPATH", py, "-m", "pytest"}, nil},
+		{"a project module of the plugin's name raises at import", []string{py, "-m", "pytest"},
+			map[string]string{pyReportModule + ".py": "raise RuntimeError('the project module of that name does not import')\n"}},
 	}
-	p, _ := ByName("python")
 	for _, c := range cases {
 		for _, suite := range []struct {
 			name, test string
@@ -592,26 +671,142 @@ func TestPytestHookNeverChangesAResultWhenItCannotLoad(t *testing.T) {
 		} {
 			t.Run(c.name+"/"+suite.name, func(t *testing.T) {
 				dir := reportFixture(t, "")
+				files := map[string]string{"conftest.py": "def pytest_sessionstart(session):\n    with open('sessions.txt', 'a') as out:\n        out.write('run\\n')\n"}
 				for name, body := range c.file {
+					files[name] = body
+				}
+				for name, body := range files {
 					if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
 						t.Fatal(err)
 					}
 				}
 				operator := append(slices.Clone(c.argv), suite.test, "-p", "no:cacheprovider")
-				plain, plainCode := runIn(t, dir, operator, c.env...)
-				if plainCode != suite.exit {
-					t.Fatalf("control: the operator's own command exited %d, want %d:\n%s", plainCode, suite.exit, plain)
-				}
-				graded, _ := ReportCmd(p, Cmd(operator), operator)
-				out, code := runIn(t, dir, graded, c.env...)
+				out, code := runIn(t, dir, pyReportHook.Wrap(operator))
 				if code != suite.exit {
-					t.Fatalf("the graded command exited %d, the operator's own exits %d:\n%s", code, suite.exit, out)
+					t.Fatalf("the wrapped command exited %d, want the operator's own %d:\n%s", code, suite.exit, out)
+				}
+				if !strings.Contains(out, "run again without the hook") {
+					t.Errorf("no line says the run was repeated:\n%s", out)
 				}
 				if got := pyFirstFailure([]byte(out)); got != suite.first {
 					t.Errorf("FirstFailure = %q, want %q, from:\n%s", got, suite.first, out)
 				}
+				raw, err := os.ReadFile(filepath.Join(dir, "sessions.txt"))
+				if err != nil || strings.Count(string(raw), "run\n") != 1 {
+					t.Errorf("pytest sessions started: %q (%v), want exactly one: the first run must fail before any session", raw, err)
+				}
 			})
 		}
+	}
+}
+
+// The commands the launcher gate declines keep the report flags alone and
+// run exactly as the operator's own: no wrapper, no failed start, no repeat.
+func TestPytestCommandsTheGateDeclinesRunUnwrapped(t *testing.T) {
+	py := pytestFor(t)
+	p, _ := ByName("python")
+	for _, flag := range []string{"-I", "-E"} {
+		for _, suite := range []struct {
+			test string
+			exit int
+		}{{"tests/test_x.py::test_good", 0}, {"tests/test_x.py::test_bad", 1}} {
+			t.Run(flag+"/"+suite.test, func(t *testing.T) {
+				dir := reportFixture(t, "")
+				operator := []string{py, flag, "-m", "pytest", suite.test, "-p", "no:cacheprovider"}
+				graded, _ := ReportCmd(p, Cmd(operator), operator)
+				if cmdIsShellWrapped(graded) {
+					t.Fatalf("ReportCmd wrapped %v", operator)
+				}
+				out, code := runIn(t, dir, graded)
+				if code != suite.exit || strings.Contains(out, "Error importing plugin") {
+					t.Errorf("exit %d, want %d, with no plugin import error:\n%s", code, suite.exit, out)
+				}
+			})
+		}
+	}
+}
+
+// A wrapper that cannot set itself up runs the command as it was: no
+// temporary directory, or no awk for the filter that watches pytest's error
+// stream.
+func TestPytestHookRunsTheCommandPlainWhenItCannotBeSetUp(t *testing.T) {
+	py := pytestFor(t)
+	abs, err := exec.LookPath(py)
+	if err != nil {
+		t.Fatal(err)
+	}
+	noAwk := t.TempDir()
+	for _, tool := range []string{"sh", "mktemp", "mkfifo", "cat", "rm"} {
+		at, err := exec.LookPath(tool)
+		if err != nil {
+			t.Skipf("SKIP: %s is not on PATH: %v", tool, err)
+		}
+		if err := os.Symlink(at, filepath.Join(noAwk, tool)); err != nil {
+			t.Skipf("SKIP: cannot link %s: %v", tool, err)
+		}
+	}
+	for _, c := range []struct {
+		name string
+		env  string
+	}{
+		{"no temporary directory", "TMPDIR=/nonexistent/corral"},
+		{"no awk", "PATH=" + noAwk},
+	} {
+		for _, suite := range []struct {
+			test, first string
+			exit        int
+		}{{"tests/test_x.py::test_good", "", 0}, {"tests/test_x.py::test_bad", "tests/test_x.py::test_bad", 1}} {
+			t.Run(c.name+"/"+suite.test, func(t *testing.T) {
+				dir := reportFixture(t, "")
+				out, code := runIn(t, dir, rewritten(t, []string{abs, "-m", "pytest", suite.test, "-p", "no:cacheprovider"}), c.env)
+				if code != suite.exit {
+					t.Fatalf("exit %d, want %d:\n%s", code, suite.exit, out)
+				}
+				if _, block := pyReportBlock(out); block || !strings.Contains(out, "could not be set up") {
+					t.Errorf("want a plain run and a line saying the hook could not be set up:\n%s", out)
+				}
+				if got := pyFirstFailure([]byte(out)); got != suite.first {
+					t.Errorf("FirstFailure = %q, want %q", got, suite.first)
+				}
+			})
+		}
+	}
+}
+
+// The fallback is triggered by what pytest prints when it cannot import a
+// plugin named in PYTEST_PLUGINS. This pins the exact wording corral matches,
+// on the stream it watches (stderr), so a pytest that changes either fails
+// here instead of silently never falling back.
+func TestPytestStillSaysWhatCorralMatchesWhenAPluginCannotBeImported(t *testing.T) {
+	py := pytestFor(t)
+	dir := reportFixture(t, "")
+	run := func(env ...string) (stdout, stderr string) {
+		cmd := exec.Command(py, "-m", "pytest", "tests/test_x.py::test_good", "-p", "no:cacheprovider") // #nosec G204 -- a test's own fixture command
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), env...)
+		var o, e strings.Builder
+		cmd.Stdout, cmd.Stderr = &o, &e
+		if err := cmd.Run(); err == nil {
+			t.Fatalf("pytest passed with a plugin it cannot import:\n%s", o.String())
+		}
+		return o.String(), e.String()
+	}
+	stdout, stderr := run("PYTEST_PLUGINS=" + pyReportModule)
+	if want := `Error importing plugin "` + pyReportModule + `"`; !strings.Contains(stderr, want) || strings.Contains(stdout, want) {
+		t.Errorf("a missing plugin: want %q on stderr and not on stdout\nstderr:\n%s\nstdout:\n%s", want, stderr, stdout)
+	}
+	if err := os.WriteFile(filepath.Join(dir, pyReportModule+".py"), []byte("raise RuntimeError('no')\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, stderr = run("PYTEST_PLUGINS=" + pyReportModule)
+	found := false
+	for _, line := range strings.Split(stderr, "\n") {
+		if strings.Contains(line, pyReportModule+`.py", line `) && strings.Contains(line, ", in <module>") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("a plugin that raises at import: want a traceback line naming %s.py ... in <module> on stderr:\n%s", pyReportModule, stderr)
 	}
 }
 
@@ -710,5 +905,85 @@ func TestNoFailureReaderReadsAnElisionLine(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// A process a test leaves running holds pytest's error stream open. The
+// wrapper's filter stops at the script's own sentinel, not at end of file, so
+// the run ends when pytest does and not when that process dies.
+func TestPytestHookDoesNotWaitForAProcessATestLeftRunning(t *testing.T) {
+	py := pytestFor(t)
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "tests"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	test := "import subprocess, sys\n\n\ndef test_leaves_a_process(capfd):\n    with capfd.disabled():\n        subprocess.Popen(['sleep', '60'])\n    assert 1 == 2\n"
+	if err := os.WriteFile(filepath.Join(dir, "tests", "test_bg.py"), []byte(test), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	graded := rewritten(t, []string{py, "-m", "pytest", "tests", "-p", "no:cacheprovider"})
+	cmd := exec.Command(graded[0], graded[1:]...) // #nosec G204 -- a test's own fixture command
+	cmd.Dir = dir
+	// The streams are files, so nothing here waits on a pipe the left-over
+	// process holds: only the wrapper itself could.
+	outFile, err := os.Create(filepath.Join(dir, "out.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer outFile.Close()
+	cmd.Stdout, cmd.Stderr = outFile, outFile
+	done := make(chan error, 1)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	go func() { done <- cmd.Wait() }()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		_ = cmd.Process.Kill()
+		t.Fatal("the wrapper was still running 30s after a one-test run: it is waiting for the process the test left behind")
+	}
+	out, err := os.ReadFile(filepath.Join(dir, "out.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd.ProcessState.ExitCode() != 1 || pyFirstFailure(out) != "tests/test_bg.py::test_leaves_a_process" {
+		t.Errorf("exit %d, FirstFailure %q; want 1 and the failing test:\n%s", cmd.ProcessState.ExitCode(), pyFirstFailure(out), out)
+	}
+}
+
+// A conftest that starts pytest as a subprocess AT IMPORT runs before the
+// outer session is configured, so the inner process would be the first to
+// open the record. It imported the plugin second, is not the owner, and
+// records nothing: the block names the outer run's failure alone. (Without
+// the owner check the block named test_inner.py::test_inner_fails.)
+func TestPytestHookIsNotTakenOverByAPytestAConftestStarts(t *testing.T) {
+	py := pytestFor(t)
+	dir := t.TempDir()
+	for _, d := range []string{"tests", "inner"} {
+		if err := os.MkdirAll(filepath.Join(dir, d), 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, body := range map[string]string{
+		// The guard variable is what stops the chain: the inner pytest loads
+		// this conftest too (it sits above inner/, and -c /dev/null moves the
+		// conftest cut-off away from the rootdir), so without it every inner
+		// run starts another, without end.
+		"conftest.py":         "import os, subprocess, sys\n\nif not os.environ.get('CORRAL_TEST_INNER_RUN'):\n    subprocess.run([sys.executable, '-m', 'pytest', 'inner', '-p', 'no:cacheprovider', '--rootdir', 'inner', '-c', '/dev/null'], capture_output=True, env={**os.environ, 'CORRAL_TEST_INNER_RUN': '1'})\n",
+		"inner/test_inner.py": "def test_inner_fails():\n    assert False\n",
+		"tests/test_outer.py": "def test_outer_fails():\n    assert 1 == 2\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, code := runIn(t, dir, rewritten(t, []string{py, "-m", "pytest", "tests", "-p", "no:cacheprovider"}))
+	if code != 1 {
+		t.Fatalf("exit %d, want 1:\n%s", code, out)
+	}
+	recs, ok := pyReportBlock(out)
+	if want := []pyReportRec{{pyReportFailed, "tests/test_outer.py::test_outer_fails"}}; !ok || !slices.Equal(recs, want) {
+		t.Errorf("block complete=%v records=%v, want exactly %v, from:\n%s", ok, recs, want, out)
 	}
 }

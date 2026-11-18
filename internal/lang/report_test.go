@@ -57,6 +57,18 @@ func TestReportCmdAppliesTheRowsReportArgs(t *testing.T) {
 		// with those letters is not the interpreter's.
 		{"python -B -W error", "python", Cmd([]string{"python3", "-B", "-W", "error", "-m", "pytest"}),
 			[]string{"python3", "-B", "-W", "error", "-m", "pytest", "-rfE"}},
+		// -W and -X take an argument, attached or as the next word: its
+		// letters are not flags.
+		{"python -Werror::EncodingWarning", "python", Cmd([]string{"python3", "-Werror::EncodingWarning", "-m", "pytest"}),
+			[]string{"python3", "-Werror::EncodingWarning", "-m", "pytest", "-rfE"}},
+		{"python -W Error -X Importtime", "python", Cmd([]string{"python3", "-W", "Error", "-X", "Importtime", "-m", "pytest"}),
+			[]string{"python3", "-W", "Error", "-X", "Importtime", "-m", "pytest", "-rfE"}},
+		{"python -BWerror", "python", Cmd([]string{"python3", "-BWerror", "-m", "pytest"}),
+			[]string{"python3", "-BWerror", "-m", "pytest", "-rfE"}},
+		{"python -IWerror", "python", Cmd([]string{"python3", "-IWerror", "-m", "pytest"}),
+			[]string{"python3", "-IWerror", "-m", "pytest", "-rfE"}},
+		{"python -W error -E", "python", Cmd([]string{"python3", "-W", "error", "-E", "-m", "pytest"}),
+			[]string{"python3", "-W", "error", "-E", "-m", "pytest", "-rfE"}},
 		{"pytest -E is pytest's", "python", Cmd([]string{"python3", "-m", "pytest", "-E", "x"}),
 			[]string{"python3", "-m", "pytest", "-E", "x", "-rfE"}},
 		{"bare pytest", "python", Cmd([]string{"pytest"}), []string{"pytest", "-rfE"}},
@@ -109,7 +121,8 @@ func TestReportCmdAppliesTheRowsReportArgs(t *testing.T) {
 	}
 	// flagsOnly: want is the whole result, with no wrapper around it.
 	flagsOnly := map[string]bool{"tox before pytest": true, "nox before pytest": true, "docker before pytest": true,
-		"podman before pytest": true, "python -I": true, "python -E": true, "python -sE cluster": true}
+		"podman before pytest": true, "python -I": true, "python -E": true, "python -sE cluster": true,
+		"python -IWerror": true, "python -W error -E": true}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			p, ok := ByName(c.lang)

@@ -204,7 +204,7 @@ func TestGoGradingRunsShareAFrozenRunCache(t *testing.T) {
 }
 
 // A language whose runner row has no run cache mounts nothing and gets no
-// no-replay rewrite. Its one rewrite is pytest's report flags
+// no-replay rewrite. Its one rewrite is pytest's report flags and failure hook
 // (gradingRewrite; TestPytestReportArgsReachEveryDoorOnEverySubstrate).
 func TestPythonGradingRunsMountNoRunCache(t *testing.T) {
 	fake := &wrapRecordingIsolator{}
@@ -218,8 +218,8 @@ func TestPythonGradingRunsMountNoRunCache(t *testing.T) {
 		t.Errorf("recorded run cache = %q, want empty for a runner with no run cache", w.runCache)
 	}
 	for name, f := range map[string]func([]string) []string{"scorer": w.scorer.CommandRewrite, "validator": w.validator.CommandRewrite} {
-		if got := f(argv); !slices.Equal(got, []string{"python3", "-m", "pytest", "-rfE"}) {
-			t.Errorf("%s rewrite = %v, want the report flags and nothing else", name, got)
+		if got := f(argv); !isReportWrapper(got, []string{"python3", "-m", "pytest", "-rfE"}) {
+			t.Errorf("%s rewrite = %v, want the report flags and the failure hook's wrapper and nothing else", name, got)
 		}
 	}
 	if _, err := w.scorer.ScoreReport(context.Background(), w.codeKey, seed.files["p/p.go"], "", oneMutant, "python3 -m pytest"); err != nil {

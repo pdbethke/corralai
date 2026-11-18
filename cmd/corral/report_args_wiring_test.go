@@ -4,10 +4,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -23,9 +26,18 @@ import (
 // `FAILED <node id>` line unless corral adds -rfE.
 func hiddenLinesRepo(t *testing.T) (repoDir string, seed repoSeed) {
 	t.Helper()
+	return hidingRepo(t, "-rXs")
+}
+
+// hidingRepo is a pytest project whose own config carries hides, an option
+// that keeps pytest from printing the `FAILED <node id>` lines: -rXs, which
+// -rfE on the command line undoes, or --no-summary or -p no:terminal, which
+// no flag undoes and only the failure hook answers.
+func hidingRepo(t *testing.T, hides string) (repoDir string, seed repoSeed) {
+	t.Helper()
 	repoDir = t.TempDir()
 	files := map[string]string{
-		"pyproject.toml":     "[tool.pytest.ini_options]\naddopts = \"-rXs -p no:cacheprovider\"\n",
+		"pyproject.toml":     "[tool.pytest.ini_options]\naddopts = \"" + hides + " -p no:cacheprovider\"\n",
 		"calc.py":            "def add(a, b):\n    return a + b\n",
 		"tests/__init__.py":  "",
 		"tests/test_calc.py": "from calc import add\n\n\ndef test_add():\n    assert add(2, 3) == 5\n\n\ndef test_zero():\n    assert add(0, 0) == 0\n",
@@ -34,6 +46,12 @@ func hiddenLinesRepo(t *testing.T) (repoDir string, seed repoSeed) {
 		mustWrite(t, filepath.Join(repoDir, rel), body)
 	}
 	return repoDir, repoSeed{seedDir: repoDir, files: files, cleanup: func() {}}
+}
+
+// isReportWrapper reports whether cmd is a shell wrapper whose positional
+// parameters end with want: the failure hook's wrapper around that command.
+func isReportWrapper(cmd, want []string) bool {
+	return len(cmd) > len(want)+3 && cmd[0] == "sh" && cmd[1] == "-c" && slices.Equal(cmd[len(cmd)-len(want):], want)
 }
 
 var subtractMutant = []adequacy.Mutant{{ID: "m1", Search: "return a + b", Replace: "return a - b"}}
@@ -149,11 +167,93 @@ func pytestOnHost(t *testing.T) {
 
 // A kill on a project that hides pytest's FAILED lines is named and confirmed
 // by the killing test run alone, on the workspace substrate and in the real
-// jail. With the rewrite taken away, the same kill names nothing and is
-// confirmed by repeating the whole run: the control, showing the fixture
-// really hides the lines.
+// jail: under -rXs, which -rfE undoes, and under --no-summary and
+// -p no:terminal, which only the failure hook answers. The confirmation is
+// the proof that the killer command is still narrowed with the wrapper on: it
+// is derived from the operator's command and wrapped afterwards, and a killer
+// derived from a wrapped command would be refused and the kill confirmed by
+// repeating the run. With the rewrite taken away, the same kill names nothing
+// and is confirmed by repeating the whole run: the control, showing the
+// fixture really hides the lines.
 func TestAKillOnAProjectHidingFailedLinesIsNamedAndConfirmedAlone(t *testing.T) {
 	pytestOnHost(t)
+	for _, hides := range []string{"-rXs", "--no-summary", "-p no:terminal"} {
+		for _, substrate := range []string{"workspace", "jail"} {
+			t.Run(hides+"/"+substrate, func(t *testing.T) { killIsNamedAndConfirmedAlone(t, hides, substrate) })
+		}
+	}
+}
+
+func killIsNamedAndConfirmedAlone(t *testing.T, hides, substrate string) {
+	var iso sandbox.Isolator
+	if substrate == "jail" {
+		b, err := sandbox.Resolve(sandbox.Config{Backend: "bwrap"})
+		if err != nil {
+			t.Skipf("SKIP: no bwrap backend: %v", err)
+		}
+		iso = b
+	}
+	for _, control := range []bool{false, true} {
+		repoDir, seed := hidingRepo(t, hides)
+		w := wirePython(t, iso, substrate, repoDir, &seed)
+		if control {
+			w.scorer.CommandRewrite = nil
+		}
+		rep, err := w.scorer.ScoreReport(context.Background(), w.codeKey, seed.files["calc.py"], seed.files["tests/test_calc.py"], subtractMutant, pytestArgv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !rep.CompliantPass {
+			if substrate == "jail" {
+				t.Skipf("SKIP: the jail did not pass the fixture's suite on unmutated code (jail or toolchain unavailable): %s", rep.BaselineOutput)
+			}
+			t.Fatalf("baseline failed: %s", rep.BaselineOutput)
+		}
+		if !slices.Contains(rep.Killed, "m1") {
+			t.Fatalf("control=%v: m1 not killed: %+v", control, rep)
+		}
+		g := rep.PerMutant["m1"]
+		if control {
+			if g.KilledBy != "" || g.KillConfirmation != adequacy.KillConfirmedRepeated {
+				t.Errorf("control: KilledBy=%q KillConfirmation=%q, want \"\" and %q: the fixture must hide the FAILED lines", g.KilledBy, g.KillConfirmation, adequacy.KillConfirmedRepeated)
+			}
+			continue
+		}
+		if g.KilledBy != "tests/test_calc.py::test_add" || g.KillConfirmation != adequacy.KillConfirmedAlone {
+			t.Errorf("KilledBy=%q KillConfirmation=%q, want tests/test_calc.py::test_add and %q", g.KilledBy, g.KillConfirmation, adequacy.KillConfirmedAlone)
+		}
+	}
+}
+
+// brokenAuthored is an authored test file with one test that passes on the
+// unmutated code and kills the subtract mutant, and one that fails on the
+// unmutated code and whose parametrized id holds a space.
+const brokenAuthored = `import pytest
+
+from calc import add
+
+
+def test_sum():
+    assert add(2, 3) == 5
+
+
+@pytest.mark.parametrize("v", ["a b"])
+def test_wrong(v):
+    assert add(1, 1) == 3
+`
+
+// Salvage reads the failing authored tests from the clean-code run and
+// reruns without them. On a project whose config hides pytest's summary, in
+// the real jail and on the workspace substrate: the run's output carries the
+// hook's block (so the jail's /tmp, mktemp, sh and cat all served it), the
+// failing id is read whole, the deselecting command is built from the
+// OPERATOR's command (a wrapped one cannot be narrowed: the control), and
+// the salvaged pass then passes on clean code and kills the mutant.
+func TestSalvageStillDeselectsWithTheFailureHookOn(t *testing.T) {
+	pytestOnHost(t)
+	plug, _ := lang.ByName("python")
+	argv := strings.Fields(pytestArgv)
+	inv := lang.Cmd(argv)
 	for _, substrate := range []string{"workspace", "jail"} {
 		t.Run(substrate, func(t *testing.T) {
 			var iso sandbox.Isolator
@@ -164,35 +264,180 @@ func TestAKillOnAProjectHidingFailedLinesIsNamedAndConfirmedAlone(t *testing.T) 
 				}
 				iso = b
 			}
-			for _, control := range []bool{false, true} {
-				repoDir, seed := hiddenLinesRepo(t)
-				w := wirePython(t, iso, substrate, repoDir, &seed)
-				if control {
-					w.scorer.CommandRewrite = nil
+			repoDir, seed := hidingRepo(t, "--no-summary")
+			w := wirePython(t, iso, substrate, repoDir, &seed)
+			ctx := context.Background()
+			code := seed.files["calc.py"]
+
+			if substrate == "jail" {
+				if pass, out, err := w.scorer.CompliantRun(ctx, w.codeKey, code, seed.files["tests/test_calc.py"], pytestArgv); err != nil || !pass {
+					t.Skipf("SKIP: the jail did not pass the fixture's own suite on unmutated code (jail or toolchain unavailable): %v\n%s", err, out)
 				}
-				rep, err := w.scorer.ScoreReport(context.Background(), w.codeKey, seed.files["calc.py"], seed.files["tests/test_calc.py"], subtractMutant, pytestArgv)
+			}
+			pass, out, err := w.scorer.CompliantRun(ctx, w.codeKey, code, brokenAuthored, pytestArgv)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if pass {
+				t.Fatalf("the broken authored test passed on clean code:\n%s", out)
+			}
+			if !strings.Contains(out, "corral-report-begin\n") || !strings.Contains(out, "corral-report-end") {
+				t.Fatalf("the graded run's output carries no hook block:\n%s", out)
+			}
+			failedTests, ok := lang.DeselectorFor(plug, inv)
+			if !ok {
+				t.Fatal("pytest has no failed-tests reader")
+			}
+			failing := failedTests(out)
+			if len(failing) != 1 || !strings.HasSuffix(failing[0], "::test_wrong[a b]") {
+				t.Fatalf("failing = %q, want the one id ending ::test_wrong[a b], from:\n%s", failing, out)
+			}
+
+			// The control: a command the hook has wrapped cannot be narrowed.
+			wrapped := w.scorer.CommandRewrite(argv)
+			if _, ok := lang.DeselectCmd(plug, inv.WithArgv(wrapped), failing); ok {
+				t.Fatal("control: DeselectCmd narrowed an already-wrapped command; the wrapper must be applied last")
+			}
+			deselect, ok := lang.DeselectCmd(plug, inv, failing)
+			if !ok {
+				t.Fatalf("DeselectCmd refused the operator's command %v", argv)
+			}
+			rep, err := w.scorer.ScoreAuthoredDeselected(ctx, w.codeKey, code, brokenAuthored, subtractMutant, pytestArgv, adequacy.ShellJoin(deselect), failing)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !rep.CompliantPass || !rep.CanaryKilled || !slices.Contains(rep.Killed, "m1") {
+				t.Errorf("salvaged pass: CompliantPass=%v CanaryKilled=%v Killed=%v, want a sound pass that kills m1\n%s", rep.CompliantPass, rep.CanaryKilled, rep.Killed, rep.BaselineOutput)
+			}
+		})
+	}
+}
+
+// A clean-code run noisier than a door's output cap still yields the hook's
+// record, because the door keeps the END of the run (and its start), where
+// the record is printed: salvage reads the failing id whole, in the real
+// jail and on the workspace substrate. The authored test prints 100 KiB past
+// pytest's capture, more than the 16 KiB the jail's head-keeping run held
+// and more than the door keeps of both ends together, on a project whose
+// config hides the printed lines. (Run before the door kept the end, this
+// same 100 KiB test read no failing id in the jail, from 16,406 bytes.)
+func TestTheSalvageDoorKeepsTheHookRecordOnARunNoisierThanItsOutputCap(t *testing.T) {
+	pytestOnHost(t)
+	plug, _ := lang.ByName("python")
+	failedTests, _ := lang.DeselectorFor(plug, lang.Cmd(strings.Fields(pytestArgv)))
+	// 1250 lines of 80 bytes, printed past pytest's capture: 100 KiB.
+	noisy := brokenAuthored + "\n\ndef test_noise(capsys):\n    with capsys.disabled():\n        print((\"n\" * 79 + \"\\n\") * 1250)\n"
+	for _, substrate := range []string{"workspace", "jail"} {
+		t.Run(substrate, func(t *testing.T) {
+			var iso sandbox.Isolator
+			if substrate == "jail" {
+				b, err := sandbox.Resolve(sandbox.Config{Backend: "bwrap"})
 				if err != nil {
-					t.Fatal(err)
+					t.Skipf("SKIP: no bwrap backend: %v", err)
 				}
-				if !rep.CompliantPass {
-					if substrate == "jail" {
-						t.Skipf("SKIP: the jail did not pass the fixture's suite on unmutated code (jail or toolchain unavailable): %s", rep.BaselineOutput)
-					}
-					t.Fatalf("baseline failed: %s", rep.BaselineOutput)
+				iso = b
+			}
+			repoDir, seed := hidingRepo(t, "--no-summary")
+			w := wirePython(t, iso, substrate, repoDir, &seed)
+			ctx := context.Background()
+			if substrate == "jail" {
+				if pass, out, err := w.scorer.CompliantRun(ctx, w.codeKey, seed.files["calc.py"], seed.files["tests/test_calc.py"], pytestArgv); err != nil || !pass {
+					t.Skipf("SKIP: the jail did not pass the fixture's own suite on unmutated code (jail or toolchain unavailable): %v\n%s", err, out)
 				}
-				if !slices.Contains(rep.Killed, "m1") {
-					t.Fatalf("control=%v: m1 not killed: %+v", control, rep)
-				}
-				g := rep.PerMutant["m1"]
-				if control {
-					if g.KilledBy != "" || g.KillConfirmation != adequacy.KillConfirmedRepeated {
-						t.Errorf("control: KilledBy=%q KillConfirmation=%q, want \"\" and %q: the fixture must hide the FAILED lines", g.KilledBy, g.KillConfirmation, adequacy.KillConfirmedRepeated)
-					}
+			}
+			pass, out, err := w.scorer.CompliantRun(ctx, w.codeKey, seed.files["calc.py"], noisy, pytestArgv)
+			if err != nil || pass {
+				t.Fatalf("pass=%v err=%v, want a failing run", pass, err)
+			}
+			if len(out) > (16<<10)+(64<<10)+128 || !strings.Contains(out, "bytes of this run's output are not shown here]\n") {
+				t.Errorf("the door handed back %d bytes; want the first 16 KiB, one elision line and the last 64 KiB", len(out))
+			}
+			if failing := failedTests(out); len(failing) != 1 || !strings.HasSuffix(failing[0], "::test_wrong[a b]") {
+				t.Errorf("failing = %q from %d bytes of output, want the one id ending ::test_wrong[a b]", failing, len(out))
+			}
+		})
+	}
+}
+
+// The deselecting command reaches the runner narrowed AND wrapped. Asserted
+// on what pytest itself received in a real run on the workspace substrate
+// (its conftest writes down its arguments and whether the hook was loaded):
+// the --deselect and the whole id, spaces included, with the hook loaded. The
+// recorder half shows the same shape reaching the runner on all three
+// wirings: the wrapper, with the command's words inside it.
+func TestADeselectedCommandReachesTheRunnerNarrowedInsideTheWrapper(t *testing.T) {
+	plug, _ := lang.ByName("python")
+	argv := strings.Fields(pytestArgv)
+	const id = "tests/test_calc_corral.py::test_wrong[a b]"
+	deselect, ok := lang.DeselectCmd(plug, lang.Cmd(argv), []string{id})
+	if !ok {
+		t.Fatal("DeselectCmd refused the operator's command")
+	}
+	t.Run("real run", func(t *testing.T) {
+		pytestOnHost(t)
+		repoDir, seed := hidingRepo(t, "--no-summary")
+		seen := filepath.Join(t.TempDir(), "seen.jsonl")
+		mustWrite(t, filepath.Join(repoDir, "conftest.py"), "import json, os, sys\n\n\ndef pytest_configure(config):\n"+
+			"    with open("+strconv.Quote(seen)+", 'a') as out:\n"+
+			"        out.write(json.dumps({'args': list(config.invocation_params.args), 'hook': any(m.startswith('_corral') for m in sys.modules)}) + '\\n')\n")
+		w := wirePython(t, nil, "workspace", repoDir, &seed)
+		rep, err := w.scorer.ScoreAuthoredDeselected(context.Background(), w.codeKey, seed.files["calc.py"], brokenAuthored, subtractMutant, pytestArgv, adequacy.ShellJoin(deselect), []string{id})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !rep.CompliantPass || !slices.Contains(rep.Killed, "m1") {
+			t.Fatalf("salvaged pass: CompliantPass=%v Killed=%v, want a pass that kills m1\n%s", rep.CompliantPass, rep.Killed, rep.BaselineOutput)
+		}
+		raw, err := os.ReadFile(seen)
+		if err != nil {
+			t.Fatal(err)
+		}
+		runs := 0
+		for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+			var got struct {
+				Args []string
+				Hook bool
+			}
+			if err := json.Unmarshal([]byte(line), &got); err != nil {
+				t.Fatal(err)
+			}
+			runs++
+			at := slices.Index(got.Args, "--deselect")
+			if at < 0 || at+1 >= len(got.Args) || got.Args[at+1] != id {
+				t.Errorf("pytest received %q, want --deselect %q among its arguments", got.Args, id)
+			}
+			if !got.Hook {
+				t.Errorf("pytest ran %q without the failure hook loaded", got.Args)
+			}
+		}
+		if runs < 3 {
+			t.Errorf("pytest ran %d times, want the baseline, the canary and the mutant at least", runs)
+		}
+	})
+	for _, substrate := range []string{"workspace", "jail", "single"} {
+		t.Run(substrate, func(t *testing.T) {
+			repoDir, seed := hidingRepo(t, "--no-summary")
+			w := wirePython(t, &wrapRecordingIsolator{}, substrate, repoDir, &seed)
+			rec := &passingRecorder{}
+			w.scorer.Jail = rec
+			if _, err := w.scorer.ScoreAuthoredDeselected(context.Background(), w.codeKey, seed.files["calc.py"], brokenAuthored, subtractMutant, pytestArgv, adequacy.ShellJoin(deselect), []string{id}); err != nil {
+				t.Fatal(err)
+			}
+			pytestRuns := 0
+			for _, c := range rec.cmds {
+				if !slices.Contains(c, "pytest") {
 					continue
 				}
-				if g.KilledBy != "tests/test_calc.py::test_add" || g.KillConfirmation != adequacy.KillConfirmedAlone {
-					t.Errorf("KilledBy=%q KillConfirmation=%q, want tests/test_calc.py::test_add and %q", g.KilledBy, g.KillConfirmation, adequacy.KillConfirmedAlone)
+				pytestRuns++
+				// sh -c <script> <$0> then the command's own words, which
+				// start with the operator's and carry the deselect whole.
+				at := slices.Index(c, "--deselect")
+				if len(c) < 4+len(argv) || c[0] != "sh" || c[1] != "-c" || !slices.Equal(c[4:4+3], argv[:3]) || at < 4 || at+1 >= len(c) || c[at+1] != id {
+					t.Errorf("a salvage command reached the runner without the wrapper around %v ... --deselect %q: %v", argv[:3], id, c[4:])
 				}
+			}
+			if pytestRuns == 0 {
+				t.Fatalf("no pytest command reached the runner: %v", rec.cmds)
 			}
 		})
 	}
@@ -217,9 +462,10 @@ func TestReportArgsLeaveTheRunCacheDecisionAlone(t *testing.T) {
 	}
 }
 
-// gradingRewrite composes the report rewrite with the run cache's: each is
-// kept whole when the other is absent, and a run the operator's command
-// cannot carry the flags on gets none of them.
+// gradingRewrite composes the run cache's rewrite with the report rewrite:
+// each is kept whole when the other is absent, the report rewrite is applied
+// last, and a run the operator's command cannot carry the flags on gets none
+// of them.
 func TestGradingRewriteComposesTheTwoRewrites(t *testing.T) {
 	py, _ := lang.ByName("python")
 	mark := func(cmd []string) []string { return append(slices.Clone(cmd), "--cache") }
@@ -228,7 +474,7 @@ func TestGradingRewriteComposesTheTwoRewrites(t *testing.T) {
 	if f := gradingRewrite(py, lang.Cmd([]string{"sh", "-c", "pytest"}), []string{"sh", "-c", "pytest"}, nil); f != nil {
 		t.Error("a shell-wrapped base command got a rewrite")
 	}
-	if got := gradingRewrite(py, lang.Cmd(pyCmd), pyCmd, nil)(pyCmd); !slices.Equal(got, []string{"python3", "-m", "pytest", "-rfE"}) {
+	if got := gradingRewrite(py, lang.Cmd(pyCmd), pyCmd, nil)(pyCmd); !isReportWrapper(got, []string{"python3", "-m", "pytest", "-rfE"}) {
 		t.Errorf("report alone = %v", got)
 	}
 	goP, _ := lang.ByName("go")
@@ -236,7 +482,9 @@ func TestGradingRewriteComposesTheTwoRewrites(t *testing.T) {
 	if got := gradingRewrite(goP, lang.Cmd(goCmd), goCmd, mark)(goCmd); !slices.Equal(got, []string{"go", "test", "./...", "--cache"}) {
 		t.Errorf("run cache alone = %v", got)
 	}
-	if got := gradingRewrite(py, lang.Cmd(pyCmd), pyCmd, mark)(pyCmd); !slices.Equal(got, []string{"python3", "-m", "pytest", "-rfE", "--cache"}) {
+	// The report rewrite goes LAST: its wrapper is around the command the
+	// run cache's rewrite already finished.
+	if got := gradingRewrite(py, lang.Cmd(pyCmd), pyCmd, mark)(pyCmd); !isReportWrapper(got, []string{"python3", "-m", "pytest", "--cache", "-rfE"}) {
 		t.Errorf("both = %v", got)
 	}
 	if f := gradingRewrite(nil, lang.Cmd(pyCmd), pyCmd, nil); f != nil {

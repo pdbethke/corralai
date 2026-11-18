@@ -43,7 +43,7 @@ func newRunJail(iso sandbox.Isolator, timeout time.Duration, depBinds []adequacy
 type gradingRunCache struct {
 	// Rewrite is the command rewrite that forbids a cached test result, for
 	// every command the grading jail is handed (advpool.JailScorer and
-	// JailValidator CommandRewrite, composed after the report flags by
+	// JailValidator CommandRewrite, composed before the report rewrite by
 	// gradingRewrite). nil unless the cache is shared: an unshared run gets
 	// no -count=1.
 	Rewrite func(cmd []string) []string
@@ -318,22 +318,29 @@ func hasContainerRuntime() bool {
 
 // gradingRewrite is the ONE command rewrite a file's grading hands its runner
 // (advpool.JailScorer and JailValidator CommandRewrite), on every substrate:
-// the runner row's report flags (lang.ReportArgv) followed by the shared run
-// cache's no-replay rewrite (gradingRunCache.Rewrite, nil unless a cache is
-// shared). nil when there is neither, which hands the runner the operator's
-// command byte for byte.
+// the shared run cache's no-replay rewrite (gradingRunCache.Rewrite, nil
+// unless a cache is shared) and then, LAST, the runner row's report rewrite
+// (lang.ReportArgv: its report flags, and its failure hook's wrapper). nil
+// when there is neither, which hands the runner the operator's command byte
+// for byte.
 //
-// The report flags are added only when the run's base command is one
-// lang.ReportCmd can give them to: then every command of the file's grading
-// that names the same runner gets them (each judged on its own words, so the
+// The report rewrite is last because a hook's wrapper is a `sh -c` command no
+// later rewrite can read: every other change to a command (selection,
+// fail-fast, a killer narrowed to one test, a deselect, the run cache's
+// -count) is made to the operator's own words, by the scorer, before this is
+// called, and the wrapper goes around the finished command.
+//
+// The report rewrite is added only when the run's base command is one
+// lang.ReportCmd can change: then every command of the file's grading that
+// names the same runner is rewritten (each judged on its own words, so the
 // compile check is left alone), and the scan line's disclosure (lang.
 // RunDisclosures) is true of the run. A base command it cannot read (`sh -c`,
-// `make test`, a runner with no report flags) adds them to nothing.
+// `make test`, a runner with no report flags or hook) rewrites nothing.
 //
 // It never touches the run-cache decision: newGradingJail and warmCheckFor
 // read the operator's commands, never this rewrite's output, and the report
 // rewrite changes no command of a runner with a run cache (go test and
-// gotestsum carry no report flags).
+// gotestsum carry no report flags and no hook).
 func gradingRewrite(plug lang.Plugin, inv lang.Invocation, base []string, runCache func([]string) []string) func([]string) []string {
 	var report func([]string) []string
 	if plug != nil {
@@ -347,5 +354,5 @@ func gradingRewrite(plug lang.Plugin, inv lang.Invocation, base []string, runCac
 	case runCache == nil:
 		return report
 	}
-	return func(cmd []string) []string { return runCache(report(cmd)) }
+	return func(cmd []string) []string { return report(runCache(cmd)) }
 }

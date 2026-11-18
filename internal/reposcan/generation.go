@@ -438,7 +438,31 @@ package reposcan
 // keep the passing cases, so proven counts can rise. "44" has reached main,
 // so it gets its own generation rather than riding along. Behaviour bump; the
 // shape is unchanged.
-const VerdictGeneration = "45"
+// "46" (2026-11-18): a graded pytest run that corral can rewrite has pytest
+// itself record its failing tests, through a plugin loaded by the wrapper
+// lang.ReportCmd puts around the command (lang.Runner.ReportHook), and the readers take that
+// record before pytest's printed lines. A "45" verdict could differ in two
+// ways. On a project whose config carries --no-summary or -p no:terminal,
+// which hide the `FAILED <node id>` lines whatever -r says, it recorded no
+// killing test, confirmed every kill by repeating the grading run, and could
+// not salvage a partly failing authored test; now killed_by is filled, the
+// blamed test is run alone, and salvage can keep the passing cases, so proven
+// counts can rise. And a killing test whose id holds a space (a parametrized
+// `test_x[a b]`) was recorded cut at the space, an id that
+// names no test; now the id is whole. "45" has reached
+// main, so this gets its own generation. In the same generation, for every
+// language: the clean-code run of an authored test (JailScorer.CompliantRun)
+// hands back the first 16 KiB and the last 64 KiB of its output, where it
+// handed back the first 16 KiB alone in the bwrap jail and all of it on the
+// workspace substrate. A verdict from a jailed run whose clean-code failure
+// printed more than 16 KiB recorded no salvage, because the failing tests
+// are named at the end; it can now record one, so proven counts can rise.
+// The writer's retry is fed the first and last 16 KiB of that run on both
+// substrates, so the test a retry produces can differ, and
+// authored_together_output is the run's true last 2000 bytes rather than the
+// end of its first 16 KiB. It rides along: "46" has not left this branch.
+// Behaviour bump; the shape is unchanged.
+const VerdictGeneration = "46"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

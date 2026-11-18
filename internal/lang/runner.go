@@ -62,6 +62,14 @@ type Runner struct {
 	// in config files corral does not read and an operator's -r can hide in a
 	// short-option cluster (-vrs).
 	ReportArgs []string
+	// ReportHook has the runner itself record which tests failed, in marker
+	// lines the row's failure readers read in preference to the runner's
+	// printed lines: no report setting of the project's reaches them, and
+	// they carry an id whole, spaces included. nil for a runner corral has
+	// built no such hook for; the parity table's "failure-hook" exemptions
+	// say why for each language. ReportCmd applies it after ReportArgs, to
+	// the same commands.
+	ReportHook *ReportHook
 	// ListCmd enumerates the tests the command (or, for runners that ignore
 	// it, the test file) runs; ParseList reads its stdout into ids.
 	ListCmd   func(argv []string, testPath string) ([]string, bool)
@@ -287,12 +295,12 @@ var runners = []Runner{
 	},
 	{
 		Name: "pytest", ID: "pytest", Languages: []string{"python"}, Default: true, Words: []string{"pytest"},
-		FailFast: []string{"-x"}, ReportArgs: []string{"-rfE"},
+		FailFast: []string{"-x"}, ReportArgs: []string{"-rfE"}, ReportHook: pyReportHook,
 		ListCmd: pyListCmd, ParseList: pyParseTestList, SingleCmd: pySingleCmd,
 		FirstFailure: pyFirstFailure, FailedTests: pyFailedTests, DeselectCmd: pyDeselectCmd, KillerCmd: pyKillerCmd,
 		CollectionBase: stripPyCollectionTargets, TestsCmd: pyTestsCmd, TestUnit: pyTestUnit, CarryArgs: deselectArgs,
 		VersionCmd: versionAtWord("pytest"),
-		Note:       "-rfE is added to every graded run, after the project's own options, because a project's -r setting (addopts) replaces pytest's default and hides the `FAILED` lines corral reads the killing test from; pytest keeping the last -r it is given was verified on pytest 5.4.3, 6.2.5, 9.1.1 and 9.2.0. It does not undo `--no-summary` or `-p no:terminal` in a project's config, which still hide the lines (measured on pytest 9.1.1): there the killing test is not named and kills are confirmed by repeating the run, as before",
+		Note:       "every graded run corral can rewrite (the command names pytest, is not shell-wrapped and is not a package script) goes through `sh -c` with a pytest plugin of corral's own loaded through `PYTEST_PLUGINS`, which records each failing test from pytest's own reports; corral reads the killing test from that record, so a project's `-r`, `--no-summary` or `-p no:terminal` does not hide it and an id with a space in it is whole. A run the plugin does not load in is repeated without it, so its result is the command's own. Not wrapped: Windows (the wrapper is a POSIX shell script), and pytest behind tox, nox, docker or podman or under `python -I`/`-E`, where the plugin could not load. Run on pytest 9.1.1, on Linux in the bubblewrap sandbox and on the workspace substrate; the macOS sandbox, the container backend and pytest-xdist (where the plugin records on the controller alone) were not run. The record is the last thing a run prints, so one larger than the 64 KiB of output corral keeps is not read. -rfE is still added, after the project's own options, so the printed `FAILED` lines are there too: they are what corral reads when the plugin's record is missing or cut short, and for a command it does not wrap; pytest keeping the last -r it is given was verified on pytest 5.4.3, 6.2.5, 9.1.1 and 9.2.0. The printed lines alone are still hidden by `--no-summary` and `-p no:terminal` (measured on pytest 9.1.1), and cut an id at its first space",
 	},
 	{
 		// No salvage: unittest exits 2 on pytest's --deselect, so a rerun
@@ -583,11 +591,29 @@ func RunsAlone(p Plugin, inv Invocation, listed []string, id string) bool {
 	return n == 1
 }
 
+// ReportHook is a runner's own record of its failing tests, as a command
+// wrapper. Wrap is cmd (the row's ReportArgs already added) turned into the
+// command that runs it with the hook loaded and prints the hook's record
+// after the runner's own output. Wrap must keep cmd's words as they are,
+// must exit with the code cmd would have exited with had the hook not been
+// there (a hook that cannot load included), and must return a command
+// ReportCmd cannot read again (a shell wrapper), so that applying it twice
+// wraps once. Wraps, when set, declines a command the hook is known not to
+// load in (at is the index of the runner's word); nil wraps every command
+// ReportCmd can read. Says is the scan line's sentence about it, after the
+// runner's name.
+type ReportHook struct {
+	Wrap  func(cmd []string) []string
+	Wraps func(cmd []string, at int) bool
+	Says  string
+}
+
 // RunDisclosures is what the scan line says about running testCmd in
 // repoDir that differs from how the project's own setup runs its suite.
 // corral runs the operator's command and never substitutes one of its own;
 // what it adds to it is said here: a row's ReportArgs, when ReportCmd adds
-// them (pytest's -rfE replaces a project's own -r). Rust reports a project
+// them (pytest's -rfE replaces a project's own -r), and a row's ReportHook,
+// when ReportCmd wraps the command in it (pytest's own plugin). Rust reports a project
 // nextest.toml that `cargo test` bypasses, and nextest's passed-on-retry
 // grading. nil when the
 // runner has nothing to say; the one way a caller asks, so no caller
@@ -602,10 +628,7 @@ func RunDisclosures(p Plugin, repoDir string, inv Invocation) []string {
 	if r, ok := RunnerFor(p, inv); ok && r.Disclose != nil {
 		out = append(out, r.Disclose(repoDir, inv.Argv)...)
 	}
-	if d := reportDisclosure(p, inv); d != "" {
-		out = append(out, d)
-	}
-	return out
+	return append(out, reportDisclosures(p, inv)...)
 }
 
 // FailureParserFor is argv's runner as the FailureParser adequacy holds, or

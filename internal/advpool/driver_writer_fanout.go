@@ -217,7 +217,7 @@ func (d *Driver) advanceWriterAttempt(ctx context.Context, missionID int64, run 
 		}
 		if a.repairs < MaxTestWriterAttempts-1 {
 			a.repairs++
-			failure := compliantFailureOutput(ctx, d.Scorer, run, test)
+			failure := writerFailureDetail(compliantFailureOutput(ctx, d.Scorer, run, test))
 			sys, instr := renderTestWriterSeat(run.rs, run.sigs, a.mutant, test, "", failure)
 			if rerr := d.reissueWriterSeat(missionID, run, a, task, sys, instr); rerr != nil {
 				return true, rerr

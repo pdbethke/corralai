@@ -87,12 +87,23 @@ var Capabilities = []Capability{
 	// project's own report-selection setting cannot hide the lines its
 	// failure readers read (pytest's -rfE over a project's -r). Only that
 	// setting: an option that suppresses the summary itself (pytest's
-	// --no-summary, -p no:terminal) still hides them, which the row's Note
-	// says and a real-run test pins. Judged on the field
+	// --no-summary, -p no:terminal) still hides the PRINTED lines, which a
+	// real-run test pins; what answers those is the next capability,
+	// "failure-hook". Judged on the field
 	// lang.ReportCmd applies, so the page cannot claim flags the code does
 	// not add. A language without it says, in its exemption, whether its
 	// runners' lines can be hidden by a project at all.
 	rowCapability("readable-failures", "Name the killing test whatever the project's -r report setting", func(r Runner) bool { return len(r.ReportArgs) > 0 }),
+	// A runner row whose ReportHook has the runner itself record its failing
+	// tests, which the row's readers take in preference to its printed
+	// lines: no report setting of the project's hides the record, and an id
+	// is whole (pytest's plugin, loaded through PYTEST_PLUGINS). Judged on
+	// the field lang.ReportCmd wraps the command with. The printed lines
+	// stay the second source, for a command corral does not wrap (Windows,
+	// where the wrapper's shell script cannot run, among them) and for a
+	// record that is missing or cut short. Where it was run, and where not,
+	// is in the row's Note.
+	rowCapability("failure-hook", "Read the failing test from the runner's own hook, not its printed lines", func(r Runner) bool { return r.ReportHook != nil }),
 	rowCapability("salvage", "Keep the passing part of an authored test", func(r Runner) bool { return r.FailedTests != nil && r.DeselectCmd != nil }),
 	rowCapability("units", "Run one test unit", func(r Runner) bool { return r.ListUnits != nil && r.UnitCmd != nil }),
 	// A runner row that declares a cache grading can share (go test's GOCACHE).
@@ -170,4 +181,16 @@ var ParityExemptions = []Exemption{
 	{"rust", "readable-failures", "a .config/nextest.toml with status-level and final-status-level \"none\" drops the `FAIL` lines corral reads, and `--status-level fail --final-status-level fail` restore them (measured 2026-11-17 on cargo-nextest 0.9.148), but corral does not add them yet; cargo test is not exposed: a .cargo/config.toml `term.quiet` makes libtest print `--- FAILED` lines, which corral still reads (cargo 1.90)"},
 
 	{"php", "run-cache", "not yet measured; it has no compile step, so little is expected"},
+
+	{"go", "failure-hook", "not built: corral reads go test's printed `--- FAIL:` lines. `go test -json` is the runner's own record of each test's result and would be the hook; corral does not add it, and nothing here measured what it does to the output the other readers take"},
+
+	{"javascript", "failure-hook", "not built: corral reads the lines jest, vitest, mocha and node --test print. Each takes a reporter module named on the command line, which is what would do it; none has been written or run, and whether one can run beside the reporters a project configures was not checked"},
+
+	{"typescript", "failure-hook", "not built: corral reads the lines jest, vitest, mocha and node --test print. Each takes a reporter module named on the command line, which is what would do it; none has been written or run, and whether one can run beside the reporters a project configures was not checked"},
+
+	{"php", "failure-hook", "not built: corral reads PHPUnit's printed `N) Class::method` lines. PHPUnit's `--log-junit <file>` writes its own record of each test and would be the hook; corral does not add it, and it has not been run for this"},
+
+	{"ruby", "failure-hook", "not built: corral reads rspec's `Failed examples:` list and minitest's printed failures. rspec takes a second formatter writing to a file (`--format json --out <file>`), which would be the hook; corral does not add it, and nothing comparable was looked for in minitest"},
+
+	{"rust", "failure-hook", "not built: corral reads the lines cargo test and cargo-nextest print. nextest writes a JUnit file when a profile in the project's .config/nextest.toml asks for one, and libtest's JSON output is an unstable option; a way to ask for either from the command line was not looked for"},
 }

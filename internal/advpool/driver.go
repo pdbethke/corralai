@@ -15,6 +15,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/agentbackend"
+	"github.com/pdbethke/corralai/internal/clip"
 	golang "github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/matrix"
 	"github.com/pdbethke/corralai/internal/modelcorr"
@@ -2357,6 +2358,21 @@ type CompliantFailureExplainer interface {
 	CompliantFailure(ctx context.Context, codePath, code, test, testCmd string) string
 }
 
+// writerFailureEnd is how much of each end of a clean-code failure's output
+// the test writer is shown.
+const writerFailureEnd = 16 << 10
+
+// writerFailureDetail is a clean-code failure's output as the test writer is
+// shown it: its first and last 16 KiB with an elision line between them, and
+// all of it when it fits. Both ends, because what names the failure can be at
+// either (JailScorer.CompliantRun says which runs put it where), and bounded,
+// because it goes into a prompt: 32 KiB and one line, on every substrate.
+// The failure READERS are not given this: salvage reads the whole captured
+// output.
+func writerFailureDetail(output string) string {
+	return clip.Ends(output, writerFailureEnd, writerFailureEnd)
+}
+
 // compliantFailureOutput asks the Scorer for the clean-code failure detail,
 // tolerating a Scorer that cannot supply it.
 func compliantFailureOutput(ctx context.Context, s Scorer, run *runState, test string) string {
@@ -2998,7 +3014,7 @@ func (d *Driver) tickPoolAdequacy(ctx context.Context, missionID int64, run *run
 
 	if !rep.CompliantPass && run.testWriterAttempts < MaxTestWriterAttempts-1 {
 		run.testWriterAttempts++
-		failure := compliantFailureOutput(ctx, d.Scorer, run, writerTest)
+		failure := writerFailureDetail(compliantFailureOutput(ctx, d.Scorer, run, writerTest))
 		newID, serr := d.Q.SupersedeTask(tw.ID, queue.TaskSpec{
 			Key:         RoleTestWriter,
 			Role:        RoleTestWriter,

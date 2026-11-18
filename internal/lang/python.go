@@ -1162,12 +1162,23 @@ func pyParseTestList(output string) []string {
 	return out
 }
 
-// pyFailedTests parses pytest's "short test summary info" lines. pytest prints
-// one `FAILED <selector> - <error>` line per failure, and the selector is the
-// exact `path::test` form `--deselect` accepts. The trailing " - <error>"
-// summary must be stripped: passing it through would make the selector match
-// nothing and the deselect silently no-op.
+// pyFailedTests names the tests that failed in a pytest run, in the exact
+// `path::test` form `--deselect` accepts.
+//
+// It reads the run's own record when the output carries one: the marker block
+// the report hook prints (pyReportBlock), complete, names every test that
+// failed in its call phase, each once and whole. Only where there is no
+// complete block (a command corral could not rewrite, output recorded before
+// the hook existed, a block the output cap cut) does it read the second
+// source, pytest's "short test summary info" lines: one `FAILED <selector> -
+// <error>` line per failure, where the trailing " - <error>" summary must be
+// stripped, since passing it through would make the selector match nothing
+// and the deselect silently no-op. That source cuts an id at its first
+// space, because nothing in the line says where an id with a space ends.
 func pyFailedTests(output string) []string {
+	if recs, ok := pyReportBlock(output); ok {
+		return pyReportedFailedTests(recs)
+	}
 	var out []string
 	for _, line := range strings.Split(output, "\n") {
 		line = strings.TrimSpace(line)
@@ -1831,7 +1842,16 @@ func alignPyPath(path, root string) (string, bool) {
 // test, and returning its first word would put a fabricated id in the
 // ledger. Collection errors that name only a FILE are likewise declined:
 // nothing there identifies a test.
+//
+// The run's own record comes first: a complete marker block from the report
+// hook (pyReportBlock) names the first failing test from pytest's reports,
+// whole, whatever the project's report settings printed, and a complete block
+// that names none is the answer "pytest reported no failing test". The
+// printed lines are read only where there is no complete block.
 func pyFirstFailure(output []byte) string {
+	if recs, ok := pyReportBlock(string(output)); ok {
+		return pyReportedFirstFailure(recs)
+	}
 	for _, line := range strings.Split(string(output), "\n") {
 		line = strings.TrimSpace(line)
 		var prefix string

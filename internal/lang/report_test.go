@@ -11,16 +11,35 @@ import (
 	"testing"
 )
 
-// ReportCmd gives a command its runner's report flags only where the command
-// names that runner and corral can see where the runner's own options end.
-// Everything else is left exactly as it was: corral then reads no failing
-// test's name, which is what it did before, never a guess.
+// unwrapped is the command inside the pytest report wrapper, without the
+// `-p corral_report` the wrapper adds, and whether cmd is that wrapper: the
+// script, its $0, then the command as positional parameters.
+func unwrapped(cmd []string) ([]string, bool) {
+	if len(cmd) < 5 || !slices.Equal(cmd[:4], []string{"sh", "-c", pyReportScript, pyReportArgv0}) {
+		return nil, false
+	}
+	inner := cmd[4:]
+	for i := 0; i+1 < len(inner); i++ {
+		if inner[i] == "-p" && inner[i+1] == pyReportModule {
+			return slices.Concat(inner[:i], inner[i+2:]), true
+		}
+	}
+	return nil, false
+}
+
+// ReportCmd gives a command its runner's report flags and hook only where
+// the command names that runner and corral can see where the runner's own
+// options end. Everything else is left exactly as it was: its failures are
+// then read from what the runner printed, which is what corral did before,
+// never a guess.
 func TestReportCmdAppliesTheRowsReportArgs(t *testing.T) {
 	cases := []struct {
 		name string
 		lang string
 		inv  Invocation
-		want []string // nil = unchanged
+		// want is the command inside the wrapper: the operator's with the
+		// flags where they belong. nil = unchanged, and not wrapped.
+		want []string
 	}{
 		{"bare pytest", "python", Cmd([]string{"pytest"}), []string{"pytest", "-rfE"}},
 		{"python3 -m pytest -q", "python", Cmd([]string{"python3", "-m", "pytest", "-q"}),
@@ -38,9 +57,11 @@ func TestReportCmdAppliesTheRowsReportArgs(t *testing.T) {
 		// After pytest's own `--` every word is a path: the flag goes before it.
 		{"-- then paths", "python", Cmd([]string{"python3", "-m", "pytest", "-q", "--", "tests/a.py"}),
 			[]string{"python3", "-m", "pytest", "-q", "-rfE", "--", "tests/a.py"}},
-		{"already last", "python", Cmd([]string{"pytest", "tests", "-rfE"}), nil},
-		{"already, only paths after", "python", Cmd([]string{"pytest", "-rfE", "tests"}), nil},
-		{"already before --", "python", Cmd([]string{"pytest", "-q", "-rfE", "--", "tests"}), nil},
+		// Flags the operator already wrote gain no second copy; the command
+		// is still wrapped.
+		{"already last", "python", Cmd([]string{"pytest", "tests", "-rfE"}), []string{"pytest", "tests", "-rfE"}},
+		{"already, only paths after", "python", Cmd([]string{"pytest", "-rfE", "tests"}), []string{"pytest", "-rfE", "tests"}},
+		{"already before --", "python", Cmd([]string{"pytest", "-q", "-rfE", "--", "tests"}), []string{"pytest", "-q", "-rfE", "--", "tests"}},
 		// An option after the operator's -rfE could be a -r cluster (-vrs):
 		// corral's goes last again, which costs nothing.
 		{"already, option after", "python", Cmd([]string{"pytest", "-rfE", "-vrs", "tests"}),
@@ -79,14 +100,25 @@ func TestReportCmdAppliesTheRowsReportArgs(t *testing.T) {
 			if !slices.Equal(c.inv.Argv, in) {
 				t.Fatalf("ReportCmd modified its input: %v", c.inv.Argv)
 			}
-			want := c.want
-			if want == nil {
-				want = in
+			if c.want == nil {
+				if !slices.Equal(got, in) || applied {
+					t.Fatalf("ReportCmd(%v) = %v applied=%v, want it unchanged", in, got, applied)
+				}
+			} else {
+				inner, wrapped := unwrapped(got)
+				if !wrapped || !applied || !slices.Equal(inner, c.want) {
+					t.Fatalf("ReportCmd(%v) = %v applied=%v, want the report wrapper around %v", in, got, applied, c.want)
+				}
+				// The plugin is loaded where the flags go: before the
+				// runner's own `--`, after which every word is a path.
+				positional := got[4:]
+				at := slices.Index(positional, pyReportModule)
+				if dash := slices.Index(c.want, "--"); dash >= 0 && slices.Index(c.want, "pytest") < dash && !slices.Equal(positional[at+1:], c.want[dash:]) {
+					t.Errorf("the plugin is loaded at %d in %v, want it directly before pytest's own --", at, positional)
+				}
 			}
-			if !slices.Equal(got, want) || applied != (c.want != nil) {
-				t.Fatalf("ReportCmd(%v) = %v applied=%v, want %v applied=%v", in, got, applied, want, c.want != nil)
-			}
-			// Idempotent: a command it has already rewritten gains nothing.
+			// Idempotent: a command it has already rewritten is a shell
+			// wrapper, which it cannot read and leaves alone.
 			again, appliedAgain := ReportCmd(p, c.inv.WithArgv(got), got)
 			if !slices.Equal(again, got) || appliedAgain {
 				t.Fatalf("second ReportCmd(%v) = %v applied=%v, want it unchanged", got, again, appliedAgain)
@@ -104,17 +136,30 @@ func TestReportArgvJudgesEachCommandOnItsOwnWords(t *testing.T) {
 	if got := hook([]string{"python3", "-m", "py_compile", "a.py"}); !slices.Equal(got, []string{"python3", "-m", "py_compile", "a.py"}) {
 		t.Errorf("compile check got %v, want it unchanged", got)
 	}
-	if got := hook([]string{"python3", "-m", "pytest", "-q", "tests/a.py::t"}); !slices.Equal(got, []string{"python3", "-m", "pytest", "-q", "tests/a.py::t", "-rfE"}) {
-		t.Errorf("one-test command got %v, want -rfE appended", got)
+	got := hook([]string{"python3", "-m", "pytest", "-q", "tests/a.py::t"})
+	if inner, wrapped := unwrapped(got); !wrapped || !slices.Equal(inner, []string{"python3", "-m", "pytest", "-q", "tests/a.py::t", "-rfE"}) {
+		t.Errorf("one-test command got %v, want the wrapper around it with -rfE appended", got)
+	}
+	// Applied to its own output it changes nothing: the wrap happens once.
+	if again := hook(got); !slices.Equal(again, got) {
+		t.Errorf("second application changed the command: %v", again)
 	}
 }
 
-// Every row that declares report flags names its runner by a word, so
-// ReportCmd can find where the runner's options start, and has a failure
-// reader those flags exist for.
+// Every row that declares report flags or a report hook names its runner by
+// a word, so ReportCmd can find where the runner's options start, and has a
+// failure reader they exist for. A hook's wrapper is one ReportCmd cannot
+// read again, and says what it does.
 func TestEveryRowWithReportArgsHasWordsAndAReader(t *testing.T) {
 	for _, r := range runners {
-		if len(r.ReportArgs) == 0 {
+		if h := r.ReportHook; h != nil {
+			if h.Wrap == nil || strings.TrimSpace(h.Says) == "" {
+				t.Errorf("%s declares a ReportHook with no Wrap or no disclosure", r.ID)
+			} else if w := h.Wrap([]string{r.Words[0]}, 1); !cmdIsShellWrapped(w) {
+				t.Errorf("%s: the hook's wrapper %v is not a shell wrapper, so ReportCmd would wrap it again", r.ID, w)
+			}
+		}
+		if len(r.ReportArgs) == 0 && r.ReportHook == nil {
 			continue
 		}
 		if len(r.Words) == 0 {
@@ -212,12 +257,18 @@ func TestReportArgsRestoreFailureLinesAProjectHides(t *testing.T) {
 		t.Fatalf("control: the failed-tests reader read %v from a run whose config hides the FAILED lines:\n%s", got, hidden)
 	}
 
-	rewritten, applied := ReportCmd(p, inv, operator)
-	if !applied {
-		t.Fatalf("ReportCmd left %v unchanged", operator)
+	// The flags alone, without the hook: the printed lines are back. This is
+	// the second source a reader falls back to, so it is still checked.
+	flagged, flagsAdded, _ := reportCmd(p, inv, operator)
+	inner, wrapped := unwrapped(flagged)
+	if !flagsAdded || !wrapped {
+		t.Fatalf("reportCmd left %v without flags or wrapper: %v", operator, flagged)
 	}
-	shown := run(rewritten)
+	shown := run(inner)
 	const want = "tests/test_x.py::test_bad"
+	if _, block := pyReportBlock(shown); block {
+		t.Fatalf("the unwrapped command printed a marker block:\n%s", shown)
+	}
 	if got := parser.FirstFailure([]byte(shown)); got != want {
 		t.Errorf("FirstFailure = %q, want %q, from:\n%s", got, want, shown)
 	}
@@ -226,12 +277,11 @@ func TestReportArgsRestoreFailureLinesAProjectHides(t *testing.T) {
 	}
 }
 
-// The stated limit, pinned by execution: a project config carrying
-// --no-summary or -p no:terminal still hides the FAILED lines with -rfE
-// applied, so the readers name nothing (the killing test goes unnamed and a
-// kill is confirmed by repeating the run, as before the fix). A fix for either
-// must change this test and the pytest row's note.
-func TestReportArgsCannotRestoreLinesNoSummaryOrNoTerminalHide(t *testing.T) {
+// --no-summary and -p no:terminal in a project's config hide the FAILED
+// lines even with -rfE applied: that was the stated limit of the flags, and
+// the first half here still pins it (the flags alone name nothing). The hook
+// removes the limit: the full graded command names the failing test.
+func TestTheHookNamesWhatNoSummaryOrNoTerminalHide(t *testing.T) {
 	py := pytestFor(t)
 	p, _ := ByName("python")
 	for _, opt := range []string{"--no-summary", "-p no:terminal"} {
@@ -250,22 +300,32 @@ func TestReportArgsCannotRestoreLinesNoSummaryOrNoTerminalHide(t *testing.T) {
 			}
 			operator := []string{py, "-m", "pytest", "tests", "-q", "-p", "no:cacheprovider"}
 			inv := Cmd(operator)
-			rewritten, applied := ReportCmd(p, inv, operator)
-			if !applied {
-				t.Fatalf("ReportCmd left %v unchanged", operator)
-			}
-			cmd := exec.Command(rewritten[0], rewritten[1:]...) // #nosec G204 -- a test's own fixture command
-			cmd.Dir = dir
-			out, err := cmd.CombinedOutput()
-			if err == nil {
-				t.Fatalf("%v passed; the fixture has a failing test:\n%s", rewritten, out)
+			graded, applied := ReportCmd(p, inv, operator)
+			flagsOnly, wrapped := unwrapped(graded)
+			if !applied || !wrapped {
+				t.Fatalf("ReportCmd left %v unwrapped: %v", operator, graded)
 			}
 			failed, _ := DeselectorFor(p, inv)
-			if got := FailureParserFor(p, inv).FirstFailure(out); got != "" {
-				t.Errorf("FirstFailure = %q under addopts %q: the stated limit no longer holds, update the pytest row's note", got, opt)
+			parser := FailureParserFor(p, inv)
+
+			out, code := runIn(t, dir, flagsOnly)
+			if code != 1 {
+				t.Fatalf("%v exited %d, want 1:\n%s", flagsOnly, code, out)
 			}
-			if got := failed(string(out)); len(got) != 0 {
-				t.Errorf("failed tests = %v under addopts %q: the stated limit no longer holds, update the pytest row's note", got, opt)
+			if got := parser.FirstFailure([]byte(out)); got != "" {
+				t.Errorf("control: the flags alone name %q under addopts %q; -rfE now undoes it, so say so in the pytest row's note", got, opt)
+			}
+
+			out, code = runIn(t, dir, graded)
+			if code != 1 {
+				t.Fatalf("the graded command exited %d, want 1:\n%s", code, out)
+			}
+			const want = "tests/test_x.py::test_bad"
+			if got := parser.FirstFailure([]byte(out)); got != want {
+				t.Errorf("FirstFailure = %q under addopts %q, want %q, from:\n%s", got, opt, want, out)
+			}
+			if got := failed(out); !slices.Equal(got, []string{want}) {
+				t.Errorf("failed tests = %v under addopts %q, want [%s]", got, opt, want)
 			}
 		})
 	}

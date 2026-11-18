@@ -310,6 +310,57 @@ func TestSalvageStillDeselectsWithTheFailureHookOn(t *testing.T) {
 	}
 }
 
+// The stated limit, pinned by execution: the hook's record is the LAST thing
+// a run prints, and the clean-code run salvage reads (CompliantRun, through
+// the jail's RunTestVerbose) keeps the FIRST 16 KiB of a run's output. An
+// authored test whose run prints more than that loses the record, and with a
+// config that hides the printed lines the reader names nothing, so nothing is
+// salvaged (never a wrong test). The workspace substrate holds the whole
+// output and is the control. A fix (that door keeping the end of the output,
+// as the door that names a killing test does) must change this test and the
+// changelog's limit.
+func TestTheSalvageDoorInTheJailLosesTheHookRecordPastItsOutputCap(t *testing.T) {
+	pytestOnHost(t)
+	plug, _ := lang.ByName("python")
+	failedTests, _ := lang.DeselectorFor(plug, lang.Cmd(strings.Fields(pytestArgv)))
+	// 400 lines of 80 bytes, printed past pytest's capture: 32 KiB.
+	noisy := brokenAuthored + "\n\ndef test_noise(capsys):\n    with capsys.disabled():\n        print((\"n\" * 79 + \"\\n\") * 400)\n"
+	for _, substrate := range []string{"workspace", "jail"} {
+		t.Run(substrate, func(t *testing.T) {
+			var iso sandbox.Isolator
+			if substrate == "jail" {
+				b, err := sandbox.Resolve(sandbox.Config{Backend: "bwrap"})
+				if err != nil {
+					t.Skipf("SKIP: no bwrap backend: %v", err)
+				}
+				iso = b
+			}
+			repoDir, seed := hidingRepo(t, "--no-summary")
+			w := wirePython(t, iso, substrate, repoDir, &seed)
+			ctx := context.Background()
+			if substrate == "jail" {
+				if pass, out, err := w.scorer.CompliantRun(ctx, w.codeKey, seed.files["calc.py"], seed.files["tests/test_calc.py"], pytestArgv); err != nil || !pass {
+					t.Skipf("SKIP: the jail did not pass the fixture's own suite on unmutated code (jail or toolchain unavailable): %v\n%s", err, out)
+				}
+			}
+			pass, out, err := w.scorer.CompliantRun(ctx, w.codeKey, seed.files["calc.py"], noisy, pytestArgv)
+			if err != nil || pass {
+				t.Fatalf("pass=%v err=%v, want a failing run", pass, err)
+			}
+			failing := failedTests(out)
+			if substrate == "workspace" {
+				if len(failing) != 1 || !strings.HasSuffix(failing[0], "::test_wrong[a b]") {
+					t.Errorf("control: failing = %q from %d bytes of output, want the one id ending ::test_wrong[a b]", failing, len(out))
+				}
+				return
+			}
+			if strings.Contains(out, "corral-report-end") || len(failing) != 0 {
+				t.Errorf("the jail's salvage door now returns the hook's record (%d bytes, failing=%q): the stated limit no longer holds, update the changelog and this test", len(out), failing)
+			}
+		})
+	}
+}
+
 // The deselecting command reaches the runner narrowed AND wrapped: the
 // wrapper's positional parameters carry the --deselect and the id, whole.
 func TestADeselectedCommandReachesTheRunnerNarrowedInsideTheWrapper(t *testing.T) {

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pdbethke/corralai/internal/clip"
 	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
@@ -395,6 +396,17 @@ func (w *WorkspaceRunner) RunTestDetailed(ctx context.Context, files map[string]
 	out := newTailWriter(maxDetailedOutput)
 	code, err := w.applyRunRestore(ctx, files, testCmd, out, out)
 	return code == 0, out.Bytes(), err
+}
+
+// RunTestEnds is RunTestVerbose keeping both ends of the run's output, the
+// first maxEndsHead bytes and the last maxDetailedOutput: the EndsJail
+// contract. Bounded as the bytes arrive (clip.EndsWriter), for the reason
+// RunTestDetailed's doc gives. It is the same capture the bwrap jail's
+// RunTestEnds makes, so a run reads the same on either substrate.
+func (w *WorkspaceRunner) RunTestEnds(ctx context.Context, files map[string]string, testCmd []string) (bool, string, error) {
+	out := clip.NewEndsWriter(maxEndsHead, maxDetailedOutput)
+	code, err := w.applyRunRestore(ctx, files, testCmd, out, out)
+	return code == 0, out.String(), err
 }
 
 // applyRunRestore is the single implementation of this runner's

@@ -759,8 +759,9 @@ func (s JailScorer) scoreAuthoredReport(ctx context.Context, codePath, code, tes
 // CompliantFailure runs the authored test against the UNMUTATED code and
 // returns the runner's own combined output — the detail that turns a
 // clean-code-failure retry into a corrective one, exactly as CompileError's
-// output does for a build failure. It is CompliantRun's output, so every
-// reader of it sees the same end of the run (see CompliantRun).
+// output does for a build failure. It is CompliantRun's whole captured
+// output; the caller that shows it to the writer clips it
+// (writerFailureDetail).
 //
 // A backend that can surface output does, and one that cannot degrades to ""
 // rather than failing the run. Costs one extra run, and only on the failure
@@ -781,41 +782,46 @@ func (s JailScorer) CompliantFailure(ctx context.Context, codePath, code, test, 
 // A jail that cannot surface output is an error here, so a caller records
 // "not checked" rather than a pass.
 //
-// WHICH END OF THE OUTPUT. The END, up to the cap the kill-naming door keeps
-// (adequacy.DetailedJail's RunTestDetailed: the last 64 KiB), on every jail
-// that offers that run: the bwrap jail, the workspace runner and the
-// workspace pool. This output has three readers, and one run serves all of
-// them:
+// WHICH PART OF THE OUTPUT. BOTH ENDS, from one run: the first 16 KiB and
+// the last 64 KiB with an elision line between them, and all of it when it
+// fits (adequacy.EndsJail's RunTestEnds), on every jail that offers that
+// run: the bwrap jail, the workspace runner and the workspace pool. This
+// output has three readers:
 //
 //   - salvage (salvageByDeselect) reads the failing tests' names from it, and
-//     a runner names its failures last: pytest's summary lines and the report
-//     hook's marker block, `go test`'s FAIL lines, rspec's "Failed examples";
-//   - the together check keeps the last 2000 bytes of it for the record
-//     (authored_together_output);
+//     a runner names those LAST: pytest's summary lines and the report hook's
+//     marker block, rspec's "Failed examples". It is given the whole captured
+//     string;
 //   - the test writer is shown it when a test fails on clean code
-//     (cleanFailureRepairBlock). The writer needs the failing assertion, and
-//     that too is at the end: a runner prints its progress first and its
-//     failures after the tests have run. So the writer is shown the end as
-//     well. That is a deliberate change of what the writer sees on a run
-//     noisier than the old cap, not a side effect of salvage's needs.
+//     (writerFailureDetail). What the writer needs can be at either end: an
+//     assertion failure is reported after the tests have run, but a Go test
+//     that hangs under `go test -timeout` prints `panic: test timed out` and
+//     the running test's name FIRST and then every goroutine's stack (264,781
+//     bytes in the run that showed this: the last 64 KiB named no test). So
+//     the writer is shown the first 16 KiB and the last 16 KiB, which bounds
+//     a retry prompt at 32 KiB on every substrate;
+//   - the together check keeps the last 2000 bytes for the record
+//     (authored_together_output), as it always did.
 //
 // Until 2026-11-18 this door ran RunTestVerbose, which in the bwrap jail
 // keeps the FIRST 16 KiB of a run and on the workspace substrate keeps all
-// of it. In the jail, a run noisier than that lost exactly the part all three
-// readers want: nothing was salvaged, and the writer was shown the opening of
-// the run. On the workspace substrate nothing bounded what went into the
-// writer's prompt. Both now hold the same thing, the same end at the same
-// cap, so a run reads the same on either.
+// of it. In the jail, a run noisier than that lost the failing tests' names
+// and nothing was salvaged; on the workspace substrate nothing bounded what
+// went into the writer's prompt. (For a few commits on the branch that made
+// this change the door kept the last 64 KiB alone, on the claim that the
+// failing assertion "too is at the end". The Go hang above is the run that
+// showed that claim false.)
 //
-// A jail that offers no tail-keeping run (only RunTestVerbose) is run as it
-// always was and hands back whatever that run keeps. What remains: a
-// runner's record of its failures that is itself larger than the kept tail
-// loses its beginning, and the readers then read what the rest of the tail
-// names (for pytest's marker block, nothing).
+// A jail that offers no such run (only RunTestVerbose) is run as it always
+// was and hands back whatever that run keeps. The door that names a killing
+// test (adequacy.Score, through DetailedJail) is unchanged: it keeps the
+// tail alone. What remains: a runner's record of its failures that is
+// itself larger than the kept tail loses its beginning, or is split by the
+// elision, and the readers then treat it as incomplete.
 func (s JailScorer) CompliantRun(ctx context.Context, codePath, code, test, testCmd string) (bool, string, error) {
-	dj, detailed := s.Jail.(adequacy.DetailedJail)
+	ej, ends := s.Jail.(adequacy.EndsJail)
 	vj, verbose := s.Jail.(verboseJail)
-	if !detailed && !verbose {
+	if !ends && !verbose {
 		return false, "", errors.New("this jail cannot report a run's output")
 	}
 	ws, base := s.scoreWorkspace(codePath, test, testCmd)
@@ -838,9 +844,8 @@ func (s JailScorer) CompliantRun(ctx context.Context, codePath, code, test, test
 	// The UNMUTATED code: this asks "why does your test fail on software that
 	// is correct", which is the only question worth feeding back.
 	ws[codePath] = code
-	if detailed {
-		pass, out, err := dj.RunTestDetailed(ctx, ws, rewriteCmd(s.CommandRewrite, cmd))
-		return pass, string(out), err
+	if ends {
+		return ej.RunTestEnds(ctx, ws, rewriteCmd(s.CommandRewrite, cmd))
 	}
 	return vj.RunTestVerbose(ctx, ws, rewriteCmd(s.CommandRewrite, cmd))
 }

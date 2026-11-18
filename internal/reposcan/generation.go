@@ -452,15 +452,16 @@ package reposcan
 // names no test; now the id is whole. "45" has reached
 // main, so this gets its own generation. In the same generation, for every
 // language: the clean-code run of an authored test (JailScorer.CompliantRun)
-// hands back the last 64 KiB of its output where it handed back the first
-// 16 KiB in the bwrap jail and all of it on the workspace substrate. A
-// verdict from a jailed run whose clean-code failure printed more than 16 KiB
-// recorded no salvage, because the failing tests are named at the end; it can
-// now record one, so proven counts can rise, the writer's
-// retry is fed the end of the run, and authored_together_output is the run's
-// true last 2000 bytes rather than the end of its first 16 KiB. It rides
-// along: "46" has not left this branch. Behaviour bump; the shape is
-// unchanged.
+// hands back the first 16 KiB and the last 64 KiB of its output, where it
+// handed back the first 16 KiB alone in the bwrap jail and all of it on the
+// workspace substrate. A verdict from a jailed run whose clean-code failure
+// printed more than 16 KiB recorded no salvage, because the failing tests
+// are named at the end; it can now record one, so proven counts can rise.
+// The writer's retry is fed the first and last 16 KiB of that run on both
+// substrates, so the test a retry produces can differ, and
+// authored_together_output is the run's true last 2000 bytes rather than the
+// end of its first 16 KiB. It rides along: "46" has not left this branch.
+// Behaviour bump; the shape is unchanged.
 const VerdictGeneration = "46"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every

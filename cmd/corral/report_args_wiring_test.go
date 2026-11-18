@@ -314,12 +314,13 @@ func TestSalvageStillDeselectsWithTheFailureHookOn(t *testing.T) {
 }
 
 // A clean-code run noisier than a door's output cap still yields the hook's
-// record, because the door keeps the END of the run, where the record is
-// printed: salvage reads the failing id whole, in the real jail and on the
-// workspace substrate. The authored test prints 100 KiB past pytest's
-// capture, more than the 16 KiB the jail's head-keeping run held (this test
-// pinned that loss until the door kept the tail) and more than the 64 KiB
-// any door keeps, on a project whose config hides the printed lines.
+// record, because the door keeps the END of the run (and its start), where
+// the record is printed: salvage reads the failing id whole, in the real
+// jail and on the workspace substrate. The authored test prints 100 KiB past
+// pytest's capture, more than the 16 KiB the jail's head-keeping run held
+// and more than the door keeps of both ends together, on a project whose
+// config hides the printed lines. (Run before the door kept the end, this
+// same 100 KiB test read no failing id in the jail, from 16,406 bytes.)
 func TestTheSalvageDoorKeepsTheHookRecordOnARunNoisierThanItsOutputCap(t *testing.T) {
 	pytestOnHost(t)
 	plug, _ := lang.ByName("python")
@@ -348,8 +349,8 @@ func TestTheSalvageDoorKeepsTheHookRecordOnARunNoisierThanItsOutputCap(t *testin
 			if err != nil || pass {
 				t.Fatalf("pass=%v err=%v, want a failing run", pass, err)
 			}
-			if len(out) > 64<<10 {
-				t.Errorf("the door handed back %d bytes, more than the 64 KiB tail it keeps", len(out))
+			if len(out) > (16<<10)+(64<<10)+128 || !strings.Contains(out, "bytes of this run's output are not shown here]\n") {
+				t.Errorf("the door handed back %d bytes; want the first 16 KiB, one elision line and the last 64 KiB", len(out))
 			}
 			if failing := failedTests(out); len(failing) != 1 || !strings.HasSuffix(failing[0], "::test_wrong[a b]") {
 				t.Errorf("failing = %q from %d bytes of output, want the one id ending ::test_wrong[a b]", failing, len(out))

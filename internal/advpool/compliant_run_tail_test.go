@@ -8,9 +8,9 @@ import (
 	"testing"
 )
 
-// endsJail is a Jail that can hand back either end of a run's output: the
-// head through RunTestVerbose, the tail through RunTestDetailed. It records
-// which was asked for and the command it was handed.
+// endsJail is a Jail that offers every output-returning run: the head
+// through RunTestVerbose, the tail through RunTestDetailed, both ends through
+// RunTestEnds. It records which was asked for and the command it was handed.
 type endsJail struct {
 	asked []string
 	cmds  [][]string
@@ -30,7 +30,12 @@ func (j *endsJail) RunTestDetailed(_ context.Context, _ map[string]string, cmd [
 	return false, []byte("TAIL"), nil
 }
 
-// headOnlyJail offers no tail-keeping run.
+func (j *endsJail) RunTestEnds(_ context.Context, _ map[string]string, cmd []string) (bool, string, error) {
+	j.asked, j.cmds = append(j.asked, "ends"), append(j.cmds, slices.Clone(cmd))
+	return false, "BOTH ENDS", nil
+}
+
+// headOnlyJail offers no run that keeps the end of its output.
 type headOnlyJail struct{ asked int }
 
 func (j *headOnlyJail) RunTest(context.Context, map[string]string, []string) (bool, error) {
@@ -42,34 +47,34 @@ func (j *headOnlyJail) RunTestVerbose(context.Context, map[string]string, []stri
 	return false, "HEAD", nil
 }
 
-// The clean-code run of an authored test hands back the END of its output
-// wherever the jail can keep one: that is where a runner names what failed,
-// which salvage reads and the test writer is shown. One run serves both; the
-// command still passes through the rewrite. A jail with no tail-keeping run
-// keeps handing back what it always did.
-func TestCompliantRunReadsTheEndOfTheRunWhereTheJailKeepsOne(t *testing.T) {
+// The clean-code run of an authored test hands back BOTH ends of its output
+// wherever the jail can keep them: a runner names some failures last (which
+// salvage reads) and some first (a hung Go test, which the writer needs).
+// One run serves every reader; the command still passes through the
+// rewrite. A jail with no such run keeps handing back what it always did.
+func TestCompliantRunReadsBothEndsOfTheRunWhereTheJailKeepsThem(t *testing.T) {
 	ctx := context.Background()
 	base := map[string]string{"go.mod": "module m\n", "p.go": "package p\n"}
 
 	both := &endsJail{}
 	s := JailScorer{Jail: both, BaseFiles: base, CommandRewrite: markRewrite}
 	pass, out, err := s.CompliantRun(ctx, "p.go", "package p\n", "package p\n", "go test ./...")
-	if err != nil || pass || out != "TAIL" {
-		t.Errorf("CompliantRun = pass %v, %q, %v; want the failing run's tail", pass, out, err)
+	if err != nil || pass || out != "BOTH ENDS" {
+		t.Errorf("CompliantRun = pass %v, %q, %v; want the failing run's two ends", pass, out, err)
 	}
-	if !slices.Equal(both.asked, []string{"detailed"}) {
-		t.Errorf("the jail was asked %v, want one tail-keeping run and no second run", both.asked)
+	if !slices.Equal(both.asked, []string{"ends"}) {
+		t.Errorf("the jail was asked %v, want one two-ends run and no second run", both.asked)
 	}
 	if len(both.cmds) != 1 || both.cmds[0][len(both.cmds[0])-1] != "--rewritten" {
 		t.Errorf("the command reached the jail unrewritten: %v", both.cmds)
 	}
-	if got := s.CompliantFailure(ctx, "p.go", "package p\n", "package p\n", "go test ./..."); got != "TAIL" {
-		t.Errorf("CompliantFailure = %q, want the same tail the salvage reader gets", got)
+	if got := s.CompliantFailure(ctx, "p.go", "package p\n", "package p\n", "go test ./..."); got != "BOTH ENDS" {
+		t.Errorf("CompliantFailure = %q, want the same capture the salvage reader gets", got)
 	}
 
 	head := &headOnlyJail{}
 	pass, out, err = JailScorer{Jail: head, BaseFiles: base}.CompliantRun(ctx, "p.go", "package p\n", "package p\n", "go test ./...")
 	if err != nil || pass || out != "HEAD" || head.asked != 1 {
-		t.Errorf("a jail with no tail-keeping run: pass %v, %q, %v after %d runs; want its own output, once", pass, out, err, head.asked)
+		t.Errorf("a jail with no two-ends run: pass %v, %q, %v after %d runs; want its own output, once", pass, out, err, head.asked)
 	}
 }

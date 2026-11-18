@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/pdbethke/corralai/internal/clip"
 	"github.com/pdbethke/corralai/internal/creds"
 	"io"
 	"os"
@@ -128,6 +129,15 @@ type Options struct {
 	// use. Only the capture differs; the command, its exit code, TimedOut
 	// and Err are identical either way. See TailWriter.
 	KeepTail bool
+	// KeepHead, with KeepTail, ALSO keeps the first KeepHead bytes of an
+	// over-long output, with one elision line between the two ends saying
+	// how many bytes are not shown (clip.EndsWriter): up to KeepHead +
+	// MaxOutput bytes of the run, plus that line. Nothing is elided when the
+	// output fits. For a caller whose readers need both ends: a runner names
+	// some failures first (a hung Go test's panic and the test's name come
+	// before every goroutine's stack) and others last (a summary). 0 keeps
+	// one end only, as KeepTail says; it is ignored without KeepTail.
+	KeepHead int
 	Backend  Isolator // isolation backend; nil => execution is disabled (used from Task 2)
 
 	// ReadOnlyBinds are host directories mounted into the jail at Target (an
@@ -607,6 +617,9 @@ func Run(ctx context.Context, command string, opts Options) Result {
 	var buf outputCapture = NewCappedWriter(opts.MaxOutput)
 	if opts.KeepTail {
 		buf = NewTailWriter(opts.MaxOutput)
+		if opts.KeepHead > 0 {
+			buf = clip.NewEndsWriter(opts.KeepHead, opts.MaxOutput)
+		}
 	}
 	cmd.Stdout = buf
 	cmd.Stderr = buf

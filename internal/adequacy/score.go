@@ -772,6 +772,37 @@ type DetailedJail interface {
 	RunTestDetailed(ctx context.Context, files map[string]string, testCmd []string) (ok bool, output []byte, err error)
 }
 
+// maxEndsHead is how much of the START of a run an EndsJail keeps: 16 KiB,
+// the cap the jail's RunTestVerbose has always kept of a run's opening
+// (sandbox.Run's default), which is what the test writer was shown of a
+// failing run in the jail until 2026-11-18.
+const maxEndsHead = 16 << 10
+
+// EndsJail is a Jail that can hand back BOTH ends of what a run printed: its
+// first maxEndsHead bytes and its last maxDetailedOutput bytes, with one
+// elision line between them counting the bytes not shown (clip.Elision), and
+// the whole output when it fits. It is for the one door whose readers need
+// both, the clean-code run of an authored test (advpool's
+// JailScorer.CompliantRun):
+//
+//   - a runner names its failing tests LAST (pytest's summary and report
+//     hook block, rspec's "Failed examples"), which salvage reads;
+//   - some failures are named FIRST: a Go test that hangs under `go test
+//     -timeout` prints `panic: test timed out` and the running test's name,
+//     then every goroutine's stack, hundreds of KiB of them, so the last
+//     64 KiB of that run say nothing about which test hung. The test writer,
+//     who is shown this output to repair the test, needs that opening.
+//
+// The door that names a killing test keeps the tail alone (DetailedJail) and
+// is unchanged: it runs once per mutant, and its one reader reads the end.
+//
+// Optional, as DetailedJail and VerboseJail are: the bwrap jail, the
+// workspace runner and the workspace pool implement it; a Jail without it is
+// run through RunTestVerbose and hands back what that keeps.
+type EndsJail interface {
+	RunTestEnds(ctx context.Context, files map[string]string, testCmd []string) (ok bool, output string, err error)
+}
+
 // tailBytes keeps the last n bytes of b, copying rather than aliasing so the
 // runner's buffer can be reused.
 func tailBytes(b []byte, n int) []byte {

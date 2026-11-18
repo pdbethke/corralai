@@ -542,23 +542,24 @@ func shellJoin(cmd []string) string {
 // runInJail runs cmd over files in a fresh disposable workspace, capturing
 // the run's OPENING up to the jail's own output cap (see WithMaxOutput).
 func (j bwrapJail) runInJail(ctx context.Context, files map[string]string, cmd []string) (sandbox.Result, error) {
-	return j.runInJailCapturing(ctx, files, cmd, j.maxOutput, false)
+	return j.runInJailCapturing(ctx, files, cmd, j.maxOutput, false, 0)
 }
 
 // runInJailCapturing is runInJail with the capture policy spelled out:
 // maxOutput bounds what is held (0 => sandbox.Run's own 16 KiB default), and
-// keepTail decides WHICH END survives it. Every other aspect of the run —
+// keepTail decides WHICH END survives it (with keepHead > 0, the first
+// keepHead bytes are kept as well: sandbox.Options.KeepHead). Every other aspect of the run —
 // binds, env, timeout, exit code, timeout classification — is identical, and
 // deliberately so: the two capture policies must never become two different
 // runs.
-func (j bwrapJail) runInJailCapturing(ctx context.Context, files map[string]string, cmd []string, maxOutput int, keepTail bool) (sandbox.Result, error) {
-	return j.runInJailCache(ctx, files, cmd, maxOutput, keepTail, false)
+func (j bwrapJail) runInJailCapturing(ctx context.Context, files map[string]string, cmd []string, maxOutput int, keepTail bool, keepHead int) (sandbox.Result, error) {
+	return j.runInJailCache(ctx, files, cmd, maxOutput, keepTail, keepHead, false)
 }
 
 // runInJailCache is runInJailCapturing with the run cache's side spelled
 // out: warm binds it writable, every other run sees it frozen. Without
 // WithRunCache neither mounts anything.
-func (j bwrapJail) runInJailCache(ctx context.Context, files map[string]string, cmd []string, maxOutput int, keepTail, warm bool) (sandbox.Result, error) {
+func (j bwrapJail) runInJailCache(ctx context.Context, files map[string]string, cmd []string, maxOutput int, keepTail bool, keepHead int, warm bool) (sandbox.Result, error) {
 	if len(cmd) == 0 {
 		return sandbox.Result{}, errors.New("adequacy: empty command")
 	}
@@ -574,7 +575,7 @@ func (j bwrapJail) runInJailCache(ctx context.Context, files map[string]string, 
 		ws.cache = mount
 	}
 	start := time.Now()
-	res, err := j.runIn(ctx, ws, cmd, maxOutput, keepTail)
+	res, err := j.runIn(ctx, ws, cmd, maxOutput, keepTail, keepHead)
 	took := time.Since(start)
 	if err == nil && ws.cache != nil && !ws.cache.Frozen {
 		// The warming run was granted the cache writable and was carried
@@ -606,7 +607,7 @@ type runWorkspace struct {
 // binds, toolchain, env, timeout, capture, timeout classification — for a
 // fresh copy and a seed alike, so the two can never become two different
 // runs.
-func (j bwrapJail) runIn(ctx context.Context, ws runWorkspace, cmd []string, maxOutput int, keepTail bool) (sandbox.Result, error) {
+func (j bwrapJail) runIn(ctx context.Context, ws runWorkspace, cmd []string, maxOutput int, keepTail bool, keepHead int) (sandbox.Result, error) {
 	if len(cmd) == 0 {
 		return sandbox.Result{}, errors.New("adequacy: empty command")
 	}
@@ -643,6 +644,7 @@ func (j bwrapJail) runIn(ctx context.Context, ws runWorkspace, cmd []string, max
 		Env:       envWithDepBinPaths(sandbox.MinimalEnv(), roBinds),
 		MaxOutput: maxOutput, // 0 => sandbox.Run's own 16 KiB default
 		KeepTail:  keepTail,
+		KeepHead:  keepHead,
 		SeedLower: seedLower,
 		Cache:     ws.cache,
 	})
@@ -817,7 +819,7 @@ func (s *seededJail) run(ctx context.Context, files map[string]string, cmd []str
 	if s.cacheDir != "" {
 		s.frozenRan.Store(true)
 	}
-	return s.j.runIn(ctx, runWorkspace{dir: s.dir, seeded: true, cache: s.mount(true)}, cmd, s.j.maxOutput, false)
+	return s.j.runIn(ctx, runWorkspace{dir: s.dir, seeded: true, cache: s.mount(true)}, cmd, s.j.maxOutput, false, 0)
 }
 
 // Enumerate is bwrapJail.Enumerate over the seed.
@@ -861,7 +863,7 @@ func (s *seededJail) Warm(ctx context.Context, files map[string]string, cmd []st
 		return sandbox.EnumerateResult{}, errors.New("adequacy: the shared cache is warmed before any frozen run, and one has run")
 	}
 	s.warmed = true
-	res, err := s.j.runIn(ctx, runWorkspace{dir: s.dir, seeded: true, cache: s.mount(false)}, cmd, s.j.maxOutput, false)
+	res, err := s.j.runIn(ctx, runWorkspace{dir: s.dir, seeded: true, cache: s.mount(false)}, cmd, s.j.maxOutput, false, 0)
 	return sandbox.EnumerateResult{Output: res.Output, ExitCode: res.ExitCode}, err
 }
 
@@ -985,7 +987,7 @@ func (j bwrapJail) RunTestVerbose(ctx context.Context, files map[string]string, 
 //
 // Output rides along even on a non-nil error, exactly as RunTestVerbose does.
 func (j bwrapJail) RunTestDetailed(ctx context.Context, files map[string]string, testCmd []string) (bool, []byte, error) {
-	res, err := j.runInJailCapturing(ctx, files, testCmd, maxDetailedOutput, true)
+	res, err := j.runInJailCapturing(ctx, files, testCmd, maxDetailedOutput, true, 0)
 	out := tailBytes([]byte(res.Output), maxDetailedOutput)
 	if err != nil {
 		return false, out, err
@@ -993,12 +995,24 @@ func (j bwrapJail) RunTestDetailed(ctx context.Context, files map[string]string,
 	return res.ExitCode == 0, out, nil
 }
 
+// RunTestEnds is RunTestVerbose keeping BOTH ends of the run's output: the
+// EndsJail contract (see it for who reads which end). The same run, exit
+// code and timeout handling as every other door; only the capture differs.
+// Output rides along on a non-nil error, as RunTestVerbose's does.
+func (j bwrapJail) RunTestEnds(ctx context.Context, files map[string]string, testCmd []string) (bool, string, error) {
+	res, err := j.runInJailCapturing(ctx, files, testCmd, maxDetailedOutput, true, maxEndsHead)
+	if err != nil {
+		return false, res.Output, err
+	}
+	return res.ExitCode == 0, res.Output, nil
+}
+
 // WarmRun is RunTestDetailed with the run cache bound writable
 // (WithRunCache): the run that fills it. Without a shared cache it is
 // RunTestDetailed. It waits for the frozen runs in flight, each bounded by
 // the jail's own timeout, so the wait is too.
 func (j bwrapJail) WarmRun(ctx context.Context, files map[string]string, testCmd []string) (bool, []byte, error) {
-	res, err := j.runInJailCache(ctx, files, testCmd, maxDetailedOutput, true, true)
+	res, err := j.runInJailCache(ctx, files, testCmd, maxDetailedOutput, true, 0, true)
 	out := tailBytes([]byte(res.Output), maxDetailedOutput)
 	if err != nil {
 		return false, out, err

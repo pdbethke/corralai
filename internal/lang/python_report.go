@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/pdbethke/corralai/internal/clip"
 )
 
 // pyReportModule is the module name of the pytest plugin corral loads into
@@ -266,7 +268,11 @@ type pyReportRec struct{ kind, id string }
 // is one. A begin with no end after it is not a block, and when the LAST
 // begin has no end there is no block at all, an earlier complete one
 // included: the record is incomplete, and an earlier block is then something
-// the tests printed (see "WHAT A TEST CAN FORGE" above). Lines are matched
+// the tests printed (see "WHAT A TEST CAN FORGE" above). An elision line (a
+// capture that kept both ends of an over-long output, clip.Elision) voids
+// everything before it and any block it falls inside: a block with its begin
+// in the kept head and its end in the kept tail has lost records, and is not
+// a block. Lines are matched
 // whole, with only a trailing carriage return dropped, so an id keeps every
 // space it has.
 func pyReportBlock(output string) (recs []pyReportRec, ok bool) {
@@ -275,6 +281,11 @@ func pyReportBlock(output string) (recs []pyReportRec, ok bool) {
 	for _, line := range strings.Split(output, "\n") {
 		line = strings.TrimSuffix(line, "\r")
 		switch {
+		case clip.IsElision(line):
+			// Part of the run's output is not in this string. Nothing before
+			// this line can be the last block, and a block open here has lost
+			// records: neither is trusted. A block wholly after it still is.
+			recs, ok, cur, open = nil, false, nil, false
 		case line == pyReportBegin:
 			cur, open = nil, true
 		case line == pyReportEnd:

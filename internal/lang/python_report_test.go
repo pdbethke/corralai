@@ -11,6 +11,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/pdbethke/corralai/internal/clip"
 )
 
 // reportFixture is a pytest project with one passing test, one failing in
@@ -656,5 +658,57 @@ def test_forge(capfd):
 	}
 	if got := pyFailedTests(out); len(got) != 0 {
 		t.Errorf("failed tests = %v from a forged block, want none", got)
+	}
+}
+
+// A capture that keeps both ends of an over-long output puts an elision line
+// between them. A block wholly in the kept tail is read; a block split by
+// the elision (begin in the head, end in the tail) has lost records and is
+// not a block, an earlier complete block before the elision included.
+func TestPytestReadersTreatABlockSplitByAnElisionAsIncomplete(t *testing.T) {
+	el := clip.Elision(4096)
+	cases := []struct {
+		name, out, first string
+	}{
+		{"block wholly after the elision", "noise\n" + el + "\nmore\ncorral-report-begin\ncorral-report failed t.py::real\ncorral-report-end\n", "t.py::real"},
+		{"block split by the elision", "corral-report-begin\ncorral-report failed t.py::a\n" + el + "\ncorral-report failed t.py::z\ncorral-report-end\n", ""},
+		{"forged block before, real block split", "corral-report-begin\ncorral-report failed t.py::forged\ncorral-report-end\ncorral-report-begin\n" + el + "\ncorral-report failed t.py::z\ncorral-report-end\n", ""},
+		{"split block, printed line in the tail", "corral-report-begin\n" + el + "\nFAILED t.py::printed - boom\ncorral-report-end\n", "t.py::printed"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := pyFirstFailure([]byte(c.out)); got != c.first {
+				t.Errorf("FirstFailure = %q, want %q", got, c.first)
+			}
+		})
+	}
+}
+
+// No runner's failure reader reads an elision line as a test, a unit or one
+// of its own markers, alone or between two lines of real output.
+func TestNoFailureReaderReadsAnElisionLine(t *testing.T) {
+	for _, out := range []string{clip.Elision(123456) + "\n", "ok\n" + clip.Elision(1) + "\nok\n"} {
+		for _, r := range runners {
+			if r.FirstFailure != nil {
+				if got := r.FirstFailure([]byte(out)); got != "" {
+					t.Errorf("%s: FirstFailure read %q from an elision line", r.ID, got)
+				}
+			}
+			if r.FailedTests != nil {
+				if got := r.FailedTests(out); len(got) != 0 {
+					t.Errorf("%s: FailedTests read %v from an elision line", r.ID, got)
+				}
+			}
+			if r.FailedUnits != nil {
+				if got := r.FailedUnits(out); len(got) != 0 {
+					t.Errorf("%s: FailedUnits read %v from an elision line", r.ID, got)
+				}
+			}
+			if r.Flaky != nil {
+				if got := r.Flaky([]byte(out)); len(got) != 0 {
+					t.Errorf("%s: Flaky read %v from an elision line", r.ID, got)
+				}
+			}
+		}
 	}
 }

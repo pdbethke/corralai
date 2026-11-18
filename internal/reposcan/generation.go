@@ -425,7 +425,20 @@ package reposcan
 // writer (advpool.checkAuthoredTest), since it passes in every jailed run and
 // fails on the developer's machine (it rides along: under "43" no run saw
 // that path, so such a test could not have passed). Behaviour bump; the shape is unchanged.
-const VerdictGeneration = "44"
+// "45" (2026-11-17): every pytest command grading runs carries -rfE
+// (lang.Runner.ReportArgs, applied by lang.ReportCmd through the scorer's one
+// command rewrite on the jail and the workspace substrate). A project whose
+// pytest config sets its own -r (Kludex/starlette's addopts carry -rXs)
+// printed no `FAILED <node id>` line, so a "44" verdict on such a project
+// recorded no killing test, confirmed every kill by repeating the grading run
+// rather than by the killing test alone, and could not salvage an authored
+// test whose cases partly failed. With the lines back, killed_by is filled,
+// confirmation runs the blamed test alone (a kill the whole run repeats but
+// that test alone does not is still confirmed by the repeat), and salvage can
+// keep the passing cases, so proven counts can rise. "44" has reached main,
+// so it gets its own generation rather than riding along. Behaviour bump; the
+// shape is unchanged.
+const VerdictGeneration = "45"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

@@ -203,8 +203,9 @@ func TestGoGradingRunsShareAFrozenRunCache(t *testing.T) {
 	}
 }
 
-// A language whose runner row has no run cache mounts nothing and rewrites
-// nothing: today's run, byte for byte.
+// A language whose runner row has no run cache mounts nothing and gets no
+// no-replay rewrite. Its one rewrite is pytest's report flags
+// (gradingRewrite; TestPytestReportArgsReachEveryDoorOnEverySubstrate).
 func TestPythonGradingRunsMountNoRunCache(t *testing.T) {
 	fake := &wrapRecordingIsolator{}
 	repoDir, seed := goCacheModule(t)
@@ -216,17 +217,17 @@ func TestPythonGradingRunsMountNoRunCache(t *testing.T) {
 	if w.runCache != "" {
 		t.Errorf("recorded run cache = %q, want empty for a runner with no run cache", w.runCache)
 	}
-	if w.scorer.CommandRewrite != nil || w.validator.CommandRewrite != nil {
-		t.Error("a runner with no run cache must carry no command rewrite")
+	for name, f := range map[string]func([]string) []string{"scorer": w.scorer.CommandRewrite, "validator": w.validator.CommandRewrite} {
+		if got := f(argv); !slices.Equal(got, []string{"python3", "-m", "pytest", "-rfE"}) {
+			t.Errorf("%s rewrite = %v, want the report flags and nothing else", name, got)
+		}
 	}
 	if _, err := w.scorer.ScoreReport(context.Background(), w.codeKey, seed.files["p/p.go"], "", oneMutant, "python3 -m pytest"); err != nil {
 		t.Fatal(err)
 	}
 	for _, r := range rec.runs {
-		if strings.Join(r.cmd, " ") != "python3 -m pytest" && !strings.Contains(strings.Join(r.cmd, " "), "py_compile") {
-			if slices.Contains(r.cmd, "-count=1") {
-				t.Errorf("a python command was rewritten: %v", r.cmd)
-			}
+		if slices.Contains(r.cmd, "-count=1") {
+			t.Errorf("a python command got the no-replay rewrite: %v", r.cmd)
 		}
 	}
 	for i, c := range fake.cache {

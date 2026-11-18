@@ -44,9 +44,10 @@ func TestRustRunnerDisclosures(t *testing.T) {
 			t.Errorf("nextest: %q", got)
 		}
 	}
-	// A runner with nothing to disclose says nothing.
+	// A runner with nothing to disclose says nothing. (pytest now has
+	// something: the -rfE corral adds, TestRunDisclosuresSayWhenReportArgsAreAdded.)
 	py, _ := ByName("python")
-	if got := RunDisclosures(py, withCfg, Cmd([]string{"pytest"})); got != nil {
+	if got := RunDisclosures(py, withCfg, Cmd([]string{"python3", "-m", "unittest"})); got != nil {
 		t.Errorf("python: %q", got)
 	}
 }

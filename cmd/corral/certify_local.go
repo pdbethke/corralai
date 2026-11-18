@@ -1337,7 +1337,10 @@ func prepareAuditJail(ctx context.Context, in localAuditInput, plug lang.Plugin,
 	if err != nil {
 		return p, auditErr("%v", err)
 	}
-	for _, line := range lang.RunDisclosures(plug, repoDir, inv.WithArgv(in.checkArgv)) {
+	// Disclosed off the command grading actually runs (gradingBase), the one
+	// gradingRewrite gives the report flags: a single-file run with no `--`
+	// command is graded with the plugin's own.
+	for _, line := range lang.RunDisclosures(plug, repoDir, inv.WithArgv(gradingBase(plug, repoDir, in.checkArgv))) {
 		fmt.Fprintf(stdout, "  %s\n", line)
 	}
 
@@ -2790,8 +2793,11 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		// has ONE tree, and a scorer told to run six mutants at once against
 		// it would queue five of them behind the borrow channel for the whole
 		// audit. The number that scores must be the number that exists.
-		w.scorer = advpool.JailScorer{Jail: pool, RepoDir: in.repoDir, BaseFiles: base, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Landing: w.landing, Concurrency: pool.Trees(), Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, KillerCmd: killerCmd, FailFast: failFast}
-		w.validator = advpool.JailValidator{Jail: pool, RepoDir: in.repoDir, BaseFiles: base, DevTestPath: w.devTestKey, Landing: w.landing}
+		// The workspace has no run cache; its one rewrite is the report flags,
+		// through the same door the jail's commands take.
+		rewrite := gradingRewrite(gradingPlugin(in.langName), in.inv, in.checkArgv, nil)
+		w.scorer = advpool.JailScorer{Jail: pool, RepoDir: in.repoDir, BaseFiles: base, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Landing: w.landing, Concurrency: pool.Trees(), Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, KillerCmd: killerCmd, FailFast: failFast, CommandRewrite: rewrite}
+		w.validator = advpool.JailValidator{Jail: pool, RepoDir: in.repoDir, BaseFiles: base, DevTestPath: w.devTestKey, Landing: w.landing, CommandRewrite: rewrite}
 		w.jailEnum = advpool.JailEnumerator{Jail: pool, BaseFiles: base}
 		// w.depBinds stays nil: there is nothing to bind read-only when the
 		// real tree is already present.
@@ -2851,8 +2857,9 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		// RunSpec.Matrix, so wiring it here costs nothing when --matrix is off
 		// (the flag is the real gate).
 		enumerator := newRunEnumerator(in.iso, in.timeout, depBinds)
-		w.scorer = advpool.JailScorer{Jail: jail, RepoDir: in.repoDir, BaseFiles: repoFiles, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Landing: w.landing, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, KillerCmd: killerCmd, FailFast: failFast, CommandRewrite: gc.Rewrite, WarmCheck: warmCheckFor(gradingPlugin(in.langName), in.inv, gc)}
-		w.validator = advpool.JailValidator{Jail: jail, RepoDir: in.repoDir, BaseFiles: repoFiles, DevTestPath: w.devTestKey, Landing: w.landing, CommandRewrite: gc.Rewrite}
+		rewrite := gradingRewrite(gradingPlugin(in.langName), in.inv, in.checkArgv, gc.Rewrite)
+		w.scorer = advpool.JailScorer{Jail: jail, RepoDir: in.repoDir, BaseFiles: repoFiles, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Landing: w.landing, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, KillerCmd: killerCmd, FailFast: failFast, CommandRewrite: rewrite, WarmCheck: warmCheckFor(gradingPlugin(in.langName), in.inv, gc)}
+		w.validator = advpool.JailValidator{Jail: jail, RepoDir: in.repoDir, BaseFiles: repoFiles, DevTestPath: w.devTestKey, Landing: w.landing, CommandRewrite: rewrite}
 		w.jailEnum = advpool.JailEnumerator{Jail: enumerator, BaseFiles: repoFiles}
 		if len(depBinds) > 0 {
 			names := make([]string, 0, len(depBinds))
@@ -2867,18 +2874,27 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		// The single-file scorer runs the plugin's own command when the run
 		// names none (scoreWorkspace), so that is the warming command here.
 		plug := gradingPlugin(in.langName)
-		warm := in.checkArgv
-		if len(warm) == 0 && plug != nil {
-			warm = plug.TestCmd()
-		}
+		warm := gradingBase(plug, "", in.checkArgv)
 		jail, gc := newGradingJail(in.iso, in.timeout, nil, plug, in.inv.WithArgv(warm), warm)
 		w.closeWithCleanup(jail, in.runCache, gc)
 		enumerator := newRunEnumerator(in.iso, in.timeout, nil)
-		w.scorer = advpool.JailScorer{Jail: jail, MutantTimeout: in.testTimeout, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, KillerCmd: killerCmd, FailFast: failFast, CommandRewrite: gc.Rewrite, WarmCheck: warmCheckFor(plug, in.inv, gc)}
-		w.validator = advpool.JailValidator{Jail: jail, CommandRewrite: gc.Rewrite}
+		rewrite := gradingRewrite(plug, in.inv, warm, gc.Rewrite)
+		w.scorer = advpool.JailScorer{Jail: jail, MutantTimeout: in.testTimeout, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, KillerCmd: killerCmd, FailFast: failFast, CommandRewrite: rewrite, WarmCheck: warmCheckFor(plug, in.inv, gc)}
+		w.validator = advpool.JailValidator{Jail: jail, CommandRewrite: rewrite}
 		w.jailEnum = advpool.JailEnumerator{Jail: enumerator}
 	}
 	return w, nil
+}
+
+// gradingBase is the command a file's grading runs as its baseline: the
+// operator's, or, in single-file mode (no repoDir) when they gave none, the
+// plugin's own (scoreWorkspace runs it then). The one answer behind the
+// single-file wiring's warming command and the scan line's disclosures.
+func gradingBase(plug lang.Plugin, repoDir string, checkArgv []string) []string {
+	if len(checkArgv) == 0 && repoDir == "" && plug != nil {
+		return plug.TestCmd()
+	}
+	return checkArgv
 }
 
 // gradingPlugin is the language plugin for a wiring's langName, nil when the

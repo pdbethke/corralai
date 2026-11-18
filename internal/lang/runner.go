@@ -38,6 +38,30 @@ type Runner struct {
 	// command that NAMES this runner and is not shell-wrapped (see
 	// FailFastArgsFor for why a wrong guess inflates the kill rate).
 	FailFast []string
+	// ReportArgs are the flags that make the runner print, whatever the
+	// project's own configuration says, the lines this row's failure readers
+	// (FirstFailure, FailedTests) read. A project's config can hide them:
+	// pytest prints a `FAILED <node id>` line only for the report characters
+	// -r asks for, and a project whose addopts set its own -r (starlette's
+	// -rXs) replaces the default fE, so the readers name nothing. These are
+	// appended to every command grading runs (ReportCmd says where and when),
+	// and they may change only what is printed, never what passes or fails.
+	// nil for a runner whose failure lines no project setting is known to
+	// hide, or whose override flag has not been run; the parity table's
+	// "readable-failures" exemptions say which.
+	//
+	// pytest: -rfE. pytest keeps the LAST -r it is given (an option stored,
+	// not added to; verified on pytest 5.4.3, 6.2.5, 9.1.1 and 9.2.0, whose
+	// default is fE), and addopts are read before the command line, so the
+	// appended -rfE wins over the project's -r and over an -r the operator
+	// wrote earlier in the command. Their extra report characters (s, x, X,
+	// p...) are therefore lost from corral's captured output. That is
+	// accepted rather than merged: those summary lines are output only, corral
+	// reads none of them, the operator's own runs outside corral are
+	// untouched, and a merge could not be exact, since the project's -r lives
+	// in config files corral does not read and an operator's -r can hide in a
+	// short-option cluster (-vrs).
+	ReportArgs []string
 	// ListCmd enumerates the tests the command (or, for runners that ignore
 	// it, the test file) runs; ParseList reads its stdout into ids.
 	ListCmd   func(argv []string, testPath string) ([]string, bool)
@@ -263,11 +287,12 @@ var runners = []Runner{
 	},
 	{
 		Name: "pytest", ID: "pytest", Languages: []string{"python"}, Default: true, Words: []string{"pytest"},
-		FailFast: []string{"-x"},
-		ListCmd:  pyListCmd, ParseList: pyParseTestList, SingleCmd: pySingleCmd,
+		FailFast: []string{"-x"}, ReportArgs: []string{"-rfE"},
+		ListCmd: pyListCmd, ParseList: pyParseTestList, SingleCmd: pySingleCmd,
 		FirstFailure: pyFirstFailure, FailedTests: pyFailedTests, DeselectCmd: pyDeselectCmd, KillerCmd: pyKillerCmd,
 		CollectionBase: stripPyCollectionTargets, TestsCmd: pyTestsCmd, TestUnit: pyTestUnit, CarryArgs: deselectArgs,
 		VersionCmd: versionAtWord("pytest"),
+		Note:       "-rfE is added to every graded run, after the project's own options, because a project's -r setting (addopts) replaces pytest's default and hides the `FAILED` lines corral reads the killing test from; pytest keeping the last -r it is given was verified on pytest 5.4.3, 6.2.5, 9.1.1 and 9.2.0. It does not undo `--no-summary` or `-p no:terminal` in a project's config, which still hide the lines (measured on pytest 9.1.1): there the killing test is not named and kills are confirmed by repeating the run, as before",
 	},
 	{
 		// No salvage: unittest exits 2 on pytest's --deselect, so a rerun
@@ -559,10 +584,12 @@ func RunsAlone(p Plugin, inv Invocation, listed []string, id string) bool {
 }
 
 // RunDisclosures is what the scan line says about running testCmd in
-// repoDir that differs from how the project's own setup runs its suite —
-// said, never acted on: corral runs the operator's command as given and never
-// substitutes one of its own. Rust reports a project nextest.toml that
-// `cargo test` bypasses, and nextest's passed-on-retry grading. nil when the
+// repoDir that differs from how the project's own setup runs its suite.
+// corral runs the operator's command and never substitutes one of its own;
+// what it adds to it is said here: a row's ReportArgs, when ReportCmd adds
+// them (pytest's -rfE replaces a project's own -r). Rust reports a project
+// nextest.toml that `cargo test` bypasses, and nextest's passed-on-retry
+// grading. nil when the
 // runner has nothing to say; the one way a caller asks, so no caller
 // switches on a language to decide whether there is anything to disclose.
 // It leads with how the runner was found when that was not the command
@@ -574,6 +601,9 @@ func RunDisclosures(p Plugin, repoDir string, inv Invocation) []string {
 	}
 	if r, ok := RunnerFor(p, inv); ok && r.Disclose != nil {
 		out = append(out, r.Disclose(repoDir, inv.Argv)...)
+	}
+	if d := reportDisclosure(p, inv); d != "" {
+		out = append(out, d)
 	}
 	return out
 }

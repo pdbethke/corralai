@@ -43,8 +43,9 @@ func newRunJail(iso sandbox.Isolator, timeout time.Duration, depBinds []adequacy
 type gradingRunCache struct {
 	// Rewrite is the command rewrite that forbids a cached test result, for
 	// every command the grading jail is handed (advpool.JailScorer and
-	// JailValidator CommandRewrite). nil unless the cache is shared: an
-	// unshared run keeps the operator's command byte for byte.
+	// JailValidator CommandRewrite, composed after the report flags by
+	// gradingRewrite). nil unless the cache is shared: an unshared run gets
+	// no -count=1.
 	Rewrite func(cmd []string) []string
 	// Record is the DECISION made before any run: "shared"; "unshared:
 	// <reason>"; or "" when the runner has no run cache at all. It is not what
@@ -313,4 +314,38 @@ func hasContainerRuntime() bool {
 		return true
 	}
 	return false
+}
+
+// gradingRewrite is the ONE command rewrite a file's grading hands its runner
+// (advpool.JailScorer and JailValidator CommandRewrite), on every substrate:
+// the runner row's report flags (lang.ReportArgv) followed by the shared run
+// cache's no-replay rewrite (gradingRunCache.Rewrite, nil unless a cache is
+// shared). nil when there is neither, which hands the runner the operator's
+// command byte for byte.
+//
+// The report flags are added only when the run's base command is one
+// lang.ReportCmd can give them to: then every command of the file's grading
+// that names the same runner gets them (each judged on its own words, so the
+// compile check is left alone), and the scan line's disclosure (lang.
+// RunDisclosures) is true of the run. A base command it cannot read (`sh -c`,
+// `make test`, a runner with no report flags) adds them to nothing.
+//
+// It never touches the run-cache decision: newGradingJail and warmCheckFor
+// read the operator's commands, never this rewrite's output, and the report
+// rewrite changes no command of a runner with a run cache (go test and
+// gotestsum carry no report flags).
+func gradingRewrite(plug lang.Plugin, inv lang.Invocation, base []string, runCache func([]string) []string) func([]string) []string {
+	var report func([]string) []string
+	if plug != nil {
+		if _, applied := lang.ReportCmd(plug, inv.WithArgv(base), base); applied {
+			report = lang.ReportArgv(plug, inv)
+		}
+	}
+	switch {
+	case report == nil:
+		return runCache
+	case runCache == nil:
+		return report
+	}
+	return func(cmd []string) []string { return runCache(report(cmd)) }
 }

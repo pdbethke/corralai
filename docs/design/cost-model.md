@@ -156,9 +156,13 @@ warehouse design doc and this page disagreeing about them:
   `DetailedJail` (`internal/adequacy/jail_detailed_test.go`'s
   `TestJailImplementsDetailedJail` pins this — it was NOT always true; the
   bwrap jail used to record NULL here for every mutant it killed). A suite
-  whose reporter is configured away from its default summary (pytest
-  `-q -q`, `-p no:terminal`) still yields NULL, disclosed as NULL, never
-  guessed.
+  whose reporter is configured away from its default output still yields
+  NULL, disclosed as NULL, never guessed; the language-support page says, per
+  runner, which project settings do that. pytest is the exception since
+  2026-11-18: a pytest command corral can rewrite records its failing tests
+  through a plugin of corral's own, so `--no-summary` and `-p no:terminal` no
+  longer hide them (a command it cannot rewrite, such as one wrapped in
+  `sh -c`, is still read from the printed lines).
 - **Per-role usage cannot split a shared batched backend.** `scan_model_calls`
   attributes a call to the role that made it; a backend that batches calls
   across roles cannot be un-batched after the fact. None does today.

@@ -438,7 +438,21 @@ package reposcan
 // keep the passing cases, so proven counts can rise. "44" has reached main,
 // so it gets its own generation rather than riding along. Behaviour bump; the
 // shape is unchanged.
-const VerdictGeneration = "45"
+// "46" (2026-11-18): a graded pytest run that corral can rewrite has pytest
+// itself record its failing tests, through a plugin loaded by the command
+// lang.ReportCmd builds (lang.Runner.ReportHook), and the readers take that
+// record before pytest's printed lines. A "45" verdict could differ in two
+// ways. On a project whose config carries --no-summary or -p no:terminal,
+// which hide the `FAILED <node id>` lines whatever -r says, it recorded no
+// killing test, confirmed every kill by repeating the grading run, and could
+// not salvage a partly failing authored test; now killed_by is filled, the
+// blamed test is run alone, and salvage can keep the passing cases, so proven
+// counts can rise. And a killing test whose id holds a space (a parametrized
+// `test_x[a b]`) was recorded cut at the space, an id that
+// names no test; now the id is whole. "45" has reached
+// main, so this gets its own generation. Behaviour bump; the shape is
+// unchanged.
+const VerdictGeneration = "46"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

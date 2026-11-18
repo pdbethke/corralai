@@ -31,6 +31,19 @@ const unitsCwdMarker = "corral-units-cwd "
 // re-read by the shell.
 const unitsPrelude = `printf 'corral-units-cwd %s\n' "$(pwd -P)" && exec "$@"`
 
+// unitsSetupPrelude is unitsPrelude for a row with a ListUnitsSetup: the
+// marker line, a temporary directory "$d" removed when the shell exits, the
+// row's setup, then the listing command, whose exit status is the shell's.
+// The command is run and not exec'd, so the shell outlives it to remove the
+// directory.
+func unitsSetupPrelude(setup string) string {
+	return `printf 'corral-units-cwd %s\n' "$(pwd -P)" || exit 1` + "\n" +
+		`d=$(mktemp -d) || exit 1` + "\n" +
+		`trap 'rm -rf "$d"' EXIT` + "\n" +
+		setup + "\n" +
+		`"$@"`
+}
+
 // ListUnitsCmd is the command that lists the units argv collects, from its
 // runner, under the working-directory prelude ParseUnitList reads.
 func ListUnitsCmd(p Plugin, inv Invocation) ([]string, bool) {
@@ -42,7 +55,11 @@ func ListUnitsCmd(p Plugin, inv Invocation) ([]string, bool) {
 	if !ok {
 		return nil, false
 	}
-	return append([]string{"sh", "-c", unitsPrelude, "corral-units"}, cmd...), true
+	prelude := unitsPrelude
+	if r.ListUnitsSetup != "" {
+		prelude = unitsSetupPrelude(r.ListUnitsSetup)
+	}
+	return append([]string{"sh", "-c", prelude, "corral-units"}, cmd...), true
 }
 
 // ParseUnitList reads ListUnitsCmd's stdout into repository-relative unit

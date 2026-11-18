@@ -1509,13 +1509,22 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	}
 	selectionNote := ""
 	if ex != nil {
-		selectionNote = ex.selection.Said()
+		// The pass's Note, not Said(): the "selection:" or "units:" line
+		// above already printed what the terminal has to add (a failed
+		// listing's output, an error), and Said() here printed a runner's
+		// whole output a second and a third time (PHPUnit 9: its banner
+		// and "Unknown option" on the units line, the grading line and
+		// this one). The summary repeats the reason, once, in one line.
+		selectionNote = ex.selection.Note
+		if selectionNote == "" {
+			selectionNote = ex.selection.Said()
+		}
 		// For a language the unit pass serves, ITS reason is why candidacy
 		// is pairing-only; the selection note ("no selector for …") is
 		// about grading.
 		switch {
 		case ex.units.Note != "":
-			selectionNote = ex.units.Said()
+			selectionNote = ex.units.Note
 		case ex.unitLandingNote != "":
 			selectionNote = ex.unitLandingNote
 		case ex.units.Ran && !evidenceCandidacyOK:

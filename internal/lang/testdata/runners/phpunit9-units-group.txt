@@ -1,0 +1,13 @@
+corral-units-cwd /fixture
+PHPUnit 9.6.39 by Sebastian Bergmann and contributors.
+
+The --group and --list-tests options cannot be combined, --group is ignored
+
+Available test(s):
+ - ATest::testOne
+ - ATest::testTwo
+ - BTest::testOne
+ - CTest::testOne
+corral-unit-class ATest	/fixture/units/phpunit/tests/ATest.php
+corral-unit-class BTest	/fixture/units/phpunit/tests/BTest.php
+corral-unit-class CTest	/fixture/units/phpunit/other/CTest.php

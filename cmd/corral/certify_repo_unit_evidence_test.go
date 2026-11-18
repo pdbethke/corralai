@@ -226,11 +226,14 @@ func TestUnitPassDisclosesACommandWithNoUnitForm(t *testing.T) {
 	root := unitEvidenceTSFixture(t)
 	s := runUnitEvidenceScan(t, root, "--", "npm", "test")
 
-	const note = "typescript: `npm test` has no one-unit form corral can list and run, so no unit evidence"
-	if !strings.Contains(s, "units: "+note) {
+	const said = "typescript: `npm test` has no one-unit form corral can list and run, so no unit evidence"
+	const note = "typescript: the unit pass could not list units: its command has no one-unit form corral can list and run"
+	if !strings.Contains(s, "units: "+said) {
 		t.Errorf("missing the units line with the pass's own note:\n%s", s)
 	}
-	if !strings.Contains(s, "pairing-only candidacy (no selection evidence: "+note+")") {
+	// The summary gives the reason in the one line the record keeps
+	// (UnitEvidence.Note); what the terminal adds is on the units line, once.
+	if !strings.Contains(s, "pairing-only candidacy (no selection evidence: "+note+")") || strings.Count(s, said) != 1 {
 		t.Errorf("the summary must say candidacy is pairing-only, and why:\n%s", s)
 	}
 	if !strings.Contains(s, "evidence-paired 0") || strings.Contains(s, "paired by evidence") {

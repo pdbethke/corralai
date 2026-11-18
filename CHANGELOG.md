@@ -9,6 +9,18 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [Unreleased]
+
+### Fixed
+
+- **PHP: a project on PHPUnit 9 or 10 gets test-file evidence.** To learn which test file executes which source file, corral asks the runner which test files your command collects and runs each one alone under coverage. For PHPUnit it asked with `--list-test-files`, an option that exists only from PHPUnit 11. On 9.6 and 10.5 the listing stopped at `Unknown option "--list-test-files"`, so no test file was run alone: a source file was paired with a test by file name only (one with no test of a matching name was not audited at all), and every file was graded by the whole suite. corral now asks with `--list-tests`, which every PHPUnit from 9.6 has, and has PHP itself name the file each listed test class was loaded from, so a test class needs no autoload entry to be found. In a PHPUnit 9.6 project whose only source file has no test of its name, the file went from not audited to paired by evidence with the one test file that runs it.
+  - *What the listing run sees that yours does not.* For the listing only, `PHP_INI_SCAN_DIR` gains a temporary directory after any value you set, holding one `auto_prepend_file` setting; the file it names prints each test class's file when PHP exits and does nothing in a process that never loaded PHPUnit. The directory is removed when the listing ends. No graded run is changed.
+  - *Group options on PHPUnit 9 and 10.* Those versions ignore `--group` and `--exclude-group` when listing and say so (`The --group and --list-tests options cannot be combined, --group is ignored`), so the list is of every test and not of the tests your command runs. corral reads that sentence as no listing: such a command gets no test-file evidence on 9 or 10, is graded by the whole suite as before, and the scan says why, with PHPUnit's own output. PHPUnit 11 and 12 apply the group options when listing, as `--list-test-files` did.
+  - *Where it was run.* PHPUnit 9.6.39, 10.5.67, 11.5.57 and 12.5.44 on PHP 8.5, listing and one-file runs on each; on 9.6.39 also whole scans in the bubblewrap sandbox (`certify --repo --dry-run --evidence`): the project above, and ramsey/uuid at `7a16331`, where the listing named 67 test files, 59 of them reported which source files they execute, and 10 source files became candidates that file names alone had not paired (the other 8 test files failed under coverage for a reason of corral's own, not yet fixed: it loads the pcov extension a second time, PHP warns, and a test PHPUnit runs in a separate process fails on the warning; those 8 are added to every file's selection, so no file is graded by fewer tests than execute it). No older PHPUnit and no older PHP was run, and no audit with models was run on a PHPUnit 9 or 10 project.
+  - Cached verdicts are measured again once (`VerdictGeneration` 47).
+
+- **A unit listing that fails prints the runner's output once.** When the listing of test units failed, the scan printed what the runner said on the `units:` line, again on the `selection:` line, and a third time inside the summary line, each copy as many lines long as the runner's output. The `units:` line still prints it in full; the two lines after it now give the reason in one line, the same sentence the record keeps.
+
 ## [v1.0.0-rc.34] — 2026-11-18
 
 ### Fixed

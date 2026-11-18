@@ -462,7 +462,19 @@ package reposcan
 // authored_together_output is the run's true last 2000 bytes rather than the
 // end of its first 16 KiB. It rides along: "46" has not left this branch.
 // Behaviour bump; the shape is unchanged.
-const VerdictGeneration = "46"
+//
+// "47" (2026-11-18): PHPUnit's test-file listing is `--list-tests` with PHP
+// naming each test class's file (lang.phpunitListUnits), where it was
+// `--list-test-files`, an option PHPUnit 9 and 10 do not have. A "46" scan
+// of a project on PHPUnit 9 or 10 had no unit listing: no unit evidence, so
+// its files were candidates by name pairing only and every one was graded by
+// the whole suite. Now those projects list, so a file can be paired by
+// evidence and graded by the test files that execute it, which can change
+// which files are audited and, through per-mutant time caps and fail-fast
+// order, what a file's verdict holds. PHPUnit 11 and 12 list the same files
+// as before (captured on both). "46" was released in rc.34, so this gets its
+// own generation.
+const VerdictGeneration = "47"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

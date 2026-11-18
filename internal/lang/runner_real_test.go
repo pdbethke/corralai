@@ -423,6 +423,20 @@ func TestRealRunnersListAndRunOneUnitBeyondJS(t *testing.T) {
 			[]string{"vendor/bin/phpunit", "--version"},
 			[]string{"units/phpunit/tests/ATest.php", "units/phpunit/tests/BTest.php"},
 			map[string]int{"units/phpunit/tests/ATest.php": 2, "units/phpunit/tests/BTest.php": 1}, ran, true},
+		// The PHPUnit lines the capture script installs beside the fixtures
+		// (pv/<major>): the same listing and one-file runs on each.
+		{"phpunit", "php", "", []string{"pv/9/vendor/bin/phpunit", "-c", "units/phpunit/phpunit.xml", "--testsuite", "unit"},
+			[]string{"pv/9/vendor/bin/phpunit", "--version"},
+			[]string{"units/phpunit/tests/ATest.php", "units/phpunit/tests/BTest.php"},
+			map[string]int{"units/phpunit/tests/ATest.php": 2, "units/phpunit/tests/BTest.php": 1}, ran, true},
+		{"phpunit", "php", "", []string{"pv/10/vendor/bin/phpunit", "-c", "units/phpunit/phpunit.xml", "--testsuite", "unit"},
+			[]string{"pv/10/vendor/bin/phpunit", "--version"},
+			[]string{"units/phpunit/tests/ATest.php", "units/phpunit/tests/BTest.php"},
+			map[string]int{"units/phpunit/tests/ATest.php": 2, "units/phpunit/tests/BTest.php": 1}, ran, true},
+		{"phpunit", "php", "", []string{"pv/12/vendor/bin/phpunit", "-c", "units/phpunit/phpunit.xml", "--testsuite", "unit"},
+			[]string{"pv/12/vendor/bin/phpunit", "--version"},
+			[]string{"units/phpunit/tests/ATest.php", "units/phpunit/tests/BTest.php"},
+			map[string]int{"units/phpunit/tests/ATest.php": 2, "units/phpunit/tests/BTest.php": 1}, ran, true},
 		// Two packages each with a lib and a tests/it.rs: every unit, the
 		// shared names included, runs its own package's target alone.
 		{"cargo test", "rust", "units/cargo", []string{"cargo", "test", "--workspace"}, []string{"cargo", "--version"},
@@ -432,7 +446,7 @@ func TestRealRunnersListAndRunOneUnitBeyondJS(t *testing.T) {
 			[]string{"units-a", "units-a::bin/units-a", "units-a::it", "units-b", "units-b::it"},
 			map[string]int{"units-a": 2, "units-b::it": 1}, nextestCount, true},
 	} {
-		t.Run(c.runner, func(t *testing.T) {
+		t.Run(c.runner+"/"+c.argv[0], func(t *testing.T) {
 			dir := root
 			if !c.needsRoot {
 				dir = t.TempDir()

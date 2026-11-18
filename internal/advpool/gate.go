@@ -759,10 +759,10 @@ func (s JailScorer) scoreAuthoredReport(ctx context.Context, codePath, code, tes
 // CompliantFailure runs the authored test against the UNMUTATED code and
 // returns the runner's own combined output — the detail that turns a
 // clean-code-failure retry into a corrective one, exactly as CompileError's
-// output does for a build failure.
+// output does for a build failure. It is CompliantRun's output, so every
+// reader of it sees the same end of the run (see CompliantRun).
 //
-// Reuses the SAME verboseJail optional extension CompileTest already uses, so
-// a backend that can surface output does, and one that cannot degrades to ""
+// A backend that can surface output does, and one that cannot degrades to ""
 // rather than failing the run. Costs one extra run, and only on the failure
 // path — the scoring run that produced CompliantPass=false has already
 // returned by the time this is called, and Report carries no output to reuse.
@@ -780,9 +780,42 @@ func (s JailScorer) CompliantFailure(ctx context.Context, codePath, code, test, 
 // (checkAuthoredTogether) needs the verdict, the retry needs only the output.
 // A jail that cannot surface output is an error here, so a caller records
 // "not checked" rather than a pass.
+//
+// WHICH END OF THE OUTPUT. The END, up to the cap the kill-naming door keeps
+// (adequacy.DetailedJail's RunTestDetailed: the last 64 KiB), on every jail
+// that offers that run: the bwrap jail, the workspace runner and the
+// workspace pool. This output has three readers, and one run serves all of
+// them:
+//
+//   - salvage (salvageByDeselect) reads the failing tests' names from it, and
+//     a runner names its failures last: pytest's summary lines and the report
+//     hook's marker block, `go test`'s FAIL lines, rspec's "Failed examples";
+//   - the together check keeps the last 2000 bytes of it for the record
+//     (authored_together_output);
+//   - the test writer is shown it when a test fails on clean code
+//     (cleanFailureRepairBlock). The writer needs the failing assertion, and
+//     that too is at the end: a runner prints its progress first and its
+//     failures after the tests have run. So the writer is shown the end as
+//     well. That is a deliberate change of what the writer sees on a run
+//     noisier than the old cap, not a side effect of salvage's needs.
+//
+// Until 2026-11-18 this door ran RunTestVerbose, which in the bwrap jail
+// keeps the FIRST 16 KiB of a run and on the workspace substrate keeps all
+// of it. In the jail, a run noisier than that lost exactly the part all three
+// readers want: nothing was salvaged, and the writer was shown the opening of
+// the run. On the workspace substrate nothing bounded what went into the
+// writer's prompt. Both now hold the same thing, the same end at the same
+// cap, so a run reads the same on either.
+//
+// A jail that offers no tail-keeping run (only RunTestVerbose) is run as it
+// always was and hands back whatever that run keeps. What remains: a
+// runner's record of its failures that is itself larger than the kept tail
+// loses its beginning, and the readers then read what the rest of the tail
+// names (for pytest's marker block, nothing).
 func (s JailScorer) CompliantRun(ctx context.Context, codePath, code, test, testCmd string) (bool, string, error) {
-	vj, ok := s.Jail.(verboseJail)
-	if !ok {
+	dj, detailed := s.Jail.(adequacy.DetailedJail)
+	vj, verbose := s.Jail.(verboseJail)
+	if !detailed && !verbose {
 		return false, "", errors.New("this jail cannot report a run's output")
 	}
 	ws, base := s.scoreWorkspace(codePath, test, testCmd)
@@ -805,6 +838,10 @@ func (s JailScorer) CompliantRun(ctx context.Context, codePath, code, test, test
 	// The UNMUTATED code: this asks "why does your test fail on software that
 	// is correct", which is the only question worth feeding back.
 	ws[codePath] = code
+	if detailed {
+		pass, out, err := dj.RunTestDetailed(ctx, ws, rewriteCmd(s.CommandRewrite, cmd))
+		return pass, string(out), err
+	}
 	return vj.RunTestVerbose(ctx, ws, rewriteCmd(s.CommandRewrite, cmd))
 }
 

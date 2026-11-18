@@ -313,21 +313,19 @@ func TestSalvageStillDeselectsWithTheFailureHookOn(t *testing.T) {
 	}
 }
 
-// The stated limit, pinned by execution: the hook's record is the LAST thing
-// a run prints, and the clean-code run salvage reads (CompliantRun, through
-// the jail's RunTestVerbose) keeps the FIRST 16 KiB of a run's output. An
-// authored test whose run prints more than that loses the record, and with a
-// config that hides the printed lines the reader names nothing, so nothing is
-// salvaged (never a wrong test). The workspace substrate holds the whole
-// output and is the control. A fix (that door keeping the end of the output,
-// as the door that names a killing test does) must change this test and the
-// changelog's limit.
-func TestTheSalvageDoorInTheJailLosesTheHookRecordPastItsOutputCap(t *testing.T) {
+// A clean-code run noisier than a door's output cap still yields the hook's
+// record, because the door keeps the END of the run, where the record is
+// printed: salvage reads the failing id whole, in the real jail and on the
+// workspace substrate. The authored test prints 100 KiB past pytest's
+// capture, more than the 16 KiB the jail's head-keeping run held (this test
+// pinned that loss until the door kept the tail) and more than the 64 KiB
+// any door keeps, on a project whose config hides the printed lines.
+func TestTheSalvageDoorKeepsTheHookRecordOnARunNoisierThanItsOutputCap(t *testing.T) {
 	pytestOnHost(t)
 	plug, _ := lang.ByName("python")
 	failedTests, _ := lang.DeselectorFor(plug, lang.Cmd(strings.Fields(pytestArgv)))
-	// 400 lines of 80 bytes, printed past pytest's capture: 32 KiB.
-	noisy := brokenAuthored + "\n\ndef test_noise(capsys):\n    with capsys.disabled():\n        print((\"n\" * 79 + \"\\n\") * 400)\n"
+	// 1250 lines of 80 bytes, printed past pytest's capture: 100 KiB.
+	noisy := brokenAuthored + "\n\ndef test_noise(capsys):\n    with capsys.disabled():\n        print((\"n\" * 79 + \"\\n\") * 1250)\n"
 	for _, substrate := range []string{"workspace", "jail"} {
 		t.Run(substrate, func(t *testing.T) {
 			var iso sandbox.Isolator
@@ -350,15 +348,11 @@ func TestTheSalvageDoorInTheJailLosesTheHookRecordPastItsOutputCap(t *testing.T)
 			if err != nil || pass {
 				t.Fatalf("pass=%v err=%v, want a failing run", pass, err)
 			}
-			failing := failedTests(out)
-			if substrate == "workspace" {
-				if len(failing) != 1 || !strings.HasSuffix(failing[0], "::test_wrong[a b]") {
-					t.Errorf("control: failing = %q from %d bytes of output, want the one id ending ::test_wrong[a b]", failing, len(out))
-				}
-				return
+			if len(out) > 64<<10 {
+				t.Errorf("the door handed back %d bytes, more than the 64 KiB tail it keeps", len(out))
 			}
-			if strings.Contains(out, "corral-report-end") || len(failing) != 0 {
-				t.Errorf("the jail's salvage door now returns the hook's record (%d bytes, failing=%q): the stated limit no longer holds, update the changelog and this test", len(out), failing)
+			if failing := failedTests(out); len(failing) != 1 || !strings.HasSuffix(failing[0], "::test_wrong[a b]") {
+				t.Errorf("failing = %q from %d bytes of output, want the one id ending ::test_wrong[a b]", failing, len(out))
 			}
 		})
 	}

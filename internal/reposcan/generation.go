@@ -472,7 +472,12 @@ package reposcan
 // evidence and graded by the test files that execute it, which can change
 // which files are audited and, through per-mutant time caps and fail-fast
 // order, what a file's verdict holds. PHPUnit 11 and 12 list the same files
-// as before (captured on both). "46" was released in rc.34, so this gets its
+// as before (captured on both). In the same generation, the PHP coverage
+// run names `extension=pcov` only when PHP lacks it under the injected scan
+// path: the second load's stderr warning failed every test PHPUnit runs in
+// a separate process, so such a test file gave no unit evidence and was
+// added to every file's selection instead (ramsey/uuid: 59 of 67 test files
+// reported before, 67 after). "46" was released in rc.34, so this gets its
 // own generation.
 const VerdictGeneration = "47"
 

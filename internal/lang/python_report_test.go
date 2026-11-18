@@ -228,7 +228,7 @@ func TestPytestHookPutsItsDirectoryLastOnPythonPath(t *testing.T) {
 
 
 def test_path():
-    hook = os.path.dirname(sys.modules["corral_report"].__file__)
+    hook = os.path.dirname(sys.modules["` + pyReportModule + `"].__file__)
     with open("seen.json", "w") as out:
         json.dump({"hook": hook, "path": sys.path}, out)
 `
@@ -315,8 +315,9 @@ def pytest_configure(config):
 	if err := json.Unmarshal(raw, &got); err != nil {
 		t.Fatal(err)
 	}
-	// What corral adds goes before pytest's own `--`, and nowhere else.
-	want := []string{"tests", "-p", "no:cacheprovider", "--deselect", odd, "-rfE", "-p", pyReportModule, "--", "tests/test_ok.py"}
+	// The one thing corral adds to the words is -rfE, before pytest's own
+	// `--`; the plugin is loaded through the environment.
+	want := []string{"tests", "-p", "no:cacheprovider", "--deselect", odd, "-rfE", "--", "tests/test_ok.py"}
 	if !slices.Equal(got, want) {
 		t.Errorf("pytest received %q\nwant            %q", got, want)
 	}
@@ -367,12 +368,162 @@ func TestPytestReadersFallBackWithoutACompleteBlock(t *testing.T) {
 }
 
 // The jail binds a command's toolchain by the programs it runs, and reads a
-// wrapper's `"$@"` as the operator's own command: the interpreter pytest
-// runs under is still found through the wrapper.
+// wrapper's `"$@"` as the operator's own command. Shown on a real run: the
+// interpreter is a link in a directory of its own, InterpretersIn names that
+// path through the wrapper, and the run executed under it.
 func TestPytestHookWrapperStillNamesTheOperatorsInterpreter(t *testing.T) {
-	got := InterpretersIn(rewritten(t, []string{"/opt/py/bin/python3", "-m", "pytest", "tests"}))
-	if !slices.Contains(got, "/opt/py/bin/python3") {
-		t.Errorf("InterpretersIn = %v, want the operator's interpreter among them", got)
+	py := pytestFor(t)
+	real, err := exec.LookPath(py)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	link := filepath.Join(dir, "bin", "python-of-the-operator")
+	if err := os.MkdirAll(filepath.Join(dir, "tests"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "bin"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("SKIP: cannot link an interpreter into the fixture: %v", err)
+	}
+	test := "import sys\n\n\ndef test_exe():\n    open('exe.txt', 'w').write(sys.executable)\n"
+	if err := os.WriteFile(filepath.Join(dir, "tests", "test_exe.py"), []byte(test), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	graded := rewritten(t, []string{link, "-m", "pytest", "tests", "-p", "no:cacheprovider"})
+	if got := InterpretersIn(graded); !slices.Contains(got, link) {
+		t.Fatalf("InterpretersIn = %v, want the operator's interpreter %s among them", got, link)
+	}
+	out, code := runIn(t, dir, graded)
+	if code != 0 {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	if _, ok := pyReportBlock(out); !ok {
+		t.Fatalf("the hook did not load under the linked interpreter:\n%s", out)
+	}
+	ran, err := os.ReadFile(filepath.Join(dir, "exe.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(ran) != link {
+		t.Errorf("the run executed under %s, want the interpreter InterpretersIn named, %s", ran, link)
+	}
+}
+
+// The plugin is loaded through PYTEST_PLUGINS: before any conftest, with
+// plugin autoloading off, and beside a plugin the operator already names
+// there, which still loads.
+func TestPytestHookLoadsThroughTheEnvironment(t *testing.T) {
+	py := pytestFor(t)
+	dir := reportFixture(t, "")
+	for name, body := range map[string]string{
+		"conftest.py":   "import json, os, sys\n\njson.dump({'hook': '" + pyReportModule + "' in sys.modules, 'own': 'own_plugin' in sys.modules, 'plugins': os.environ.get('PYTEST_PLUGINS')}, open('seen.json', 'w'))\n",
+		"own_plugin.py": "# the operator's own plugin\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, code := runIn(t, dir, rewritten(t, []string{py, "-m", "pytest", "tests/test_x.py::test_bad", "-p", "no:cacheprovider"}),
+		"PYTEST_DISABLE_PLUGIN_AUTOLOAD=1", "PYTEST_PLUGINS=own_plugin")
+	if code != 1 {
+		t.Fatalf("exit %d, want 1:\n%s", code, out)
+	}
+	if strings.Contains(out, "did not load") {
+		t.Fatalf("the run was repeated without the hook:\n%s", out)
+	}
+	if got := pyFirstFailure([]byte(out)); got != "tests/test_x.py::test_bad" {
+		t.Errorf("FirstFailure = %q, want tests/test_x.py::test_bad", got)
+	}
+	if _, ok := pyReportBlock(out); !ok {
+		t.Errorf("no complete block in:\n%s", out)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "seen.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seen struct {
+		Hook, Own bool
+		Plugins   string
+	}
+	if err := json.Unmarshal(raw, &seen); err != nil {
+		t.Fatal(err)
+	}
+	if !seen.Hook || !seen.Own || seen.Plugins != "own_plugin,"+pyReportModule {
+		t.Errorf("at conftest import: hook loaded=%v, operator's plugin loaded=%v, PYTEST_PLUGINS=%q; want both loaded and own_plugin,%s", seen.Hook, seen.Own, seen.Plugins, pyReportModule)
+	}
+}
+
+// PYTEST_PLUGINS is inherited, so a pytest that a test starts imports the
+// plugin too. Neither a subprocess run nor a pytester in-process run records
+// into the outer run's block: only the outer run's own failure is named.
+func TestPytestHookRecordsOnlyTheOuterSession(t *testing.T) {
+	py := pytestFor(t)
+	dir := t.TempDir()
+	for _, d := range []string{"tests", "inner"} {
+		if err := os.MkdirAll(filepath.Join(dir, d), 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, body := range map[string]string{
+		"conftest.py":         "pytest_plugins = ['pytester']\n",
+		"inner/test_inner.py": "def test_inner_fails():\n    assert False\n",
+		"tests/test_outer.py": `import subprocess, sys
+
+
+def test_subprocess_run_fails_on_purpose():
+    r = subprocess.run([sys.executable, "-m", "pytest", "inner", "-p", "no:cacheprovider", "--rootdir", "inner", "-c", "/dev/null"])
+    assert r.returncode == 1
+
+
+def test_in_process_run_fails_on_purpose(pytester):
+    pytester.makepyfile("def test_nested_fails():\n    assert False\n")
+    result = pytester.runpytest_inprocess()
+    result.assert_outcomes(failed=1)
+
+
+def test_outer_fails():
+    assert 1 == 2
+`,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, code := runIn(t, dir, rewritten(t, []string{py, "-m", "pytest", "tests", "-p", "no:cacheprovider"}))
+	if code != 1 {
+		t.Fatalf("exit %d, want 1:\n%s", code, out)
+	}
+	recs, ok := pyReportBlock(out)
+	if want := []pyReportRec{{pyReportFailed, "tests/test_outer.py::test_outer_fails"}}; !ok || !slices.Equal(recs, want) {
+		t.Errorf("block complete=%v records=%v, want exactly %v, from:\n%s", ok, recs, want, out)
+	}
+}
+
+// The stated limit: the block is the last thing printed, and a door keeps
+// only the END of a run's output up to a cap (64 KiB where a killing test is
+// named). A block bigger than that has its begin cut off, so it is not a
+// block: the readers fall back to the printed lines, and name nothing where
+// those are hidden. Never a wrong test, and no partial list.
+func TestABlockLargerThanTheKeptTailIsNotRead(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("1 failed\n\n" + pyReportBegin + "\n")
+	for i := 0; b.Len() < 80<<10; i++ {
+		b.WriteString(pyReportRecord + pyReportFailed + " tests/test_many.py::test_case_number_" + strings.Repeat("x", 40) + "\n")
+	}
+	b.WriteString(pyReportEnd + "\n")
+	full := b.String()
+	if _, ok := pyReportBlock(full); !ok {
+		t.Fatal("the whole output holds no complete block")
+	}
+	tail := full[len(full)-(64<<10):]
+	if got := pyFirstFailure([]byte(tail)); got != "" {
+		t.Errorf("FirstFailure = %q from a block whose begin was cut, want nothing named", got)
+	}
+	if got := pyFailedTests(tail); len(got) != 0 {
+		t.Errorf("failed tests = %d ids from a block whose begin was cut, want none", len(got))
 	}
 }
 
@@ -381,7 +532,7 @@ func TestPytestHookWrapperStillNamesTheOperatorsInterpreter(t *testing.T) {
 // nothing for a command it cannot read.
 func TestRunDisclosuresSayWhenTheHookWraps(t *testing.T) {
 	p, _ := ByName("python")
-	const hook = "pytest: corral runs every graded run through `sh -c` with a pytest plugin of its own loaded (-p corral_report"
+	const hook = "pytest: corral runs every graded run through `sh -c` with a pytest plugin of its own loaded (named in PYTEST_PLUGINS"
 	has := func(argv []string, prefix string) bool {
 		return slices.ContainsFunc(RunDisclosures(p, t.TempDir(), Cmd(argv)), func(l string) bool { return strings.HasPrefix(l, prefix) })
 	}
@@ -397,9 +548,113 @@ func TestRunDisclosuresSayWhenTheHookWraps(t *testing.T) {
 		{"sh", "-c", "pytest tests"},
 		{"python3", "-m", "unittest"},
 		{"tox", "-e", "py"},
+		{"tox", "-e", "py", "--", "pytest"},
+		{"python3", "-I", "-m", "pytest"},
 	} {
 		if has(argv, hook) {
 			t.Errorf("%v: the wrapper is disclosed though corral does not wrap it", argv)
 		}
+	}
+}
+
+// THE GUARANTEE: the hook failing to load never changes what the run's exit
+// code would have been without it, and never fails a baseline. Each case is
+// a command or a project the hook cannot load in, run for real with a passing
+// suite (exit 0) and a failing one (exit 1, the killing test still named,
+// from the printed lines where the hook recorded nothing).
+func TestPytestHookNeverChangesAResultWhenItCannotLoad(t *testing.T) {
+	py := pytestFor(t)
+	cases := []struct {
+		name string
+		argv []string          // before the test path
+		env  []string          // extra environment
+		file map[string]string // extra project files
+	}{
+		{"python -I ignores PYTHONPATH", []string{py, "-I", "-m", "pytest"}, nil, nil},
+		{"python -E ignores PYTHONPATH", []string{py, "-E", "-m", "pytest"}, nil, nil},
+		{"env -u PYTHONPATH drops it", []string{"env", "-u", "PYTHONPATH", py, "-m", "pytest"}, nil, nil},
+		{"env -u PYTEST_PLUGINS drops it", []string{"env", "-u", "PYTEST_PLUGINS", py, "-m", "pytest"}, nil, nil},
+		{"a project file shadows the plugin's module", []string{py, "-m", "pytest"}, nil,
+			map[string]string{pyReportModule + ".py": "# the project's own module of that name\n"}},
+		{"no temporary directory", []string{py, "-m", "pytest"}, []string{"TMPDIR=/nonexistent/corral"}, nil},
+	}
+	p, _ := ByName("python")
+	for _, c := range cases {
+		for _, suite := range []struct {
+			name, test string
+			exit       int
+			first      string
+		}{
+			{"passing", "tests/test_x.py::test_good", 0, ""},
+			{"failing", "tests/test_x.py::test_bad", 1, "tests/test_x.py::test_bad"},
+		} {
+			t.Run(c.name+"/"+suite.name, func(t *testing.T) {
+				dir := reportFixture(t, "")
+				for name, body := range c.file {
+					if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				operator := append(slices.Clone(c.argv), suite.test, "-p", "no:cacheprovider")
+				plain, plainCode := runIn(t, dir, operator, c.env...)
+				if plainCode != suite.exit {
+					t.Fatalf("control: the operator's own command exited %d, want %d:\n%s", plainCode, suite.exit, plain)
+				}
+				graded, _ := ReportCmd(p, Cmd(operator), operator)
+				out, code := runIn(t, dir, graded, c.env...)
+				if code != suite.exit {
+					t.Fatalf("the graded command exited %d, the operator's own exits %d:\n%s", code, suite.exit, out)
+				}
+				if got := pyFirstFailure([]byte(out)); got != suite.first {
+					t.Errorf("FirstFailure = %q, want %q, from:\n%s", got, suite.first, out)
+				}
+			})
+		}
+	}
+}
+
+// A begin with no end after it means the record is incomplete, and then no
+// block in the output is trusted, an earlier complete one included: a test
+// that prints a forged block and kills the process (os._exit) leaves exactly
+// that, the forged block followed by the real begin. Both readers fall back
+// to the printed lines.
+func TestPytestReadersVoidEveryBlockWhenTheLastBeginHasNoEnd(t *testing.T) {
+	out := "corral-report-begin\ncorral-report failed t.py::forged\ncorral-report-end\n" +
+		"FAILED t.py::printed - boom\n" +
+		"corral-report-begin\ncorral-report failed t.py::real\n"
+	if got := pyFirstFailure([]byte(out)); got != "t.py::printed" {
+		t.Errorf("FirstFailure = %q, want the printed line's t.py::printed", got)
+	}
+	if got := pyFailedTests(out); !slices.Equal(got, []string{"t.py::printed"}) {
+		t.Errorf("failed tests = %v, want [t.py::printed]", got)
+	}
+}
+
+// The same by a real run: the forging test's process dies before the session
+// finishes, so the real record has a begin and no end.
+func TestAForgedBlockFromATestThatKillsTheProcessIsNotTrusted(t *testing.T) {
+	py := pytestFor(t)
+	dir := reportFixture(t, "--no-summary")
+	forge := `import os, sys
+
+
+def test_forge(capfd):
+    with capfd.disabled():
+        print("\ncorral-report-begin\ncorral-report failed tests/test_x.py::test_good\ncorral-report-end")
+        sys.stdout.flush()
+    os._exit(1)
+`
+	if err := os.WriteFile(filepath.Join(dir, "tests", "test_forge.py"), []byte(forge), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, code := runIn(t, dir, rewritten(t, []string{py, "-m", "pytest", "tests/test_forge.py", "-p", "no:cacheprovider"}))
+	if code != 1 {
+		t.Fatalf("exit %d, want the test's own 1:\n%s", code, out)
+	}
+	if got := pyFirstFailure([]byte(out)); got != "" {
+		t.Errorf("FirstFailure = %q from a forged block, want nothing named:\n%s", got, out)
+	}
+	if got := pyFailedTests(out); len(got) != 0 {
+		t.Errorf("failed tests = %v from a forged block, want none", got)
 	}
 }

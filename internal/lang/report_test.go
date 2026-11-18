@@ -11,20 +11,15 @@ import (
 	"testing"
 )
 
-// unwrapped is the command inside the pytest report wrapper, without the
-// `-p corral_report` the wrapper adds, and whether cmd is that wrapper: the
-// script, its $0, then the command as positional parameters.
+// unwrapped is the command inside the pytest report wrapper, and whether cmd
+// is that wrapper: the script, its $0, then the command as positional
+// parameters, its words untouched (the plugin is loaded through the
+// environment, not by a word).
 func unwrapped(cmd []string) ([]string, bool) {
 	if len(cmd) < 5 || !slices.Equal(cmd[:4], []string{"sh", "-c", pyReportScript, pyReportArgv0}) {
 		return nil, false
 	}
-	inner := cmd[4:]
-	for i := 0; i+1 < len(inner); i++ {
-		if inner[i] == "-p" && inner[i+1] == pyReportModule {
-			return slices.Concat(inner[:i], inner[i+2:]), true
-		}
-	}
-	return nil, false
+	return cmd[4:], true
 }
 
 // ReportCmd gives a command its runner's report flags and hook only where
@@ -41,6 +36,29 @@ func TestReportCmdAppliesTheRowsReportArgs(t *testing.T) {
 		// flags where they belong. nil = unchanged, and not wrapped.
 		want []string
 	}{
+		// A launcher that builds its own environment keeps the flags and is
+		// not wrapped: the plugin could not load there, and the wrapper
+		// would pay a failed start and a repeat on every graded run.
+		{"tox before pytest", "python", Cmd([]string{"tox", "-e", "py", "--", "pytest", "tests"}),
+			[]string{"tox", "-e", "py", "--", "pytest", "tests", "-rfE"}},
+		{"nox before pytest", "python", Cmd([]string{"nox", "-s", "tests", "--", "pytest"}),
+			[]string{"nox", "-s", "tests", "--", "pytest", "-rfE"}},
+		{"docker before pytest", "python", Cmd([]string{"docker", "run", "img", "pytest", "tests"}),
+			[]string{"docker", "run", "img", "pytest", "tests", "-rfE"}},
+		{"podman before pytest", "python", Cmd([]string{"/usr/bin/podman", "run", "img", "pytest"}),
+			[]string{"/usr/bin/podman", "run", "img", "pytest", "-rfE"}},
+		{"python -I", "python", Cmd([]string{"python3", "-I", "-m", "pytest"}),
+			[]string{"python3", "-I", "-m", "pytest", "-rfE"}},
+		{"python -E", "python", Cmd([]string{"/opt/py/bin/python3.12", "-E", "-m", "pytest"}),
+			[]string{"/opt/py/bin/python3.12", "-E", "-m", "pytest", "-rfE"}},
+		{"python -sE cluster", "python", Cmd([]string{"python3", "-sE", "-m", "pytest"}),
+			[]string{"python3", "-sE", "-m", "pytest", "-rfE"}},
+		// Other interpreter options do not isolate it, and a pytest option
+		// with those letters is not the interpreter's.
+		{"python -B -W error", "python", Cmd([]string{"python3", "-B", "-W", "error", "-m", "pytest"}),
+			[]string{"python3", "-B", "-W", "error", "-m", "pytest", "-rfE"}},
+		{"pytest -E is pytest's", "python", Cmd([]string{"python3", "-m", "pytest", "-E", "x"}),
+			[]string{"python3", "-m", "pytest", "-E", "x", "-rfE"}},
 		{"bare pytest", "python", Cmd([]string{"pytest"}), []string{"pytest", "-rfE"}},
 		{"python3 -m pytest -q", "python", Cmd([]string{"python3", "-m", "pytest", "-q"}),
 			[]string{"python3", "-m", "pytest", "-q", "-rfE"}},
@@ -89,6 +107,9 @@ func TestReportCmdAppliesTheRowsReportArgs(t *testing.T) {
 		// append to is left alone, as fail-fast leaves it.
 		{"package script", "python", Invocation{Argv: []string{"npm", "test"}, Script: []string{"pytest"}, Pass: "--", Narrow: true}, nil},
 	}
+	// flagsOnly: want is the whole result, with no wrapper around it.
+	flagsOnly := map[string]bool{"tox before pytest": true, "nox before pytest": true, "docker before pytest": true,
+		"podman before pytest": true, "python -I": true, "python -E": true, "python -sE cluster": true}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			p, ok := ByName(c.lang)
@@ -100,21 +121,20 @@ func TestReportCmdAppliesTheRowsReportArgs(t *testing.T) {
 			if !slices.Equal(c.inv.Argv, in) {
 				t.Fatalf("ReportCmd modified its input: %v", c.inv.Argv)
 			}
-			if c.want == nil {
+			switch {
+			case c.want == nil:
 				if !slices.Equal(got, in) || applied {
 					t.Fatalf("ReportCmd(%v) = %v applied=%v, want it unchanged", in, got, applied)
 				}
-			} else {
+			case flagsOnly[c.name]:
+				if !slices.Equal(got, c.want) || !applied {
+					t.Fatalf("ReportCmd(%v) = %v applied=%v, want the flags alone and no wrapper: %v", in, got, applied, c.want)
+				}
+				return // a flags-only command is idempotent by carriesLast, checked by the cases above
+			default:
 				inner, wrapped := unwrapped(got)
 				if !wrapped || !applied || !slices.Equal(inner, c.want) {
 					t.Fatalf("ReportCmd(%v) = %v applied=%v, want the report wrapper around %v", in, got, applied, c.want)
-				}
-				// The plugin is loaded where the flags go: before the
-				// runner's own `--`, after which every word is a path.
-				positional := got[4:]
-				at := slices.Index(positional, pyReportModule)
-				if dash := slices.Index(c.want, "--"); dash >= 0 && slices.Index(c.want, "pytest") < dash && !slices.Equal(positional[at+1:], c.want[dash:]) {
-					t.Errorf("the plugin is loaded at %d in %v, want it directly before pytest's own --", at, positional)
 				}
 			}
 			// Idempotent: a command it has already rewritten is a shell
@@ -155,7 +175,7 @@ func TestEveryRowWithReportArgsHasWordsAndAReader(t *testing.T) {
 		if h := r.ReportHook; h != nil {
 			if h.Wrap == nil || strings.TrimSpace(h.Says) == "" {
 				t.Errorf("%s declares a ReportHook with no Wrap or no disclosure", r.ID)
-			} else if w := h.Wrap([]string{r.Words[0]}, 1); !cmdIsShellWrapped(w) {
+			} else if w := h.Wrap([]string{r.Words[0]}); !cmdIsShellWrapped(w) {
 				t.Errorf("%s: the hook's wrapper %v is not a shell wrapper, so ReportCmd would wrap it again", r.ID, w)
 			}
 		}
@@ -328,5 +348,23 @@ func TestTheHookNamesWhatNoSummaryOrNoTerminalHide(t *testing.T) {
 				t.Errorf("failed tests = %v under addopts %q, want [%s]", got, opt, want)
 			}
 		})
+	}
+}
+
+// A hook's wrapper is a POSIX shell script, so on Windows nothing is wrapped
+// and a pytest command keeps the report flags alone, as it ran before the
+// hook existed.
+func TestReportCmdDoesNotWrapOnWindows(t *testing.T) {
+	was := reportHookGOOS
+	reportHookGOOS = "windows"
+	t.Cleanup(func() { reportHookGOOS = was })
+	p, _ := ByName("python")
+	operator := []string{"python", "-m", "pytest", "tests"}
+	got, applied := ReportCmd(p, Cmd(operator), operator)
+	if want := []string{"python", "-m", "pytest", "tests", "-rfE"}; !slices.Equal(got, want) || !applied {
+		t.Errorf("ReportCmd on windows = %v applied=%v, want the flags alone: %v", got, applied, want)
+	}
+	if lines := RunDisclosures(p, t.TempDir(), Cmd(operator)); slices.ContainsFunc(lines, func(l string) bool { return strings.Contains(l, "sh -c") }) {
+		t.Errorf("the wrapper is disclosed on windows, where nothing is wrapped: %v", lines)
 	}
 }

@@ -3,6 +3,7 @@
 package lang
 
 import (
+	"runtime"
 	"slices"
 	"strings"
 )
@@ -55,6 +56,11 @@ import (
 //     that undoes them (pytest's -vrs cluster sets -r), so then the flags are
 //     appended again, which costs nothing.
 //
+// A hook is not applied everywhere its flags are: not on Windows, where there
+// is no POSIX shell to run its wrapper (reportHookGOOS), and not to a command
+// the row's hook declines (ReportHook.Wraps: pytest behind tox, nox, docker
+// or podman, or a Python given -I or -E). Those keep the flags alone.
+//
 // Applying it twice changes nothing: a command a hook has wrapped is
 // shell-wrapped, which the second application cannot read and leaves alone.
 // So every caller that DERIVES a command (a killer narrowed to one test, a
@@ -103,11 +109,17 @@ func reportCmd(p Plugin, inv Invocation, cmd []string) (out []string, flagged, h
 		end += len(r.ReportArgs)
 		flagged = true
 	}
-	if r.ReportHook != nil {
-		return r.ReportHook.Wrap(out, end), flagged, true
+	if h := r.ReportHook; h != nil && reportHookGOOS != "windows" && (h.Wraps == nil || h.Wraps(cmd, at)) {
+		return h.Wrap(out), flagged, true
 	}
 	return out, flagged, false
 }
+
+// reportHookGOOS is the operating system ReportCmd decides a hook's wrapper
+// for. A hook's wrapper is a POSIX shell script (sh, mktemp, cat), so on
+// Windows no command is wrapped and a row keeps its report flags alone, as
+// before hooks existed. A variable only so a test can stand in for Windows.
+var reportHookGOOS = runtime.GOOS
 
 // ReportArgv is ReportCmd as the rewrite hook grading composes into its one
 // command door: each command is judged on its own words (inv.WithArgv), and

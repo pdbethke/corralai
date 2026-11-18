@@ -97,10 +97,12 @@ var Capabilities = []Capability{
 	// A runner row whose ReportHook has the runner itself record its failing
 	// tests, which the row's readers take in preference to its printed
 	// lines: no report setting of the project's hides the record, and an id
-	// is whole (pytest's plugin, loaded by -p). Judged on the field
-	// lang.ReportCmd wraps the command with. The printed lines stay the
-	// second source, for a command corral cannot rewrite and for a record
-	// that is missing or cut short.
+	// is whole (pytest's plugin, loaded through PYTEST_PLUGINS). Judged on
+	// the field lang.ReportCmd wraps the command with. The printed lines
+	// stay the second source, for a command corral does not wrap (Windows,
+	// where the wrapper's shell script cannot run, among them) and for a
+	// record that is missing or cut short. Where it was run, and where not,
+	// is in the row's Note.
 	rowCapability("failure-hook", "Read the failing test from the runner's own hook, not its printed lines", func(r Runner) bool { return r.ReportHook != nil }),
 	rowCapability("salvage", "Keep the passing part of an authored test", func(r Runner) bool { return r.FailedTests != nil && r.DeselectCmd != nil }),
 	rowCapability("units", "Run one test unit", func(r Runner) bool { return r.ListUnits != nil && r.UnitCmd != nil }),

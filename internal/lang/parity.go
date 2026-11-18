@@ -83,13 +83,16 @@ var Capabilities = []Capability{
 	rowCapability("first-failure", "Name the killing test", func(r Runner) bool { return r.FirstFailure != nil }),
 	rowCapability("confirm-alone", "Confirm a kill by running the killing test alone", func(r Runner) bool { return r.KillerCmd != nil }),
 	rowCapability("fail-fast", "Stop at the first failure", func(r Runner) bool { return len(r.FailFast) > 0 }),
-	// A runner row whose ReportArgs corral adds to every graded run, so a
-	// project's own report settings cannot hide the lines its failure readers
-	// read (pytest's -rfE over a project's -r). Judged on the field
+	// A runner row whose ReportArgs corral adds to every graded run, so the
+	// project's own report-selection setting cannot hide the lines its
+	// failure readers read (pytest's -rfE over a project's -r). Only that
+	// setting: an option that suppresses the summary itself (pytest's
+	// --no-summary, -p no:terminal) still hides them, which the row's Note
+	// says and a real-run test pins. Judged on the field
 	// lang.ReportCmd applies, so the page cannot claim flags the code does
 	// not add. A language without it says, in its exemption, whether its
 	// runners' lines can be hidden by a project at all.
-	rowCapability("readable-failures", "Name the killing test whatever the project's report settings", func(r Runner) bool { return len(r.ReportArgs) > 0 }),
+	rowCapability("readable-failures", "Name the killing test whatever the project's -r report setting", func(r Runner) bool { return len(r.ReportArgs) > 0 }),
 	rowCapability("salvage", "Keep the passing part of an authored test", func(r Runner) bool { return r.FailedTests != nil && r.DeselectCmd != nil }),
 	rowCapability("units", "Run one test unit", func(r Runner) bool { return r.ListUnits != nil && r.UnitCmd != nil }),
 	// A runner row that declares a cache grading can share (go test's GOCACHE).

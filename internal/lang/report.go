@@ -97,7 +97,7 @@ func reportDisclosure(p Plugin, inv Invocation) string {
 	}
 	r, _ := namedRunner(p, inv.Argv)
 	return r.Name + ": corral adds " + strings.Join(r.ReportArgs, " ") +
-		" to every run so it can read which test failed; a report setting of the project's own that these replace does not apply to those runs (what passes and fails is unchanged)"
+		" to every graded run so it can read which test failed; a report setting of the project's own that these replace does not apply to those runs (what passes and fails is unchanged)"
 }
 
 // runnerWordIndex is the index of the first word of cmd that names r by one

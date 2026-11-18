@@ -243,3 +243,28 @@ func TestGradingRewriteComposesTheTwoRewrites(t *testing.T) {
 		t.Error("no plugin, no run cache: want no rewrite")
 	}
 }
+
+// Single-file --local with no `--` command grades with the plugin's own
+// command, and gradingRewrite gives that command -rfE: the scan line must say
+// so, read off the same base command, not off the empty one the operator gave.
+func TestSingleFileRunWithNoCommandDisclosesTheReportArgs(t *testing.T) {
+	dir := t.TempDir()
+	code, test := filepath.Join(dir, "calc.py"), filepath.Join(dir, "test_calc.py")
+	mustWrite(t, code, "def add(a, b):\n    return a + b\n")
+	mustWrite(t, test, "from calc import add\n\ndef test_add():\n    assert add(2, 3) == 5\n")
+	plug, _ := lang.ByName("python")
+	var out strings.Builder
+	prep, err := prepareAuditJail(context.Background(), localAuditInput{
+		codePath: code, testPath: test, goal: "g", lang: "python", iso: &wrapRecordingIsolator{},
+	}, plug, time.Minute, &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer prep.cleanup()
+	if !strings.Contains(out.String(), "pytest: corral adds -rfE to every graded run") {
+		t.Errorf("no report-flags disclosure for a single-file run graded with the plugin's own pytest command:\n%s", out.String())
+	}
+	if got := prep.wiring.scorer.CommandRewrite(plug.TestCmd()); !slices.Contains(got, "-rfE") {
+		t.Fatalf("the plugin's own command got no -rfE (%v), so the disclosure would be false", got)
+	}
+}

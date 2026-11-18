@@ -129,7 +129,7 @@ func TestEveryRowWithReportArgsHasWordsAndAReader(t *testing.T) {
 // The disclosure is said only when corral actually adds the flags.
 func TestRunDisclosuresSayWhenReportArgsAreAdded(t *testing.T) {
 	p, _ := ByName("python")
-	const want = "pytest: corral adds -rfE to every run so it can read which test failed"
+	const want = "pytest: corral adds -rfE to every graded run so it can read which test failed"
 	has := func(inv Invocation) bool {
 		for _, l := range RunDisclosures(p, t.TempDir(), inv) {
 			if strings.HasPrefix(l, want) {
@@ -223,5 +223,50 @@ func TestReportArgsRestoreFailureLinesAProjectHides(t *testing.T) {
 	}
 	if got := failed(shown); !slices.Equal(got, []string{want}) {
 		t.Errorf("failed tests = %v, want [%s], from:\n%s", got, want, shown)
+	}
+}
+
+// The stated limit, pinned by execution: a project config carrying
+// --no-summary or -p no:terminal still hides the FAILED lines with -rfE
+// applied, so the readers name nothing (the killing test goes unnamed and a
+// kill is confirmed by repeating the run, as before the fix). A fix for either
+// must change this test and the pytest row's note.
+func TestReportArgsCannotRestoreLinesNoSummaryOrNoTerminalHide(t *testing.T) {
+	py := pytestFor(t)
+	p, _ := ByName("python")
+	for _, opt := range []string{"--no-summary", "-p no:terminal"} {
+		t.Run(opt, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(dir, "tests"), 0o750); err != nil {
+				t.Fatal(err)
+			}
+			for name, body := range map[string]string{
+				"pyproject.toml":  "[tool.pytest.ini_options]\naddopts = \"" + opt + "\"\n",
+				"tests/test_x.py": "def test_good():\n    assert True\n\ndef test_bad():\n    assert 1 == 2\n",
+			} {
+				if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			operator := []string{py, "-m", "pytest", "tests", "-q", "-p", "no:cacheprovider"}
+			inv := Cmd(operator)
+			rewritten, applied := ReportCmd(p, inv, operator)
+			if !applied {
+				t.Fatalf("ReportCmd left %v unchanged", operator)
+			}
+			cmd := exec.Command(rewritten[0], rewritten[1:]...) // #nosec G204 -- a test's own fixture command
+			cmd.Dir = dir
+			out, err := cmd.CombinedOutput()
+			if err == nil {
+				t.Fatalf("%v passed; the fixture has a failing test:\n%s", rewritten, out)
+			}
+			failed, _ := DeselectorFor(p, inv)
+			if got := FailureParserFor(p, inv).FirstFailure(out); got != "" {
+				t.Errorf("FirstFailure = %q under addopts %q: the stated limit no longer holds, update the pytest row's note", got, opt)
+			}
+			if got := failed(string(out)); len(got) != 0 {
+				t.Errorf("failed tests = %v under addopts %q: the stated limit no longer holds, update the pytest row's note", got, opt)
+			}
+		})
 	}
 }

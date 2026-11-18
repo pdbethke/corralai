@@ -1337,7 +1337,10 @@ func prepareAuditJail(ctx context.Context, in localAuditInput, plug lang.Plugin,
 	if err != nil {
 		return p, auditErr("%v", err)
 	}
-	for _, line := range lang.RunDisclosures(plug, repoDir, inv.WithArgv(in.checkArgv)) {
+	// Disclosed off the command grading actually runs (gradingBase), the one
+	// gradingRewrite gives the report flags: a single-file run with no `--`
+	// command is graded with the plugin's own.
+	for _, line := range lang.RunDisclosures(plug, repoDir, inv.WithArgv(gradingBase(plug, repoDir, in.checkArgv))) {
 		fmt.Fprintf(stdout, "  %s\n", line)
 	}
 
@@ -2871,10 +2874,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		// The single-file scorer runs the plugin's own command when the run
 		// names none (scoreWorkspace), so that is the warming command here.
 		plug := gradingPlugin(in.langName)
-		warm := in.checkArgv
-		if len(warm) == 0 && plug != nil {
-			warm = plug.TestCmd()
-		}
+		warm := gradingBase(plug, "", in.checkArgv)
 		jail, gc := newGradingJail(in.iso, in.timeout, nil, plug, in.inv.WithArgv(warm), warm)
 		w.closeWithCleanup(jail, in.runCache, gc)
 		enumerator := newRunEnumerator(in.iso, in.timeout, nil)
@@ -2884,6 +2884,17 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		w.jailEnum = advpool.JailEnumerator{Jail: enumerator}
 	}
 	return w, nil
+}
+
+// gradingBase is the command a file's grading runs as its baseline: the
+// operator's, or, in single-file mode (no repoDir) when they gave none, the
+// plugin's own (scoreWorkspace runs it then). The one answer behind the
+// single-file wiring's warming command and the scan line's disclosures.
+func gradingBase(plug lang.Plugin, repoDir string, checkArgv []string) []string {
+	if len(checkArgv) == 0 && repoDir == "" && plug != nil {
+		return plug.TestCmd()
+	}
+	return checkArgv
 }
 
 // gradingPlugin is the language plugin for a wiring's langName, nil when the

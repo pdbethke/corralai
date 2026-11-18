@@ -4,10 +4,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -361,36 +364,85 @@ func TestTheSalvageDoorInTheJailLosesTheHookRecordPastItsOutputCap(t *testing.T)
 	}
 }
 
-// The deselecting command reaches the runner narrowed AND wrapped: the
-// wrapper's positional parameters carry the --deselect and the id, whole.
+// The deselecting command reaches the runner narrowed AND wrapped. Asserted
+// on what pytest itself received in a real run on the workspace substrate
+// (its conftest writes down its arguments and whether the hook was loaded):
+// the --deselect and the whole id, spaces included, with the hook loaded. The
+// recorder half shows the same shape reaching the runner on all three
+// wirings: the wrapper, with the command's words inside it.
 func TestADeselectedCommandReachesTheRunnerNarrowedInsideTheWrapper(t *testing.T) {
+	plug, _ := lang.ByName("python")
+	argv := strings.Fields(pytestArgv)
+	const id = "tests/test_calc_corral.py::test_wrong[a b]"
+	deselect, ok := lang.DeselectCmd(plug, lang.Cmd(argv), []string{id})
+	if !ok {
+		t.Fatal("DeselectCmd refused the operator's command")
+	}
+	t.Run("real run", func(t *testing.T) {
+		pytestOnHost(t)
+		repoDir, seed := hidingRepo(t, "--no-summary")
+		seen := filepath.Join(t.TempDir(), "seen.jsonl")
+		mustWrite(t, filepath.Join(repoDir, "conftest.py"), "import json, os, sys\n\n\ndef pytest_configure(config):\n"+
+			"    with open("+strconv.Quote(seen)+", 'a') as out:\n"+
+			"        out.write(json.dumps({'args': list(config.invocation_params.args), 'hook': any(m.startswith('_corral') for m in sys.modules)}) + '\\n')\n")
+		w := wirePython(t, nil, "workspace", repoDir, &seed)
+		rep, err := w.scorer.ScoreAuthoredDeselected(context.Background(), w.codeKey, seed.files["calc.py"], brokenAuthored, subtractMutant, pytestArgv, adequacy.ShellJoin(deselect), []string{id})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !rep.CompliantPass || !slices.Contains(rep.Killed, "m1") {
+			t.Fatalf("salvaged pass: CompliantPass=%v Killed=%v, want a pass that kills m1\n%s", rep.CompliantPass, rep.Killed, rep.BaselineOutput)
+		}
+		raw, err := os.ReadFile(seen)
+		if err != nil {
+			t.Fatal(err)
+		}
+		runs := 0
+		for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+			var got struct {
+				Args []string
+				Hook bool
+			}
+			if err := json.Unmarshal([]byte(line), &got); err != nil {
+				t.Fatal(err)
+			}
+			runs++
+			at := slices.Index(got.Args, "--deselect")
+			if at < 0 || at+1 >= len(got.Args) || got.Args[at+1] != id {
+				t.Errorf("pytest received %q, want --deselect %q among its arguments", got.Args, id)
+			}
+			if !got.Hook {
+				t.Errorf("pytest ran %q without the failure hook loaded", got.Args)
+			}
+		}
+		if runs < 3 {
+			t.Errorf("pytest ran %d times, want the baseline, the canary and the mutant at least", runs)
+		}
+	})
 	for _, substrate := range []string{"workspace", "jail", "single"} {
 		t.Run(substrate, func(t *testing.T) {
 			repoDir, seed := hidingRepo(t, "--no-summary")
 			w := wirePython(t, &wrapRecordingIsolator{}, substrate, repoDir, &seed)
 			rec := &passingRecorder{}
 			w.scorer.Jail = rec
-			plug, _ := lang.ByName("python")
-			argv := strings.Fields(pytestArgv)
-			const id = "tests/test_calc_corral.py::test_wrong[a b]"
-			deselect, ok := lang.DeselectCmd(plug, lang.Cmd(argv), []string{id})
-			if !ok {
-				t.Fatal("DeselectCmd refused the operator's command")
-			}
 			if _, err := w.scorer.ScoreAuthoredDeselected(context.Background(), w.codeKey, seed.files["calc.py"], brokenAuthored, subtractMutant, pytestArgv, adequacy.ShellJoin(deselect), []string{id}); err != nil {
 				t.Fatal(err)
 			}
-			if len(rec.cmds) == 0 {
-				t.Fatal("no command reached the runner")
-			}
+			pytestRuns := 0
 			for _, c := range rec.cmds {
 				if !slices.Contains(c, "pytest") {
 					continue
 				}
+				pytestRuns++
+				// sh -c <script> <$0> then the command's own words, which
+				// start with the operator's and carry the deselect whole.
 				at := slices.Index(c, "--deselect")
-				if c[0] != "sh" || at < 0 || at+1 >= len(c) || c[at+1] != id {
-					t.Errorf("a salvage command reached the runner without the wrapper or without --deselect %q: %v", id, c)
+				if len(c) < 4+len(argv) || c[0] != "sh" || c[1] != "-c" || !slices.Equal(c[4:4+3], argv[:3]) || at < 4 || at+1 >= len(c) || c[at+1] != id {
+					t.Errorf("a salvage command reached the runner without the wrapper around %v ... --deselect %q: %v", argv[:3], id, c[4:])
 				}
+			}
+			if pytestRuns == 0 {
+				t.Fatalf("no pytest command reached the runner: %v", rec.cmds)
 			}
 		})
 	}
@@ -427,7 +479,7 @@ func TestGradingRewriteComposesTheTwoRewrites(t *testing.T) {
 	if f := gradingRewrite(py, lang.Cmd([]string{"sh", "-c", "pytest"}), []string{"sh", "-c", "pytest"}, nil); f != nil {
 		t.Error("a shell-wrapped base command got a rewrite")
 	}
-	if got := gradingRewrite(py, lang.Cmd(pyCmd), pyCmd, nil)(pyCmd); !isReportWrapper(got, []string{"python3", "-m", "pytest", "-rfE", "-p", "corral_report"}) {
+	if got := gradingRewrite(py, lang.Cmd(pyCmd), pyCmd, nil)(pyCmd); !isReportWrapper(got, []string{"python3", "-m", "pytest", "-rfE"}) {
 		t.Errorf("report alone = %v", got)
 	}
 	goP, _ := lang.ByName("go")
@@ -437,7 +489,7 @@ func TestGradingRewriteComposesTheTwoRewrites(t *testing.T) {
 	}
 	// The report rewrite goes LAST: its wrapper is around the command the
 	// run cache's rewrite already finished.
-	if got := gradingRewrite(py, lang.Cmd(pyCmd), pyCmd, mark)(pyCmd); !isReportWrapper(got, []string{"python3", "-m", "pytest", "--cache", "-rfE", "-p", "corral_report"}) {
+	if got := gradingRewrite(py, lang.Cmd(pyCmd), pyCmd, mark)(pyCmd); !isReportWrapper(got, []string{"python3", "-m", "pytest", "--cache", "-rfE"}) {
 		t.Errorf("both = %v", got)
 	}
 	if f := gradingRewrite(nil, lang.Cmd(pyCmd), pyCmd, nil); f != nil {

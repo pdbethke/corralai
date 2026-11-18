@@ -401,7 +401,8 @@ type JailScorer struct {
 	// Passed in rather than derived from Lang here for the reason
 	// FailureParser is: the ONE place that builds the grading jail also
 	// decides whether it shares a cache at all, and an unshared run must keep
-	// the operator's command but for the report flags.
+	// the operator's command but for the report rewrite (the runner row's
+	// report flags, and its failure hook's wrapper around the same words).
 	CommandRewrite func(cmd []string) []string
 	// WarmCheck, when non-nil, says whether the DEV pass's own baseline
 	// command forbids a cached test result once rewritten (cmd/corral sets it

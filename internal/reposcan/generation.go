@@ -439,8 +439,8 @@ package reposcan
 // so it gets its own generation rather than riding along. Behaviour bump; the
 // shape is unchanged.
 // "46" (2026-11-18): a graded pytest run that corral can rewrite has pytest
-// itself record its failing tests, through a plugin loaded by the command
-// lang.ReportCmd builds (lang.Runner.ReportHook), and the readers take that
+// itself record its failing tests, through a plugin loaded by the wrapper
+// lang.ReportCmd puts around the command (lang.Runner.ReportHook), and the readers take that
 // record before pytest's printed lines. A "45" verdict could differ in two
 // ways. On a project whose config carries --no-summary or -p no:terminal,
 // which hide the `FAILED <node id>` lines whatever -r says, it recorded no

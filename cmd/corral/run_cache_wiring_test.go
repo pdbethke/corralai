@@ -218,7 +218,7 @@ func TestPythonGradingRunsMountNoRunCache(t *testing.T) {
 		t.Errorf("recorded run cache = %q, want empty for a runner with no run cache", w.runCache)
 	}
 	for name, f := range map[string]func([]string) []string{"scorer": w.scorer.CommandRewrite, "validator": w.validator.CommandRewrite} {
-		if got := f(argv); !isReportWrapper(got, []string{"python3", "-m", "pytest", "-rfE", "-p", "corral_report"}) {
+		if got := f(argv); !isReportWrapper(got, []string{"python3", "-m", "pytest", "-rfE"}) {
 			t.Errorf("%s rewrite = %v, want the report flags and the failure hook's wrapper and nothing else", name, got)
 		}
 	}

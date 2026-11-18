@@ -665,6 +665,7 @@ var printedMetrics = map[string]printedRow{
 	"internal/buildstore/store.go:LoadOrCreateSigningKey":                {Exempt: "error message: the numbers are limits, ids, exit codes, offsets and counts inside a failure text, not an audit measurement"},
 	"internal/certify/certify.go:VerifyLedger":                           {Exempt: "hash framing: sequence number formatted into the bytes hashed"},
 	"internal/certify/signbuild.go:SignBuild":                            {Exempt: "error message: builds failure text from causes, ids and paths via %v; no measured number"},
+	"internal/clip/ends.go:Elision":                                      {Exempt: "display truncation: the count of bytes of a run's output a bounded capture did not keep, written between the two ends it kept; it describes the capture, not what the run measured"},
 	"internal/controlgate/post.go:describeResult":                        {Exempt: "control gate result for the brain's control stack, a separate record from the scan ledger"},
 	"internal/coord/inbox.go:RecentInstructions":                         {Exempt: "SQL LIMIT value from a caller's argument"},
 	"internal/creds/creds.go:Redact":                                     {Exempt: "length of a secret shown redacted, a safety label"},

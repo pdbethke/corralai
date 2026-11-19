@@ -100,6 +100,11 @@ func TestOnlyAutoseatDecidesASeatFromEvidence(t *testing.T) {
 		// models_pool.go ranks for the proposer (rankPool); models_rank.go
 		// ranks for the disclosure verb.
 		"modelrank.Rank(": {"models_pool.go": true, "models_rank.go": true},
+		// The other readers serve only the disclosure verb's other sources
+		// (--source scorecard, --db), which --models never reads.
+		"scorecardRankEvidence(": {"models_rank.go": true},
+		"bugcatchRankEvidence(":  {"models_rank.go": true},
+		"warehouseRankEvidence(": {"models_rank.go": true},
 	}
 	files, err := filepath.Glob("*.go")
 	if err != nil || len(files) == 0 {

@@ -322,14 +322,15 @@ qualifies for is refused with the flag that would fill it, never filled from
 outside the pool and never by lowering the floor. The plan is printed and
 nothing runs until the operator answers `y` or `yes` with both stdin and stdout
 on a terminal (anything else declines, exit 0); otherwise it prints the
-equivalent seat flags and a last line saying nothing was audited, and exits 0,
+equivalent seat flags and a last line saying nothing was run, and exits 0,
 so a pipeline must pass the seat flags itself. There is no `--yes`. `doctor` and
 `certify --repo --dry-run` print the plan and ask nothing. The evidence is
 the machine ledger only, with no fallback to another source. The proposer is
 `internal/autoseat` (a pure function) and it is the one door:
 `TestOnlyAutoseatDecidesASeatFromEvidence` fails any other file in `cmd/corral`
-that imports it or calls the evidence readers or `modelrank.Rank` outside the
-files it lists, `TestEveryDoorWithSeatFlagsRegistersModelsFlags` fails a door
+that imports it, or that uses `modelrank.Rank` or an evidence reader
+(`defaultRankLoader`, `machineLedgerRankEvidence`, `scorecardRankEvidence`,
+`bugcatchRankEvidence`, `warehouseRankEvidence`) outside the files it lists, `TestEveryDoorWithSeatFlagsRegistersModelsFlags` fails a door
 that registers `--models` and never calls `seatFromPool` (or forwards it, for
 `demo`), and `models_pool.go` is the only caller. How each seat was
 chosen is recorded on the entry as `SeatedBy` (`operator`, `evidence` or

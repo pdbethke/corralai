@@ -276,8 +276,13 @@ How each seat is filled:
   not measured, so it goes to the first member you named. The critic goes to
   the first member that is not the writer's model, preferring one from a
   different provider than the writer, whether the writer was proposed or
-  pinned (an operator-defined agent declares no provider, so beside one
-  there is no preference to apply). A critic is measured only by human adjudication, and the ranking
+  pinned. An agent seat's provider is the vendor of its pinned model when
+  corral's model-name table recognises that model (so `myagent:claude-…`
+  has one), else, for a built-in agent whose definition you have not
+  replaced with `CORRALAI_AGENT_<NAME>`, the maker declared on it. Any other
+  agent seat (one you defined, or a built-in you redefined) that is unpinned
+  or pinned to a model the table does not recognise has no known provider,
+  and beside it there is no preference to apply. A critic is measured only by human adjudication, and the ranking
   reads no critic adjudications from the machine ledger, so the critic is
   always seated this way unless pinned.
 - A bare agent seat (`codex`) names a tool, not a model, so nothing is ranked
@@ -316,7 +321,7 @@ When stdin and stdout are both terminals, corral then asks
 stdout redirected to a file, where a `y` would accept a plan nobody saw)
 nothing runs: corral prints the plan, the same lineup as seat flags
 (`to run this lineup: --mutant-model ... --writer-model ...`) and a last line
-saying nothing was audited, and exits 0. A pipeline that reads only the exit
+saying nothing was run, and exits 0. A pipeline that reads only the exit
 code passes without an audit, so a pipeline must pass the seat flags itself,
 not `--models`. There is no `--yes`. `doctor` and `certify --repo --dry-run`
 print the plan, say it is the lineup a real run would propose, and ask

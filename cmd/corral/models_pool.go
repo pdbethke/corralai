@@ -299,7 +299,7 @@ func seatFromPool(ctx context.Context, cmdName, repoRoot, lang string, anyWhy an
 // noTerminalLine is the last line a --models run with no terminal prints. It
 // exits 0, as a decline does (spec 5.3), so a pipeline that only reads the
 // exit code goes green; this line is what a person reading the log sees.
-const noTerminalLine = "nothing was audited: --models without a terminal only prints the plan and exits 0; pass the seat flags above to run this lineup"
+const noTerminalLine = "nothing was run: --models without a terminal only prints the plan and exits 0; pass the seat flags above to run this lineup"
 
 // resolvePins resolves every pin but "off" with the resolver the members
 // use, sharing their daemon listing, and with the door's --local-endpoint

@@ -3967,6 +3967,10 @@ func (r *runState) signedSeats(assign RoleAssignment) signedRoster {
 		seatedBy:  seatedBy,
 		// The evidence line explains an evidence seat, so it goes with the
 		// last one the narrowing keeps, as the selection goes with its seat.
+		// The engine imports the proposer's package for this one rule
+		// because the rule has one definition, autoseat.EvidenceFor, used
+		// here for the verdict and by the doors for the --repo row and the
+		// review entry; a second copy here could disagree with theirs.
 		evidence: autoseat.EvidenceFor(seatedBy, r.rs.SeatEvidence),
 	}
 }

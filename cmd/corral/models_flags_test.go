@@ -21,13 +21,6 @@ var seatFlagLiteral = regexp.MustCompile(`\.String(Var)?\([^)]*"(writer|reviewer
 // shapes the flag package offers.
 var modelsFlagLiteral = regexp.MustCompile(`\.(String|StringVar|Func|Var)\([^)]*"models"`)
 
-// pendingModelsDoors are doors that register a seat flag and are not wired to
-// --models yet, each with the reason. An entry for a door that now calls the
-// helper fails the test below, so the list cannot outlive the gap it names.
-var pendingModelsDoors = map[string]string{
-	"review.go": "corral review is wired in its own change (autoseat phase 2, task 5): its seats are reviewer and verifier, not certify's",
-}
-
 func TestModelsFlagPatternsMatchARegistration(t *testing.T) {
 	// Negative controls: each pattern must catch the shape it exists to
 	// catch, or the door test below passes vacuously.
@@ -69,11 +62,7 @@ func TestEveryDoorWithSeatFlagsRegistersModelsFlags(t *testing.T) {
 		}
 		doors++
 		wired := strings.Contains(src, "registerModelsFlags(")
-		why, pending := pendingModelsDoors[f]
-		switch {
-		case pending && wired:
-			t.Errorf("%s now calls registerModelsFlags; remove its pendingModelsDoors entry (%s)", f, why)
-		case !pending && !wired:
+		if !wired {
 			t.Errorf("%s registers a seat flag and not --models; call registerModelsFlags", f)
 		}
 	}

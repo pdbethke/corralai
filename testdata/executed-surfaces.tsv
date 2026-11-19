@@ -239,6 +239,7 @@ corral review adjudicate --confirm	executed	test:cmd/corral/review_test.go
 corral review adjudicate --reason	executed	test:cmd/corral/review_test.go
 corral review adjudicate --refute	executed	test:cmd/corral/review_test.go
 corral review --ledger	executed	test:cmd/corral/review_test.go
+corral review --models	executed	test:cmd/corral/review_models_test.go (TestReviewSeatedByModels, TestReviewModelsWithVerifierOffProposesOnlyTheReviewer: a fake ledger and an accepting operator; the real machine ledger and terminal are never read)
 corral review --repo	executed	test:cmd/corral/review_test.go
 corral review --reviewer-model	executed	test:cmd/corral/review_test.go
 corral review --scope	executed	test:cmd/corral/review_test.go

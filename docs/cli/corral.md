@@ -972,6 +972,8 @@ flags of `corral review`:
     	the ledger directory the review entry is written to (default: <repo>/.corral/ledger, or $CORRAL_LEDGER). A copy of the entry also goes to this machine's own ledger (the state directory's ledger, see corral state paths; override CORRALAI_MACHINE_LEDGER); a machine ledger that resolves inside the checkout is skipped, with the reason printed
   -max-bytes int
     	how many bytes of the scope the reviewer is shown; files past the cap are listed by name and the review records them as unshown (default 200000)
+  -models POOL
+    	a comma-separated POOL of models you name; corral proposes which of them seats the reviewer and the verifier, ranked by the recorded review evidence (all languages: a review is not ranked by language), prints that plan, and nothing runs until you accept it on a terminal (with no terminal it prints the equivalent seat flags and exits). A pool is not a default: a seat you also name by its own flag is pinned (--verifier-model off pins no verifier), and a seat no member qualifies for is refused, never filled from outside the pool
   -no-ledger
     	print the review and write no entry, in either ledger
   -push string
@@ -988,8 +990,8 @@ flags of `corral review`:
     	where the reproduction scripts run: jail (default) — the offline sandbox certify grades in, over the tree at the commit with your dependency directories read-only; or `workspace` — a detached git worktree on the host, network on, model keys and your desktop session (DISPLAY, WAYLAND_DISPLAY, ...) removed from the environment, for where the caller is the isolation boundary (a CI runner, as with certify --repo --substrate workspace) (default "jail")
   -timeout duration
     	wall-clock bound on each reproduction script (default 1m0s)
-  -verifier-model string
-    	a VERIFIER seat, adversarial to the reviewer: a different model that tries to refute every finding, by the same rules — a REPRODUCED refutation (a sh script that exits 0 iff the refutation is demonstrated) that holds demotes the finding on the record; a CODE-READ refutation is carried as opinion; a search that finds nothing is never a refutation. Must not be the reviewer's model. Off unless named
+  -verifier-model off
+    	a VERIFIER seat, adversarial to the reviewer: a different model that tries to refute every finding, by the same rules — a REPRODUCED refutation (a sh script that exits 0 iff the refutation is demonstrated) that holds demotes the finding on the record; a CODE-READ refutation is carried as opinion; a search that finds nothing is never a refutation. Must not be the reviewer's model. Off unless named: off names no verifier, the same word --critic-model off uses on certify. With --models a verifier is proposed unless you pin it with this flag or pin `off`
 ```
 
 ## `corral review adjudicate` flags

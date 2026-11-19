@@ -42,7 +42,7 @@ func recordEvidence() rankEvidence {
 	for _, r := range runs {
 		obs = append(obs, writerObs("claude-sonnet-5", "go", r, 5, 5))
 	}
-	return rankEvidence{Obs: obs, Source: recordSource, Generations: generationRange{Min: "48", Max: "48", Scans: 6}}
+	return rankEvidence{Obs: obs, Source: recordSource, RecordSource: recordSource, Generations: generationRange{Min: "48", Max: "48", Scans: 6}}
 }
 
 // stubDoorPool replaces the doors' production seams (the machine ledger and

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -24,6 +25,9 @@ import (
 const samplePool = "anthropic/claude-sonnet-5-5,anthropic/claude-haiku-5-5,codex:gpt-6"
 
 const sampleSource = "the machine ledger /state/ledger (31 scan(s), 2 review(s); a run is one SCAN)"
+
+// sampleRecordSource is sampleSource as a record keeps it: no host path.
+const sampleRecordSource = "the machine ledger (31 scan(s), 2 review(s))"
 
 // poolEnv isolates the resolver from the machine: no registry, no gateway, no
 // daemon, and a credential check that passes, so no test reads a real key.
@@ -79,7 +83,7 @@ func sampleEvidence() rankEvidence {
 		obs = append(obs, writerObs("claude-sonnet-5-5", "python", r, 32, 32))
 	}
 	obs = append(obs, writerObs("claude-sonnet-5-5", "python", "r6", 33, 35))
-	return rankEvidence{Obs: obs, Source: sampleSource,
+	return rankEvidence{Obs: obs, Source: sampleSource, RecordSource: sampleRecordSource,
 		Generations: generationRange{Min: "40", Max: "43", Scans: 6}}
 }
 
@@ -175,7 +179,7 @@ func TestSeatFromPoolWritesChosenSeatsIntoTheFlags(t *testing.T) {
 	if fmt.Sprint(seating.SeatedBy) != fmt.Sprint(wantBy) {
 		t.Errorf("SeatedBy = %v, want %v", seating.SeatedBy, wantBy)
 	}
-	wantEvidence := sampleSource + "; language python"
+	wantEvidence := sampleRecordSource + "; language python"
 	if seating.SeatEvidence != wantEvidence {
 		t.Errorf("SeatEvidence = %q, want %q", seating.SeatEvidence, wantEvidence)
 	}
@@ -252,7 +256,7 @@ func TestSeatFromPoolRefusesBelowTheFloor(t *testing.T) {
 func TestSeatFromPoolNoEvidenceYet(t *testing.T) {
 	root := poolEnv(t)
 	src := "the machine ledger /state/ledger (no entries yet)"
-	load := &fakeLoad{ev: rankEvidence{Source: src}}
+	load := &fakeLoad{ev: rankEvidence{Source: src, RecordSource: "the machine ledger (no entries yet)"}}
 	confirm := &fakeConfirm{accepted: true, interactive: true}
 	vals := &certifyVals{}
 	_, exit, done, out, _ := runPool(t, root, "python", samplePool, vals, load, confirm)
@@ -337,7 +341,7 @@ func TestSeatFromPoolNoTerminal(t *testing.T) {
 	if exit != 0 || !done {
 		t.Fatalf("exit=%d done=%v, want 0 and done: no terminal means nothing runs", exit, done)
 	}
-	want := "to run this lineup: --derive-model anthropic/claude-sonnet-5-5 --mutant-model anthropic/claude-sonnet-5-5 --writer-model anthropic/claude-sonnet-5-5\n"
+	want := "to run this lineup: --derive-model anthropic/claude-sonnet-5-5 --mutant-model anthropic/claude-sonnet-5-5 --writer-model anthropic/claude-sonnet-5-5\n" + noTerminalLine + "\n"
 	if !strings.HasSuffix(out, want) {
 		t.Errorf("stdout must end with the explicit flags for the proposed (not pinned) seats:\n%s\nwant suffix %q", out, want)
 	}
@@ -376,7 +380,7 @@ func TestSeatFromPoolAlias(t *testing.T) {
 	vals := &certifyVals{derive: "anthropic/claude-haiku-5-5", critic: "off"}
 	confirm := &fakeConfirm{accepted: true, interactive: true}
 	seating, exit, done, out, errs := runPool(t, root, "python", "edge,anthropic/claude-haiku-5-5", vals,
-		&fakeLoad{ev: rankEvidence{Obs: obs, Source: sampleSource}}, confirm)
+		&fakeLoad{ev: rankEvidence{Obs: obs, Source: sampleSource, RecordSource: sampleRecordSource}}, confirm)
 	if done || exit != 0 {
 		t.Fatalf("done=%v exit=%d stderr=%q out=%s", done, exit, errs, out)
 	}
@@ -423,7 +427,7 @@ func TestSeatFromPoolLanguageLine(t *testing.T) {
 		ev   rankEvidence
 		want string
 	}{
-		{shadowpool.LangAny, sampleEvidence(), "; all languages (this scan has more than one)\n"},
+		{shadowpool.LangAny, sampleEvidence(), "; all languages (the walked sources are in more than one)\n"},
 		{"python", stripped, "; all languages (the evidence records none)\n"},
 	}
 	for _, c := range cases {
@@ -472,7 +476,8 @@ func TestSeatFromPoolSaysWhyThereIsNoSingleLanguage(t *testing.T) {
 		why  anyLangReason
 		want string
 	}{
-		{anyLangSeveral, "all languages (this scan has more than one)"},
+		{anyLangSeveral, "all languages (the walked sources are in more than one)"},
+		{anyLangNone, "all languages (no language was detected in this scan)"},
 		{anyLangReview, "all languages (a review is not ranked by language)"},
 		{anyLangUnknown, "all languages (no single language is known for this check)"},
 	} {
@@ -520,5 +525,232 @@ func TestTerminalConfirmNotATerminal(t *testing.T) {
 	accepted, interactive, err := terminalConfirm(r, &out)("plan")
 	if accepted || interactive || err != nil || out.Len() != 0 {
 		t.Errorf("a pipe is not a terminal: accepted=%v interactive=%v err=%v out=%q", accepted, interactive, err, out.String())
+	}
+}
+
+// Pins are resolved as the members are, so the hard rule and the critic's
+// provider preference compare the models that would run, not the spellings
+// the operator typed (B3).
+func TestSeatFromPoolResolvesPins(t *testing.T) {
+	t.Run("an agent-pinned critic that is the evidence-seated writer is refused", func(t *testing.T) {
+		root := poolEnv(t)
+		vals := &certifyVals{critic: "claude-code:claude-sonnet-5-5"}
+		confirm := &fakeConfirm{accepted: true, interactive: true}
+		_, exit, done, out, errs := runPool(t, root, "python", samplePool, vals, &fakeLoad{ev: sampleEvidence()}, confirm)
+		if exit != 2 || !done || confirm.calls != 0 {
+			t.Fatalf("exit=%d done=%v asked=%d, want the lineup refused before any question\n%s%s", exit, done, confirm.calls, out, errs)
+		}
+		if !strings.Contains(out, "refused: test-critic and test-writer are both claude-sonnet-5-5") || !strings.Contains(out, "--critic-model off") {
+			t.Errorf("the plan must name the broken pair and the flags that fix it:\n%s", out)
+		}
+	})
+	t.Run("a writer pinned by alias is not proposed again as the critic", func(t *testing.T) {
+		root := poolEnv(t)
+		t.Setenv(models.EnvInline, `{"edge": {"provider": "ollama", "model": "localmodel-a:1", "endpoint": "http://127.0.0.1:11434"},`+
+			`"edge2": {"provider": "ollama", "model": "localmodel-a:1", "endpoint": "http://127.0.0.1:11434"}}`)
+		vals := &certifyVals{derive: "edge", mutant: "edge", writer: "edge"}
+		confirm := &fakeConfirm{accepted: true, interactive: true}
+		seating, exit, done, out, errs := runPool(t, root, "python", "edge2,anthropic/claude-haiku-5-5", vals, &fakeLoad{ev: sampleEvidence()}, confirm)
+		if done || exit != 0 {
+			t.Fatalf("done=%v exit=%d\n%s%s", done, exit, out, errs)
+		}
+		if vals.critic != "anthropic/claude-haiku-5-5" || seating.SeatedBy[modelrank.SeatTestCritic] != "order" {
+			t.Errorf("critic = %q (%v), want the member that is not the writer's model\n%s", vals.critic, seating.SeatedBy, out)
+		}
+	})
+	t.Run("a pinned writer outside the pool still steers the critic to another provider", func(t *testing.T) {
+		root := poolEnv(t)
+		vals := &certifyVals{derive: "anthropic/claude-sonnet-5-5", mutant: "anthropic/claude-sonnet-5-5", writer: "anthropic/claude-sonnet-5-5"}
+		confirm := &fakeConfirm{accepted: true, interactive: true}
+		_, exit, done, out, errs := runPool(t, root, "python", "anthropic/claude-haiku-5-5,codex:gpt-6", vals, &fakeLoad{ev: sampleEvidence()}, confirm)
+		if done || exit != 0 {
+			t.Fatalf("done=%v exit=%d\n%s%s", done, exit, out, errs)
+		}
+		if vals.critic != "codex:gpt-6" {
+			t.Errorf("critic = %q, want codex:gpt-6 (a provider other than the pinned writer's)\n%s", vals.critic, out)
+		}
+	})
+	t.Run("a pin no source serves is refused before any plan", func(t *testing.T) {
+		root := poolEnv(t)
+		vals := &certifyVals{writer: "no-source-serves-this"}
+		load, confirm := &fakeLoad{ev: sampleEvidence()}, &fakeConfirm{accepted: true, interactive: true}
+		_, exit, done, out, errs := runPool(t, root, "python", samplePool, vals, load, confirm)
+		if exit != 2 || !done || out != "" || confirm.calls != 0 || len(load.asked) != 0 {
+			t.Fatalf("exit=%d done=%v out=%q asked=%d load=%v, want a refusal before evidence or plan", exit, done, out, confirm.calls, load.asked)
+		}
+		if !strings.Contains(errs, "--writer-model") || !strings.Contains(errs, "no-source-serves-this") {
+			t.Errorf("stderr must carry the resolver's own refusal: %q", errs)
+		}
+	})
+}
+
+// The recorded evidence line names the source without a host path, while the
+// printed plan keeps the directory the operator can open (B2). The record is
+// signed and may be published; a home directory and a user name are not
+// evidence.
+func TestSeatEvidenceRecordsNoHostPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := machineLedgerWith(t, [2]string{`{"test-writer":"claude-sonnet-5-5"}`, ""})
+	ledger := filepath.Join(home, "state", "ledger")
+	if err := os.MkdirAll(filepath.Dir(ledger), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(dir, ledger); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CORRALAI_MACHINE_LEDGER", ledger)
+
+	ev, err := machineLedgerRankEvidence()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(ev.Source, ledger) {
+		t.Errorf("the printed source must name the directory: %q", ev.Source)
+	}
+	if ev.RecordSource != "the machine ledger (1 scan(s), 0 review(s))" {
+		t.Errorf("RecordSource = %q", ev.RecordSource)
+	}
+
+	root := poolEnv(t)
+	vals := &certifyVals{derive: "anthropic/claude-haiku-5-5", mutant: "anthropic/claude-haiku-5-5", critic: "off"}
+	var out, errb bytes.Buffer
+	seating, exit, done := seatFromPool(context.Background(), "corral certify --repo", root, shadowpool.LangAny, anyLangSeveral,
+		poolFlags("anthropic/claude-sonnet-5-5"), vals.roles(),
+		poolDeps{load: defaultRankLoader, confirm: (&fakeConfirm{accepted: true, interactive: true}).fn, stdout: &out, stderr: &errb})
+	if done || exit != 0 || seating.SeatedBy[modelrank.SeatTestWriter] != "evidence" {
+		t.Fatalf("done=%v exit=%d seating=%+v\n%s%s", done, exit, seating, out.String(), errb.String())
+	}
+	if strings.Contains(seating.SeatEvidence, string(filepath.Separator)) || strings.Contains(seating.SeatEvidence, home) {
+		t.Errorf("SeatEvidence carries a host path: %q", seating.SeatEvidence)
+	}
+	if want := "the machine ledger (1 scan(s), 0 review(s)); all languages (the walked sources are in more than one)"; seating.SeatEvidence != want {
+		t.Errorf("SeatEvidence = %q, want %q", seating.SeatEvidence, want)
+	}
+	if !strings.Contains(out.String(), "evidence: the machine ledger "+ledger) {
+		t.Errorf("the printed plan must still name the directory:\n%s", out.String())
+	}
+}
+
+// A loader that gives no path-free name for the record is refused before
+// anything is proposed: a recorded line built from the printed one would
+// carry the path, and an empty one would record nothing about the evidence.
+func TestSeatFromPoolRefusesEvidenceWithNoRecordName(t *testing.T) {
+	root := poolEnv(t)
+	ev := sampleEvidence()
+	ev.RecordSource = ""
+	confirm := &fakeConfirm{accepted: true, interactive: true}
+	_, exit, done, out, errs := runPool(t, root, "python", samplePool, &certifyVals{}, &fakeLoad{ev: ev}, confirm)
+	if exit != 2 || !done || out != "" || confirm.calls != 0 {
+		t.Fatalf("exit=%d done=%v out=%q asked=%d", exit, done, out, confirm.calls)
+	}
+	if !strings.Contains(errs, "record") {
+		t.Errorf("stderr = %q", errs)
+	}
+}
+
+// With no observations at all, one plain line under the plan says why every
+// measured seat is refused (C5).
+func TestSeatFromPoolSaysWhenThereIsNoEvidenceAtAll(t *testing.T) {
+	root := poolEnv(t)
+	_, _, _, out, _ := runPool(t, root, "python", samplePool, &certifyVals{},
+		&fakeLoad{ev: rankEvidence{Source: "the machine ledger /state/ledger (no entries yet)", RecordSource: "the machine ledger (no entries yet)"}},
+		&fakeConfirm{accepted: true, interactive: true})
+	const line = "no recorded evidence yet: every measured seat must be pinned until this machine has runs on its ledger\n"
+	if !strings.Contains(out, line) {
+		t.Errorf("plan lacks the no-evidence line:\n%s", out)
+	}
+	_, _, _, out, _ = runPool(t, root, "python", samplePool, &certifyVals{}, &fakeLoad{ev: sampleEvidence()},
+		&fakeConfirm{accepted: true, interactive: true})
+	if strings.Contains(out, "no recorded evidence yet") {
+		t.Errorf("the line is printed with evidence present:\n%s", out)
+	}
+}
+
+// With no terminal the run audits nothing and exits 0; its last line says so
+// in words a CI log reader cannot take for a pass (B7).
+func TestSeatFromPoolNoTerminalSaysNothingWasAudited(t *testing.T) {
+	root := poolEnv(t)
+	_, exit, done, out, _ := runPool(t, root, "python", samplePool, &certifyVals{critic: "off"}, &fakeLoad{ev: sampleEvidence()}, &fakeConfirm{interactive: false})
+	if exit != 0 || !done {
+		t.Fatalf("exit=%d done=%v", exit, done)
+	}
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	if last := lines[len(lines)-1]; last != noTerminalLine {
+		t.Errorf("last line = %q, want %q", last, noTerminalLine)
+	}
+}
+
+// A scan in which no language was detected says that, not "more than one"
+// (B5, A5).
+func TestSeatFromPoolNoLanguageDetected(t *testing.T) {
+	root := poolEnv(t)
+	var out, errb bytes.Buffer
+	_, exit, done := seatFromPool(context.Background(), "corral certify --repo", root, shadowpool.LangAny, anyLangNone, poolFlags(samplePool), (&certifyVals{}).roles(),
+		poolDeps{load: (&fakeLoad{ev: sampleEvidence()}).fn, confirm: (&fakeConfirm{accepted: true, interactive: true}).fn, stdout: &out, stderr: &errb})
+	if exit != 0 || done || !strings.Contains(out.String(), "; all languages (no language was detected in this scan)\n") {
+		t.Errorf("exit=%d done=%v\n%s%s", exit, done, out.String(), errb.String())
+	}
+}
+
+// A model a placement alone serves cannot be a member, and the refusal says
+// how to seat it instead (B11).
+func TestSeatFromPoolNamesLocalEndpointForAnUnservedMember(t *testing.T) {
+	root := poolEnv(t)
+	_, exit, _, _, errs := runPool(t, root, "python", "anthropic/claude-sonnet-5-5,gpu-only-model:1", &certifyVals{}, &fakeLoad{ev: sampleEvidence()}, &fakeConfirm{})
+	if exit != 2 || !strings.Contains(errs, "--local-endpoint") || !strings.Contains(errs, "gpu-only-model:1") {
+		t.Errorf("exit=%d stderr=%q", exit, errs)
+	}
+}
+
+// The prompt is written to the plan's own stream, so both ends must be a
+// terminal: with stdout redirected, a "y" would accept a lineup nobody saw
+// (B9).
+func TestTerminalConfirmNeedsBothEndsToBeTerminals(t *testing.T) {
+	in, inW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer in.Close()
+	defer inW.Close()
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer outR.Close()
+	defer outW.Close()
+	orig := isTerminal
+	t.Cleanup(func() { isTerminal = orig })
+
+	isTerminal = func(fd int) bool { return fd == int(in.Fd()) } // #nosec G115 -- test fd
+	var buf bytes.Buffer
+	if acc, inter, err := terminalConfirm(in, &buf)("plan"); acc || inter || err != nil || buf.Len() != 0 {
+		t.Errorf("stdout a buffer: accepted=%v interactive=%v err=%v out=%q", acc, inter, err, buf.String())
+	}
+	if acc, inter, err := terminalConfirm(in, outW)("plan"); acc || inter || err != nil {
+		t.Errorf("stdout a pipe: accepted=%v interactive=%v err=%v", acc, inter, err)
+	}
+
+	isTerminal = func(int) bool { return true }
+	if _, err := inW.WriteString("y\n"); err != nil {
+		t.Fatal(err)
+	}
+	if acc, inter, err := terminalConfirm(in, outW)("plan"); !acc || !inter || err != nil {
+		t.Errorf("both terminals: accepted=%v interactive=%v err=%v", acc, inter, err)
+	}
+}
+
+// An alias and the concrete name it declares are one model: naming both
+// would make the ranking's row ambiguous between two members (C4).
+func TestSeatFromPoolRefusesAnAliasBesideItsModel(t *testing.T) {
+	root := poolEnv(t)
+	t.Setenv(models.EnvInline, `{"sonnet": {"provider": "anthropic", "model": "claude-sonnet-5-5"}}`)
+	load, confirm := &fakeLoad{ev: sampleEvidence()}, &fakeConfirm{accepted: true, interactive: true}
+	_, exit, done, out, errs := runPool(t, root, "python", "sonnet,anthropic/claude-sonnet-5-5", &certifyVals{}, load, confirm)
+	if exit != 2 || !done || out != "" || confirm.calls != 0 || len(load.asked) != 0 {
+		t.Fatalf("exit=%d done=%v out=%q asked=%d load=%v", exit, done, out, confirm.calls, load.asked)
+	}
+	if !strings.Contains(errs, `members "sonnet" and "anthropic/claude-sonnet-5-5" are both the model "claude-sonnet-5-5"`) {
+		t.Errorf("stderr = %q", errs)
 	}
 }

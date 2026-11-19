@@ -88,7 +88,9 @@ type Review struct {
 	// "verifier" like SeatProviders: operator, evidence or order. Absent
 	// means named by flag.
 	SeatedBy map[string]string `json:"seated_by,omitempty"`
-	// SeatEvidence names what the ranking read to seat the "evidence" seats.
+	// SeatEvidence names what the ranking read to seat the "evidence" seats,
+	// with no host path. Absent when no seat on the entry was seated by
+	// evidence.
 	SeatEvidence string `json:"seat_evidence,omitempty"`
 	// ReviewerModelResolved / VerifierModelResolved report whether the model
 	// field beside them names an actual MODEL, or merely the tool that ran

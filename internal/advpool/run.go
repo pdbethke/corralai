@@ -173,8 +173,10 @@ type RunSpec struct {
 	// Carried to Verdict.SeatedBy by signedSeats on BOTH construction paths.
 	SeatedBy map[string]string
 	// SeatEvidence names what the ranking read to seat the "evidence"
-	// seats, for example "the machine ledger (31 scans)". "" when nothing
-	// was read. Carried to Verdict.SeatEvidence the same way.
+	// seats, with no host path, for example "the machine ledger (31
+	// scan(s), 2 review(s)); language go". "" when nothing was read.
+	// Carried to Verdict.SeatEvidence the same way, and dropped there when
+	// the roster keeps no evidence seat.
 	SeatEvidence    string
 	ShadowSelection []shadowpool.Selection
 

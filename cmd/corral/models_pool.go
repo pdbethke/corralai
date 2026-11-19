@@ -12,11 +12,13 @@ import (
 	"os"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"golang.org/x/term"
 
 	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/autoseat"
+	"github.com/pdbethke/corralai/internal/hoststat"
 	"github.com/pdbethke/corralai/internal/modelrank"
 	"github.com/pdbethke/corralai/internal/seatrecord"
 	"github.com/pdbethke/corralai/internal/shadowpool"
@@ -47,8 +49,20 @@ func registerModelsFlags(fs *flag.FlagSet, help string) *modelsFlags {
 
 // poolSeating is what a door records.
 type poolSeating struct {
-	SeatedBy     map[string]string // role -> operator|evidence|order; nil when --models was not given
-	SeatEvidence string            // what the ranking read, as the plan's evidence line says it; "" when no seat was seated by evidence
+	SeatedBy map[string]string // role -> operator|evidence|order; nil when --models was not given
+	// SeatEvidence is what the ranking read: the source named without any
+	// host path (rankEvidence.RecordSource), then the language scope exactly
+	// as the plan printed it. "" when no seat was seated by evidence.
+	SeatEvidence string
+}
+
+// seatEvidenceFor is the evidence line a record keeps beside seatedBy: the
+// line only when a seat that record names was seated by evidence. A door
+// narrows SeatedBy to the seats on its entry (a verifier that did not run,
+// a roster without the deriver), and an evidence line left beside a record
+// with no evidence seat would explain a choice the record does not hold.
+func seatEvidenceFor(seatedBy map[string]string, evidence string) string {
+	return autoseat.EvidenceFor(seatedBy, evidence)
 }
 
 // proposed reports whether --models chose any seat (by evidence or order),
@@ -80,6 +94,12 @@ type poolDeps struct {
 	confirm func(plan string) (accepted bool, interactive bool, err error)
 	stdout  io.Writer
 	stderr  io.Writer
+	// placed is the door's --local-endpoint placements (role -> daemon
+	// URL, as parseLocalEndpoints returns them), or nil where the door
+	// takes none. A pin is resolved with them, exactly as the door's own
+	// resolution will resolve it, so a pin served only by its placement
+	// resolves here too.
+	placed map[string]string
 	// noCredentialCheck skips each member's credential check, and is set
 	// by certify --repo --dry-run alone: a dry run demands no credential
 	// for any seat (validateShadowPools is called there with
@@ -108,14 +128,19 @@ func acceptUnasked(string) (accepted bool, interactive bool, err error) { return
 
 // anyLangReason says why a door has no single language to rank by. It is
 // spelled out per door and has no default, because the evidence line is the
-// operator's record of what the ranking read, and "this scan has more than
-// one" printed for a review or a doctor run without --code would be a claim
-// about the scan that nobody made.
+// operator's record of what the ranking read, and "the walked sources are in
+// more than one" printed for a review, a doctor run without --code or a scan
+// that detected no language would be a claim about the scan that nobody made.
 type anyLangReason string
 
 const (
-	// anyLangSeveral: a scan that audits files in more than one language.
-	anyLangSeveral anyLangReason = "this scan has more than one"
+	// anyLangSeveral: a scan whose walked sources are in more than one
+	// language. It speaks of the walk, the superset the evidence pass
+	// instruments, because --top or --diff-base may audit fewer files than
+	// the walk found and so fewer languages.
+	anyLangSeveral anyLangReason = "the walked sources are in more than one"
+	// anyLangNone: a scan whose walk detected no language at all.
+	anyLangNone anyLangReason = "no language was detected in this scan"
 	// anyLangReview: a review's seats read prose about code, and the record
 	// does not rank a reviewer by the language of what it reviewed.
 	anyLangReview anyLangReason = "a review is not ranked by language"
@@ -157,7 +182,8 @@ func seatFromPool(ctx context.Context, cmdName, repoRoot, lang string, anyWhy an
 	if err != nil {
 		return refuse("%v", err)
 	}
-	pool, err := resolveModelsPool(ctx, cmdName, repoRoot, typed, !deps.noCredentialCheck)
+	listing := &ollamaListing{}
+	pool, err := resolveModelsPool(ctx, cmdName, repoRoot, typed, !deps.noCredentialCheck, listing)
 	if err != nil {
 		return refuse("%v", err)
 	}
@@ -181,16 +207,31 @@ func seatFromPool(ctx context.Context, cmdName, repoRoot, lang string, anyWhy an
 		return poolSeating{SeatedBy: by}, 0, false
 	}
 
+	// The pins are resolved as the members were, before any evidence is
+	// read: the hard rule and the critic's provider preference compare the
+	// models that would run, and a pin no source serves is refused here
+	// with the resolver's own words rather than after the operator accepts.
+	resolvedPins, err := resolvePins(ctx, cmdName, repoRoot, roles, pins, deps.placed, listing)
+	if err != nil {
+		return refuse("%v", err)
+	}
+
 	ev, err := deps.load(rankSource{Kind: rankSourceLedger})
 	if err != nil {
 		return refuse("cannot read the evidence: %v — nothing was proposed", err)
 	}
-	report, evidence := rankPool(ev, lang, anyWhy, pool)
+	if strings.TrimSpace(ev.RecordSource) == "" {
+		// The recorded line is built from this name, never by cutting the
+		// path out of the printed one; a loader that gives none has said
+		// nothing the record could keep.
+		return refuse("the evidence source gave no name to record without its path, so how a seat was chosen could not be recorded — nothing was proposed")
+	}
+	report, scope := rankPool(ev, lang, anyWhy, pool)
 	plan := autoseat.Propose(autoseat.Input{
-		Roles: roleNames, Pool: pool, Pins: pins, Report: report, Floor: modelrank.DefaultMinRuns,
+		Roles: roleNames, Pool: pool, Pins: resolvedPins, Report: report, Floor: modelrank.DefaultMinRuns,
 	})
 
-	text := renderPoolPlan(poolText, plan, evidence, ev.Generations.Line())
+	text := renderPoolPlan(poolText, plan, ev.Source+"; "+scope, ev.Generations.Line(), len(ev.Obs) == 0)
 	fmt.Fprint(deps.stdout, text)
 	if plan.Refused {
 		return refuse("the proposed lineup is refused (the plan above names each unfilled seat and what would fill it)")
@@ -211,6 +252,7 @@ func seatFromPool(ctx context.Context, cmdName, repoRoot, lang string, anyWhy an
 			}
 		}
 		fmt.Fprintln(deps.stdout, b.String())
+		fmt.Fprintln(deps.stdout, noTerminalLine)
 		return poolSeating{}, 0, true
 	case !accepted:
 		fmt.Fprintln(deps.stdout, "not run; nothing was spent")
@@ -227,11 +269,54 @@ func seatFromPool(ctx context.Context, cmdName, repoRoot, lang string, anyWhy an
 		// runs next and rewrites an alias or vendor/model exactly as it
 		// would have had the operator typed this flag.
 		*roles[i].val = s.Given
-		if s.By == autoseat.ByEvidence {
-			seating.SeatEvidence = evidence
-		}
 	}
+	// The record keeps the source without its host path: the entry is
+	// signed and may be published, and a home directory is not evidence.
+	seating.SeatEvidence = seatEvidenceFor(seating.SeatedBy, ev.RecordSource+"; "+scope)
 	return seating, 0, false
+}
+
+// restartRunClock stops the sampler a door started before its --models
+// question and starts the clock and a new sampler at the operator's answer.
+// A door calls it only when a plan was accepted (poolSeating.proposed), so a
+// run without --models, or with every seat pinned, is timed exactly as it
+// always was.
+func restartRunClock(old *hoststat.Sampler) (time.Time, *hoststat.Sampler) {
+	old.Stop()
+	return time.Now(), hoststat.Start(hostSampleInterval)
+}
+
+// noTerminalLine is the last line a --models run with no terminal prints. It
+// exits 0, as a decline does (spec 5.3), so a pipeline that only reads the
+// exit code goes green; this line is what a person reading the log sees.
+const noTerminalLine = "nothing was audited: --models without a terminal only prints the plan and exits 0; pass the seat flags above to run this lineup"
+
+// resolvePins resolves every pin but "off" with the resolver the members
+// use, sharing their daemon listing, and with the door's --local-endpoint
+// placements. Each pin resolves a copy, so the door's flag keeps what the
+// operator typed and the door's own resolution, which runs after the
+// operator accepts, rewrites it exactly as it always has.
+func resolvePins(ctx context.Context, cmdName, repoRoot string, roles []poolRole, pins map[string]string, placed map[string]string, listing *ollamaListing) (map[string]autoseat.Pin, error) {
+	out := make(map[string]autoseat.Pin, len(pins))
+	for _, r := range roles {
+		given, ok := pins[r.role]
+		if !ok {
+			continue
+		}
+		if strings.EqualFold(given, "off") {
+			out[r.role] = autoseat.Pin{Given: given}
+			continue
+		}
+		flagName := autoseat.PinFlag[r.role]
+		concrete := given
+		set, err := resolveSeatsListed(ctx, cmdName, repoRoot, []seatFlag{{flag: flagName, role: r.role, val: &concrete}}, placed, io.Discard, listing)
+		if err != nil {
+			return nil, err
+		}
+		rs := set[flagName]
+		out[r.role] = autoseat.Pin{Given: given, Recorded: rs.Spec, Provider: rs.Provider}
+	}
+	return out, nil
 }
 
 // parseModelsPool splits --models. shadowpool.ParsePool is not reused: it
@@ -265,14 +350,19 @@ func parseModelsPool(text string) ([]string, error) {
 // checkCredentials is false (poolDeps.noCredentialCheck). The
 // resolver rewrites the value it is handed, so it resolves a copy and the
 // member keeps what the operator typed as Given.
-func resolveModelsPool(ctx context.Context, cmdName, repoRoot string, typed []string, checkCredentials bool) ([]autoseat.Member, error) {
-	listing := &ollamaListing{}
+func resolveModelsPool(ctx context.Context, cmdName, repoRoot string, typed []string, checkCredentials bool, listing *ollamaListing) ([]autoseat.Member, error) {
 	byRecorded := map[string]string{}
 	var out []autoseat.Member
 	for _, given := range typed {
 		concrete := given
 		set, err := resolveSeatsListed(ctx, cmdName, repoRoot, []seatFlag{{flag: "models", val: &concrete}}, nil, io.Discard, listing)
 		if err != nil {
+			var ns errNoSource
+			if errors.As(err, &ns) {
+				// Members resolve with no placements: a placement belongs
+				// to one seat, and a member is not yet any seat's.
+				return nil, fmt.Errorf("member %q: %v — a model served only through --local-endpoint cannot be a --models member; name it with its own seat flag and place it with --local-endpoint", given, err)
+			}
 			return nil, fmt.Errorf("member %q: %v", given, err)
 		}
 		rs := set["models"]
@@ -305,7 +395,9 @@ func resolveModelsPool(ctx context.Context, cmdName, repoRoot string, typed []st
 }
 
 // rankPool ranks the evidence for this scan and returns the report with the
-// plan's evidence line (the source verbatim, then the language it covers).
+// language scope the evidence line ends with. The caller puts a source in
+// front of it: the printed source for the plan, the path-free one for the
+// record, so both say the same scope in the same words.
 //
 // A scan of several languages ranks across all of them: the language is
 // cleared on a copy of the observations, so each seat is one group rather
@@ -341,14 +433,19 @@ func rankPool(ev rankEvidence, lang string, anyWhy anyLangReason, pool []autosea
 		opt.Lang = lang
 		scope = "language " + lang
 	}
-	return modelrank.Rank(obs, opt), ev.Source + "; " + scope
+	return modelrank.Rank(obs, opt), scope
 }
 
 // renderPoolPlan is the plan as spec 5.3 draws it: one row per role (role,
 // model, how it was chosen, why), then what the ranking read and the grading
 // rules it spans. Columns are aligned by tabwriter, so a long model name
 // widens its column instead of breaking the table.
-func renderPoolPlan(poolText string, plan autoseat.Plan, evidence, generations string) string {
+//
+// noEvidence adds one plain line under the evidence when the ranking read no
+// observation at all: the source line alone ("no entries yet") does not say
+// what that means for the plan, which is that every measured seat is refused
+// until it is pinned.
+func renderPoolPlan(poolText string, plan autoseat.Plan, evidence, generations string, noEvidence bool) string {
 	var b strings.Builder
 	b.WriteString("seats (from --models " + poolText + "):\n")
 	tw := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
@@ -367,6 +464,9 @@ func renderPoolPlan(poolText string, plan autoseat.Plan, evidence, generations s
 	if generations != "" {
 		b.WriteString("grading rules: " + generations + "\n")
 	}
+	if noEvidence {
+		b.WriteString("no recorded evidence yet: every measured seat must be pinned until this machine has runs on its ledger\n")
+	}
 	return b.String()
 }
 
@@ -383,13 +483,20 @@ func seatDisplay(s autoseat.Seat) string {
 	return name
 }
 
-// terminalConfirm asks on in, when in is a terminal, after the caller has
-// printed the plan (so the plan argument is not printed again). Anything but
-// y or yes declines. When in is not a terminal it asks nothing and reports
-// interactive=false: a pipe or a CI log cannot accept a lineup.
+// isTerminal is term.IsTerminal, a variable so a test can say which ends of
+// the conversation are terminals without allocating a pty.
+var isTerminal = term.IsTerminal
+
+// terminalConfirm asks on in, when both in and out are terminals, after the
+// caller has printed the plan to out (so the plan argument is not printed
+// again). Anything but y or yes declines. Otherwise it asks nothing and
+// reports interactive=false: a pipe or a CI log cannot accept a lineup, and
+// neither can a terminal whose plan and prompt went to a redirected stdout,
+// because a "y" typed there would accept a lineup nobody saw.
 func terminalConfirm(in *os.File, out io.Writer) func(plan string) (bool, bool, error) {
 	return func(string) (bool, bool, error) {
-		if !term.IsTerminal(int(in.Fd())) { // #nosec G115 -- a file descriptor fits in an int
+		outFile, ok := out.(*os.File)
+		if !ok || !isTerminal(int(in.Fd())) || !isTerminal(int(outFile.Fd())) { // #nosec G115 -- a file descriptor fits in an int
 			return false, false, nil
 		}
 		fmt.Fprint(out, "run with these seats? [y/N] ")

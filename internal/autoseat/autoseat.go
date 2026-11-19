@@ -34,6 +34,20 @@ const (
 	ByOrder    = "order"
 )
 
+// EvidenceFor is the evidence line a record keeps beside seatedBy (role ->
+// how it was chosen): the line when any seat seatedBy names was seated by
+// evidence, and "" otherwise. A record narrows SeatedBy to the seats it
+// holds, and the line explains only an evidence seat, so a record whose
+// evidence seats were all narrowed away keeps no line.
+func EvidenceFor(seatedBy map[string]string, evidence string) string {
+	for _, by := range seatedBy {
+		if by == ByEvidence {
+			return evidence
+		}
+	}
+	return ""
+}
+
 // PinFlag maps a role to the flag that pins it. It is the one table the
 // "pin --writer-model" text is built from, so a refusal names a flag that
 // exists.
@@ -55,12 +69,23 @@ type Member struct {
 	Rankable bool // false for a bare agent seat with no model
 }
 
+// Pin is a seat the operator named with its own flag, resolved by the same
+// resolver as the pool's members. The hard rule compares the models that
+// would run: an alias, a vendor/model spelling and an agent pinned to a model
+// can all name one model, and comparing the typed text would let a model
+// grade its own work under a second spelling.
+type Pin struct {
+	Given    string // exactly what the operator typed; "off" disables the seat
+	Recorded string // the resolved name (ResolvedSeat.Spec); "" only for "off"
+	Provider string // the resolved provider; "" when the resolver names none
+}
+
 // Input is everything a proposal depends on.
 type Input struct {
-	Roles  []string          // in the order the verb meets them
-	Pool   []Member          // in the order the operator named it
-	Pins   map[string]string // role -> the operator's flag value ("off" included)
-	Report modelrank.Report  // already filtered to the pool and the language
+	Roles  []string         // in the order the verb meets them
+	Pool   []Member         // in the order the operator named it
+	Pins   map[string]Pin   // role -> the operator's resolved flag value ("off" included)
+	Report modelrank.Report // already filtered to the pool and the language
 	Floor  int
 }
 
@@ -68,7 +93,8 @@ type Input struct {
 type Seat struct {
 	Role     string
 	Given    string // "" when unfilled
-	Recorded string
+	Recorded string // "" when unfilled or pinned "off"
+	Provider string
 	By       string
 	Reason   string
 	Unfilled string // the fix, when the role could not be filled
@@ -131,59 +157,95 @@ func Propose(in Input) Plan {
 			plan.Refused = true
 		}
 	}
-	for role, other := range counterpart {
-		a, b := done[role], done[other]
-		if a.Given == "" || b.Given == "" || strings.EqualFold(a.Given, off) {
+	// The hard rule, on the whole lineup with pins included, comparing the
+	// resolved names. Walked in Roles order, never over the map, so the same
+	// input always gives the same text, and every broken pair is reported:
+	// an operator who fixes one should not discover the next on a rerun.
+	var why []string
+	for _, role := range in.Roles {
+		other, ok := counterpart[role]
+		if !ok {
 			continue
 		}
-		if agentbackend.SameSeat(a.Given, b.Given) {
-			plan.Refused = true
-			plan.Why = fmt.Sprintf("%s and %s are both %q; a model must not grade its own work",
-				role, other, a.Given)
+		a, b := done[role], done[other]
+		// An unfilled seat or one pinned off has no Recorded name, and there
+		// is nothing for it to be correlated with.
+		if a.Recorded == "" || b.Recorded == "" {
+			continue
 		}
+		if agentbackend.SameSeat(a.Recorded, b.Recorded) {
+			why = append(why, fmt.Sprintf(
+				"%s and %s are both %s; a model must not grade its own work: pin --%s or --%s to a different model, or pass --%s off",
+				role, other, agentbackend.SeatModelOf(a.Recorded), PinFlag[role], PinFlag[other], PinFlag[role]))
+		}
+	}
+	if len(why) > 0 {
+		plan.Refused = true
+		plan.Why = strings.Join(why, "; and ")
 	}
 	return plan
 }
 
 func (in Input) seat(role string, done map[string]Seat) Seat {
-	if v, ok := in.Pins[role]; ok {
-		return Seat{Role: role, Given: v, Recorded: in.recordedFor(v), By: ByOperator,
-			Reason: fmt.Sprintf("pinned by --%s", PinFlag[role])}
+	if p, ok := in.Pins[role]; ok {
+		reason := fmt.Sprintf("pinned by --%s", PinFlag[role])
+		if strings.EqualFold(strings.TrimSpace(p.Given), off) {
+			return Seat{Role: role, Given: p.Given, By: ByOperator, Reason: reason}
+		}
+		if strings.TrimSpace(p.Recorded) == "" {
+			// A pin the caller did not resolve cannot be checked against
+			// the hard rule, and treating its typed text as its model is
+			// the comparison this field exists to replace.
+			return Seat{Role: role, Unfilled: fmt.Sprintf(
+				"--%s %q reached the proposer unresolved, so the lineup cannot be checked; this is a corral defect",
+				PinFlag[role], p.Given)}
+		}
+		return Seat{Role: role, Given: p.Given, Recorded: p.Recorded, Provider: p.Provider, By: ByOperator, Reason: reason}
 	}
-	avoid := in.avoid(role, done)
-	if row, ok := in.best(role, avoid); ok {
+	other := in.counterSeat(role, done)
+	if row, ok := in.best(role, other.Recorded); ok {
 		mem, _ := in.member(row.Model)
-		return Seat{Role: role, Given: mem.Given, Recorded: mem.Recorded, By: ByEvidence, Reason: row.Evidence}
+		return Seat{Role: role, Given: mem.Given, Recorded: mem.Recorded, Provider: mem.Provider, By: ByEvidence, Reason: row.Evidence}
 	}
 	switch {
 	case measured[role]:
+		if other.Recorded != "" {
+			if row, ok := in.best(role, ""); ok {
+				// Every member with enough evidence is the counterpart's
+				// model, so "no model has the evidence" would be false.
+				return Seat{Role: role, Unfilled: fmt.Sprintf(
+					"the only model in --models with %d+ %s as %s is %s, already the %s; name another model in --models, or pin --%s",
+					in.Floor, in.unit(role), role, row.Model, counterpart[role], PinFlag[role])}
+			}
+		}
 		return Seat{Role: role, Unfilled: fmt.Sprintf(
 			"no model in --models has %d+ %s as %s; pin --%s",
 			in.Floor, in.unit(role), role, PinFlag[role])}
 	case role == modelrank.SeatGoalDeriver, role == modelrank.SeatTestCritic:
-		return in.byOrder(role, avoid)
+		return in.byOrder(role, other)
 	}
 	return Seat{Role: role, Unfilled: fmt.Sprintf("no rule seats %s; pin --%s", role, PinFlag[role])}
 }
 
 // byOrder seats the first pool member that is not the counterpart, preferring
 // a different provider: two models from one vendor satisfy the letter of
-// decorrelation and not its point.
-func (in Input) byOrder(role, avoid string) Seat {
+// decorrelation and not its point. The counterpart's provider is known for a
+// pin as well as a member, because pins are resolved before they get here.
+func (in Input) byOrder(role string, other Seat) Seat {
 	const reason = "no measurement for this seat: taken from the order you named"
 	var same *Member
 	for i, mem := range in.Pool {
-		if avoid != "" && agentbackend.SameSeat(mem.Recorded, avoid) {
+		if other.Recorded != "" && agentbackend.SameSeat(mem.Recorded, other.Recorded) {
 			continue
 		}
-		if avoid != "" && same == nil && in.providerOf(avoid) != "" && mem.Provider == in.providerOf(avoid) {
+		if other.Provider != "" && same == nil && strings.EqualFold(mem.Provider, other.Provider) {
 			same = &in.Pool[i]
 			continue
 		}
-		return Seat{Role: role, Given: mem.Given, Recorded: mem.Recorded, By: ByOrder, Reason: reason}
+		return Seat{Role: role, Given: mem.Given, Recorded: mem.Recorded, Provider: mem.Provider, By: ByOrder, Reason: reason}
 	}
 	if same != nil {
-		return Seat{Role: role, Given: same.Given, Recorded: same.Recorded, By: ByOrder,
+		return Seat{Role: role, Given: same.Given, Recorded: same.Recorded, Provider: same.Provider, By: ByOrder,
 			Reason: reason + " (same provider as " + counterpart[role] + "; no other member was available)"}
 	}
 	fix := fmt.Sprintf("name a second model in --models, or pin --%s", PinFlag[role])
@@ -197,6 +259,11 @@ func (in Input) byOrder(role, avoid string) Seat {
 // best walks the group's rows in the order modelrank returned them and takes
 // the first sufficient, rankable pool member that is not the avoided model.
 // Members whose metric ties the best are resolved by pool position.
+//
+// A row must clear this proposal's own floor as well as be marked
+// sufficient: Sufficient is modelrank's verdict at whatever floor that
+// ranking ran with, and the proposer is the one place that enforces the
+// floor it was given rather than trusting a caller to have ranked at it.
 func (in Input) best(role, avoid string) (modelrank.Row, bool) {
 	var cands []modelrank.Row
 	for _, g := range in.Report.Groups {
@@ -205,7 +272,7 @@ func (in Input) best(role, avoid string) (modelrank.Row, bool) {
 		}
 		for _, r := range g.Rows {
 			mem, ok := in.member(r.Model)
-			if !ok || !mem.Rankable || !r.Sufficient || r.Metric == nil {
+			if !ok || !mem.Rankable || !r.Sufficient || r.N < in.Floor || r.Metric == nil {
 				continue
 			}
 			if avoid != "" && agentbackend.SameSeat(mem.Recorded, avoid) {
@@ -227,21 +294,16 @@ func (in Input) best(role, avoid string) (modelrank.Row, bool) {
 	return win, true
 }
 
-// avoid is the recorded name the role must differ from, taken from the
-// counterpart's seat (a pin included), or "".
-func (in Input) avoid(role string, done map[string]Seat) string {
+// counterSeat is the seat the role must differ from (a pin included), or
+// the zero Seat when the role has no counterpart, or the counterpart is
+// unfilled or pinned off. Its Recorded is what the role avoids and its
+// Provider what the order rule prefers to avoid.
+func (in Input) counterSeat(role string, done map[string]Seat) Seat {
 	other, ok := counterpart[role]
 	if !ok {
-		return ""
+		return Seat{}
 	}
-	s := done[other]
-	if s.Given == "" || strings.EqualFold(s.Given, off) {
-		return ""
-	}
-	if s.Recorded != "" {
-		return s.Recorded
-	}
-	return s.Given
+	return done[other]
 }
 
 func (in Input) member(recorded string) (Member, bool) {
@@ -260,24 +322,6 @@ func (in Input) position(recorded string) int {
 		}
 	}
 	return len(in.Pool)
-}
-
-// recordedFor resolves a pin to the name the record knows it by when it is a
-// pool member; a pin outside the pool is recorded as typed.
-func (in Input) recordedFor(pin string) string {
-	for _, m := range in.Pool {
-		if agentbackend.SameSeat(m.Given, pin) || agentbackend.SameSeat(m.Recorded, pin) {
-			return m.Recorded
-		}
-	}
-	return pin
-}
-
-func (in Input) providerOf(recorded string) string {
-	if m, ok := in.member(recorded); ok {
-		return m.Provider
-	}
-	return ""
 }
 
 // unit names the seat's own evidence unit for the refusal text, read from a

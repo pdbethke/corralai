@@ -15,6 +15,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/agentbackend"
+	"github.com/pdbethke/corralai/internal/autoseat"
 	"github.com/pdbethke/corralai/internal/clip"
 	golang "github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/matrix"
@@ -1005,7 +1006,8 @@ type Verdict struct {
 	// field existed reads the same. Set by signedSeats on both paths.
 	SeatedBy map[string]string `json:"seated_by,omitempty"`
 	// SeatEvidence is what the ranking behind the "evidence" seats read
-	// (RunSpec.SeatEvidence). "" when no seat was seated by evidence.
+	// (RunSpec.SeatEvidence). "" when no seat SeatedBy keeps was seated by
+	// evidence.
 	SeatEvidence string `json:"seat_evidence,omitempty"`
 	// MutantSources is where each mutant of the exam came from (graded, or
 	// refused by the compile gate, or unmeasured — so waste can be counted
@@ -3957,12 +3959,15 @@ func (r *runState) signedSeats(assign RoleAssignment) signedRoster {
 			sels = append(sels, sel)
 		}
 	}
+	seatedBy := SeatedOnly(r.rs.SeatedBy, roster)
 	return signedRoster{
 		roster: roster, selection: sels,
 		tools:     SeatedOnly(r.rs.SeatTools, roster),
 		providers: SeatedOnly(r.rs.SeatProviders, roster),
-		seatedBy:  SeatedOnly(r.rs.SeatedBy, roster),
-		evidence:  r.rs.SeatEvidence,
+		seatedBy:  seatedBy,
+		// The evidence line explains an evidence seat, so it goes with the
+		// last one the narrowing keeps, as the selection goes with its seat.
+		evidence: autoseat.EvidenceFor(seatedBy, r.rs.SeatEvidence),
 	}
 }
 

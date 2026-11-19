@@ -33,6 +33,12 @@ import (
 type rankEvidence struct {
 	Obs    []modelrank.Observation
 	Source string
+	// RecordSource names the same source with no host path, for a record:
+	// --models writes it into signed entries that may be published, where
+	// Source's directory would put a home directory and a user name. Set by
+	// the machine-ledger loader, the one source --models reads; "" from the
+	// others, which only `corral models rank` prints.
+	RecordSource string
 	// Generations is which grading rules (VerdictGeneration) the scans behind
 	// Obs were graded under. Zero when the store records none (the local
 	// bugcatch ledger) or has no scans.
@@ -774,11 +780,17 @@ func machineLedgerRankEvidence() (rankEvidence, error) {
 	}
 	if _, serr := os.Stat(dir); serr != nil {
 		if os.IsNotExist(serr) {
-			return rankEvidence{Source: "the machine ledger " + dir + " (not created yet: no run on this machine has written an entry)"}, nil
+			return rankEvidence{
+				Source:       "the machine ledger " + dir + " (not created yet: no run on this machine has written an entry)",
+				RecordSource: "the machine ledger (not created yet)",
+			}, nil
 		}
 		return rankEvidence{}, fmt.Errorf("cannot read the machine ledger %s: %w", dir, serr)
 	}
-	return rankFromView(dir, func() (*sql.DB, error) {
+	// The path-free name is built from the same counts as the printed one,
+	// never by cutting the directory out of the printed text.
+	var record string
+	ev, err := rankFromView(dir, func() (*sql.DB, error) {
 		db, lerr := auditpush.LoadDirForRank(dir)
 		if lerr != nil {
 			return nil, fmt.Errorf("the machine ledger %s: %w\n  run `corral verify --ledger %s` to see which entry fails; `--source scorecard` or `--db <another ledger>` reads a different source deliberately — nothing falls back to one automatically", dir, lerr, dir)
@@ -790,10 +802,17 @@ func machineLedgerRankEvidence() (rankEvidence, error) {
 			return "", fmt.Errorf("counting entries in the machine ledger %s: %w", dir, err)
 		}
 		if scans == 0 && reviews == 0 {
+			record = "the machine ledger (no entries yet)"
 			return "the machine ledger " + dir + " (no entries yet)", nil
 		}
+		record = fmt.Sprintf("the machine ledger (%d scan(s), %d review(s))", scans, reviews)
 		return fmt.Sprintf("the machine ledger %s (%d scan(s), %d review(s); a run is one SCAN)", dir, scans, reviews), nil
 	})
+	if err != nil {
+		return rankEvidence{}, err
+	}
+	ev.RecordSource = record
+	return ev, nil
 }
 
 // reviewRankEvidence grades the reviewer and verifier seats from the

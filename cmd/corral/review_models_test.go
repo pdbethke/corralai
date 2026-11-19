@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"path/filepath"
 	"strings"
@@ -33,7 +34,7 @@ func reviewEvidence() rankEvidence {
 	add("verifier-y", modelrank.SeatReviewer, 2, 1, 0, 0)
 	add("verifier-y", modelrank.SeatVerifier, 0, 0, 2, 2)
 	add("reviewer-x", modelrank.SeatVerifier, 0, 0, 2, 1)
-	return rankEvidence{Obs: obs, Source: "test evidence (6 review(s))", Generations: generationRange{Min: "48", Max: "48", Scans: 6}}
+	return rankEvidence{Obs: obs, Source: "test evidence (6 review(s))", RecordSource: "test evidence (6 review(s))", Generations: generationRange{Min: "48", Max: "48", Scans: 6}}
 }
 
 // stubReviewPool replaces the doors' seams with reviewEvidence and an
@@ -61,11 +62,41 @@ func stubReviewPool(t *testing.T) *int {
 // recorded and not an intermediate.
 func reviewModelsRun(t *testing.T, args ...string) (rev review.Review, code int, out, errs string, seen map[string]int) {
 	t.Helper()
+	r := reviewModelsRunWith(t, reviewRunOpts{verifierReply: `{"opinion":"v","refutations":[]}`}, args...)
+	if r.code == 0 {
+		if len(r.entries) != 1 || r.entries[0].Review == nil {
+			t.Fatalf("want one review entry, got %d\n%s%s", len(r.entries), r.out, r.errs)
+		}
+		rev = *r.entries[0].Review
+	}
+	return rev, r.code, r.out, r.errs, r.seen
+}
+
+// reviewRunOpts varies the canned review: what the verifier replies.
+type reviewRunOpts struct{ verifierReply string }
+
+// reviewRun is everything one canned review left behind: the exit, both
+// streams, the seats built (by model), the entries in the repo ledger and the
+// machine ledger directory, which a test reads for what was or was not
+// written.
+type reviewRun struct {
+	code          int
+	out, errs     string
+	seen          map[string]int
+	entries       []auditpush.LedgerEntry
+	machineLedger string
+	stateDir      string
+}
+
+func reviewModelsRunWith(t *testing.T, opts reviewRunOpts, args ...string) reviewRun {
+	t.Helper()
 	requireReviewSandbox(t)
 	declareLocalSeats(t, "reviewer-x", "verifier-y")
 	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
 	ledger := filepath.Join(t.TempDir(), "machine")
 	t.Setenv("CORRALAI_MACHINE_LEDGER", ledger)
+	state := t.TempDir()
+	t.Setenv("CORRALAI_STATE_DIR", state)
 	root := t.TempDir()
 	gitRun := gitCmd(t, root)
 	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n\nfunc Add(a, b int) int { return a - b }\n")
@@ -74,26 +105,20 @@ func reviewModelsRun(t *testing.T, args ...string) (rev review.Review, code int,
 	gitRun("add", ".")
 	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
 
-	seen = map[string]int{}
+	seen := map[string]int{}
 	orig := newReviewerBackend
 	t.Cleanup(func() { newReviewerBackend = orig })
 	newReviewerBackend = func(rs agentbackend.ResolvedSeat, _ agentbackend.SeatOptions) (agentbackend.Backend, error) {
 		seen[rs.Spec]++
 		if rs.Spec == "verifier-y" {
-			return cannedReviewer{reply: `{"opinion":"v","refutations":[]}`}, nil
+			return cannedReviewer{reply: opts.verifierReply}, nil
 		}
 		return cannedReviewer{reply: `{"opinion":"o","findings":[{"claim":"a caller might overflow","tier":"HYPOTHESIS"}],"sound":[]}`}, nil
 	}
 	var o, e bytes.Buffer
-	code = runReview(append([]string{"--repo", root, "--scope", "pkg"}, args...), &o, &e)
+	code := runReview(append([]string{"--repo", root, "--scope", "pkg"}, args...), &o, &e)
 	entries, _ := auditpush.ReadLedgerDir(filepath.Join(root, ".corral", "ledger"))
-	if code == 0 {
-		if len(entries) != 1 || entries[0].Review == nil {
-			t.Fatalf("want one review entry, got %d\n%s%s", len(entries), o.String(), e.String())
-		}
-		rev = *entries[0].Review
-	}
-	return rev, code, o.String(), e.String(), seen
+	return reviewRun{code: code, out: o.String(), errs: e.String(), seen: seen, entries: entries, machineLedger: ledger, stateDir: state}
 }
 
 func TestReviewSeatedByModels(t *testing.T) {
@@ -200,7 +225,67 @@ func TestReviewModelsRefusesUsageBeforeAskingAnything(t *testing.T) {
 	o.Reset()
 	e.Reset()
 	root := t.TempDir()
-	if code := runReview([]string{"--repo", root, "--scope", "x", "--no-ledger"}, &o, &e); code == 0 {
-		t.Errorf("no reviewer was accepted")
+	gitRun := gitCmd(t, root)
+	mustWrite(t, filepath.Join(root, "x", "a.go"), "package x\n")
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+	code := runReview([]string{"--repo", root, "--scope", "x", "--no-ledger"}, &o, &e)
+	if code != 2 || *asked != 0 || o.Len() != 0 {
+		t.Errorf("no reviewer: exit %d asked %d stdout %q, want 2, nothing asked, nothing printed", code, *asked, o.String())
+	}
+	if !strings.Contains(e.String(), "a reviewer: --reviewer-model, or --models to have one proposed") {
+		t.Errorf("stderr = %q", e.String())
+	}
+}
+
+// Every seat pinned (the reviewer named, the verifier pinned off): nothing is
+// proposed or asked, the pool is still checked, and the entry records the
+// reviewer as the operator's and nothing else new (C8).
+func TestReviewModelsAllPinned(t *testing.T) {
+	asked := stubReviewPool(t)
+	rev, code, out, errs, seen := reviewModelsRun(t, "--models", reviewPool, "--reviewer-model", "anthropic/reviewer-x", "--verifier-model", "off")
+	if code != 0 {
+		t.Fatalf("exit %d\n%s%s", code, out, errs)
+	}
+	if *asked != 0 || strings.Contains(out, "seats (from --models") {
+		t.Errorf("asked %d time(s) or printed a plan with every seat pinned:\n%s", *asked, out)
+	}
+	if len(rev.SeatedBy) != 1 || rev.SeatedBy[modelrank.SeatReviewer] != "operator" || rev.SeatEvidence != "" {
+		t.Errorf("seated_by %v, seat_evidence %q; want the reviewer as the operator's only", rev.SeatedBy, rev.SeatEvidence)
+	}
+	if rev.VerifierModel != "" || seen["verifier-y"] != 0 {
+		t.Errorf("a verifier ran: %q %v", rev.VerifierModel, seen)
+	}
+	// The pool is still checked: a member that cannot run refuses the run.
+	shadowMemberRunnable = func(rs agentbackend.ResolvedSeat) error {
+		if rs.Spec == "verifier-y" {
+			return errors.New("no key for verifier-y")
+		}
+		return nil
+	}
+	_, code, _, errs, _ = reviewModelsRun(t, "--models", reviewPool, "--reviewer-model", "anthropic/reviewer-x", "--verifier-model", "off")
+	if code != 2 || !strings.Contains(errs, "no key for verifier-y") {
+		t.Errorf("a pool with a member that cannot run: exit %d stderr %q", code, errs)
+	}
+}
+
+// A review records the evidence line only when a seat on the entry was
+// seated by evidence (B12): with the reviewer pinned and the evidence-seated
+// verifier recorded unverified (its reply does not parse), no recorded seat
+// was chosen by the ranking, so the line would explain nothing on the entry.
+func TestReviewRecordsNoEvidenceLineWithoutAnEvidenceSeat(t *testing.T) {
+	stubReviewPool(t)
+	r := reviewModelsRunWith(t, reviewRunOpts{verifierReply: "not a verdict at all"},
+		"--models", reviewPool, "--reviewer-model", "anthropic/reviewer-x")
+	if r.code != 0 || len(r.entries) != 1 || r.entries[0].Review == nil {
+		t.Fatalf("exit %d, %d entries\n%s%s", r.code, len(r.entries), r.out, r.errs)
+	}
+	rev := *r.entries[0].Review
+	if rev.VerifierModel != "" || rev.SeatedBy[modelrank.SeatReviewer] != "operator" {
+		t.Fatalf("fixture did not drop the verifier: verifier %q seated_by %v", rev.VerifierModel, rev.SeatedBy)
+	}
+	if rev.SeatEvidence != "" {
+		t.Errorf("seat_evidence = %q on an entry whose only recorded seat was pinned", rev.SeatEvidence)
 	}
 }

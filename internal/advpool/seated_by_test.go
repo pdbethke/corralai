@@ -53,3 +53,23 @@ func TestVerdictCarriesSeatedByOnBothConstructionPaths(t *testing.T) {
 		}
 	}
 }
+
+// The evidence line explains an evidence seat, so a verdict whose evidence
+// seats the roster narrowed away keeps no line (B12): a critic seated by
+// evidence and then pinned off leaves a verdict whose every recorded seat
+// was the operator's.
+func TestVerdictDropsSeatEvidenceWithItsLastEvidenceSeat(t *testing.T) {
+	rs := RunSpec{Repo: "r", Commit: "c", Lang: "go",
+		SeatedBy:     map[string]string{RoleTestWriter: "operator", RoleTestCritic: "evidence", RoleMutantGenerator: "operator"},
+		SeatEvidence: "the machine ledger (31 scan(s), 2 review(s)); language go",
+	}
+	assign := RoleAssignment{RoleTestWriter: "w", RoleTestCritic: "off", RoleMutantGenerator: "g"}
+	d := &Driver{Assign: assign}
+	converged := Verdict{}
+	(&runState{rs: rs}).signedSeats(assign).stamp(&converged)
+	for name, v := range map[string]Verdict{"converged": converged, "timeout": d.timeoutVerdict(&runState{rs: rs})} {
+		if v.SeatEvidence != "" {
+			t.Errorf("%s: SeatEvidence = %q with no evidence seat on the verdict (SeatedBy %v)", name, v.SeatEvidence, v.SeatedBy)
+		}
+	}
+}

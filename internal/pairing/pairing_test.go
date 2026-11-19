@@ -144,3 +144,24 @@ func TestPrimary(t *testing.T) {
 		t.Errorf("Primary(nil rules) = %+v, %v; want zero Candidate, false", got, ok)
 	}
 }
+
+// DirSuffix is how SwiftPM names a test target: Sources/<Target>/ pairs with
+// Tests/<Target>Tests/, the suffix on the leading directory that survives the
+// strip, and nowhere else in the path.
+func TestParallelTreeDirSuffixAppendsToTheTargetDirectoryOnly(t *testing.T) {
+	rules := []Rule{{Shape: ParallelTree, Name: "{base}Tests.swift", Dir: "Tests", DirSuffix: "Tests", Rank: 1}}
+	for src, want := range map[string]string{
+		"Sources/Core/Eval.swift":       "Tests/CoreTests/EvalTests.swift",
+		"Sources/Core/Sub/Deep/N.swift": "Tests/CoreTests/Sub/Deep/NTests.swift",
+	} {
+		c := Candidates(rules, src)
+		if len(c) != 1 || c[0].Path != want {
+			t.Errorf("Candidates(%q) = %v, want %q", src, c, want)
+		}
+	}
+	// No directory left after the strip: there is no target to suffix, and the
+	// rule must not invent "Tests/Tests".
+	if c := Candidates(rules, "Sources/Eval.swift"); len(c) != 1 || c[0].Path != "Tests/EvalTests.swift" {
+		t.Errorf("Candidates(no target dir) = %v", c)
+	}
+}

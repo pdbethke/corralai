@@ -422,6 +422,13 @@ var runners = []Runner{
 		UnitsCmd: cargoUnitsCmd, UnitsCoruns: cargoUnitsCoruns, UnitForFile: cargoUnitForFile, UnitNoun: "test targets",
 		Note: "libtest has no retries; flaky tests are named when the output is nextest's (a wrapper that runs nextest under another command); one-target runs (`-p <package>` with `--lib`, `--test` or `--bin`, in place of the command's own package and target selection) verified on cargo 1.90; a run of several targets runs each named target in every named package, since cargo selects targets across the packages it is given (measured on cargo 1.90); doc tests, examples and benches are no unit",
 	},
+	{
+		// The Default row Swift's registration needs and nothing more: every
+		// capability is exempted in ParityExemptions until the runner row
+		// task fills it from captured `swift test` output.
+		Name: "swift test", ID: "swift-test", Languages: []string{"swift"}, Default: true, Words: []string{"swift"},
+		Note: "no capability built yet; each is listed with its reason in the parity exemptions",
+	},
 }
 
 // RunnerFor is the ONE place a command is mapped to a runner: the row an

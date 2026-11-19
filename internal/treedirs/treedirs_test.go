@@ -27,14 +27,14 @@ func TestCompositions(t *testing.T) {
 		}
 		return m
 	}
-	deps := []string{"node_modules", "vendor", ".venv", "venv", "site-packages", ".tox", ".bundle"}
+	deps := []string{"node_modules", "vendor", ".venv", "venv", "site-packages", ".tox", ".bundle", ".build", ".swiftpm"}
 	cases := []struct {
 		name string
 		got  map[string]bool
 		want map[string]bool
 	}{
 		{"Dependencies", Dependencies(), set(deps...)},
-		// .tox is excluded: the run writes into it (adequacy/pool.go). site-packages is NEW
+		// .tox, .build and .swiftpm are excluded: the run writes into them (adequacy/pool.go). site-packages is NEW
 		// to the bind/symlink sets — a read-only dependency tree like .venv.
 		{"SharedDependencies", SharedDependencies(), set("node_modules", "vendor", ".venv", "venv", "site-packages", ".bundle")},
 		// Identical to reposcan's skipDirs before B3.

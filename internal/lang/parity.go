@@ -16,6 +16,7 @@ var paritySamples = map[string]paritySample{
 	"rust":       {"src/a.rs", "#[test]\nfn a() {}\n"},
 	"javascript": {"a.test.js", "test('a', () => {});\n"},
 	"typescript": {"a.test.ts", "test('a', () => {});\n"},
+	"swift":      {"Tests/ATests/ATests.swift", "import XCTest\n\nfinal class ATests: XCTestCase {\n    func testA() {}\n}\n"},
 	"ruby":       {"a_spec.rb", "describe 'A' do\n  it 'a' do\n  end\nend\n"},
 }
 
@@ -193,4 +194,30 @@ var ParityExemptions = []Exemption{
 	{"ruby", "failure-hook", "not built: corral reads rspec's `Failed examples:` list and minitest's printed failures. rspec takes a second formatter writing to a file (`--format json --out <file>`), which would be the hook; corral does not add it, and nothing comparable was looked for in minitest"},
 
 	{"rust", "failure-hook", "not built: corral reads the lines cargo test and cargo-nextest print. nextest writes a JUnit file when a profile in the project's .config/nextest.toml asks for one, and libtest's JSON output is an unstable option; a way to ask for either from the command line was not looked for"},
+
+	{"swift", "list", "not built yet (Swift phase 1, task 2)"},
+
+	{"swift", "single", "not built yet (Swift phase 1, task 2)"},
+
+	{"swift", "first-failure", "not built yet (Swift phase 1, task 2)"},
+
+	{"swift", "confirm-alone", "not built yet (Swift phase 1, task 2)"},
+
+	{"swift", "fail-fast", "not built yet (Swift phase 1, task 2)"},
+
+	{"swift", "readable-failures", "not built yet (Swift phase 1, task 2)"},
+
+	{"swift", "failure-hook", "not built yet (Swift phase 1, task 2)"},
+
+	{"swift", "salvage", "not built yet (Swift phase 1, task 2)"},
+
+	{"swift", "units", "not built yet (Swift phase 1, task 2)"},
+
+	{"swift", "critic-list", "not built yet (Swift phase 1, task 3)"},
+
+	{"swift", "coverage", "not built yet (Swift phase 1, task 4)"},
+
+	{"swift", "selection", "not built yet (Swift phase 1, task 4)"},
+
+	{"swift", "run-cache", "not built; a shared build directory for SwiftPM is a later phase"},
 }

@@ -28,6 +28,12 @@ keeps statistics out of every seat that gates. It also addresses that
 incident's actual mechanism, which was greedy: routing that never re-tests
 an early winner. Thompson sampling keeps re-testing by construction.
 
+(The rule in model-ranking.md now reads "disclosure; selection only through
+`--models`, among models the operator named on that run". `--models` proposes
+verdict seats from a pool the operator names and runs nothing until the
+operator accepts the lineup; it does not change the shadow draw described
+here.)
+
 The shadow seats are the right place to start because they already never
 gate. `Shadow` on a seat is the driver's own marker for that
 (`internal/advpool/driver.go`), and shadow rows are already flagged in the

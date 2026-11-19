@@ -88,10 +88,14 @@ A ranking that promotes the 100% row is worse than no ranking at all, because
 it is confidently wrong in the operator's favour: it recommends the expensive
 model on three observations over the one with thirty-eight runs behind it.
 
-## Disclosure, never selection
+## Disclosure; selection only through `--models`
 
 **This command prints a table. It writes no config, changes no default, fills
 no seat, and feeds no router.**
+
+(This section was titled "Disclosure, never selection" until `--models` was
+added. The ranking now has one reader that seats models, described at the end
+of this section; the command itself is unchanged.)
 
 That is not a limitation left for later — it is the design. corral has no
 default models: every seat is named by the operator or the run refuses to
@@ -105,9 +109,24 @@ well kept scoring well in a ranking nobody re-derived. The routing was
 "earned", which is precisely why nobody looked at it.
 
 So the boundary is drawn at the output: the ranking is a document a human
-reads before typing a model name, and there is no code path from it to a seat.
-The help text and the table's own header say so, so that an operator reading
-the output cannot mistake it for something that has already acted.
+reads before typing a model name. The help text and the table's own header say
+so, so that an operator reading the output cannot mistake it for something
+that has already acted.
+
+There is one code path from the ranking to a seat, and it is built against the
+incident above. `--models a,b,c` on `certify --local`, `certify --repo`,
+`doctor`, `demo` and `review` hands the ranking, filtered to the pool, to
+`internal/autoseat`, a pure function and the only code that decides a seat from
+evidence (`TestOnlyAutoseatDecidesASeatFromEvidence` holds that). It can seat
+only a model the operator named in that run's pool, so a model that ranks well
+but was not named is never chosen; it uses this page's floor and never lowers
+it, refusing a seat no member clears; it prints the lineup with each seat's
+reason, and nothing runs until the operator accepts it on a terminal. The
+entry records how each seat was chosen (`SeatedBy`) and what the ranking read
+(`SeatEvidence`). The router in the incident re-selected a model nobody had
+named on the run; the guard here is that the operator names the candidates
+every time. The operator-facing description is in
+[docs/corral/agent-seats.md](../corral/agent-seats.md).
 
 Two smaller rules follow from the same principle:
 

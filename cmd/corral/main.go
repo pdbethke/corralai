@@ -262,8 +262,10 @@ Usage:
                                   adjudication; the goal-deriver is reported as not scored rather
                                   than given an invented number. A model below --min-runs (default 5)
                                   is printed with its real numbers, marked insufficient, and never
-                                  preferred. DISCLOSURE, NOT SELECTION: it writes no config, changes
-                                  no default and staffs no seat — corral has no default models.
+                                  preferred. DISCLOSURE; SELECTION ONLY THROUGH --models, AMONG MODELS
+                                  THE OPERATOR NAMED ON THAT RUN: this command writes no config,
+                                  changes no default and staffs no seat — corral has no default
+                                  models.
                                   flags: --db <dsn> (a pushed warehouse instead of the local
                                   bug-catching ledger; unreachable REFUSES, never falls back)
                                   --seat <role>  --lang <name>  --min-runs n  --json

@@ -157,9 +157,13 @@ const modelsUsage = `usage: corral models rank [--source ledger|scorecard] [--db
   evidence says about them — a different metric per seat, because the seats do
   different jobs.
 
-  This is DISCLOSURE, NOT SELECTION. It prints a table. It writes no config,
-  changes no default, and feeds no router: corral has no default models, and a
-  ranking that quietly staffed a seat would put one back.`
+  This is DISCLOSURE; SELECTION ONLY THROUGH --models, AMONG MODELS THE
+  OPERATOR NAMED ON THAT RUN. This command prints a table and seats nothing. It
+  writes no config, changes no default, and feeds no router: corral has no
+  default models, and a ranking that quietly staffed a seat would put one back.
+  The same ranking is read when you pass --models to certify, doctor, demo or
+  review: there it proposes seats only from the pool you named on that run,
+  and prints the lineup before anything runs.`
 
 func runModelsRank(args []string, repoRoot string, load rankLoader, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("models rank", flag.ContinueOnError)
@@ -307,7 +311,7 @@ func printRankReport(rep modelrank.Report, reg *models.Registry, gen generationR
 	if !rep.LangDimension {
 		fmt.Fprintln(w, "language: this evidence records none, so every row is across all languages.")
 	}
-	fmt.Fprintln(w, "DISCLOSURE, NOT SELECTION: this command sets no default and staffs no seat. corral has no default models.")
+	fmt.Fprintln(w, "DISCLOSURE; SELECTION ONLY THROUGH --models, AMONG MODELS THE OPERATOR NAMED ON THAT RUN: this command sets no default and staffs no seat. corral has no default models.")
 	if len(rep.Groups) == 0 {
 		fmt.Fprintln(w, "\nno recorded observations for any seat yet.")
 		return

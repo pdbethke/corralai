@@ -15,13 +15,20 @@
 // not judged at all: no recorded outcome is attributable to it, so this
 // package reports it as unscored rather than inventing a number for it.
 //
-// DISCLOSURE, NEVER SELECTION. Nothing here writes config, fills a seat, or
-// feeds a router. corral has no default models — every seat is named by the
-// operator or the run refuses — and a ranking that quietly became an input to
-// staffing would reintroduce that rule through the back door. It has happened
-// in this project before: a production router's performance statistics
-// OVERRODE the operator's configured model list and re-selected a retired
-// model, forever. The output of this package is a table for a human to read.
+// DISCLOSURE; SELECTION ONLY THROUGH --models, AMONG MODELS THE OPERATOR NAMED
+// ON THAT RUN. Nothing here writes config, fills a seat, or feeds a router.
+// corral has no default models — every seat is named by the operator or the
+// run refuses — and a ranking that quietly became an input to staffing would
+// reintroduce that rule through the back door. It has happened in this project
+// before: a production router's performance statistics OVERRODE the operator's
+// configured model list and re-selected a retired model, forever. The output
+// of this package is a table for a human to read, and one other reader:
+// internal/autoseat, which a certify, doctor, demo or review run consults only
+// when the operator passes --models. It seats a model only if the operator
+// named it in that run's pool, prints the lineup with each seat's reason, and
+// the run starts only after the operator accepts it. A model the operator did
+// not name on the run cannot be seated however it ranks, which is the guard
+// against the router incident above.
 //
 // THIN EVIDENCE IS NOT A RANKING. A model with a perfect rate over three
 // observations has not earned a recommendation; the live scorecard has exactly

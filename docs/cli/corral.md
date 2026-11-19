@@ -87,8 +87,10 @@ Usage:
                                   adjudication; the goal-deriver is reported as not scored rather
                                   than given an invented number. A model below --min-runs (default 5)
                                   is printed with its real numbers, marked insufficient, and never
-                                  preferred. DISCLOSURE, NOT SELECTION: it writes no config, changes
-                                  no default and staffs no seat — corral has no default models.
+                                  preferred. DISCLOSURE; SELECTION ONLY THROUGH --models, AMONG MODELS
+                                  THE OPERATOR NAMED ON THAT RUN: this command writes no config,
+                                  changes no default and staffs no seat — corral has no default
+                                  models.
                                   flags: --db <dsn> (a pushed warehouse instead of the local
                                   bug-catching ledger; unreachable REFUSES, never falls back)
                                   --seat <role>  --lang <name>  --min-runs n  --json
@@ -878,9 +880,13 @@ usage: corral models rank [--source ledger|scorecard] [--db <dir or dsn>] [--sea
   evidence says about them — a different metric per seat, because the seats do
   different jobs.
 
-  This is DISCLOSURE, NOT SELECTION. It prints a table. It writes no config,
-  changes no default, and feeds no router: corral has no default models, and a
-  ranking that quietly staffed a seat would put one back.
+  This is DISCLOSURE; SELECTION ONLY THROUGH --models, AMONG MODELS THE
+  OPERATOR NAMED ON THAT RUN. This command prints a table and seats nothing. It
+  writes no config, changes no default, and feeds no router: corral has no
+  default models, and a ranking that quietly staffed a seat would put one back.
+  The same ranking is read when you pass --models to certify, doctor, demo or
+  review: there it proposes seats only from the pool you named on that run,
+  and prints the lineup before anything runs.
 ```
 
 ## `corral models rank` flags
@@ -902,9 +908,13 @@ usage: corral models rank [--source ledger|scorecard] [--db <dir or dsn>] [--sea
   evidence says about them — a different metric per seat, because the seats do
   different jobs.
 
-  This is DISCLOSURE, NOT SELECTION. It prints a table. It writes no config,
-  changes no default, and feeds no router: corral has no default models, and a
-  ranking that quietly staffed a seat would put one back.
+  This is DISCLOSURE; SELECTION ONLY THROUGH --models, AMONG MODELS THE
+  OPERATOR NAMED ON THAT RUN. This command prints a table and seats nothing. It
+  writes no config, changes no default, and feeds no router: corral has no
+  default models, and a ranking that quietly staffed a seat would put one back.
+  The same ranking is read when you pass --models to certify, doctor, demo or
+  review: there it proposes seats only from the pool you named on that run,
+  and prints the lineup before anything runs.
 
 flags:
   -db md:<db>

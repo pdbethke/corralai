@@ -116,14 +116,15 @@ that has already acted.
 There is one code path from the ranking to a seat, and it is built against the
 incident above. `--models a,b,c` on `certify --local`, `certify --repo`,
 `doctor`, `demo` and `review` hands the ranking, filtered to the pool, to
-`internal/autoseat`, a pure function and the only code that decides a seat from
-evidence (`TestOnlyAutoseatDecidesASeatFromEvidence` holds that). It can seat
+`internal/autoseat`, a pure function and the only code that decides a verdict
+seat from the ranking (in `cmd/corral`, `TestOnlyAutoseatDecidesASeatFromEvidence`
+holds that); the shadow draw is separate. It can seat
 only a model the operator named in that run's pool, so a model that ranks well
 but was not named is never chosen; it uses this page's floor and never lowers
 it, refusing a seat no member clears; it prints the lineup with each seat's
 reason, and nothing runs until the operator accepts it on a terminal. The
 entry records how each seat was chosen (`SeatedBy`) and what the ranking read
-(`SeatEvidence`). The router in the incident re-selected a model nobody had
+(`SeatEvidence`, named without the ledger's directory). The router in the incident re-selected a model nobody had
 named on the run; the guard here is that the operator names the candidates
 every time. The operator-facing description is in
 [docs/corral/agent-seats.md](../corral/agent-seats.md).

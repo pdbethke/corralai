@@ -312,23 +312,36 @@ checks none for any seat); a seat named by its own flag is a pin and wins; the m
 member with at least `modelrank.DefaultMinRuns` (5) observations in that seat's
 own unit; the goal-deriver takes the first member in the order the operator
 typed, and the critic, unless it has such a row, the first member that is not
-the writer, preferring one from a different provider. A seat nothing
+the writer, preferring one from a different provider. Pins are resolved by the
+same resolver as the members (`resolvePins` in `models_pool.go`), so the hard
+rule (critic is not writer, verifier is not reviewer) and the provider
+preference compare resolved models, pins included; comparing the typed text let
+`anthropic/claude-sonnet-5-5` and `claude-code:claude-sonnet-5-5` sit in both
+seats. A seat nothing
 qualifies for is refused with the flag that would fill it, never filled from
 outside the pool and never by lowering the floor. The plan is printed and
-nothing runs until the operator answers `y` or `yes` on a terminal (anything
-else declines, exit 0); with no terminal it
-prints the equivalent seat flags and exits 0. There is no `--yes`. `doctor` and
-`certify --repo --dry-run` print the plan and ask nothing. The evidence is the
-machine ledger only, with no fallback to another source. The proposer is
+nothing runs until the operator answers `y` or `yes` with both stdin and stdout
+on a terminal (anything else declines, exit 0); otherwise it prints the
+equivalent seat flags and a last line saying nothing was audited, and exits 0,
+so a pipeline must pass the seat flags itself. There is no `--yes`. `doctor` and
+`certify --repo --dry-run` print the plan and ask nothing. The evidence is
+the machine ledger only, with no fallback to another source. The proposer is
 `internal/autoseat` (a pure function) and it is the one door:
 `TestOnlyAutoseatDecidesASeatFromEvidence` fails any other file in `cmd/corral`
-that imports it, and `models_pool.go` is the only caller. How each seat was
+that imports it or calls the evidence readers or `modelrank.Rank` outside the
+files it lists, `TestEveryDoorWithSeatFlagsRegistersModelsFlags` fails a door
+that registers `--models` and never calls `seatFromPool` (or forwards it, for
+`demo`), and `models_pool.go` is the only caller. How each seat was
 chosen is recorded on the entry as `SeatedBy` (`operator`, `evidence` or
-`order`, keyed by role) beside `SeatEvidence` (what the ranking read), both
-tier DECLARED; a seat filled by an accepted proposal is recorded as `evidence`
-or `order`, never as `operator`, because a person pressing `y` did not choose
-the model. The machine ledger carries no critic adjudications, so on this
-evidence the critic is always seated by order.
+`order`, keyed by role) beside `SeatEvidence` (what the ranking read, named
+without the ledger's directory: the entry is signed and may be published),
+both tier DECLARED; `SeatEvidence` is kept only while a seat the entry records
+was seated by evidence (`autoseat.EvidenceFor`). A seat filled by an accepted
+proposal is recorded as `evidence` or `order`, never as `operator`, because a
+person pressing `y` did not choose the model. A run's clock and host sampler
+restart when the operator accepts, so a recorded duration never includes the
+plan being read. The ranking reads no critic adjudications from the machine
+ledger, so the critic is always seated by order unless pinned.
 `corral models rank` itself still seats nothing. `--autoseat` (seat without
 asking) and exploration (seating below-floor members in the shadow seats) are
 NOT built; do not document them as features.

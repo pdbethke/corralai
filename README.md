@@ -468,7 +468,8 @@ go by the order you named the pool, because the ledger holds nothing that ranks
 them, the critic never to the writer's model and preferably to another
 provider. corral prints the lineup with the reason for
 each seat and runs nothing until you answer `y` or `yes` on a terminal. With no terminal
-it prints the lineup as seat flags and exits 0; there is no `--yes`. `doctor`
+it prints the lineup as seat flags, audits nothing and exits 0, so a pipeline
+must pass the seat flags itself; there is no `--yes`. `doctor`
 and `certify --repo --dry-run` print it and ask nothing. A seat no member
 qualifies for is refused with the flag that would fill it, never filled from
 outside the pool. The entry records how each seat was chosen (`SeatedBy`) and

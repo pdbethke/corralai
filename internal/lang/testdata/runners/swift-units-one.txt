@@ -1,0 +1,22 @@
+# argv: swift test
+$ swift test --filter ^(?:CalcXCTests)\.
+[0/1] Planning build
+Building for debugging...
+[0/2] Write swift-version-24593BA9C3E375BF.txt
+Build complete! (0.06s)
+Test Suite 'Selected tests' started at 2026-11-19 21:06:04.216
+Test Suite 'CalcXCTests' started at 2026-11-19 21:06:04.217
+Test Case 'CalcXCTests.testAdds' started at 2026-11-19 21:06:04.217
+Test Case 'CalcXCTests.testAdds' passed (0.0 seconds)
+Test Case 'CalcXCTests.testAddsTwice' started at 2026-11-19 21:06:04.218
+Test Case 'CalcXCTests.testAddsTwice' passed (0.1 seconds)
+Test Case 'CalcXCTests.testFails' started at 2026-11-19 21:06:04.318
+Test Case 'CalcXCTests.testFails' passed (0.0 seconds)
+Test Suite 'CalcXCTests' passed at 2026-11-19 21:06:04.318
+	 Executed 3 tests, with 0 failures (0 unexpected) in 0.101 (0.101) seconds
+Test Suite 'Selected tests' passed at 2026-11-19 21:06:04.318
+	 Executed 3 tests, with 0 failures (0 unexpected) in 0.101 (0.101) seconds
+◇ Test run started.
+↳ Testing Library Version: 6.3.2 (70eff261d7f462c)
+↳ Target Platform: x86_64-unknown-linux-gnu
+✔ Test run with 0 tests in 0 suites passed after 0.001 seconds.

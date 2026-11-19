@@ -1,0 +1,193 @@
+OVERVIEW: Build and run tests.
+
+SEE ALSO: swift build, swift run, swift package
+
+USAGE: swift test <options> <subcommand>
+
+PATHS & LOCATIONS:
+  --package-path <package-path>
+                          Specify the package path to operate on (default
+                          current directory). This changes the working
+                          directory before any other operation.
+  --cache-path <cache-path>
+                          Specify the shared cache directory path.
+  --config-path <config-path>
+                          Specify the shared configuration directory path.
+  --security-path <security-path>
+                          Specify the shared security directory path.
+  --scratch-path <scratch-path>
+                          Specify a custom scratch directory path. (default
+                          .build)
+  --swift-sdks-path <swift-sdks-path>
+                          Path to the directory containing installed Swift SDKs.
+  --toolset <toolset>     Specify a toolset JSON file to use when building for
+                          the target platform. Use the option multiple times to
+                          specify more than one toolset. Toolsets will be
+                          merged in the order they're specified into a single
+                          final toolset for the current build.
+  --pkg-config-path <pkg-config-path>
+                          Specify alternative path to search for pkg-config
+                          `.pc` files. Use the option multiple times to
+                          specify more than one path.
+
+CACHING:
+  --enable-dependency-cache/--disable-dependency-cache
+                          Use a shared cache when fetching dependencies.
+                          (default: --enable-dependency-cache)
+  --enable-build-manifest-caching/--disable-build-manifest-caching
+                          (default: --enable-build-manifest-caching)
+  --manifest-cache <manifest-cache>
+                          Caching mode of Package.swift manifests. Valid values
+                          are: (shared: shared cache, local: package's build
+                          directory, none: disabled) (default: shared)
+  --enable-experimental-prebuilts/--disable-experimental-prebuilts
+                          Whether to use prebuilt swift-syntax libraries for
+                          macros. (default: --enable-experimental-prebuilts)
+
+LOGGING:
+  -v, --verbose           Increase verbosity to include informational output.
+  --very-verbose, --vv    Increase verbosity to include debug output.
+  -q, --quiet             Decrease verbosity to only include error output.
+  --color-diagnostics/--no-color-diagnostics
+                          Enables or disables color diagnostics when printing
+                          to a TTY.
+                          By default, color diagnostics are enabled when
+                          connected to a TTY and disabled otherwise. (default:
+                          --color-diagnostics)
+
+SECURITY:
+  --disable-sandbox       Disable using the sandbox when executing subprocesses.
+  --netrc                 Use netrc file even in cases where other credential
+                          stores are preferred.
+  --enable-netrc/--disable-netrc
+                          Load credentials from a netrc file. (default:
+                          --enable-netrc)
+  --netrc-file <netrc-file>
+                          Specify the netrc file path.
+  --resolver-fingerprint-checking <resolver-fingerprint-checking>
+                          (default: strict)
+  --resolver-signing-entity-checking <resolver-signing-entity-checking>
+                          (default: warn)
+  --enable-signature-validation/--disable-signature-validation
+                          Validate signature of a signed package release
+                          downloaded from registry. (default:
+                          --enable-signature-validation)
+
+RESOLUTION:
+  --enable-prefetching/--disable-prefetching
+                          (default: --enable-prefetching)
+  --force-resolved-versions, --disable-automatic-resolution, --only-use-versions-from-resolved-file
+                          Only use versions from the Package.resolved file and
+                          fail resolution if it is out-of-date.
+  --skip-update           Skip updating dependencies from their remote during a
+                          resolution.
+  --disable-scm-to-registry-transformation
+                          Disable source control to registry transformation.
+                          (default: --disable-scm-to-registry-transformation)
+  --use-registry-identity-for-scm
+                          Look up source control dependencies in the registry
+                          and use their registry identity when possible to help
+                          deduplicate across the two origins.
+  --replace-scm-with-registry
+                          Look up source control dependencies in the registry
+                          and use the registry to retrieve them instead of
+                          source control when possible.
+  --default-registry-url <default-registry-url>
+                          Default registry URL to use, instead of the
+                          registries.json configuration file.
+
+BUILD OPTIONS:
+  -c, --configuration <configuration>
+                          Build with configuration (values: debug, release)
+  -Xcc <Xcc>              Pass flag through to all C compiler invocations.
+  -Xswiftc <Xswiftc>      Pass flag through to all Swift compiler invocations.
+  -Xlinker <Xlinker>      Pass flag through to all linker invocations.
+  -Xcxx <Xcxx>            Pass flag through to all C++ compiler invocations.
+  --triple <triple>
+  --sdk <sdk>
+  --toolchain <toolchain>
+  --swift-sdk <swift-sdk> Filter for selecting a specific Swift SDK to build
+                          with.
+  --sanitize <sanitize>   Turn on runtime checks for erroneous behavior.
+                          (values: address, thread, undefined, scudo, fuzzer)
+  --auto-index-store/--enable-index-store/--disable-index-store
+                          Enable or disable indexing-while-building feature.
+                          (default: --auto-index-store)
+  --enable-parseable-module-interfaces
+  -j, --jobs <jobs>       The number of jobs to spawn in parallel during the
+                          build process. (default: 32)
+  --use-integrated-swift-driver
+  --explicit-target-dependency-import-check <explicit-target-dependency-import-check>
+                          A flag that indicates this build should check whether
+                          targets only import their explicitly-declared
+                          dependencies. (values: none, warn, error; default:
+                          none)
+  --build-system <build-system>
+                          Specify the build system to use. (default: native)
+        native            - Native Build System
+        swiftbuild        - Swift Build build engine (preview; recommended
+                            for feedback and testing.  Report issues at
+                            https://github.com/swiftlang/swift-package-manager/issues)
+        xcode             - Xcode build system integration (discouraged)
+  -debug-info-format <debug-info-format>
+                          The Debug Information Format to use. (values: dwarf,
+                          codeview, none; default: dwarf)
+  --enable-dead-strip/--disable-dead-strip
+                          Disable/enable dead code stripping by the linker.
+                          (default: --enable-dead-strip)
+  --disable-local-rpath   Disable adding $ORIGIN/@loader_path to the rpath by
+                          default.
+
+TRAIT OPTIONS:
+  --traits <traits>       Enables the passed traits of the package. Multiple
+                          traits can be specified by providing a comma
+                          separated list e.g. `--traits Trait1,Trait2`. When
+                          enabling specific traits the defaults traits need to
+                          explictily enabled as well by passing `defaults` to
+                          this command.
+  --enable-all-traits     Enables all traits of the package.
+  --disable-default-traits
+                          Disables all default traits of the package.
+
+OPTIONS:
+  --skip-build            Skip building the test target.
+  --enable-xctest/--disable-xctest
+                          Enable support for XCTest.
+  --enable-swift-testing/--disable-swift-testing
+                          Enable support for Swift Testing.
+  --attachments-path <attachments-path>
+                          Path where attachments should be written (Swift
+                          Testing only). This path must be an existing
+                          directory the current user can write to. If not
+                          specified, any attachments created during testing are
+                          discarded.
+  --parallel/--no-parallel
+                          Run the tests in parallel. (default: --no-parallel)
+  --num-workers <num-workers>
+                          Number of tests to execute in parallel.
+  -l, --list-tests        Lists test methods in specifier format.
+  --show-codecov-path, --show-code-coverage-path, --show-coverage-path
+                          Print the path of the exported code coverage JSON
+                          file.
+  -s, --specifier <specifier>
+  --filter <filter>       Run test cases that match a regular expression,
+                          Format: '<test-target>.<test-case>' or
+                          '<test-target>.<test-case>/<test>'.
+  --skip <skip>           Skip test cases that match a regular expression,
+                          Example: '--skip PerformanceTests'.
+  --xunit-output <xunit-output>
+                          Path where the xUnit xml file should be generated.
+  --enable-testable-imports/--disable-testable-imports
+                          Enable or disable testable imports. Enabled by
+                          default. (default: --enable-testable-imports)
+  --enable-code-coverage/--disable-code-coverage
+                          Enable code coverage. (default:
+                          --disable-code-coverage)
+  --version               Show the version.
+  -h, -help, --help       Show help information.
+
+SUBCOMMANDS:
+  list                    Lists test methods in specifier format
+  last
+
+  See 'swift help test <subcommand>' for detailed help.

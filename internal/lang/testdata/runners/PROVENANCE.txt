@@ -54,3 +54,20 @@ go1.26.11, cargo 1.90.0, cargo-nextest 0.9.148, rspec-core 3.13.6, PHPUnit
 11.5.57. The runners are installed from scripts/npm-pins/runner-fixtures
 by npm ci. Dates in the notes above are when each file was first added;
 the hand-captured vitest5-* and *-version.txt files were not re-captured.
+swift-*.txt and toolchain-swift-version.txt (added 2026-11-19, Swift 6.3.2
+(swift-6.3.2-RELEASE) with swift-testing 6.3.2, x86_64-unknown-linux-gnu):
+`scripts/capture-runner-fixtures.sh --swift-only`, with SWIFT a container of
+the swift:6.3.2-noble image (the host has no Swift toolchain) run as the
+invoking user, on src/swift: CalcTests (swift-testing, five tests) and
+CalcXCTests (XCTest, three). swift-list.txt is the stdout of `swift test
+list`; swift-units.txt the stdout of `swift package describe --type json`
+under the unit-listing prelude, the capture directory written as /fixture;
+every other file is stdout+stderr, not a TTY, with the capture directory
+written as $DIR. swift-fail-testing.txt and swift-fail-xctest.txt are
+`swift test` with CORRAL_FAIL_TESTING or CORRAL_FAIL_XCTEST set, which the
+fixture reads to plant its failures; swift-build-fail.txt is `swift test`
+after a line that does not compile was appended to Sources/Calc/Calc.swift.
+swift-single-*.txt and swift-units-*.txt open with `# argv:` (the operator's
+command) and `$ ` (the command the row builds) before the run. swift-testing
+runs its tests in parallel, so the order of its lines differs between
+captures.

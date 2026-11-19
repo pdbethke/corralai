@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Elastic-2.0
 #
-# scripts/capture-runner-fixtures.sh [--keep] [DIR] — runs the real jest,
-# vitest, mocha, node --test, rspec, phpunit, go test, gotestsum, cargo test
-# and cargo nextest against the fixture suites in
+# scripts/capture-runner-fixtures.sh [--swift-only] [--keep] [DIR] — runs the
+# real jest, vitest, mocha, node --test, rspec, phpunit, go test, gotestsum,
+# cargo test, cargo nextest and swift test against the fixture suites in
 # internal/lang/testdata/runners/src, writes what each runner's LIST command
 # prints into internal/lang/testdata/runners/, and checks that each runner's
 # one-test command really runs one test.
@@ -19,22 +19,122 @@
 # defaults to a temp dir, removed on exit unless --keep; a kept DIR is what
 # CORRALAI_RUNNER_ROOT points TestRealRunnersListAndRunOne at. RSPEC overrides
 # the rspec command (a box whose rspec shim is broken can pass `ruby -S ...`).
+#
+# SWIFT overrides the swift command, as RSPEC does rspec's, for a box with no
+# Swift toolchain: it may be a container command line, run from the fixture
+# package (DIR/swift) for every swift command below. Such a command must mount
+# DIR at its own path (so the paths it prints are the host's, which the
+# captures replace), start in DIR/swift, run as the invoking user (so the
+# build directory it writes into DIR can be removed), and pass the two
+# variables that plant the fixture's failures through, for example:
+#   SWIFT="docker run --rm -u $(id -u):$(id -g) -e HOME=/tmp \
+#     -e CORRAL_FAIL_TESTING -e CORRAL_FAIL_XCTEST -v /tmp/rf:/tmp/rf \
+#     -w /tmp/rf/swift swift:6.3.2-noble swift" \
+#     scripts/capture-runner-fixtures.sh --swift-only /tmp/rf
+# --swift-only captures the Swift fixtures alone, needs nothing but SWIFT, and
+# leaves PROVENANCE.txt as it is (the Swift paragraph there is written by hand).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 REPO="$PWD"
 OUT="$REPO/internal/lang/testdata/runners"
 
+SWIFT_ONLY=0
+[ "${1:-}" = "--swift-only" ] && { SWIFT_ONLY=1; shift; }
 KEEP=0
 [ "${1:-}" = "--keep" ] && { KEEP=1; shift; }
 DIR="${1:-$(mktemp -d)}"
 [ "$KEEP" = 1 ] || trap 'rm -rf "$DIR"' EXIT
 RSPEC="${RSPEC:-rspec}"
+SWIFT="${SWIFT:-swift}"
 
 JEST=30.5.2 VITEST=5.1.0 MOCHA=12.0.3 PHPUNIT=11.5.57 PHPUNIT9=9.6.39 PHPUNIT10=10.5.67 PHPUNIT12=12.5.44
 
 mkdir -p "$DIR"
 cp -r "$OUT/src/." "$DIR/"
 cd "$DIR"
+
+fail=0
+want() { # want <runner> <expected> <got>
+  if [ "$2" = "$3" ]; then echo "ok   $1: ran $3"; else echo "FAIL $1: ran $3, want $2"; fail=1; fi
+}
+
+# --- swift test (internal/lang/swift_runner.go) ----------------------------
+# The package in src/swift has two test targets: CalcTests (swift-testing,
+# five tests) and CalcXCTests (XCTest, three). Run from DIR/swift; $SWIFT may
+# be a container (see the header), which is why every command is $SWIFT and
+# none is `cd`-relative to it.
+capture_swift() (
+  cd "$DIR/swift"
+  local pdir
+  pdir="$(pwd -P)"
+  # swiftout <fixture> <cmd...>: stdout+stderr, the capture directory as $DIR.
+  swiftout() {
+    local f="$1"; shift
+    "$@" 2>&1 | sed -e "s#$pdir#\$DIR/swift#g" > "$OUT/$f" || true
+  }
+  # swiftran: the tests a run executed, from its own summaries: swift-testing's
+  # "Test run with N tests" plus XCTest's last "Executed N tests" (its suites
+  # repeat the total).
+  swiftran() {
+    local out testing xctest
+    out="$(cat)"
+    testing="$(printf '%s\n' "$out" | sed -n 's/.*Test run with \([0-9]*\) tests\{0,1\} .*/\1/p' | tail -1)"
+    xctest="$(printf '%s\n' "$out" | sed -n 's/^[[:space:]]*Executed \([0-9]*\) tests\{0,1\}, with.*/\1/p' | tail -1)"
+    echo $(( ${testing:-0} + ${xctest:-0} ))
+  }
+  # swiftcmd <fixture> <argv> <cmd...>: `# argv:` the operator's command, `$ `
+  # the row's command (cmd, whose first word is swift), then the run of cmd
+  # under $SWIFT. Keep cmd equal to what the row builds; the tests compare.
+  swiftcmd() {
+    local f="$1" argv="$2"; shift 2
+    { echo "# argv: $argv"; echo "\$ $*"; $SWIFT "${@:2}" 2>&1; } | sed -e "s#$pdir#\$DIR/swift#g" > "$OUT/$f" || true
+  }
+  $SWIFT --version 2>/dev/null > "$OUT/toolchain-swift-version.txt"
+  swiftout swift-test-help.txt $SWIFT test --help
+  # The listing builds the tests first; its build lines go to stderr, which
+  # the enumerator does not read.
+  $SWIFT test list 2>/dev/null > "$OUT/swift-list.txt"
+  # `swift test list` takes no --filter or --skip: it lists all eight tests
+  # whatever the command selects (swiftListCmd refuses such a command).
+  want swift-list-ignores-filter 8 "$($SWIFT test list --filter parses 2>/dev/null | wc -l | tr -d ' ')"
+  # The unit listing, under ListUnitsCmd's working-directory prelude, with the
+  # capture directory written as /fixture.
+  sh -c 'printf '"'"'corral-units-cwd %s\n'"'"' "$(pwd -P)" && exec "$@"' corral-units $SWIFT package describe --type json 2>/dev/null |
+    sed -e "s#$pdir#/fixture/swift#g" > "$OUT/swift-units.txt" || true
+  swiftout swift-pass.txt $SWIFT test
+  CORRAL_FAIL_TESTING=1 swiftout swift-fail-testing.txt $SWIFT test
+  CORRAL_FAIL_XCTEST=1 swiftout swift-fail-xctest.txt $SWIFT test
+  # A build failure: the source no longer compiles, so no test runs.
+  cp Sources/Calc/Calc.swift "$DIR/Calc.swift.orig"
+  printf 'public func broken() -> Int { "not an Int" }\n' >> Sources/Calc/Calc.swift
+  swiftout swift-build-fail.txt $SWIFT test
+  cp "$DIR/Calc.swift.orig" Sources/Calc/Calc.swift
+  # One test alone (swiftSingleCmd): the shorter of two ids sharing a prefix,
+  # in each framework, each running exactly one test.
+  swiftcmd swift-single-testing.txt "swift test" swift test --filter '^CalcTests\.parses\(\)(?:/|$)'
+  want swift-single-testing 1 "$(sed '1,2d' "$OUT/swift-single-testing.txt" | swiftran)"
+  swiftcmd swift-single-xctest.txt "swift test" swift test --filter '^CalcXCTests\.CalcXCTests/testAdds(?:/|$)'
+  want swift-single-xctest 1 "$(sed '1,2d' "$OUT/swift-single-xctest.txt" | swiftran)"
+  # Why the pattern does not end in `$` alone: swift-testing matches --filter
+  # against the id followed by "/<file>:<line>:<column>", so an id anchored
+  # at the end selects nothing, and a run of nothing passes.
+  want swift-filter-dollar-runs-none 0 "$($SWIFT test --filter '^CalcTests\.parses\(\)$' 2>&1 | swiftran)"
+  # Two --filter options select the union, so a command with its own filter
+  # has no one-test or one-unit form (swiftNarrowable).
+  want swift-filters-union 2 "$($SWIFT test --filter '^CalcTests\.parses\(\)(?:/|$)' --filter '^CalcXCTests\.CalcXCTests/testAdds(?:/|$)' 2>&1 | swiftran)"
+  # Test targets (swiftUnitsCmd): one, then both.
+  swiftcmd swift-units-one.txt "swift test" swift test --filter '^(?:CalcXCTests)\.'
+  want swift-unit-one 3 "$(sed '1,2d' "$OUT/swift-units-one.txt" | swiftran)"
+  swiftcmd swift-units-multi.txt "swift test" swift test --filter '^(?:CalcTests|CalcXCTests)\.'
+  want swift-units-multi 8 "$(sed '1,2d' "$OUT/swift-units-multi.txt" | swiftran)"
+  # This body is a subshell (for its cd), so a failed want is its exit status.
+  return "$fail"
+)
+
+if [ "$SWIFT_ONLY" = 1 ]; then
+  capture_swift || fail=1
+  exit "$fail"
+fi
 # The runners come from scripts/npm-pins/runner-fixtures/package-lock.json via
 # `npm ci`, so every package is pinned by its integrity hash. They are installed
 # beside the fixtures, not into them: a lockfile in the copied src/ would be one
@@ -95,10 +195,6 @@ units node-units.txt node --test --test-only --test-reporter=tap --test-concurre
 units node-units-only.txt node --test --test-only --test-reporter=tap 'units/node-only/*.test.js' 'units/node/*.test.js'
 
 # --- one-test commands: each must run exactly the tests named --------------
-fail=0
-want() { # want <runner> <expected> <got>
-  if [ "$2" = "$3" ]; then echo "ok   $1: ran $3"; else echo "FAIL $1: ran $3, want $2"; fail=1; fi
-}
 want jest 1 "$(npx jest --json --testNamePattern '^Calc adds \(a\+b\)$' calc.jest.test.js 2>/dev/null | node -e 'const j=JSON.parse(require("fs").readFileSync(0));console.log(j.numPassedTests+j.numFailedTests)')"
 # The -t patterns below are the ones corral builds (vitestName): either joiner,
 # since vitest 3 matched titles joined by a space and vitest 5 by " > ".
@@ -355,6 +451,8 @@ want yarn-test-single 1 "$(corepack "yarn@$YARN" test --testNamePattern '^top le
 want pnpm-test-single 1 "$(corepack "pnpm@$PNPM" test -- --testNamePattern '^top level$' calc.jest.test.js 2>&1 | jestran)"
 want composer-test-single 1 "$(composer test -- --filter '/(?:^|\\)CalcTest::testAdds(?: with data set .*)?$/' tests/CalcTest.php 2>&1 | sed -n 's/^OK (\([0-9]*\) test.*/\1/p')"
 
+capture_swift || fail=1
+
 {
   echo "Captured by scripts/capture-runner-fixtures.sh on $(date -u +%Y-%m-%d)."
   echo "jest $JEST, vitest $VITEST, mocha $MOCHA (npm); PHPUnit $PHPUNIT (composer)"
@@ -372,6 +470,8 @@ want composer-test-single 1 "$(composer test -- --filter '/(?:^|\\)CalcTest::tes
   echo "gotestsum $GOTESTSUM (go install), $(php -r 'echo "PHP ", PHP_VERSION;'),"
   echo "$(cargo --version | awk '{print "cargo", $2}'), $(cargo nextest --version 2>/dev/null | head -1)."
   echo "*-help files are each runner's --help; libtest-help.txt is a cargo-built test binary's."
+  echo "swift-*.txt: $(head -1 "$OUT/toolchain-swift-version.txt") on src/swift;"
+  echo "swift-list.txt is stdout, the others stdout+stderr with the capture directory as \$DIR or /fixture."
 } > "$OUT/PROVENANCE.txt"
 
 exit "$fail"

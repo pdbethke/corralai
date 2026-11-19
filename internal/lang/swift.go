@@ -15,8 +15,8 @@ func init() { Register(swiftPlugin{}) }
 
 // swiftPlugin is registered with pairing (TestRules) and detection first, as
 // rustPlugin was: every other method gives the answer its contract defines
-// for "not built yet" (ok=false, nil, a stock command) until the tasks that
-// prove it against a real SwiftPM package. Registering it is what puts Swift
+// for "not built yet" (ok=false, nil, a stock command) until each
+// is proven against a real SwiftPM package. Registering it is what puts Swift
 // under every registry-derived test at once. SwiftPM only, Linux only; the
 // capabilities it lacks are named, with a reason each, in ParityExemptions.
 type swiftPlugin struct{}
@@ -51,22 +51,26 @@ func (swiftPlugin) LineComment() string { return "//" }
 // package, both RunWrites.
 //
 // .build is SwiftPM's build output AND its dependency checkout directory
-// (.build/checkouts holds every dependency's source). What each walker did
-// with it before this declaration: reposcan.Enumerate walked it (no dot-
-// directory is skipped there; only a repository's own .gitignore kept
-// checkouts out of the candidate list), the repo reader walked it, and the
-// jail seed copied it. Declared as a dependency it is skipped by all of
-// them, and invisible rather than accounted, as node_modules is.
+// (.build/checkouts holds every dependency's source). Declared as a
+// dependency, the repo scan (reposcan.Enumerate and its fallback walk) and the
+// repo reader skip both directories, and invisibly rather than accounted, as
+// node_modules is. Before this they skipped neither: no dot-directory is
+// skipped there, and only a repository's own .gitignore kept checkouts out of
+// the candidate list.
 //
-// RunWrites is what keeps it out of SharedDependencies, which is the set the
+// The jail seed does NOT read this declaration. It skips only .git and the
+// BuildDirs below, and binds only SharedDependencies. So .build stays out of
+// the seed through BuildDirs alone (and only beside a Package.swift), and
+// .swiftpm, which is no BuildDir, is still copied into every jail seed. The
+// review walkers already skip every dot-directory.
+//
+// RunWrites is what keeps both out of SharedDependencies, which is the set the
 // workspace pool symlinks into every tree and the jail binds read-only: a
 // swift build WRITES .build, so N trees building at once through one link
 // would read each other's products (the .tox reasoning, python.go).
 //
 // .swiftpm is SwiftPM's configuration directory (Xcode workspace data). It is
-// no source either, and a run may write to it, so it is declared the same
-// way. The review walkers already skip every dot-directory; the three above
-// did not.
+// no source either, and a run may write to it, so it is declared the same way.
 func (swiftPlugin) DependencyDirs() []DepDir {
 	return []DepDir{{Name: ".build", RunWrites: true}, {Name: ".swiftpm", RunWrites: true}}
 }
@@ -78,12 +82,18 @@ func (swiftPlugin) DependencyDirs() []DepDir {
 // the default is what a checkout carries, and a miss costs seed size, never a
 // wrong verdict. .swiftpm is not declared here: it is small configuration, not
 // derived output.
+//
+// Consequence: leaving .build out of the jail seed leaves out .build/checkouts
+// too, so a package with remote dependencies cannot resolve them in the
+// offline jail. That is why the default sandbox does not run Swift yet; making
+// it do so needs a way to keep the resolved checkouts while dropping build
+// output.
 func (swiftPlugin) BuildDirs() []BuildDir {
 	return []BuildDir{{Name: ".build", Marker: "Package.swift"}}
 }
 
 // CompileCheck builds the package's targets without running tests. Not yet
-// scoped to the audited file's target (Swift phase 1, task 3); never empty,
+// scoped to the audited file's target; never empty,
 // see Plugin.CompileCheck.
 func (swiftPlugin) CompileCheck(string, string) [][]string {
 	return [][]string{{"swift", "build", "--build-tests"}}
@@ -132,7 +142,7 @@ func swiftTargetUnder(root, p string) (string, bool) {
 }
 
 // Preflight requires `swift` on PATH, or the operator's own first token. The
-// Package.swift and platform checks the spec names are a later task.
+// Package.swift and platform checks the spec names are not checked yet.
 func (swiftPlugin) Preflight(_ string, testCmd []string) error {
 	return toolOnPath(preflightBin(testCmd, "swift"))
 }
@@ -159,22 +169,21 @@ func (swiftPlugin) ImportPath(string, func(string) bool) (string, bool) { return
 // ImportNote is always "": see ImportPath.
 func (swiftPlugin) ImportNote(string, bool) string { return "" }
 
-// TestNamesInSource is nil — no list — until the task that reads swift-testing
-// and XCTest declarations (Swift phase 1, task 3). nil never means the file
+// TestNamesInSource is nil — no list — until corral reads swift-testing
+// and XCTest declarations. nil never means the file
 // has no tests; see Plugin.TestNamesInSource.
 func (swiftPlugin) TestNamesInSource(string, string) []string { return nil }
 
 // WorkspaceRunEnv is a no-op FOR NOW, and that is not a claim of safety: whether
 // SwiftPM's incremental build can serve a stale product for a mutant rewritten
 // in the same second on the workspace substrate (the hole CPython's
-// __pycache__ has) is unmeasured, and the task that runs Swift on that
-// substrate owns measuring it. See Plugin.WorkspaceRunEnv.
+// __pycache__ has) is unmeasured, and it is to be measured
+// when Swift runs on that substrate. See Plugin.WorkspaceRunEnv.
 func (swiftPlugin) WorkspaceRunEnv() (env []string, cleanup func()) { return nil, func() {} }
 
-// ConcatTests merges nothing yet (Swift phase 1, task 3 owns the authored-test
-// landing, which settles what a merged Swift file is: top-level names in a
-// module must be unique, so the writer wraps its tests in one type). It
-// refuses every part rather than guess; ConcatAuthored then delivers each
+// ConcatTests merges nothing yet: what a merged Swift file is has not been
+// settled (top-level names in a module must be unique, so a merge would have to
+// wrap the tests in one type). It refuses every part rather than guess; ConcatAuthored then delivers each
 // proven test as its own file, with this reason, which is the contract's
 // answer for a language that cannot merge precisely (see TestConcatenator).
 func (swiftPlugin) ConcatTests([]AuthoredPart) (string, error) {

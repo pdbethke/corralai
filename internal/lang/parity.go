@@ -195,29 +195,29 @@ var ParityExemptions = []Exemption{
 
 	{"rust", "failure-hook", "not built: corral reads the lines cargo test and cargo-nextest print. nextest writes a JUnit file when a profile in the project's .config/nextest.toml asks for one, and libtest's JSON output is an unstable option; a way to ask for either from the command line was not looked for"},
 
-	{"swift", "list", "not built yet (Swift phase 1, task 2)"},
+	{"swift", "list", "not built yet: corral has no reader for the list `swift test` prints"},
 
-	{"swift", "single", "not built yet (Swift phase 1, task 2)"},
+	{"swift", "single", "not built yet: corral has no command that runs one Swift test alone"},
 
-	{"swift", "first-failure", "not built yet (Swift phase 1, task 2)"},
+	{"swift", "first-failure", "not built yet: corral has no reader for the failure lines `swift test` prints"},
 
-	{"swift", "confirm-alone", "not built yet (Swift phase 1, task 2)"},
+	{"swift", "confirm-alone", "not built yet: it needs the command that runs one Swift test alone, which is not built"},
 
-	{"swift", "fail-fast", "not built yet (Swift phase 1, task 2)"},
+	{"swift", "fail-fast", "not built yet"},
 
-	{"swift", "readable-failures", "not built yet (Swift phase 1, task 2)"},
+	{"swift", "readable-failures", "not built yet: no Swift failure reader exists to protect, and whether a project can hide `swift test`'s failure lines was not checked"},
 
-	{"swift", "failure-hook", "not built yet (Swift phase 1, task 2)"},
+	{"swift", "failure-hook", "not built yet"},
 
-	{"swift", "salvage", "not built yet (Swift phase 1, task 2)"},
+	{"swift", "salvage", "not built yet: it needs a reader for failing Swift tests and a way to skip them, neither of which is built"},
 
-	{"swift", "units", "not built yet (Swift phase 1, task 2)"},
+	{"swift", "units", "not built yet"},
 
-	{"swift", "critic-list", "not built yet (Swift phase 1, task 3)"},
+	{"swift", "critic-list", "not built yet: corral does not read the tests a Swift test file declares"},
 
-	{"swift", "coverage", "not built yet (Swift phase 1, task 4)"},
+	{"swift", "coverage", "not built yet: corral has no Swift coverage reader"},
 
-	{"swift", "selection", "not built yet (Swift phase 1, task 4)"},
+	{"swift", "selection", "not built yet: it needs Swift coverage, which is not built"},
 
-	{"swift", "run-cache", "not built; a shared build directory for SwiftPM is a later phase"},
+	{"swift", "run-cache", "not built, and not measured: whether sharing a SwiftPM build directory between sandboxed runs would save time, or stay correct, has not been looked at"},
 }

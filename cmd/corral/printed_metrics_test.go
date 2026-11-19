@@ -428,6 +428,11 @@ var printedMetrics = map[string]printedRow{
 	"cmd/corral/ledger.go:runLedgerPush":       {Exempt: "ledger push result: counts of entries pushed, skipped and left out, the operation's own output; the rows are the record"},
 	"cmd/corral/matrix.go:runMatrix":           {Fields: []string{"MutantRow.KilledBy", "MutantRow.Outcome"}},
 
+	// The --models plan prints each evidence seat's modelrank.Row.Evidence
+	// text (the same counts models rank prints) and the evidence line, whose
+	// scan count is recorded verbatim as SeatEvidence.
+	"cmd/corral/models_pool.go:seatFromPool":              {Fields: []string{"SeatRow.Catches", "SeatRow.Opportunities", "SeatRow.MutantsPlanted", "SeatRow.MutantsSurvived", "Row.SeatEvidence"}, Exempt: "refusal text on stderr carries causes via %v; no measured number"},
+	"cmd/corral/models_pool.go:resolveModelsPool":         {Exempt: "error message: a pool member's resolution or credential failure, a string"},
 	"cmd/corral/models_rank.go:printRankReport":           {Fields: []string{"SeatRow.Catches", "SeatRow.Opportunities", "SeatRow.ParseRetries"}, Exempt: "registry model count and --min-runs threshold are the operator's inputs"},
 	"cmd/corral/models_rank.go:scanGenerationsByUID":      {Fields: []string{"ScanRow.VerdictGeneration"}, Exempt: "formats the highest recorded generation per scan back to text; it prints nothing else"},
 	"cmd/corral/models_rank.go:summarizeGenerations":      {Fields: []string{"ScanRow.VerdictGeneration"}, Exempt: "formats the lowest and highest recorded generation back to text; the scan count is the evidence-size count, not a record field"},
@@ -493,6 +498,7 @@ var printedMetrics = map[string]printedRow{
 	"cmd/corral/verify_attest.go:runVerifyLedger":      {Exempt: "verify result: entries checked and entries with a problem, computed at verify time"},
 	"cmd/corral/verify_attest.go:verifyReviewEntry":    {Exempt: exReview},
 
+	"internal/autoseat/autoseat.go:seat":                      {Exempt: "the evidence floor in a refusal is modelrank.DefaultMinRuns, a constant the caller passes, not a measurement"},
 	"internal/hoststat/hoststat.go:unreadable":                {Exempt: "error message: the reason a host figure could not be read, a string (the figure itself is on the record as nil with HostNotMeasured)"},
 	"internal/pricing/pricing.go:BasisPartlyUnmetered":        {Fields: []string{"ModelCallRow.Calls", "ModelCallRow.UnmeteredCalls", "ModelCallRow.CostBasis"}},
 	"internal/hoststat/hoststat_linux.go:usage":               {Exempt: "error message: the errno of a failed getrusage, a string"},

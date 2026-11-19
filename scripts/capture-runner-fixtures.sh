@@ -15,7 +15,7 @@
 # the ones the runner rows build (internal/lang/runner_*.go); keep them equal.
 #
 # Needs the network (npm, composer, go install) and node, ruby with rspec,
-# php, go, cargo and cargo-nextest. DIR
+# php, go, cargo, cargo-nextest and swift (or SWIFT, below). DIR
 # defaults to a temp dir, removed on exit unless --keep; a kept DIR is what
 # CORRALAI_RUNNER_ROOT points TestRealRunnersListAndRunOne at. RSPEC overrides
 # the rspec command (a box whose rspec shim is broken can pass `ruby -S ...`).
@@ -32,16 +32,23 @@
 #     -w /tmp/rf/swift swift:6.3.2-noble swift" \
 #     scripts/capture-runner-fixtures.sh --swift-only /tmp/rf
 # --swift-only captures the Swift fixtures alone, needs nothing but SWIFT, and
-# leaves PROVENANCE.txt as it is (the Swift paragraph there is written by hand).
+# leaves PROVENANCE.txt as it is (a full run rewrites it, the Swift paragraph
+# included, from swift_provenance). Either run checks `$SWIFT --version` before
+# it writes anything, so a box without Swift stops there with every capture
+# as it was, as a box without node stops at the npm pin check.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 REPO="$PWD"
 OUT="$REPO/internal/lang/testdata/runners"
 
-SWIFT_ONLY=0
-[ "${1:-}" = "--swift-only" ] && { SWIFT_ONLY=1; shift; }
-KEEP=0
-[ "${1:-}" = "--keep" ] && { KEEP=1; shift; }
+SWIFT_ONLY=0 KEEP=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --swift-only) SWIFT_ONLY=1; shift ;;
+    --keep) KEEP=1; shift ;;
+    *) break ;;
+  esac
+done
 DIR="${1:-$(mktemp -d)}"
 [ "$KEEP" = 1 ] || trap 'rm -rf "$DIR"' EXIT
 RSPEC="${RSPEC:-rspec}"
@@ -52,6 +59,10 @@ JEST=30.5.2 VITEST=5.1.0 MOCHA=12.0.3 PHPUNIT=11.5.57 PHPUNIT9=9.6.39 PHPUNIT10=
 mkdir -p "$DIR"
 cp -r "$OUT/src/." "$DIR/"
 cd "$DIR"
+# Before any capture is written (and after DIR exists, which a container
+# SWIFT mounts): a missing toolchain must not leave empty or "command not
+# found" captures in place of the committed ones.
+$SWIFT --version >/dev/null 2>&1 || { echo "swift: \`$SWIFT --version\` failed; set SWIFT (see the header). Nothing was captured." >&2; exit 1; }
 
 fail=0
 want() { # want <runner> <expected> <got>
@@ -83,11 +94,12 @@ capture_swift() (
     echo $(( ${testing:-0} + ${xctest:-0} ))
   }
   # swiftcmd <fixture> <argv> <cmd...>: `# argv:` the operator's command, `$ `
-  # the row's command (cmd, whose first word is swift), then the run of cmd
-  # under $SWIFT. Keep cmd equal to what the row builds; the tests compare.
+  # the row's command (cmd, whose first word is swift), the run of cmd under
+  # $SWIFT, then `# exit:` its exit status. Keep cmd equal to what the row
+  # builds; the tests compare.
   swiftcmd() {
     local f="$1" argv="$2"; shift 2
-    { echo "# argv: $argv"; echo "\$ $*"; $SWIFT "${@:2}" 2>&1; } | sed -e "s#$pdir#\$DIR/swift#g" > "$OUT/$f" || true
+    { echo "# argv: $argv"; echo "\$ $*"; $SWIFT "${@:2}" 2>&1; echo "# exit: $?"; } | sed -e "s#$pdir#\$DIR/swift#g" > "$OUT/$f" || true
   }
   $SWIFT --version 2>/dev/null > "$OUT/toolchain-swift-version.txt"
   swiftout swift-test-help.txt $SWIFT test --help
@@ -113,15 +125,22 @@ capture_swift() (
   # in each framework, each running exactly one test.
   swiftcmd swift-single-testing.txt "swift test" swift test --filter '^CalcTests\.parses\(\)(?:/|$)'
   want swift-single-testing 1 "$(sed '1,2d' "$OUT/swift-single-testing.txt" | swiftran)"
-  swiftcmd swift-single-xctest.txt "swift test" swift test --filter '^CalcXCTests\.CalcXCTests/testAdds(?:/|$)'
+  swiftcmd swift-single-xctest.txt "swift test" swift test --filter '^CalcXCTests\.AdderTests/testAdds(?:/|$)'
   want swift-single-xctest 1 "$(sed '1,2d' "$OUT/swift-single-xctest.txt" | swiftran)"
+  # The other two listed shapes: a test in a suite (with a display name) and
+  # a parameterised test (its labels carry a ":"), each alone.
+  swiftcmd swift-single-suite.txt "swift test" swift test --filter '^CalcTests\.Arithmetic/adds\(\)(?:/|$)'
+  want swift-single-suite 1 "$(sed '1,2d' "$OUT/swift-single-suite.txt" | swiftran)"
+  swiftcmd swift-single-param.txt "swift test" swift test --filter '^CalcTests\.Arithmetic/doubles\(value:\)(?:/|$)'
+  want swift-single-param 1 "$(sed '1,2d' "$OUT/swift-single-param.txt" | swiftran)"
   # Why the pattern does not end in `$` alone: swift-testing matches --filter
   # against the id followed by "/<file>:<line>:<column>", so an id anchored
-  # at the end selects nothing, and a run of nothing passes.
-  want swift-filter-dollar-runs-none 0 "$($SWIFT test --filter '^CalcTests\.parses\(\)$' 2>&1 | swiftran)"
+  # at the end selects nothing, and a run of nothing passes (exit 0).
+  swiftcmd swift-filter-dollar.txt "swift test" swift test --filter '^CalcTests\.parses\(\)$'
+  want swift-filter-dollar-runs-none "0 exit 0" "$(sed '1,2d' "$OUT/swift-filter-dollar.txt" | swiftran) exit $(sed -n 's/^# exit: //p' "$OUT/swift-filter-dollar.txt")"
   # Two --filter options select the union, so a command with its own filter
   # has no one-test or one-unit form (swiftNarrowable).
-  want swift-filters-union 2 "$($SWIFT test --filter '^CalcTests\.parses\(\)(?:/|$)' --filter '^CalcXCTests\.CalcXCTests/testAdds(?:/|$)' 2>&1 | swiftran)"
+  want swift-filters-union 2 "$($SWIFT test --filter '^CalcTests\.parses\(\)(?:/|$)' --filter '^CalcXCTests\.AdderTests/testAdds(?:/|$)' 2>&1 | swiftran)"
   # Test targets (swiftUnitsCmd): one, then both.
   swiftcmd swift-units-one.txt "swift test" swift test --filter '^(?:CalcXCTests)\.'
   want swift-unit-one 3 "$(sed '1,2d' "$OUT/swift-units-one.txt" | swiftran)"
@@ -130,6 +149,34 @@ capture_swift() (
   # This body is a subshell (for its cd), so a failed want is its exit status.
   return "$fail"
 )
+
+# swift_provenance is PROVENANCE.txt's Swift paragraph, from the version the
+# capture ran (toolchain-swift-version.txt). --swift-only leaves the file to
+# the operator; a full run writes this.
+swift_provenance() {
+  # How swift was run: the host's, or a container's image (the word before
+  # the final "swift" of a container SWIFT).
+  local how="the host's swift" words
+  read -ra words <<<"$SWIFT"
+  if [ "${#words[@]}" -gt 2 ]; then how="a container of ${words[${#words[@]}-2]} run as the invoking user"; fi
+  cat <<PROV
+swift-*.txt and toolchain-swift-version.txt (added 2026-11-19; $(head -1 "$OUT/toolchain-swift-version.txt"),
+$(sed -n 2p "$OUT/toolchain-swift-version.txt")): scripts/capture-runner-fixtures.sh
+through $how, on src/swift, whose test targets are CalcTests (swift-testing, five tests) and
+CalcXCTests (XCTest, three, in class AdderTests). swift-list.txt is the stdout
+of \`swift test list\`; swift-units.txt the stdout of \`swift package describe
+--type json\` under the unit-listing prelude, the capture directory written as
+/fixture; every other file is stdout+stderr, not a TTY, with the capture
+directory written as \$DIR. swift-fail-testing.txt and swift-fail-xctest.txt
+are \`swift test\` with CORRAL_FAIL_TESTING or CORRAL_FAIL_XCTEST set, which
+the fixture reads to plant its failures; swift-build-fail.txt is \`swift test\`
+after a line that does not compile was appended to Sources/Calc/Calc.swift.
+swift-single-*.txt, swift-filter-dollar.txt and swift-units-*.txt open with
+\`# argv:\` (the operator's command) and \`$ \` (the command the row builds)
+and end with \`# exit:\` (its exit status). swift-testing runs its tests in
+parallel, so the order of its lines differs between captures.
+PROV
+}
 
 if [ "$SWIFT_ONLY" = 1 ]; then
   capture_swift || fail=1
@@ -470,8 +517,7 @@ capture_swift || fail=1
   echo "gotestsum $GOTESTSUM (go install), $(php -r 'echo "PHP ", PHP_VERSION;'),"
   echo "$(cargo --version | awk '{print "cargo", $2}'), $(cargo nextest --version 2>/dev/null | head -1)."
   echo "*-help files are each runner's --help; libtest-help.txt is a cargo-built test binary's."
-  echo "swift-*.txt: $(head -1 "$OUT/toolchain-swift-version.txt") on src/swift;"
-  echo "swift-list.txt is stdout, the others stdout+stderr with the capture directory as \$DIR or /fixture."
+  swift_provenance
 } > "$OUT/PROVENANCE.txt"
 
 exit "$fail"

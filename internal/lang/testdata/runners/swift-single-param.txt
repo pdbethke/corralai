@@ -1,0 +1,21 @@
+# argv: swift test
+$ swift test --filter ^CalcTests\.Arithmetic/doubles\(value:\)(?:/|$)
+[0/1] Planning build
+Building for debugging...
+[0/2] Write swift-version-24593BA9C3E375BF.txt
+Build complete! (0.06s)
+Test Suite 'Selected tests' started at 2026-11-19 21:30:21.226
+Test Suite 'Selected tests' passed at 2026-11-19 21:30:21.227
+	 Executed 0 tests, with 0 failures (0 unexpected) in 0.0 (0.0) seconds
+◇ Test run started.
+↳ Testing Library Version: 6.3.2 (70eff261d7f462c)
+↳ Target Platform: x86_64-unknown-linux-gnu
+◇ Suite Arithmetic started.
+◇ Test doubles(value:) started.
+◇ Test case passing 1 argument value → 2 to doubles(value:) started.
+◇ Test case passing 1 argument value → 3 to doubles(value:) started.
+◇ Test case passing 1 argument value → 1 to doubles(value:) started.
+✔ Test doubles(value:) with 3 test cases passed after 0.001 seconds.
+✔ Suite Arithmetic passed after 0.001 seconds.
+✔ Test run with 1 test in 1 suite passed after 0.001 seconds.
+# exit: 0

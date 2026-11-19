@@ -1,6 +1,6 @@
-CalcXCTests.CalcXCTests/testAdds
-CalcXCTests.CalcXCTests/testAddsTwice
-CalcXCTests.CalcXCTests/testFails
+CalcXCTests.AdderTests/testAdds
+CalcXCTests.AdderTests/testAddsTwice
+CalcXCTests.AdderTests/testFails
 CalcTests.Arithmetic/adds()
 CalcTests.Arithmetic/doubles(value:)
 CalcTests.Arithmetic/fails()

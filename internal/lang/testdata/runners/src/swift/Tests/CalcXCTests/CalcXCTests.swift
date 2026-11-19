@@ -2,7 +2,9 @@ import Foundation
 import XCTest
 @testable import Calc
 
-final class CalcXCTests: XCTestCase {
+// The class is named apart from its target (CalcXCTests), so a capture shows
+// which of the two each line of XCTest output names.
+final class AdderTests: XCTestCase {
     // Two tests whose names share a prefix: running testAdds alone must not
     // run testAddsTwice.
     func testAdds() {

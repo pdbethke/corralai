@@ -84,6 +84,12 @@ type Review struct {
 	// the field existed, and for a seat with no resolved provider: not
 	// recorded, never inferred from a model's name.
 	SeatProviders map[string]string `json:"seat_providers,omitempty"`
+	// SeatedBy is how each seat's model was chosen, keyed "reviewer" and
+	// "verifier" like SeatProviders: operator, evidence or order. Absent
+	// means named by flag.
+	SeatedBy map[string]string `json:"seated_by,omitempty"`
+	// SeatEvidence names what the ranking read to seat the "evidence" seats.
+	SeatEvidence string `json:"seat_evidence,omitempty"`
 	// ReviewerModelResolved / VerifierModelResolved report whether the model
 	// field beside them names an actual MODEL, or merely the tool that ran
 	// one. An agentic seat given without a pin ("claude-code", "antigravity")

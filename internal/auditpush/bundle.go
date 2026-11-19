@@ -270,6 +270,8 @@ CREATE TABLE IF NOT EXISTS corral_audits (
   seat_tools                  VARCHAR,
   covering_units              INTEGER,
   seat_providers              VARCHAR,
+  seated_by                   VARCHAR,
+  seat_evidence               VARCHAR,
   files                       INTEGER,
   run_cache                   VARCHAR
 );`
@@ -478,6 +480,12 @@ var corralAuditsMigrationCols = []struct{ name, ddl string }{
 	// (Row.SeatProviders). NULL on every row before it: not recorded, never
 	// to be filled in from a model's name.
 	{"seat_providers", "seat_providers VARCHAR"},
+	// How each roster seat was chosen (Row.SeatedBy, JSON keyed by role) and
+	// what the ranking read (Row.SeatEvidence). NULL on every row before
+	// them: every seat was named by flag, which is also what NULL means on a
+	// row written without --models.
+	{"seated_by", "seated_by VARCHAR"},
+	{"seat_evidence", "seat_evidence VARCHAR"},
 	// How many walked files the row stands for (Row.Files). NULL on every
 	// row before it and on a one-file row: read back as 0, which FileCount
 	// turns into one.
@@ -1342,8 +1350,8 @@ func insertFileRow(tx *sql.Tx, uid string, now time.Time, r Row) error {
 	    symbols, symbols_probed, decisions, decisions_probed,
 	    mutants_unplaced, mutants_unmeasured, mutants_duplicate, writer_attempts,
 	    challenger_mutants, challenger_survived_writer, challenger_survived_shadow, challenger_union, challenger_shared,
-	    priors_applied, prior_digest, computed_at, mutants_from, authored_landing, baseline_flaky, seat_tools, covering_units, seat_providers, files, run_cache
-	  ) VALUES (`+placeholders(107)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+	    priors_applied, prior_digest, computed_at, mutants_from, authored_landing, baseline_flaky, seat_tools, covering_units, seat_providers, seated_by, seat_evidence, files, run_cache
+	  ) VALUES (`+placeholders(109)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 		uid, now, r.Repo, r.Commit, r.Path, r.Lang,
 		killRate, r.Survivors, r.ProvenMissed,
 		r.TimedOut, r.TestWriterFailed, r.PoolTestUnsound,
@@ -1376,7 +1384,7 @@ func insertFileRow(tx *sql.Tx, uid string, now time.Time, r Row) error {
 		r.ChallengerMutants, r.ChallengerSurvivedWriter, r.ChallengerSurvivedShadow, r.ChallengerUnion, r.ChallengerShared,
 		r.PriorsApplied, nullIfEmpty(r.PriorDigest), nullTime(r.ComputedAt), nullIfEmpty(r.MutantsFrom),
 		nullIfEmpty(r.AuthoredLanding), nullIfEmpty(r.BaselineFlaky), nullIfEmpty(r.SeatTools), r.CoveringUnits,
-		nullIfEmpty(r.SeatProviders), nullIfZeroInt(r.Files), nullIfEmpty(r.RunCache),
+		nullIfEmpty(r.SeatProviders), nullIfEmpty(r.SeatedBy), nullIfEmpty(r.SeatEvidence), nullIfZeroInt(r.Files), nullIfEmpty(r.RunCache),
 	)
 	if err != nil {
 		return fmt.Errorf("auditpush: insert %s: %w", r.Path, err)

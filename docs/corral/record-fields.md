@@ -259,7 +259,9 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `ReviewerModelResolved` | measured |  |
 | `ReviewerTool` | measured |  |
 | `Scope` | measured |  |
+| `SeatEvidence` | declared | how corral chose the seat: the operator's flag, the ranking, or the order the pool was named; a statement of the choice, not a measurement |
 | `SeatProviders` | measured | the provider corral resolved and sent the seat's calls to; not a check of what served the model behind that endpoint, and for an agent seat a vendor label |
+| `SeatedBy` | declared | how corral chose the seat: the operator's flag, the ranking, or the order the pool was named; a statement of the choice, not a measurement |
 | `Sound` | meta | a model's opinion: advisory, signed but not verified as true |
 | `StartedAt` | measured |  |
 | `StatementSHA256` | key |  |
@@ -354,8 +356,10 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `RunCache` | meta | the run's own account of itself: signed, but not verified as true |
 | `RunURL` | key |  |
 | `ScanID` | key |  |
+| `SeatEvidence` | declared | how corral chose the seat: the operator's flag, the ranking, or the order the pool was named; a statement of the choice, not a measurement |
 | `SeatProviders` | measured | the provider corral resolved and sent the seat's calls to; not a check of what served the model behind that endpoint, and for an agent seat a vendor label |
 | `SeatTools` | measured |  |
+| `SeatedBy` | declared | how corral chose the seat: the operator's flag, the ranking, or the order the pool was named; a statement of the choice, not a measurement |
 | `SelectedTests` | measured |  |
 | `SelectionExcluded` | measured |  |
 | `SelectionExcludedRed` | measured |  |

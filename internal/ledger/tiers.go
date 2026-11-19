@@ -60,6 +60,7 @@ const (
 	noteModelOpinion   = "a model's opinion: advisory, signed but not verified as true"
 	notePerson         = "declared by the person who wrote it: their words, not verified as true"
 	noteAdjudicator    = "declared by the person who adjudicated"
+	noteSeatedBy       = "how corral chose the seat: the operator's flag, the ranking, or the order the pool was named; a statement of the choice, not a measurement"
 	noteSeatProvider   = "the provider corral resolved and sent the seat's calls to; not a check of what served the model behind that endpoint, and for an agent seat a vendor label"
 )
 
@@ -152,6 +153,10 @@ func buildFieldTiers() map[[2]string]FieldTier {
 	// declaration, exactly as ModelsByRole is corral's record of the named
 	// model; and not META: it is not the run's narrative about itself.
 	add("Row", TierMeasured, noteSeatProvider, "SeatProviders")
+	// SeatedBy and SeatEvidence record HOW a seat was chosen, which is
+	// corral's account of a decision, not something execution measured:
+	// DECLARED, as the operator's own choice of seating policy is.
+	add("Row", TierDeclared, noteSeatedBy, "SeatedBy SeatEvidence")
 	add("Row", TierMeta, noteRunAccount, "ConcurrencyNote Detail Reason RunCache")
 	add("Row", TierMeta, "carries the run's full verdict document, critic opinion included: signed, but not verified as true", "VerdictJSON")
 	add("Row", TierMeta, noteModelOpinion, "VacuousFindings")
@@ -197,6 +202,7 @@ func buildFieldTiers() map[[2]string]FieldTier {
 	add("Review", TierMeta, noteModelOpinion, "Opinion Sound VerifierNote VerifierOpinion")
 	// The same tier and note as Row.SeatProviders, for the same reason.
 	add("Review", TierMeasured, noteSeatProvider, "SeatProviders")
+	add("Review", TierDeclared, noteSeatedBy, "SeatedBy SeatEvidence")
 	add("Finding", TierKey, "", "ID")
 	add("Finding", TierMeasured, "", "Demoted ExitCode Script Stdout Tier Unrun")
 	add("Finding", TierMeta, noteModelOpinion, "Claim Declared File Line Severity")

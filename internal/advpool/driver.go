@@ -998,6 +998,15 @@ type Verdict struct {
 	// signedSeats, so both construction paths carry it, and JSON-tagged, so
 	// the --local signed digest covers it.
 	SeatProviders map[string]string `json:"seat_providers,omitempty"`
+	// SeatedBy is how each seat's model was chosen (RunSpec.SeatedBy):
+	// operator, evidence or order, keyed by role, for the seats the signed
+	// roster names. A statement of the choice, not a measurement. Absent
+	// means every seat was named by flag, so a verdict cached before the
+	// field existed reads the same. Set by signedSeats on both paths.
+	SeatedBy map[string]string `json:"seated_by,omitempty"`
+	// SeatEvidence is what the ranking behind the "evidence" seats read
+	// (RunSpec.SeatEvidence). "" when no seat was seated by evidence.
+	SeatEvidence string `json:"seat_evidence,omitempty"`
 	// MutantSources is where each mutant of the exam came from (graded, or
 	// refused by the compile gate, or unmeasured — so waste can be counted
 	// per source too), keyed by mutant ID: Kind model (with the generator seat's model) for what this run's
@@ -3919,6 +3928,8 @@ type signedRoster struct {
 	selection []shadowpool.Selection
 	tools     map[string]string
 	providers map[string]string
+	seatedBy  map[string]string
+	evidence  string
 }
 
 // stamp writes the signed seats onto v.
@@ -3927,6 +3938,8 @@ func (s signedRoster) stamp(v *Verdict) {
 	v.ShadowSelection = s.selection
 	v.SeatTools = s.tools
 	v.SeatProviders = s.providers
+	v.SeatedBy = s.seatedBy
+	v.SeatEvidence = s.evidence
 }
 
 // signedSeats is the roster a verdict signs AND the pool draws, tools and
@@ -3948,6 +3961,8 @@ func (r *runState) signedSeats(assign RoleAssignment) signedRoster {
 		roster: roster, selection: sels,
 		tools:     SeatedOnly(r.rs.SeatTools, roster),
 		providers: SeatedOnly(r.rs.SeatProviders, roster),
+		seatedBy:  SeatedOnly(r.rs.SeatedBy, roster),
+		evidence:  r.rs.SeatEvidence,
 	}
 }
 

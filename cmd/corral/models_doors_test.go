@@ -97,6 +97,20 @@ func TestLocalModelsNeedsALanguage(t *testing.T) {
 	}
 }
 
+// A run the command line already refuses is refused before --models asks
+// anything: an operator never accepts a lineup for a run that cannot start.
+func TestLocalModelsRefusesUsageBeforeAsking(t *testing.T) {
+	asked := stubDoorPool(t)
+	var out, errb bytes.Buffer
+	code := runCertifyLocal([]string{"--lang", "go", "--code", "a.go", "--models", recordPool, "--", "true"}, &out, &errb)
+	if code != 2 || !strings.Contains(errb.String(), "--goal is required") {
+		t.Fatalf("exit %d, want 2 for the missing --goal:\n%s", code, errb.String())
+	}
+	if *asked != 0 || strings.Contains(out.String(), "seats (from --models") {
+		t.Errorf("asked %d time(s) and printed a plan for a run with no --goal:\n%s", *asked, out.String())
+	}
+}
+
 // corral demo is the real certify --local, reached by its argv, so the pool
 // travels there and certify --local proposes the seats (and records how they
 // were chosen). A seat the pool fills is not passed as an empty flag.

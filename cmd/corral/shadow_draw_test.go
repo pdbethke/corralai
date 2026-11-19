@@ -167,8 +167,11 @@ func TestEveryDoorDrawsFromItsPoolFlags(t *testing.T) {
 		run  func(args []string, stdout, stderr io.Writer) int
 		args []string
 	}{
-		// No --code: refused right after the draw.
-		{"certify --local", runCertifyLocal, append([]string{"--lang", "go"}, pools...)},
+		// A --prior that does not exist: refused after the draw and the
+		// seat resolution, before any jail or spend. (Missing --code was the
+		// trigger until the flag refusals moved ahead of the draw, so that
+		// --models never asks about a run the command line already refuses.)
+		{"certify --local", runCertifyLocal, append([]string{"--lang", "go", "--code", "a.go", "--goal", "g", "--prior", filepath.Join(t.TempDir(), "no-such-prior")}, pools...)},
 		// --scope-tests is refused right after the registry, which runs after the draw.
 		{"certify --repo", runCertifyRepo, append([]string{"--repo", t.TempDir(), "--scope-tests"}, pools...)},
 	}

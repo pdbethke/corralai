@@ -13,6 +13,7 @@ import (
 	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/modelrank"
+	"github.com/pdbethke/corralai/internal/reposcan"
 )
 
 // How each seat was chosen reaches the WRITTEN entry at every door that
@@ -170,6 +171,67 @@ func TestRepoEntryRecordsHowEachSeatWasChosen(t *testing.T) {
 		if audited != 2 {
 			t.Fatalf("%s ledger: %d audited rows, want the fixture's two", name, audited)
 		}
+	}
+}
+
+// A --repo scan with no --goals map runs a goal deriver, so the roster names
+// it and the row records how it was chosen: by pool order when --models
+// proposed it, by the operator when --derive-model named it. The deriver is
+// stubbed, so the "anthropic" seat makes no call.
+func TestRepoEntryRecordsHowTheDeriverWasChosen(t *testing.T) {
+	cases := []struct {
+		name  string
+		extra []string
+		want  string
+	}{
+		{"proposed by --models", nil, "order"},
+		{"named by --derive-model", []string{"--derive-model", "anthropic/claude-sonnet-5"}, "operator"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			root, setPath, _ := telemetryRepoFixture(t)
+			stubDoorPool(t)
+			machine := withMachineLedger(t)
+			noKeys(t)
+			t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+			wiredAgent(t, "fakec", "claude-json", claudeJSONReply)
+			prev := certifyRepoDeriver
+			t.Cleanup(func() { certifyRepoDeriver = prev })
+			certifyRepoDeriver = func(rs agentbackend.ResolvedSeat) (reposcan.Deriver, error) {
+				return newMeteredDeriver(&fakeBackend{reply: "the function returns its documented constant"}, rs.Spec), nil
+			}
+			args := append([]string{
+				"--repo", root, "--models", recordPool, "--no-goal-cache", "--cache-db", filepath.Join(t.TempDir(), "cache.duckdb"),
+				"--substrate", substrateWorkspace, "--all", "--mutants", setPath,
+			}, c.extra...)
+			var out, errb bytes.Buffer
+			if code := runCertifyRepo(args, &out, &errb); code != 0 {
+				t.Fatalf("exit=%d\n%s%s", code, out.String(), errb.String())
+			}
+			entries, err := auditpush.ReadLedgerDir(machine)
+			if err != nil || len(entries) != 1 {
+				t.Fatalf("machine ledger: %d entries, %v", len(entries), err)
+			}
+			audited := 0
+			for _, f := range entries[0].Bundle.Files {
+				if f.Disposition != "audited" {
+					continue
+				}
+				audited++
+				var roster, by map[string]string
+				_ = json.Unmarshal([]byte(f.ModelsByRole), &roster)
+				_ = json.Unmarshal([]byte(f.SeatedBy), &by)
+				if roster[modelrank.SeatGoalDeriver] != "claude-sonnet-5" {
+					t.Errorf("%s: roster %v does not name the deriver claude-sonnet-5", f.Path, roster)
+				}
+				if by[modelrank.SeatGoalDeriver] != c.want {
+					t.Errorf("%s: SeatedBy %v, want goal-deriver=%s", f.Path, by, c.want)
+				}
+			}
+			if audited != 2 {
+				t.Fatalf("%d audited rows, want the fixture's two\n%s%s", audited, out.String(), errb.String())
+			}
+		})
 	}
 }
 

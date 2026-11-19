@@ -1804,11 +1804,22 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 
 	// One roster, shared by the push and the statement, so the two can never
 	// disagree about which model held which seat.
+	//
+	// The goal deriver is on it when it is a seat of this scan (no --goals
+	// map replaced it), so the row names the model that derived the goals
+	// the grading seats were held to, and how --models chose it (SeatedBy,
+	// narrowed to this roster) is attributed to a named model rather than
+	// dropped. With --goals no deriver ran and none is named. A reader that
+	// ranks the roster sees the deriver as goal-deriver, which modelrank
+	// already reports as "not scored", so no seat's measure changes.
 	models := func() map[string]string {
 		m := map[string]string{
 			"mutant-generator": strings.TrimSpace(*mutantModelFlag),
 			"test-writer":      strings.TrimSpace(*writerModelFlag),
 			"test-critic":      strings.TrimSpace(*criticModelFlag),
+		}
+		if strings.TrimSpace(*goalsPath) == "" {
+			m[roleGoalDeriver] = strings.TrimSpace(*deriveModel)
 		}
 		for role, v := range m {
 			if v == "" || v == "off" {
@@ -1975,7 +1986,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			SeatTools:     seatToolsJSON,
 			SeatProviders: roleMapJSON(seatProviders),
 			// How the roster's seats were chosen, narrowed to the roster as
-			// its providers are (the deriver is not on it).
+			// its providers are (the deriver is on it only when it ran).
 			SeatedBy:     roleMapJSON(advpool.SeatedOnly(seating.SeatedBy, models())),
 			SeatEvidence: seating.SeatEvidence,
 			MinKillRate:  minKillRate, MaxProvenMissed: maxProvenMissed,

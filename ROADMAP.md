@@ -142,6 +142,14 @@ of these has happened, with the evidence linked here:
 - **`--max-tokens` caps a certify run** across every seat, goal derivation
   included (rc.20), and holds under parallel calls (rc.22). `corral review`
   has no token cap yet.
+- **`--models` lets the record propose the seats (not yet in a release).** The
+  operator names a pool; corral seats the measured seats from this machine's
+  ledger and the others by the order the pool was named, prints the lineup,
+  and runs nothing until the operator accepts it. Only named models can be
+  seated, a measured seat no member has 5 observations for is refused, and the entry
+  records how each seat was chosen (`SeatedBy`). Next, and not built: seating
+  without asking (`--autoseat`), and seating members below the evidence floor
+  in the shadow seats so that they gather evidence.
 
 **The review — a stranger reads your code.**
 - **`corral review --scope`.** A coding agent that has never seen the repository

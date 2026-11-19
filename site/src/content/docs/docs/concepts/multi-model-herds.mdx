@@ -72,7 +72,15 @@ reach and how to define your own are in
   corral's own recorded evidence — a different metric per seat (the writer by
   proven gaps per survivor attempted, the generator by valid mutants the dev
   suite missed, the critic by precision against human adjudication). It is
-  disclosure, not selection: it writes no config and staffs no seat.
+  disclosure: it writes no config and staffs no seat.
+- **`--models`** is the one way the ranking selects. Name a pool
+  (`--models a,b,c`) on `certify`, `doctor`, `demo` or `review`, and corral
+  proposes which member takes each seat from this machine's ledger, prints the
+  lineup with the reason for each seat, and runs nothing until you accept it on
+  a terminal. Only models you named on that run can be seated, a seat you name
+  by its own flag is pinned, and a seat no member has enough evidence for is
+  refused. See
+  [agent seats](https://github.com/pdbethke/corralai/blob/main/docs/corral/agent-seats.md).
 
 ## The optional daemon
 

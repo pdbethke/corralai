@@ -238,6 +238,106 @@ shell-wrapped definition proceeds unchecked.
 An Ollama tag that starts with an agent's name, such as `codex:latest`, reads as
 that agent pinned to the model `latest`; rename the model or undefine the agent.
 
+## A pool of seats: `--models`
+
+`--models` names a pool of models and lets corral propose which of them takes
+each seat, from what this machine's ledger recorded about them.
+`certify --local`, `certify --repo`, `doctor`, `demo` and `review` take it.
+A member is written exactly as a seat flag takes it: `vendor/model`, a
+registry alias, a local model, an agent seat (`codex`) or a pinned agent seat
+(`codex:gpt-6`).
+
+```bash
+corral demo --models anthropic/claude-sonnet-5-5,anthropic/claude-haiku-5-5,codex:gpt-6
+```
+
+The models in that command are examples, not defaults. A pool is not a
+default either: corral seats only models you named on the run.
+
+How each seat is filled:
+
+- A seat you also name with its own flag (`--writer-model`, `--critic-model off`
+  and so on) is pinned, and the pin wins.
+- The measured seats (mutant-generator, test-writer, and on `review` the
+  reviewer and verifier) go to the pool member that `corral models rank` puts
+  first among those with at least 5 observations in that seat's own unit:
+  runs for the generator (in the machine ledger a run is one scan), survivors
+  attempted for the writer, claims checked for the reviewer, verdicts for the
+  verifier. Equal rates go to the member you named first.
+- The goal-deriver (on `certify --repo` without `--goals`, and on `doctor`) is
+  not measured, so it goes to the first member you named. The critic goes to
+  the first member that is not the writer, preferring one from a different
+  provider. A critic is measured only by human adjudication, which the machine
+  ledger does not carry, so on this evidence it is always seated this way.
+- A bare agent seat (`codex`) names a tool, not a model, so nothing is ranked
+  under it: it can take a seat by pin or by pool order, never by evidence.
+  `codex:gpt-6` is ranked like any other model.
+
+Before anything is proposed, every member is resolved and its credential (or
+its CLI) checked, whether or not it will be seated. `certify --repo --dry-run`
+checks no member's credential, as it checks none for any seat. Then the plan is
+printed on stdout (on stderr under `certify --repo --json`), one row per seat:
+the seat, the model, how it was chosen (`operator`, `evidence` or `order`) and
+why, then what the ranking read and, when the evidence records them, the
+grading rules it spans. An illustration of a `certify --repo` plan for a
+Python scan (the numbers are a test's fixture, not a measurement; `certify
+--local` and `demo` have no goal-deriver row):
+
+```
+seats (from --models anthropic/claude-sonnet-5-5,anthropic/claude-haiku-5-5,codex:gpt-6):
+  goal-deriver      claude-sonnet-5-5  order     no measurement for this seat: taken from the order you named
+  mutant-generator  claude-sonnet-5-5  evidence  60 planted, 54 graded, 6 invalid, 24 survived over 6 runs
+  test-writer       claude-sonnet-5-5  evidence  193/195 survivors proven over 6 runs
+  test-critic       gpt-6 (codex)      order     no measurement for this seat: taken from the order you named
+evidence: the machine ledger /state/ledger (31 scan(s), 2 review(s); a run is one SCAN); language python
+grading rules: generations 40 to 43 across 6 scan(s) with evidence
+```
+
+On a terminal corral then asks `run with these seats? [y/N]`. Only `y` or `yes`
+runs; any other answer prints `not run; nothing was spent` and exits 0. With no
+terminal (a pipe, a CI job) nothing runs: corral prints the plan and the same
+lineup as seat flags (`to run this lineup: --mutant-model ... --writer-model ...`)
+and exits 0, so you can run it deliberately. There is no `--yes`. `doctor` and
+`certify --repo --dry-run` print the plan, say it is the lineup a real run
+would propose, and ask nothing.
+
+What refuses, before anything is spent (exit 2):
+
+- a pool with an empty member, a member named twice, two members that resolve
+  to the same model, or `off` (pin a seat off with its own flag instead);
+- `--models` given twice;
+- a member that cannot run, for example a missing key;
+- a measured seat no member has 5 or more observations for. The plan marks it
+  `REFUSED` and names the fix, for example
+  `no model in --models has 5+ survivors attempted as test-writer; pin --writer-model`.
+  The floor is never lowered and no model outside the pool is used. A machine
+  with no entries yet refuses every measured seat that is not pinned;
+- a critic or verifier that would be the same model as its writer or reviewer,
+  including a one-model pool's critic (`--critic-model off` satisfies it);
+- a machine ledger that cannot be read or does not verify. Nothing falls back
+  to another source;
+- on `certify --local`, a file whose language cannot be detected (pass `--lang`).
+
+When every seat is pinned, `--models` seats nothing, reads no evidence and asks
+nothing. On `review`, `--verifier-model off` pins no verifier.
+
+The ranking is read for the audited file's language on `certify --local` and
+`demo` (Go), for the scan's language on `certify --repo` when it has exactly
+one (otherwise across all languages), for `--code`'s language on
+`doctor` (across all languages without it), and across all languages on
+`review`. The evidence line says which.
+
+The entry records how each seat was chosen as `SeatedBy`, keyed by seat, and,
+when a seat was seated by evidence, what the ranking read as `SeatEvidence`;
+both are declared fields
+([record-fields.md](record-fields.md)). A seat you accepted from the plan is
+recorded as `evidence` or `order`, not `operator`. On `certify --repo` without
+`--goals` the entry's roster also names the goal-deriver, so its seating is
+attributed to a model. `corral models rank` itself still seats nothing.
+
+Not in this release: seating a proposal without asking (`--autoseat`), and
+seating members below the floor in the shadow seats to gather evidence on them.
+
 ## In analysis
 
 `corral models rank`, the bug-catching scorecard and the public warehouse's

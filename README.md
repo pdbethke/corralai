@@ -454,7 +454,26 @@ wrote ledger entries (rc.26), are shown only under `--source scorecard`, which
 reads the old local bug-catching store instead.
 `--db` reads a ledger directory or a warehouse that `certify --repo --push`
 filled. A ledger that does not verify is refused, and no source falls back to
-another. It prints a ranking; it never staffs a seat.
+another. `corral models rank` prints a ranking and staffs no seat.
+
+**Letting the record propose the seats: `--models`.** Name a pool and corral
+proposes which member takes each seat, from this machine's ledger:
+`--models anthropic/claude-sonnet-5-5,anthropic/claude-haiku-5-5,codex:gpt-6`
+(examples, not defaults) on `certify --local`, `certify --repo`, `doctor`,
+`demo` or `review`. A pool is not a default: only models you named on that run
+can be seated. A seat you also name by its own flag is pinned. The measured
+seats (generator, writer, reviewer, verifier) go to the best-ranked member with
+at least 5 observations in that seat's unit; the goal-deriver and the critic
+go by the order you named the pool, because the ledger holds nothing that ranks
+them, the critic never to the writer's model and preferably to another
+provider. corral prints the lineup with the reason for
+each seat and runs nothing until you answer `y` or `yes` on a terminal. With no terminal
+it prints the lineup as seat flags and exits 0; there is no `--yes`. `doctor`
+and `certify --repo --dry-run` print it and ask nothing. A seat no member
+qualifies for is refused with the flag that would fill it, never filled from
+outside the pool. The entry records how each seat was chosen (`SeatedBy`) and
+what the ranking read (`SeatEvidence`). Details and every refusal:
+[docs/corral/agent-seats.md](docs/corral/agent-seats.md#a-pool-of-seats---models).
 
 The levers that bound it: `corral doctor` (below) catches environment failures for
 free before a run spends anything; `--top` bounds a whole-repo scan to the

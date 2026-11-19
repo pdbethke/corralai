@@ -302,6 +302,37 @@ This is deliberate. corral claims to be model-agnostic, and a binary that names
 one vendor's models when the operator named none is making an exception to that
 claim. We run Claude; we do not make anyone else.
 
+**`--models a,b,c` lets the record propose seats, from models the operator
+named on that run. A pool is not a default.** `certify --local`, `certify
+--repo`, `doctor`, `demo` (which forwards it to `certify --local`) and `review`
+take it. Every member is resolved and credential-checked before anything is
+proposed (`certify --repo --dry-run` checks no member's credential, as it
+checks none for any seat); a seat named by its own flag is a pin and wins; the measured seats
+(mutant-generator, test-writer, reviewer, verifier) take the best-ranked pool
+member with at least `modelrank.DefaultMinRuns` (5) observations in that seat's
+own unit; the goal-deriver takes the first member in the order the operator
+typed, and the critic, unless it has such a row, the first member that is not
+the writer, preferring one from a different provider. A seat nothing
+qualifies for is refused with the flag that would fill it, never filled from
+outside the pool and never by lowering the floor. The plan is printed and
+nothing runs until the operator answers `y` or `yes` on a terminal (anything
+else declines, exit 0); with no terminal it
+prints the equivalent seat flags and exits 0. There is no `--yes`. `doctor` and
+`certify --repo --dry-run` print the plan and ask nothing. The evidence is the
+machine ledger only, with no fallback to another source. The proposer is
+`internal/autoseat` (a pure function) and it is the one door:
+`TestOnlyAutoseatDecidesASeatFromEvidence` fails any other file in `cmd/corral`
+that imports it, and `models_pool.go` is the only caller. How each seat was
+chosen is recorded on the entry as `SeatedBy` (`operator`, `evidence` or
+`order`, keyed by role) beside `SeatEvidence` (what the ranking read), both
+tier DECLARED; a seat filled by an accepted proposal is recorded as `evidence`
+or `order`, never as `operator`, because a person pressing `y` did not choose
+the model. The machine ledger carries no critic adjudications, so on this
+evidence the critic is always seated by order.
+`corral models rank` itself still seats nothing. `--autoseat` (seat without
+asking) and exploration (seating below-floor members in the shadow seats) are
+NOT built; do not document them as features.
+
 **The shadow challenger is OFF unless named**, and it doubles the mutant count
 when on. It used to default to a Claude model and be on, which quietly kept an
 Anthropic seat alive through an otherwise all-Gemini run.

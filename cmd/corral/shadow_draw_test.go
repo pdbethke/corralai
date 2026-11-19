@@ -163,23 +163,30 @@ func TestEveryDoorDrawsFromItsPoolFlags(t *testing.T) {
 	t.Setenv("CORRALAI_BUGCATCH_DB", filepath.Join(t.TempDir(), "bc.duckdb"))
 	pools := []string{"--shadow-pool", "localmodel-a:1,localmodel-b:1", "--shadow-writer-pool", "localmodel-c:1,localmodel-d:1", "--shadow-seed", "0x2a"}
 	doors := []struct {
-		name string
-		run  func(args []string, stdout, stderr io.Writer) int
-		args []string
+		name    string
+		run     func(args []string, stdout, stderr io.Writer) int
+		args    []string
+		refusal string // the after-the-draw refusal the door must reach
 	}{
 		// A --prior that does not exist: refused after the draw and the
 		// seat resolution, before any jail or spend. (Missing --code was the
 		// trigger until the flag refusals moved ahead of the draw, so that
 		// --models never asks about a run the command line already refuses.)
-		{"certify --local", runCertifyLocal, append([]string{"--lang", "go", "--code", "a.go", "--goal", "g", "--prior", filepath.Join(t.TempDir(), "no-such-prior")}, pools...)},
-		// --scope-tests is refused right after the registry, which runs after the draw.
-		{"certify --repo", runCertifyRepo, append([]string{"--repo", t.TempDir(), "--scope-tests"}, pools...)},
+		{"certify --local", runCertifyLocal, append([]string{"--lang", "go", "--code", "a.go", "--goal", "g", "--prior", filepath.Join(t.TempDir(), "no-such-prior")}, pools...), "no-such-prior"},
+		// A primary seat no source serves: refused by the seat resolution,
+		// which runs after the draw and needs it (the drawn challengers are
+		// resolved in the same call). --scope-tests was the trigger until it
+		// moved ahead of --models with the other flag-only refusals.
+		{"certify --repo", runCertifyRepo, append([]string{"--repo", t.TempDir(), "--writer-model", "no-source-serves-this"}, pools...), "no-source-serves-this"},
 	}
 	for _, d := range doors {
 		t.Run(d.name, func(t *testing.T) {
 			var out, errb bytes.Buffer
 			if rc := d.run(d.args, &out, &errb); rc != 2 {
 				t.Fatalf("rc = %d, want the usage refusal after the draw\n%s", rc, errb.String())
+			}
+			if !strings.Contains(errb.String(), d.refusal) {
+				t.Errorf("refused, but not by the after-the-draw refusal naming %q:\n%s", d.refusal, errb.String())
 			}
 			for _, want := range []string{"mutant-generator challenger drawn from a pool of 2", "test-writer challenger drawn from a pool of 2", "0x000000000000002a"} {
 				if !strings.Contains(errb.String(), want) {

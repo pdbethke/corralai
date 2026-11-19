@@ -83,7 +83,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		writerPool:  "a comma-separated POOL of challenger WRITER models, drawn once per scan exactly as --shadow-pool is. Mutually exclusive with --shadow-writer-model. OFF unless named; NEVER gates the verdict",
 		seed:        shadowSeedReplayHelp,
 	})
-	modelsPool := registerModelsFlags(fs, "a comma-separated `POOL` of models you name; corral proposes which of them seats the goal-deriver (unless --goals is given), mutant-generator, test-writer and test-critic for the whole scan, ranked by the recorded evidence for the scan's language (across all languages when it spans several), prints that plan, and nothing runs until you accept it on a terminal (with no terminal it prints the equivalent seat flags and exits; --dry-run prints the plan and asks nothing). A pool is not a default: a seat you also name by its own flag is pinned, and a seat no member qualifies for is refused, never filled from outside the pool")
+	modelsPool := registerModelsFlags(fs, "a comma-separated `POOL` of models you name; corral proposes which of them seats the goal-deriver (unless --goals is given), mutant-generator, test-writer and test-critic for the whole scan, ranked by the recorded evidence for the scan's language (across all languages when it has none or several), prints that plan, and nothing runs until you accept it on a terminal. With no terminal it prints the equivalent seat flags, audits nothing and exits 0, so a pipeline must pass the seat flags itself; --dry-run prints the plan and asks nothing. A pool is not a default: a seat you also name by its own flag is pinned, and a seat no member qualifies for is refused, never filled from outside the pool")
 	owner := fs.String("owner", "local", "owning account for the scan (tenant identifier)")
 	commit := fs.String("commit", "", "commit SHA the report is bound to")
 	swarmFlag := fs.Int("swarm", 0, "max concurrent audit workers (0 = auto-size to this host's cores); on --substrate workspace it also sizes the private trees that score one file's mutants at once (budget/4, min 1), so --swarm 4 is one tree")
@@ -363,16 +363,35 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		maxProvenMissed = &v
 	}
 
+	// Refusals the command line alone decides, before the walk and before
+	// --models asks anything: an operator must never accept a lineup for a
+	// run that was always going to be refused.
+	if *scopeTestsFlag {
+		fmt.Fprintln(stderr, "corral certify --repo: --scope-tests was removed. Its paired-FILE scoping inverted verdicts (requests/adapters.py 1.00 -> 0.00). Selection is now by coverage evidence and on by default; pass --whole-suite to grade against the whole suite. See docs/design/test-selection.md")
+		return 2
+	}
+	// --local-endpoint placements are parsed here, before the seats resolve:
+	// a placement is itself a declared source for a seat with a bare local
+	// name, so --models resolves a pin with them and the preflight below
+	// (resolveAuditRoles) sees them folded in.
+	localEndpoints, lerr := parseLocalEndpoints(localEndpointFlag)
+	if lerr != nil {
+		fmt.Fprintf(stderr, "corral certify --repo: %v\n", lerr)
+		return 2
+	}
+
 	// Captured here, before enumeration: this is the header row's
 	// provenance timestamp for the whole invocation, not just the audit
-	// portion of it. Read only if --record is given (see the fail-open call
-	// site near the bottom of this function).
+	// portion of it, except that a --models run restarts it when the
+	// operator accepts the plan (below). Read only if --record is given (see
+	// the fail-open call site near the bottom of this function).
 	startedAt := time.Now()
 	// The host's load and the run's own consumption, sampled until the scan
 	// header is built. The deferred Stop ends the sampler on every early
-	// return; Stop is idempotent, so the one before the header is the read.
+	// return (the one running then, since a --models acceptance replaces
+	// it); Stop is idempotent, so the one before the header is the read.
 	hostSampler := hoststat.Start(hostSampleInterval)
-	defer hostSampler.Stop()
+	defer func() { hostSampler.Stop() }()
 
 	var testMap *reposcan.TestMap
 	if *testsPath != "" {
@@ -427,14 +446,18 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// the one the evidence pass instruments (preflightLanguages over the
 	// enumerated sources): a superset of what the scan audits, so a scan
 	// ranked by one language never audits another. One language ranks by it;
-	// none or several rank across all of them.
+	// none or several rank across all of them, and the evidence line says
+	// which of the two it was.
 	//
 	// A dry run spends nothing and demands no credential for any seat, so
 	// there the pool is not credential-checked and the plan is shown without
 	// a question. Under --json the plan goes to stderr: not one byte of prose
 	// may precede the inventory.
-	scanLang := shadowpool.LangAny
-	if langs := preflightLanguages(enumeratedSourcePaths(cands, excl)); len(langs) == 1 {
+	scanLang, anyWhy := shadowpool.LangAny, anyLangSeveral
+	switch langs := preflightLanguages(enumeratedSourcePaths(cands, excl)); len(langs) {
+	case 0:
+		anyWhy = anyLangNone
+	case 1:
 		for l := range langs {
 			scanLang = l
 		}
@@ -453,12 +476,22 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		planOut = stderr
 	}
 	seatDeps := doorPoolDeps(planOut, stderr)
+	seatDeps.placed = localEndpoints
 	if *dryRun {
 		seatDeps.confirm, seatDeps.noCredentialCheck = acceptUnasked, true
 	}
-	seating, poolExit, poolDone := seatFromPool(context.Background(), "corral certify --repo", *repoDir, scanLang, anyLangSeveral, modelsPool, poolRoles, seatDeps)
+	seating, poolExit, poolDone := seatFromPool(context.Background(), "corral certify --repo", *repoDir, scanLang, anyWhy, modelsPool, poolRoles, seatDeps)
 	if poolDone {
 		return poolExit
+	}
+	if seating.proposed() && !*dryRun {
+		// The scan starts when the operator accepts: started_at,
+		// total_millis and the host-load samples must not include a person
+		// reading the plan, or the evidence read behind it. The walk above
+		// (which the plan needed for the scan's language) is excluded with
+		// them, and is the one part of the invocation a --models scan's
+		// total_millis does not cover.
+		startedAt, hostSampler = restartRunClock(hostSampler)
 	}
 	if *dryRun && seating.proposed() {
 		fmt.Fprintln(planOut, "a dry run asks nothing and runs nothing: this is the lineup a real run would propose")
@@ -501,15 +534,8 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// Resolved HERE, before any seat value is read by the preflight, the cache
 	// key, the ledger or the signed statement, so every one of them records
 	// the CONCRETE model. An alias is a label for humans and is never
-	// authoritative.
-	// --local-endpoint placements are parsed BEFORE the seats resolve: a
-	// placement is itself a declared source for a seat with a bare local name,
-	// and the preflight below (resolveAuditRoles) must see it folded in.
-	localEndpoints, lerr := parseLocalEndpoints(localEndpointFlag)
-	if lerr != nil {
-		fmt.Fprintf(stderr, "corral certify --repo: %v\n", lerr)
-		return 2
-	}
+	// authoritative. The --local-endpoint placements, parsed with the other
+	// flag refusals above, are folded in here.
 	// context.Background(): no cancellable context exists here. The SIGINT
 	// handler (auditContext) is installed after the goal derivation, on
 	// purpose — an interrupt before any audit has nothing to record, and
@@ -519,10 +545,6 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		certifySeats(deriveModel, mutantModelFlag, writerModelFlag, criticModelFlag, shadow.model, shadow.writerModel), localEndpoints, stderr)
 	if regErr != nil {
 		fmt.Fprintf(stderr, "corral certify --repo: %v\n", regErr)
-		return 2
-	}
-	if *scopeTestsFlag {
-		fmt.Fprintln(stderr, "corral certify --repo: --scope-tests was removed. Its paired-FILE scoping inverted verdicts (requests/adapters.py 1.00 -> 0.00). Selection is now by coverage evidence and on by default; pass --whole-suite to grade against the whole suite. See docs/design/test-selection.md")
 		return 2
 	}
 
@@ -1987,8 +2009,10 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			SeatProviders: roleMapJSON(seatProviders),
 			// How the roster's seats were chosen, narrowed to the roster as
 			// its providers are (the deriver is on it only when it ran).
+			// The evidence line goes with the last evidence seat the
+			// narrowing keeps, as the verdict's does (B12).
 			SeatedBy:     roleMapJSON(advpool.SeatedOnly(seating.SeatedBy, models())),
-			SeatEvidence: seating.SeatEvidence,
+			SeatEvidence: seatEvidenceFor(advpool.SeatedOnly(seating.SeatedBy, models()), seating.SeatEvidence),
 			MinKillRate:  minKillRate, MaxProvenMissed: maxProvenMissed,
 			Passed:    boolPtr(exitCode == 0),
 			PushedBy:  auditpush.PushedByCertify,

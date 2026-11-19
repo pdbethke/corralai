@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -39,7 +40,7 @@ func TestDoctorModelsPrintsThePlanAndAsksNothing(t *testing.T) {
 	}
 	text := out.String()
 	plan := strings.Index(text, "seats (from --models "+recordPool+")")
-	note := strings.Index(text, "doctor runs nothing: this is the lineup `certify` would propose")
+	note := strings.Index(text, "doctor asks nothing: this is the lineup `certify` would propose")
 	if plan < 0 || note < plan {
 		t.Fatalf("want the plan, then the doctor note under it:\n%s\nstderr:\n%s", text, errb.String())
 	}
@@ -150,8 +151,8 @@ func TestModelsHelpIsTrueAtEachDoor(t *testing.T) {
 		must []string
 	}{
 		{"certify --local", runCertifyLocal, []string{"not a default", "accept", "language"}},
-		{"certify --repo", runCertifyRepo, []string{"not a default", "accept", "goal-deriver", "--dry-run"}},
-		{"doctor", runDoctor, []string{"not a default", "accept", "runs nothing"}},
+		{"certify --repo", runCertifyRepo, []string{"not a default", "accept", "goal-deriver", "--dry-run", "audits nothing and exits 0", "none or several"}},
+		{"doctor", runDoctor, []string{"not a default", "accept", "doctor asks nothing and spends nothing on a seat it proposes; a `--derive-model` you name is still probed with one real call"}},
 		{"demo", runDemo, []string{"not a default", "accept", "Go"}},
 	}
 	for _, d := range doors {
@@ -161,5 +162,76 @@ func TestModelsHelpIsTrueAtEachDoor(t *testing.T) {
 				t.Errorf("%s -models help lacks %q:\n%s", d.name, w, help)
 			}
 		}
+	}
+}
+
+// certify --repo refuses what its flags alone decide before --models asks
+// anything (B4): --scope-tests and a malformed --local-endpoint used to be
+// refused after the operator had accepted a lineup.
+func TestRepoModelsRefusesFlagErrorsBeforeAsking(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"--scope-tests", []string{"--scope-tests"}, "--scope-tests was removed"},
+		{"--local-endpoint", []string{"--local-endpoint", "no-such-role=http://localhost:1"}, "unknown role"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			root, setPath, goals := telemetryRepoFixture(t)
+			asked := stubDoorPool(t)
+			var out, errb bytes.Buffer
+			code := runCertifyRepo(append([]string{"--repo", root, "--models", recordPool, "--goals", goals,
+				"--substrate", substrateWorkspace, "--all", "--mutants", setPath}, c.args...), &out, &errb)
+			if code != 2 || !strings.Contains(errb.String(), c.want) {
+				t.Fatalf("exit %d, want 2 naming %q:\n%s", code, c.want, errb.String())
+			}
+			if *asked != 0 || strings.Contains(out.String(), "seats (from --models") {
+				t.Errorf("asked %d time(s) and printed a plan for a run its flags refuse:\n%s", *asked, out.String())
+			}
+		})
+	}
+}
+
+// The top-level usage names what `corral models rank` reads without --db:
+// this machine's ledger, with --source to choose the old scorecard store
+// (B14). It said "instead of the local bug-catching ledger" after the default
+// had moved.
+func TestTopLevelUsageNamesTheRankSources(t *testing.T) {
+	u := usageText()
+	if strings.Contains(u, "instead of the local\n") || strings.Contains(u, "bug-catching ledger; unreachable") {
+		t.Errorf("usage still says --db replaces the local bug-catching ledger")
+	}
+	for _, want := range []string{"instead of this machine's ledger", "--source ledger|scorecard"} {
+		if !strings.Contains(u, want) {
+			t.Errorf("usage lacks %q", want)
+		}
+	}
+}
+
+// Under --json a dry run's stdout is the inventory document and nothing
+// else; the --models plan and the dry-run note go to stderr (C6).
+func TestRepoJSONDryRunModelsKeepsStdoutJSON(t *testing.T) {
+	root, _, goals := telemetryRepoFixture(t)
+	asked := stubDoorPool(t)
+	noKeys(t)
+	clearSeatEnv(t)
+	wiredAgent(t, "fakec", "claude-json", claudeJSONReply)
+	var out, errb bytes.Buffer
+	code := runCertifyRepo([]string{"--repo", root, "--models", recordPool, "--goals", goals, "--dry-run", "--json"}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit=%d\n%s%s", code, out.String(), errb.String())
+	}
+	if *asked != 0 {
+		t.Errorf("asked %d time(s)", *asked)
+	}
+	if !json.Valid(out.Bytes()) || !strings.HasPrefix(strings.TrimSpace(out.String()), "{") {
+		t.Errorf("stdout is not exactly one JSON document:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "seats (from --models") {
+		t.Errorf("the plan reached stdout")
+	}
+	if !strings.Contains(errb.String(), "seats (from --models "+recordPool+")") || !strings.Contains(errb.String(), "a dry run asks nothing") {
+		t.Errorf("the plan and the dry-run note must be on stderr:\n%s", errb.String())
 	}
 }

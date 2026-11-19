@@ -51,7 +51,7 @@ func runDemo(args []string, stdout, stderr io.Writer) int {
 	// seats (ranked for the demo's language, Go) and records how they were
 	// chosen. Proposing here and passing plain seat flags on would record
 	// a lineup the evidence chose as one the operator named.
-	modelsPool := registerModelsFlags(fs, "a comma-separated `POOL` of models you name; certify --local proposes which of them seats the demo's mutant-generator, test-writer and test-critic, ranked by the recorded evidence for Go, prints that plan, and nothing runs until you accept it on a terminal. A pool is not a default: a seat you also name by its own flag is pinned, and a seat no member qualifies for is refused")
+	modelsPool := registerModelsFlags(fs, "a comma-separated `POOL` of models you name; certify --local proposes which of them seats the demo's mutant-generator, test-writer and test-critic, ranked by the recorded evidence for Go, prints that plan, and nothing runs until you accept it on a terminal (with no terminal it audits nothing and exits 0). A pool is not a default: a seat you also name by its own flag is pinned, and a seat no member qualifies for is refused")
 	if err := fs.Parse(args); err != nil {
 		return flagParseExit(err)
 	}

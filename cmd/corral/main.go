@@ -266,8 +266,10 @@ Usage:
                                   THE OPERATOR NAMED ON THAT RUN: this command writes no config,
                                   changes no default and staffs no seat — corral has no default
                                   models.
-                                  flags: --db <dsn> (a pushed warehouse instead of the local
-                                  bug-catching ledger; unreachable REFUSES, never falls back)
+                                  flags: --db <dsn> (a ledger directory or pushed warehouse
+                                  instead of this machine's ledger; unreachable REFUSES, never
+                                  falls back)  --source ledger|scorecard (without --db: this
+                                  machine's ledger, or the old local bug-catching store)
                                   --seat <role>  --lang <name>  --min-runs n  --json
   corral criticscore list         list execution-checked test-critic findings still awaiting human
                                   adjudication — the local store certify --local writes, or a

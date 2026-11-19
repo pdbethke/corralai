@@ -65,6 +65,12 @@ func TestEveryDoorWithSeatFlagsRegistersModelsFlags(t *testing.T) {
 		if !wired {
 			t.Errorf("%s registers a seat flag and not --models; call registerModelsFlags", f)
 		}
+		// Registered is not used: a door that parses --models and never
+		// hands it to seatFromPool (or, for demo, to the command it
+		// forwards to) accepts a pool and silently ignores it.
+		if wired && !strings.Contains(src, "seatFromPool(") && !strings.Contains(src, `"--models"`) {
+			t.Errorf("%s registers --models and neither calls seatFromPool nor forwards \"--models\"", f)
+		}
 	}
 	// certify --local, certify --repo, doctor, demo and review.
 	if doors < 5 {
@@ -82,6 +88,18 @@ func TestOnlyAutoseatDecidesASeatFromEvidence(t *testing.T) {
 		// models_rank.go is the disclosure verb; review.go reads the
 		// ranking's seat names and predates the proposer.
 		`"github.com/pdbethke/corralai/internal/modelrank"`: {"models_pool.go": true, "models_rank.go": true, "review.go": true},
+		// The evidence readers and the ranking itself. An import gate alone
+		// misses a door that reads the evidence with the package's own
+		// loader and ranks it, so the calls are held to their places too.
+		// main.go hands defaultRankLoader to `corral models rank`, which
+		// discloses and seats nothing; models_pool.go wires it into
+		// doorPoolDeps, the one reader seatFromPool uses; models_rank.go
+		// defines both loaders and runs the disclosure verb's ranking.
+		"defaultRankLoader":          {"main.go": true, "models_pool.go": true, "models_rank.go": true},
+		"machineLedgerRankEvidence(": {"models_rank.go": true},
+		// models_pool.go ranks for the proposer (rankPool); models_rank.go
+		// ranks for the disclosure verb.
+		"modelrank.Rank(": {"models_pool.go": true, "models_rank.go": true},
 	}
 	files, err := filepath.Glob("*.go")
 	if err != nil || len(files) == 0 {
@@ -97,7 +115,7 @@ func TestOnlyAutoseatDecidesASeatFromEvidence(t *testing.T) {
 		}
 		for imp, ok := range allowed {
 			if strings.Contains(string(b), imp) && !ok[f] {
-				t.Errorf("%s imports %s; only %v may", f, imp, allowedFiles(ok))
+				t.Errorf("%s uses %s; only %v may", f, imp, allowedFiles(ok))
 			}
 		}
 	}

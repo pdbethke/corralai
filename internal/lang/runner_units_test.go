@@ -520,10 +520,13 @@ func TestMinitestHasNoUnitForm(t *testing.T) {
 	}
 }
 
-// PHPUnit's units are its own --list-test-files, which applies the
-// configuration, --testsuite and the group options (captured: under --group
-// slow only ATest is listed). One unit replaces the operator's file
-// arguments, since PHPUnit runs them all (capture phpunit-args-union).
+// PHPUnit's units are the files of the classes its own --list-tests names,
+// each file told by PHP itself in the listing run (phpunitUnitsSetup). The
+// listing applies the configuration and --testsuite on every PHPUnit from
+// 9.6 to 12.5 (captured on each), and the group options on 11 and 12
+// (captured: under --group slow only ATest is listed, though PHP also
+// loaded BTest and CTest). One unit replaces the operator's file arguments,
+// since PHPUnit runs them all (capture phpunit-args-union).
 func TestPHPUnitUnitsFromListing(t *testing.T) {
 	conf := []string{"vendor/bin/phpunit", "-c", "units/phpunit/phpunit.xml"}
 	for _, c := range []unitCase{
@@ -533,10 +536,48 @@ func TestPHPUnitUnitsFromListing(t *testing.T) {
 		{row: "phpunit", lang: "php", fixture: "phpunit-units-group.txt", argv: append(slices.Clone(conf), "--group", "slow", "units/phpunit"),
 			want:    []string{"units/phpunit/tests/ATest.php"},
 			wantRun: append(slices.Clone(conf), "--group", "slow", "units/phpunit/tests/ATest.php")},
+		{row: "phpunit", lang: "php", fixture: "phpunit9-units.txt", argv: append(slices.Clone(conf), "--testsuite", "unit"),
+			want:    []string{"units/phpunit/tests/ATest.php", "units/phpunit/tests/BTest.php"},
+			wantRun: append(slices.Clone(conf), "--testsuite", "unit", "units/phpunit/tests/ATest.php")},
+		{row: "phpunit", lang: "php", fixture: "phpunit10-units.txt", argv: append(slices.Clone(conf), "--testsuite", "unit"),
+			want:    []string{"units/phpunit/tests/ATest.php", "units/phpunit/tests/BTest.php"},
+			wantRun: append(slices.Clone(conf), "--testsuite", "unit", "units/phpunit/tests/ATest.php")},
+		{row: "phpunit", lang: "php", fixture: "phpunit12-units.txt", argv: append(slices.Clone(conf), "--testsuite", "unit"),
+			want:    []string{"units/phpunit/tests/ATest.php", "units/phpunit/tests/BTest.php"},
+			wantRun: append(slices.Clone(conf), "--testsuite", "unit", "units/phpunit/tests/ATest.php")},
 	} {
 		c.check(t)
 	}
 	php, _ := ByName("php")
+	// The listing is PHPUnit's --list-tests under the row's setup, which
+	// every version from 9.6 takes; --list-test-files is PHPUnit 11's.
+	if got, ok := listCmd(t, "php", conf); !ok || !slices.Equal(got, append(slices.Clone(conf), "--list-tests")) {
+		t.Errorf("listing command = %q, %v", got, ok)
+	}
+	if cmd, _ := ListUnitsCmd(php, Cmd(conf)); len(cmd) < 3 || !strings.Contains(cmd[2], phpunitUnitsPrepend) || !strings.Contains(cmd[2], `trap 'rm -rf "$d"' EXIT`) {
+		t.Errorf("the PHPUnit listing does not run under its setup: %q", cmd)
+	}
+	// PHPUnit 9 and 10 ignore a group option beside --list-tests and say
+	// so; the list is then every test, so it is no listing of the command
+	// (captured on 9.6: all four tests under --group slow).
+	groupInv := Cmd(append(slices.Clone(conf), "--group", "slow"))
+	if got := ParseUnitList(php, groupInv, unitFixture(t, "phpunit9-units-group.txt")); got != nil {
+		t.Errorf("PHPUnit 9 under --group = %q, want no listing: it ignored the option", got)
+	}
+	// A listed class PHP named no file for is no listing: every unit or none.
+	whole := unitFixture(t, "phpunit9-units.txt")
+	cut := strings.Replace(whole, phpunitUnitClassMarker+"BTest\t/fixture/units/phpunit/tests/BTest.php\n", "", 1)
+	if cut == whole {
+		t.Fatal("the fixture has no file line for BTest to remove")
+	}
+	if got := ParseUnitList(php, Cmd(conf), cut); got != nil {
+		t.Errorf("a listed class with no file line = %q, want no listing", got)
+	}
+	// An empty list under its heading is a listing of no units (captured:
+	// PHPUnit prints the heading alone).
+	if got := ParseUnitList(php, Cmd(conf), unitsCwdMarker+"/r\nPHPUnit 9.6.39 by Sebastian Bergmann and contributors.\n\nAvailable test(s):\n"); got == nil || len(got) != 0 {
+		t.Errorf("an empty list = %#v, want an empty listing", got)
+	}
 	if got, ok := UnitRunCmd(php, Cmd([]string{"php", "-d", "memory_limit=1G", "vendor/bin/phpunit", "tests", "-dxdebug.mode=off", "--colors=never"}), "tests/ATest.php"); !ok ||
 		!slices.Equal(got, []string{"php", "-d", "memory_limit=1G", "vendor/bin/phpunit", "-dxdebug.mode=off", "--colors=never", "tests/ATest.php"}) {
 		t.Errorf("UnitRunCmd = %q, %v", got, ok)

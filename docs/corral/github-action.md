@@ -150,16 +150,16 @@ slow"`), not a shell one-liner that chains multiple commands.
 - uses: actions/checkout@v4
   with:
     fetch-depth: 0
-- uses: pdbethke/corralai@v1.0.0-rc.31
+- uses: pdbethke/corralai@v1.0.0-rc.35
   with:
     test-command: "go test ./..."
     anthropic-key: ${{ secrets.ANTHROPIC_API_KEY }}
     # corral has no default models: name every seat you want filled.
     # These are an example — use whichever provider you supplied a key for.
-    derive-model: claude-sonnet-5
-    writer-model: claude-sonnet-5
-    mutant-model: claude-sonnet-5
-    critic-model: claude-haiku-4-5
+    derive-model: anthropic/claude-sonnet-5
+    writer-model: anthropic/claude-sonnet-5
+    mutant-model: anthropic/claude-sonnet-5
+    critic-model: anthropic/claude-haiku-4-5
     top: "3"                 # audit at most three changed files, highest-ranked first
     max-tokens: "3000000"    # a hard cap on the audit's spend, every audit seat
 ```
@@ -176,14 +176,14 @@ need before the corral step:
   with:
     python-version: "3.12"
 - run: pip install -e ".[dev]" pytest pytest-cov   # pytest-cov lets corral pick tests per file
-- uses: pdbethke/corralai@v1.0.0-rc.31
+- uses: pdbethke/corralai@v1.0.0-rc.35
   with:
     test-command: "python -m pytest -q"
     gemini-key: ${{ secrets.GEMINI_API_KEY }}
-    derive-model: gemini-3.8-flash
-    writer-model: gemini-3.8-flash
-    mutant-model: gemini-3.8-flash
-    critic-model: gemini-3.7-flash
+    derive-model: google/gemini-3.8-flash
+    writer-model: google/gemini-3.8-flash
+    mutant-model: google/gemini-3.8-flash
+    critic-model: google/gemini-3.7-flash
     top: "3"
     max-tokens: "3000000"
 ```
@@ -201,7 +201,7 @@ key (exit 2) unless the job is guarded; see
 
 **There is no `v1` tag, but there are pinnable release tags.** `v0.1.0` and
 `v0.2.0` predate the action and carry no `action.yml`; **`v0.3.0` and later do**
-(`v1.0.0-rc.31` is current). Prefer `pdbethke/corralai@v1.0.0-rc.31` over `@main` — pinning
+(`v1.0.0-rc.35` is current). Prefer `pdbethke/corralai@v1.0.0-rc.35` over `@main` — pinning
 a tag means a push to `main` cannot change what runs in your CI. Pin the commit
 SHA you reviewed (`pdbethke/corralai@<sha>`) if you want an immutable reference
 that a re-tag also cannot move. `@main` still works and tracks the newest
@@ -502,6 +502,7 @@ and the fix belongs in the code, not a caveat in these docs.
 | `path` | no | `""` (the whole repository) | Audit only the files under this directory, keeping the checkout whole: one package of a monorepo, such as a crate of a Cargo workspace. Tests are still found anywhere in the repository, the build still sees the root's files, and the ledger entry records the scope. |
 | `min-kill-rate` | no | `""` (unset) | Fail the run (exit 1) if **any individual audited file's** kill rate is below this value. Range 0.0-1.0 inclusive; a *minimum*, so a file exactly at the value passes. Opt-in — leave empty to keep the pre-`min-kill-rate` behaviour, where a weak-but-gradable suite still exits 0. See "Failing on a weak kill rate" below. |
 | `max-proven-missed` | no | `""` (unset) | Fail the run if any audited file has *more* than this many PROVEN-MISSED gaps — survivors the herd itself then killed with a test it wrote and ran. Prefer this to `min-kill-rate` as the merge gate: a kill rate is a proportion of freshly generated mutants and moves between runs on unchanged code, while a proven gap is a specific planted fault the suite misses, with a test shown by execution to catch it. `0` means any demonstrated gap fails the build. Fails **closed** when the herd had survivors but authored no test that graded — a `0` there means nothing was proven, not that the suite is clean. |
+| `record-every-file` | no | `"false"` | Record one ledger row for every file the scan walked. By default the entry counts files in skipped or gitignored directories (one row per directory) and test files (one row per language) instead of listing each, which keeps an entry small; the totals are the same either way. A counted directory row's path is a directory, not a file (loose gitignored files whose directory is not ignored are counted under `<parent>/*`), the count is in `corral_audits.files` (NULL means one file) so a query counting files uses `SUM(COALESCE(files, 1))`, and an older corral reading a new entry shows a counted row as one file. Set `"true"` for the full listing. Ignored when there is neither a `ledger` directory nor a `push` target, since nothing is recorded then. |
 | `push` | no | `""` | Append this run's per-file audit verdicts (the review step does not push) to a DuckDB *you* own — a path, or `md:<db>` for MotherDuck. Append-only; every row carries the run URL, and — only when `attest` is also set — the sha256 of the signed statement it came from. See `docs/corral/actions-as-swarm.md` for a full per-PR workflow and `docs/design/cost-model.md` for what a pushed row's timing and cost columns mean. |
 | `push-source` | no | `"false"` | With `push`, also send the SOURCE BYTES corral holds — the pool's authored test and the full verdict JSON — to the warehouse. Default `false`: those bytes quote your audited code, so with it off the pushed rows carry only numbers, hashes, reasons, and model names, and no source leaves the runner. Mutant code is **never** carried by either setting — corral keeps no mutant source at rest. The scan row records which setting was used. |
 | `motherduck-token` | no | `""` | MotherDuck token, exported as `motherduck_token`, for a `md:<db>` `push` target. Pass as a secret, never inline. Not needed for a local DuckDB path. |
@@ -511,7 +512,7 @@ and the fix belongs in the code, not a caveat in these docs.
 | `openai-key` | no | `""` | OpenAI (or OpenAI-compatible) key, supplied as `OPENAI_API_KEY`. |
 | `claude-code-oauth-token` | no | `""` | Login for a `claude-code` agent seat, supplied as `CLAUDE_CODE_OAUTH_TOKEN` (create one with `claude setup-token`). The `claude` CLI must be installed on the runner. Not yet run on a runner. |
 | `codex-api-key` | no | `""` | API key for a `codex` agent seat, supplied as `CODEX_API_KEY`. The `codex` CLI must be installed on the runner. An API key bills per token, unlike a subscription login. Not yet run on a runner: the variable name comes from the codex binary's own error text, not its `--help`. |
-| `model-key` | no | `""` | Generic escape hatch for a credential the three named inputs do not cover (e.g. `GOOGLE_API_KEY`, or a gateway reading its own variable). Prefer the named inputs. |
+| `model-key` | no | `""` | Generic escape hatch for a credential the three named inputs do not cover (e.g. `OPENROUTER_API_KEY`, or a gateway reading its own variable). Prefer the named inputs. |
 | `model-key-env` | no | `""` | Which environment variable `model-key` becomes. Must be a plain environment variable name. **Required when `model-key` is set** — it no longer defaults to `ANTHROPIC_API_KEY`, because corral has no default models and guessing a vendor here puts the key in the wrong variable. Naming a variable a named input already fills, with a *different* value, is refused. |
 | `derive-model` | **yes**, unless `goals` is set | `""` | Model that derives a goal per file. `goals` skips derivation entirely and needs no model or key. **corral has no default models** — see "Naming the herd" below. |
 | `writer-model` | **yes** | `""` | Model for the test-writer role — the half that authors a test to prove a survivor is a real gap. |
@@ -611,14 +612,14 @@ back, re-linking the entry if another run pushed first.
             git worktree add --detach .corral-ledger
             (cd .corral-ledger && git checkout --orphan corral/ledger && git rm -rfq . && echo "corral's record — see docs/corral/github-action.md" > README.md)
           fi
-      - uses: pdbethke/corralai@v1.0.0-rc.31
+      - uses: pdbethke/corralai@v1.0.0-rc.35
         with:
           test-command: pytest -q
           ledger: .corral-ledger
-          derive-model: gemini-3.6-flash
-          mutant-model: gemini-3.6-flash
-          writer-model: gemini-3.6-flash
-          critic-model: claude-haiku-4-5
+          derive-model: google/gemini-3.6-flash
+          mutant-model: google/gemini-3.6-flash
+          writer-model: google/gemini-3.6-flash
+          critic-model: anthropic/claude-haiku-4-5
           gemini-key: ${{ secrets.GEMINI_API_KEY }}
           anthropic-key: ${{ secrets.ANTHROPIC_API_KEY }}
       - name: Attest this run's ledger entry (keyless, via the workflow's identity)
@@ -947,9 +948,9 @@ Both halves have to move together:
     test-command: "go test ./..."
     top: "1"
     gemini-key: ${{ secrets.GEMINI_API_KEY }}
-    derive-model: gemini-3.6-flash
-    writer-model: gemini-3.6-flash
-    mutant-model: gemini-3.6-flash
+    derive-model: google/gemini-3.6-flash
+    writer-model: google/gemini-3.6-flash
+    mutant-model: google/gemini-3.6-flash
     critic-model: "off"
 ```
 
@@ -964,14 +965,14 @@ to satisfy it, and one dishonest one:
 
 ```yaml
     # Two models, one key — satisfies the guard.
-    writer-model: gemini-3.6-flash
-    critic-model: gemini-3.7-flash
+    writer-model: google/gemini-3.6-flash
+    critic-model: google/gemini-3.7-flash
 
     # Two vendors — genuine independence. Keys are additive; set both.
     gemini-key:    ${{ secrets.GEMINI_API_KEY }}
     anthropic-key: ${{ secrets.ANTHROPIC_API_KEY }}
-    writer-model: gemini-3.6-flash
-    critic-model: claude-haiku-4-5
+    writer-model: google/gemini-3.6-flash
+    critic-model: anthropic/claude-haiku-4-5
 
     # Turning the independence check off because the plumbing was in the way.
     critic-model: "off"
@@ -1076,13 +1077,13 @@ of every existing caller of this action.
 Set `min-kill-rate` (a number from `0.0` to `1.0`) to give the gate teeth:
 
 ```yaml
-- uses: pdbethke/corralai@v1.0.0-rc.31
+- uses: pdbethke/corralai@v1.0.0-rc.35
   with:
     test-command:  "go test ./..."
     gemini-key:    ${{ secrets.GEMINI_API_KEY }}
-    mutant-model:  gemini-3.6-flash
-    writer-model:  gemini-3.6-flash
-    derive-model:  gemini-3.6-flash
+    mutant-model:  google/gemini-3.6-flash
+    writer-model:  google/gemini-3.6-flash
+    derive-model:  google/gemini-3.6-flash
     critic-model:  "off"
     min-kill-rate: "0.7"
 ```
@@ -1117,15 +1118,15 @@ The audit is the gate by execution. The review is the gate by adversary,
 and the same step runs it when `reviewer-model` is named:
 
 ```yaml
-      - uses: pdbethke/corralai@v1.0.0-rc.31
+      - uses: pdbethke/corralai@v1.0.0-rc.35
         with:
           test-command: "go test ./..."
-          mutant-model: gemini-3.6-flash
-          writer-model: gemini-3.6-flash
+          mutant-model: google/gemini-3.6-flash
+          writer-model: google/gemini-3.6-flash
           critic-model: off
-          derive-model: gemini-3.6-flash
-          reviewer-model: gemini-3.6-flash
-          verifier-model: claude-haiku-4-5
+          derive-model: google/gemini-3.6-flash
+          reviewer-model: google/gemini-3.6-flash
+          verifier-model: anthropic/claude-haiku-4-5
           gemini-key: ${{ secrets.GEMINI_API_KEY }}
           anthropic-key: ${{ secrets.ANTHROPIC_API_KEY }}
           ledger: .corral-ledger

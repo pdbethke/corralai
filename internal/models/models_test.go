@@ -295,3 +295,61 @@ func TestAuditedRepoCannotPickItsAuditors(t *testing.T) {
 		t.Errorf("CORRALAI_MODELS_FILE ignored on a runner: reg=%v err=%v", reg, err)
 	}
 }
+
+// Which wire an entry speaks follows from its provider, so the resolver never
+// has to guess it from a URL.
+func TestEntryWireFollowsProvider(t *testing.T) {
+	cases := map[string]Wire{
+		"ollama":     WireOllama,
+		"vllm":       WireOpenAIChat,
+		"lmstudio":   WireOpenAIChat,
+		"llamacpp":   WireOpenAIChat,
+		"localai":    WireOpenAIChat,
+		"llamafile":  WireOpenAIChat,
+		"anthropic":  WireHosted,
+		"google":     WireHosted,
+		"openai":     WireHosted,
+		"openrouter": WireHosted,
+	}
+	for provider, want := range cases {
+		if got := (Entry{Provider: provider}).Wire(); got != want {
+			t.Errorf("provider %q: Wire() = %q, want %q", provider, got, want)
+		}
+	}
+}
+
+func TestHostedOpenAICompatibleEndpointNeedsKeyEnv(t *testing.T) {
+	for _, provider := range []string{"openai", "openrouter"} {
+		bare := `{"x":{"provider":"` + provider + `","model":"gpt-5","endpoint":"https://proxy.example/v1"}}`
+		_, err := Parse([]byte(bare), "inline")
+		if err == nil || !strings.Contains(err.Error(), "key_env") {
+			t.Fatalf("%s: endpoint without key_env must be refused naming key_env, got %v", provider, err)
+		}
+		keyed := `{"x":{"provider":"` + provider + `","model":"gpt-5","endpoint":"https://proxy.example/v1","key_env":"PROXY_KEY"}}`
+		reg, err := Parse([]byte(keyed), "inline")
+		if err != nil {
+			t.Fatalf("%s: %v", provider, err)
+		}
+		e, _ := reg.Lookup("x")
+		if e.KeyEnv != "PROXY_KEY" || e.Endpoint != "https://proxy.example/v1" {
+			t.Errorf("%s: got %+v", provider, e)
+		}
+	}
+}
+
+func TestAnthropicAndGoogleStillRefuseEndpoint(t *testing.T) {
+	for _, provider := range []string{"anthropic", "google"} {
+		doc := `{"x":{"provider":"` + provider + `","model":"m","endpoint":"https://proxy.example/v1","key_env":"K"}}`
+		_, err := Parse([]byte(doc), "inline")
+		if err == nil || !strings.Contains(err.Error(), "hosted by its vendor") {
+			t.Errorf("%s: want the hosted-endpoint refusal, got %v", provider, err)
+		}
+	}
+}
+
+func TestKeyEnvOnlyWithEndpoint(t *testing.T) {
+	_, err := Parse([]byte(`{"x":{"provider":"openai","model":"gpt-5","key_env":"K"}}`), "inline")
+	if err == nil || !strings.Contains(err.Error(), "key_env") || !strings.Contains(err.Error(), "endpoint") {
+		t.Fatalf("key_env without endpoint must be refused naming both fields, got %v", err)
+	}
+}

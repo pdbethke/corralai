@@ -619,6 +619,18 @@ func (p *WorkspacePool) RunTestDetailed(ctx context.Context, files map[string]st
 	return r.RunTestDetailed(ctx, files, testCmd)
 }
 
+// RunTestEnds is the runner's RunTestEnds on a borrowed tree: the pool
+// implements it for the reason it implements the other two output-returning
+// runs, so that substituting a pool never costs a caller a capability.
+func (p *WorkspacePool) RunTestEnds(ctx context.Context, files map[string]string, testCmd []string) (bool, string, error) {
+	r, release, err := p.borrow(ctx)
+	if err != nil {
+		return false, "", err
+	}
+	defer release()
+	return r.RunTestEnds(ctx, files, testCmd)
+}
+
 // Enumerate borrows a tree exactly as RunTest does, then runs there.
 //
 // Borrowing is NOT optional even though enumeration is nominally a pre-flight.

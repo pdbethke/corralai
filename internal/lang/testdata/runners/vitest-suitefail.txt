@@ -1,6 +1,7 @@
 
- RUN  v3.2.7 $DIR
+ RUN  v5.1.0 $DIR
 
+ ❯ fail/broken.vitest.test.mjs (0 test)
 
 ⎯⎯⎯⎯⎯⎯ Failed Suites 1 ⎯⎯⎯⎯⎯⎯⎯
 
@@ -12,11 +13,11 @@ Error: Failed to parse source for import analysis because the content contains i
      |  ^
   2  |  import {describe,it} from 'vitest';
   3  |  describe('Broken', () => {
- ❯ TransformPluginContext._formatLog node_modules/vite/dist/node/chunks/config.js:29250:43
- ❯ TransformPluginContext.error node_modules/vite/dist/node/chunks/config.js:29247:14
- ❯ TransformPluginContext.transform node_modules/vite/dist/node/chunks/config.js:27333:10
- ❯ EnvironmentPluginContainer.transform node_modules/vite/dist/node/chunks/config.js:29048:14
- ❯ loadAndTransform node_modules/vite/dist/node/chunks/config.js:22914:26
+ ❯ TransformPluginContext._formatLog node_modules/vite/dist/node/chunks/node.js:8865:39
+ ❯ TransformPluginContext.error node_modules/vite/dist/node/chunks/node.js:8862:14
+ ❯ TransformPluginContext.transform node_modules/vite/dist/node/chunks/node.js:26516:10
+ ❯ EnvironmentPluginContainer.transform node_modules/vite/dist/node/chunks/node.js:8636:14
+ ❯ loadAndTransform node_modules/vite/dist/node/chunks/node.js:20112:26
 
 ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
 

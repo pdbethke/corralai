@@ -9,6 +9,11 @@ type Row struct {
 	Repo   string
 	Commit string
 	Path   string
+	// Files is how many walked files this row stands for. 0 (and 1) means
+	// the row is one file, which is every row written before the field
+	// existed; omitempty keeps such a row's JSON, and so its entry hash,
+	// byte-identical. Read it through FileCount, never as a raw int.
+	Files int `json:",omitempty"`
 	// KillRate is a POINTER so an UNCOVERED file writes SQL NULL rather than
 	// a 0.0 the report itself refuses to print. A warehouse that stores the
 	// fabricated zero is where the withheld number comes back as fact.
@@ -35,7 +40,18 @@ type Row struct {
 	// by role like ModelsByRole (agentbackend.SeatTool); "" when no seat was
 	// an agent. A per-model reader needs it beside the roster: an unpinned
 	// agent seat names a tool, not a model (agentbackend.RecordedSeatNamesAModel).
-	SeatTools       string `json:",omitempty"`
+	SeatTools string `json:",omitempty"`
+	// SeatProviders is the provider each seat's model was served from, as
+	// JSON keyed by role like ModelsByRole: what the seat resolver decided
+	// (the vendor of a vendor/model seat, a registry entry's provider, the
+	// pinned gateway, ollama for a discovered or placed daemon, an agent
+	// seat's vendor label). ModelsByRole holds the bare model, so this is
+	// the only place the record says where a seat's calls, and the audited
+	// source with them, went. "" on an entry written before the field
+	// existed and for a run that resolved no provider: not recorded, and a
+	// reader must never put a provider guessed from a model's name in its
+	// place.
+	SeatProviders   string `json:",omitempty"`
 	MinKillRate     *float64
 	MaxProvenMissed *int
 	Passed          *bool      // nil = not recorded; see ScanRow.Passed
@@ -232,6 +248,12 @@ type Row struct {
 	// also holds it is withheld without --push-source. Omitted when empty, so
 	// every row written before it hashes as it did.
 	BaselineFlaky string `json:",omitempty"`
+	// RunCache is scanstore.File's: whether this file's grading runs shared a
+	// tool cache ("shared"), or why not ("unshared: <reason>"). The run's own
+	// account of itself. Omitted when empty (a runner with no run cache, an
+	// ungraded file, every row written before it), so those rows hash as they
+	// did.
+	RunCache string `json:",omitempty"`
 	// PromptShape mirrors scanstore.File.PromptShape / advpool.Verdict.PromptShape:
 	// "chunk" when every mutant-generator shard on this file's run saw only
 	// its own symbols' bodies plus the file's preamble, "file" when even one
@@ -291,6 +313,33 @@ type Row struct {
 	// reposcan.ReasonImportOnly exists to correct.
 	ImportOnly *bool
 }
+
+// FileCount is how many files the row stands for: Files when it says so,
+// else one. The one place a reader turns the stored 0 into "one file".
+func (r Row) FileCount() int {
+	if r.Files > 0 {
+		return r.Files
+	}
+	return 1
+}
+
+// FilesIn is how many files the rows stand for together: the sum of
+// FileCount. A caller printing "N file(s)" for an entry uses this, never
+// len(rows), which counts rows.
+func FilesIn(rows []Row) int {
+	n := 0
+	for _, r := range rows {
+		n += r.FileCount()
+	}
+	return n
+}
+
+// FilesSQL is FileCount for a SQL reader: the files a corral_audits row
+// stands for, summed as SUM(FilesSQL). The warehouse stores NULL for a one-file
+// row, so the same "absent means one" rule lives here as COALESCE. A reader
+// that counts files in SQL uses this constant, never its own COALESCE, so the
+// Go rule and the SQL rule cannot drift (the pattern of seatrecord.ResolvedOnly).
+const FilesSQL = "COALESCE(files, 1)"
 
 // Link identifies the ledger scan and signed statement a pushed row belongs
 // to — the fields stampLink (internal/auditpush/bundle.go) writes onto every

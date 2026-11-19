@@ -184,7 +184,12 @@ type Scan struct {
 // "your tests caught nothing here" about a file corral never graded — a
 // false accusation, persisted.
 type File struct {
-	Path           string
+	Path string
+	// Files is how many walked files this row stands for. 0 (and 1) means
+	// the row is one file, which is every row written before the field
+	// existed; omitempty keeps such a row's JSON byte-identical. Read it
+	// through FileCount, never as a raw int.
+	Files          int `json:",omitempty"`
 	Lang           string
 	Disposition    string // "audited" | "rejected"
 	Reason         string // populated when Disposition == "rejected"
@@ -267,6 +272,18 @@ type File struct {
 	// row says its baseline leaned on retries. "" when none did, and then
 	// omitted.
 	BaselineFlaky string `json:",omitempty"`
+	// RunCache is whether this file's grading runs shared a tool cache among
+	// themselves, read when the file's run ended and from what its jail did:
+	// "shared" (one frozen cache, and a warming run ran on it: the dev
+	// suite's baseline on the unmutated code), or "unshared: <reason>" (the
+	// backend could not overlay it, the test command could not be given the
+	// flag that forbids a cached result, or "never warmed (<why>)": the cache
+	// was mounted but no warming run happened, so every run saw it empty).
+	// The warming command always forbids a cached test result; a later
+	// command the rewrite cannot read runs as given, against a cache that
+	// holds no result. "" when the file's runner has no run cache or the file
+	// was not graded here; then omitted.
+	RunCache string `json:",omitempty"`
 	// TestSelection, SelectedTests and SuiteTests say WHICH MEASUREMENT this
 	// row's kill rate is: the tests coverage evidence showed execute this
 	// file ("coverage-context", SelectedTests of SuiteTests), rather than the
@@ -573,6 +590,15 @@ type File struct {
 	TestsPerMutantMin    *int
 	TestsPerMutantMedian *int
 	TestsPerMutantMax    *int
+}
+
+// FileCount is how many files the row stands for: Files when it says so,
+// else one (ledger.Row.FileCount, same rule).
+func (f File) FileCount() int {
+	if f.Files > 0 {
+		return f.Files
+	}
+	return 1
 }
 
 // scanFilesMigrationCols is the additive set of columns this package has

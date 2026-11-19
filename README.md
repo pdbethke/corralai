@@ -32,11 +32,11 @@ password rule and a test that checks only two of them, then audits it with the
 real `certify --local`:
 
 ```bash
-go install github.com/pdbethke/corralai/cmd/corral@v1.0.0-rc.31   # @latest still resolves to 0.8.x: a release candidate is a pre-release to Go
+go install github.com/pdbethke/corralai/cmd/corral@v1.0.0-rc.35   # @latest still resolves to 0.8.x: a release candidate is a pre-release to Go
 
 # with API keys (the model names are an example, not a default; corral has none):
 export GEMINI_API_KEY=...  ANTHROPIC_API_KEY=sk-ant-...
-corral demo --writer-model gemini-3.8-flash --mutant-model gemini-3.8-flash --critic-model claude-haiku-4-5
+corral demo --writer-model google/gemini-3.8-flash --mutant-model google/gemini-3.8-flash --critic-model anthropic/claude-haiku-4-5
 
 # or with no API key at all, on the coding-agent CLIs you are already logged in to:
 corral demo --writer-model codex --mutant-model codex --critic-model claude-code
@@ -78,8 +78,8 @@ Rust is audited a crate at a time. Run this from a **scratch clone**, because
 corral certify --repo . --path crates/<crate> --dry-run      # free: no key, no sandbox, no model call
 
 corral certify --repo . --path crates/<crate> --substrate workspace --top 1 \
-  --derive-model gemini-3.8-flash --mutant-model gemini-3.8-flash \
-  --writer-model gemini-3.8-flash --critic-model codex \
+  --derive-model google/gemini-3.8-flash --mutant-model google/gemini-3.8-flash \
+  --writer-model google/gemini-3.8-flash --critic-model codex \
   --max-tokens 3000000 \
   -- cargo test -p <crate>          # or: cargo nextest run -p <crate>
 ```
@@ -206,8 +206,8 @@ blind); without it corral grades by the whole suite and says so. Then:
 
 ```bash
 corral certify --repo . --top 3 --max-tokens 3000000 \
-  --writer-model gemini-3.8-flash --mutant-model gemini-3.8-flash \
-  --derive-model gemini-3.8-flash --critic-model claude-haiku-4-5 \
+  --writer-model google/gemini-3.8-flash --mutant-model google/gemini-3.8-flash \
+  --derive-model google/gemini-3.8-flash --critic-model anthropic/claude-haiku-4-5 \
   -- <your test command>       # e.g. -- python -m pytest, or -- npm test
 ```
 
@@ -307,9 +307,9 @@ own goal:
 corral certify --local \
   --code path/to/your/file.py \
   --goal "what this code must guarantee" \
-  --writer-model claude-sonnet-5 \
-  --mutant-model claude-sonnet-5 \
-  --critic-model claude-haiku-4-5 \
+  --writer-model anthropic/claude-sonnet-5 \
+  --mutant-model anthropic/claude-sonnet-5 \
+  --critic-model anthropic/claude-haiku-4-5 \
   --out verdict.json \
   -- python -m pytest
 ```
@@ -357,17 +357,20 @@ directory, or a `pip install --user`, is invisible there.
 One key can satisfy the distinctness rule on its own — name two different models
 from the same provider (Sonnet writing and mutating, Haiku critiquing, say) — though
 two models from one lab are the WEAKEST form of it and share the most lineage. Naming
-`--critic-model gemini-3.6-flash` plus `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) routes
+`--critic-model google/gemini-3.6-flash` plus `GEMINI_API_KEY` routes
 the critic to Gemini via the OpenAI-compatible Google endpoint, a real cross-vendor
 critic, while the writer and mutant-generator stay on whatever you named — a missing
 key fails the run closed rather than silently falling back.
 
-**Every seat routes by the model you name.** A Gemini generator, a Claude writer
-and a GPT critic each go to their own vendor's endpoint, each needing its own key,
-and a missing key refuses the run before anything is spent. The one exception is a
-pinned *gateway*: `MODEL_BACKEND=openrouter` (or `ollama`) means "every seat on
-this endpoint", and a `claude-*` name is then an OpenRouter call, never re-routed
-to Anthropic behind your back. For a deliberately single-vendor run, use
+**Every hosted seat names its vendor: `vendor/model`.** `google/gemini-3.6-flash`,
+`anthropic/claude-sonnet-5` and `openai/gpt-6` each go to that vendor's endpoint,
+each needing its own key, and a missing key refuses the run before anything is
+spent. corral never guesses a vendor from a model's name: a bare `claude-sonnet-5`
+is refused, because a guess decides where your code and a credential go. The
+recorded model is the bare name (`claude-sonnet-5`), as before. A pinned
+*gateway* is the other way to name hosted models: `MODEL_BACKEND=openrouter` (or
+`ollama`) means "every seat on this endpoint", and the seat value goes to it
+verbatim, never re-routed to a vendor behind your back. For a deliberately single-vendor run, use
 **`--critic-model off`**: the critic is advisory
 and never gates the verdict, so dropping it changes nothing about the
 execution-proven result — it only removes the second opinion. (Useful when a vendor
@@ -422,8 +425,8 @@ corral certify --repo . --substrate workspace \
   -- pytest
 ```
 
-Seat flags still take a concrete model name, so nothing above changes if you
-prefer them, and a seat you do not name still refuses the run — the registry
+Seat flags still take a `vendor/model` name or a local model your declared daemon
+serves, so nothing above changes if you prefer them, and a seat you do not name still refuses the run — the registry
 declares what is *available*, never what is chosen. `"strict": true` makes a
 mistyped alias cost two seconds instead of failing at the seat hours into a
 paid run: the run refuses and lists the aliases you declared. Local models are
@@ -444,10 +447,14 @@ workflow declares the registry through `CORRALAI_MODELS_FILE` or
 evidence you recorded rather than from benchmarks — proven gaps per survivor
 attempted for the writer, missed-fault yield for the generator, adjudicated
 precision for the critic — and it refuses to recommend on thin evidence. Its
-evidence is what you gave it: by default the local ledger `certify --local`
-writes, or with `--db` a warehouse that `certify --repo --push` filled (a
-`--repo` scan that was never pushed left nothing for it to rank). It prints a
-ranking; it never staffs a seat.
+evidence is what you gave it: by default this machine's ledger, the signed
+entries `certify` and `review` runs on this machine wrote, so a `--repo` run
+counts. Critic precision, and `certify --local` history from before that verb
+wrote ledger entries (rc.26), are shown only under `--source scorecard`, which
+reads the old local bug-catching store instead.
+`--db` reads a ledger directory or a warehouse that `certify --repo --push`
+filled. A ledger that does not verify is refused, and no source falls back to
+another. It prints a ranking; it never staffs a seat.
 
 The levers that bound it: `corral doctor` (below) catches environment failures for
 free before a run spends anything; `--top` bounds a whole-repo scan to the
@@ -471,7 +478,7 @@ itself would hit them, so the first `FAIL` is the first thing to fix:
 
 ```bash
 corral doctor --code path/to/your/file.py \
-  --writer-model claude-sonnet-5 --mutant-model claude-sonnet-5 \
+  --writer-model anthropic/claude-sonnet-5 --mutant-model anthropic/claude-sonnet-5 \
   -- python -m pytest
 ```
 
@@ -479,7 +486,7 @@ corral doctor --code path/to/your/file.py \
   [ok  ] sandbox starts
   [ok  ] toolchain reachable inside the sandbox
   [FAIL] credential for mutant-generator (claude-sonnet-5)
-         agentbackend: ForModel: model "claude-sonnet-5" needs an Anthropic key — set ANTHROPIC_API_KEY
+         agentbackend: model "claude-sonnet-5" at anthropic needs an Anthropic key — set ANTHROPIC_API_KEY
 
 1 check(s) failed — fix these before spending a run.
 ```
@@ -586,6 +593,8 @@ Not a slogan — the code refuses to do otherwise.
    process listing. And what a run keeps is explicit: its ledger entry under the
    audited repo's own `.corral/ledger/` (`--no-ledger` to skip it), `--push` for a
    warehouse you own, `--attest` for a signed statement a third party can check.
+   An entry counts files in skipped or ignored directories and test files rather
+   than listing each (`--record-every-file` lists them).
    Nothing leaves the box that you did not send, and nothing recorded is
    fabricated — see **[SECURITY.md](SECURITY.md)**.
 
@@ -601,7 +610,7 @@ those seats work in and the **fences** are the security boundaries.
 
 ## In CI — the GitHub Action
 
-**No brain, no server — the GitHub Action.** `pdbethke/corralai@v1.0.0-rc.31` (pin the
+**No brain, no server — the GitHub Action.** `pdbethke/corralai@v1.0.0-rc.35` (pin the
 tag, or a reviewed SHA — `@main` floats) runs `corral
 certify --repo` straight in your own CI job, on the checkout that's already
 there: no jail, no brain, no separate infra. It mutates the runner's checkout
@@ -1343,6 +1352,20 @@ isolated (under `--substrate workspace`, nothing is: see above):
   `CORRALAI_EXEC_IMAGE=python:3.12-bookworm`.
 - **Network off by default.** Opt a build step in only where it legitimately fetches
   deps.
+- **A shared build cache (Go, default sandbox).** A Go file's grading runs share one
+  `GOCACHE`, written only by the developer's own tests on the unmutated code and frozen for every other run, so
+  the compiled standard library (the packages outside the audited tree) is reused and nothing a fault writes is
+  kept. Only `bwrap` that can overlay a directory shares the cache. With it, a run sees its files at
+  `/corral-work` whatever directory holds them, so the shared cache serves the project's own compiled packages
+  and its vendored dependencies (which Go keys on their directory) as well as the standard library. A `bwrap`
+  that overlays but fails the start-up check of placing a workspace keeps each run's host path, and its shared
+  cache reuses only the standard library; the scan header says so. The container backend places the workspace
+  at `/corral-work` (checked on its command line only, never run) and shares no build cache; macOS
+  (`sandbox-exec`) keeps the host path and shares none. A placed run's `TMPDIR` is the jail's own. An authored
+  test that names `/corral-work` is refused and sent back to the writer, since that path exists only in the
+  sandbox. `-count=1` is added when you gave no `-count`, so a
+  cached test result is never replayed, and the record's `run_cache` column says whether a file's runs
+  shared it. What that trusts is in [SECURITY.md](SECURITY.md).
 
 bwrap shares the host kernel — it stops casual damage, egress, and filesystem escape,
 **not** a kernel-exploit escape. For adversarial code use a stronger backend

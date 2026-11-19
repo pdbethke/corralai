@@ -199,9 +199,9 @@ func openAIBase() string {
 }
 
 // newOpenAIBackend picks the wire format the model is actually served on.
-func newOpenAIBackend(key, model string) Backend {
+func newOpenAIBackend(base, key, model string) Backend {
 	if needsResponsesAPI(model) {
-		return &responsesBackend{base: openAIBase(), key: key, model: model}
+		return &responsesBackend{base: base, key: key, model: model}
 	}
-	return &openaiBackend{base: openAIBase(), key: key, model: model}
+	return &openaiBackend{base: base, key: key, model: model}
 }

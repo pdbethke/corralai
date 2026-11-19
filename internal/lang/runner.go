@@ -38,6 +38,38 @@ type Runner struct {
 	// command that NAMES this runner and is not shell-wrapped (see
 	// FailFastArgsFor for why a wrong guess inflates the kill rate).
 	FailFast []string
+	// ReportArgs are the flags that make the runner print, whatever the
+	// project's own configuration says, the lines this row's failure readers
+	// (FirstFailure, FailedTests) read. A project's config can hide them:
+	// pytest prints a `FAILED <node id>` line only for the report characters
+	// -r asks for, and a project whose addopts set its own -r (starlette's
+	// -rXs) replaces the default fE, so the readers name nothing. These are
+	// appended to every command grading runs (ReportCmd says where and when),
+	// and they may change only what is printed, never what passes or fails.
+	// nil for a runner whose failure lines no project setting is known to
+	// hide, or whose override flag has not been run; the parity table's
+	// "readable-failures" exemptions say which.
+	//
+	// pytest: -rfE. pytest keeps the LAST -r it is given (an option stored,
+	// not added to; verified on pytest 5.4.3, 6.2.5, 9.1.1 and 9.2.0, whose
+	// default is fE), and addopts are read before the command line, so the
+	// appended -rfE wins over the project's -r and over an -r the operator
+	// wrote earlier in the command. Their extra report characters (s, x, X,
+	// p...) are therefore lost from corral's captured output. That is
+	// accepted rather than merged: those summary lines are output only, corral
+	// reads none of them, the operator's own runs outside corral are
+	// untouched, and a merge could not be exact, since the project's -r lives
+	// in config files corral does not read and an operator's -r can hide in a
+	// short-option cluster (-vrs).
+	ReportArgs []string
+	// ReportHook has the runner itself record which tests failed, in marker
+	// lines the row's failure readers read in preference to the runner's
+	// printed lines: no report setting of the project's reaches them, and
+	// they carry an id whole, spaces included. nil for a runner corral has
+	// built no such hook for; the parity table's "failure-hook" exemptions
+	// say why for each language. ReportCmd applies it after ReportArgs, to
+	// the same commands.
+	ReportHook *ReportHook
 	// ListCmd enumerates the tests the command (or, for runners that ignore
 	// it, the test file) runs; ParseList reads its stdout into ids.
 	ListCmd   func(argv []string, testPath string) ([]string, bool)
@@ -93,8 +125,15 @@ type Runner struct {
 	// second listed unit can match); nil means a unit run is exact.
 	ListUnits  func(argv []string) ([]string, bool)
 	ParseUnits func(stdout string) []string
-	UnitCmd    func(argv []string, unit string) ([]string, bool)
-	UnitCoruns func(unit, other string) bool
+	// ListUnitsSetup is shell the listing runs before its command, for a
+	// runner whose listing needs something beside it (PHPUnit: a file PHP
+	// loads into the listing). It may write only under "$d", the listing's
+	// own temporary directory, removed when the listing ends, and export
+	// what the command reads. "" on every row whose listing is the command
+	// alone.
+	ListUnitsSetup string
+	UnitCmd        func(argv []string, unit string) ([]string, bool)
+	UnitCoruns     func(unit, other string) bool
 	// CollectionBase is argv with the operator's collection targets removed,
 	// so appending a chosen set NARROWS the run instead of joining a
 	// directory argv already names (pytest `tests/` plus a node id still
@@ -149,7 +188,8 @@ type Runner struct {
 	// unit alone under coverage to learn what it executes, and a flag that
 	// changes how the runner schedules its workers can change what coverage
 	// those workers write without changing whether the tests pass. Grading
-	// never sees these flags. nil means the evidence pass runs the unit
+	// never sees these flags; its own no-replay rewrite is RunCacheArgs.
+	// nil means the evidence pass runs the unit
 	// command unchanged; the field is optional per runner, so the parity
 	// table holds no entry for it. Callers go through EvidenceUnitCmd and
 	// EvidenceNote, never the field. It must also accept the operator's own
@@ -165,10 +205,13 @@ type Runner struct {
 	// recovered worker coverage for 30 and then 84 of 93 files on two runs
 	// of the same batch, so it is not a fix.
 	EvidenceArgs func(unitCmd []string) []string
-	// EvidenceCache is the tool cache the unit evidence pass shares among
-	// its units (EvidenceCache says how), or nil for none: each unit then
-	// starts from the empty cache a jailed run always had. Callers go
-	// through EvidenceCacheFor, never the field.
+	// EvidenceCache is the tool cache a pass shares among its runs
+	// (EvidenceCache says how), or nil for none: each run then starts from
+	// the empty cache a jailed run always had. The unit evidence pass reads
+	// it through EvidenceCacheFor, grading through RunCacheFor and
+	// RunCacheCmd (RunCacheArgs); the support page's
+	// run-cache row is this field. Callers go through those, never the
+	// field.
 	//
 	// go test and gotestsum set it to GOCACHE: every jailed unit rebuilt
 	// the standard library and the module's dependencies from nothing,
@@ -176,6 +219,13 @@ type Runner struct {
 	// 15.07 s against 11.13 s for another (n=3 each, one worker). Their
 	// EvidenceArgs add -count=1 for the same reason: see goEvidenceArgs.
 	EvidenceCache *EvidenceCache
+	// RunCacheArgs is what grading does to a command it hands the jail when
+	// the row's cache is shared: the no-replay rewrite and what became of
+	// the command (RunCacheRewrite). Optional, and meaningful only with an
+	// EvidenceCache; callers go through RunCacheCmd. It is not EvidenceArgs:
+	// grading's commands carry filters and a test-binary tail a unit
+	// command never does, and a command it cannot read must say so.
+	RunCacheArgs func(cmd []string) ([]string, RunCacheRewrite)
 	// VersionCmd is argv with everything after the runner's own binary
 	// replaced by its version flag: the command that prints the version of the
 	// runner argv runs, in the form argv launches it (the entry script behind
@@ -238,7 +288,7 @@ var runners = []Runner{
 		FirstFailure: goFirstFailure, FailedTests: goFailedTests, DeselectCmd: goDeselectCmd, KillerCmd: goKillerCmd,
 		ListUnits: goTestListUnits, ParseUnits: goParseUnits, UnitCmd: oneUnit(goTestUnitsCmd),
 		UnitsCmd: goTestUnitsCmd, UnitForFile: goUnitForFile, UnitNoun: "packages",
-		EvidenceArgs: goTestEvidenceArgs, EvidenceCache: goEvidenceCache,
+		EvidenceArgs: goTestEvidenceArgs, EvidenceCache: goEvidenceCache, RunCacheArgs: goRunCacheArgs,
 		Note: "one-package and several-package runs and their `go list` listing verified on go 1.26; the unit evidence pass runs each package with -count=1 over one GOCACHE the pass shares, warmed by its first package and frozen for the rest, so a cached test result is never read as a run",
 	},
 	{
@@ -247,16 +297,17 @@ var runners = []Runner{
 		FirstFailure: goFirstFailure,
 		ListUnits:    gotestsumListUnits, ParseUnits: goParseUnits, UnitCmd: oneUnit(gotestsumUnitsCmd),
 		UnitsCmd: gotestsumUnitsCmd, UnitForFile: goUnitForFile, UnitNoun: "packages",
-		EvidenceArgs: gotestsumEvidenceArgs, EvidenceCache: goEvidenceCache,
+		EvidenceArgs: gotestsumEvidenceArgs, EvidenceCache: goEvidenceCache, RunCacheArgs: goRunCacheArgs,
 		Note: "listing and one-test runs use `go test` itself; the killing test is read from `--- FAIL:` lines, which gotestsum passes through for a failed test but was not run here; units are listed with `go list` and one or several packages run through gotestsum, verified on gotestsum 1.13; the unit evidence pass adds -count=1 after its `--` and shares one GOCACHE as for go test (not run through gotestsum)",
 	},
 	{
 		Name: "pytest", ID: "pytest", Languages: []string{"python"}, Default: true, Words: []string{"pytest"},
-		FailFast: []string{"-x"},
-		ListCmd:  pyListCmd, ParseList: pyParseTestList, SingleCmd: pySingleCmd,
+		FailFast: []string{"-x"}, ReportArgs: []string{"-rfE"}, ReportHook: pyReportHook,
+		ListCmd: pyListCmd, ParseList: pyParseTestList, SingleCmd: pySingleCmd,
 		FirstFailure: pyFirstFailure, FailedTests: pyFailedTests, DeselectCmd: pyDeselectCmd, KillerCmd: pyKillerCmd,
 		CollectionBase: stripPyCollectionTargets, TestsCmd: pyTestsCmd, TestUnit: pyTestUnit, CarryArgs: deselectArgs,
 		VersionCmd: versionAtWord("pytest"),
+		Note:       "every graded run corral can rewrite (the command names pytest, is not shell-wrapped and is not a package script) goes through `sh -c` with a pytest plugin of corral's own loaded through `PYTEST_PLUGINS`, which records each failing test from pytest's own reports; corral reads the killing test from that record, so a project's `-r`, `--no-summary` or `-p no:terminal` does not hide it and an id with a space in it is whole. A run the plugin does not load in is repeated without it, so its result is the command's own. Not wrapped: Windows (the wrapper is a POSIX shell script), and pytest behind tox, nox, docker or podman or under `python -I`/`-E`, where the plugin could not load. Run on pytest 9.1.1, on Linux in the bubblewrap sandbox and on the workspace substrate; the macOS sandbox, the container backend and pytest-xdist (where the plugin records on the controller alone) were not run. The record is the last thing a run prints, so one larger than the 64 KiB of output corral keeps is not read. -rfE is still added, after the project's own options, so the printed `FAILED` lines are there too: they are what corral reads when the plugin's record is missing or cut short, and for a command it does not wrap; pytest keeping the last -r it is given was verified on pytest 5.4.3, 6.2.5, 9.1.1 and 9.2.0. The printed lines alone are still hidden by `--no-summary` and `-p no:terminal` (measured on pytest 9.1.1), and cut an id at its first space",
 	},
 	{
 		// No salvage: unittest exits 2 on pytest's --deselect, so a rerun
@@ -299,7 +350,7 @@ var runners = []Runner{
 		// on its command line (measured on mocha 11.8.0), so `mocha <file>`
 		// runs every configured spec as well, and argv cannot show whether
 		// a config names one.
-		Note: "listing and one-test runs verified on mocha 11.8 (listing needs mocha 9 or later); no unit evidence: its config's spec list is always added to the files on its command line, so it has no one-file run",
+		Note: "listing and one-test runs verified on mocha 11.8 and 12.0 (listing needs mocha 9 or later); no unit evidence: its config's spec list is always added to the files on its command line, so it has no one-file run",
 	},
 	{
 		// Detect adds vitest's entry script to the word; a shell-wrapped
@@ -313,7 +364,7 @@ var runners = []Runner{
 		EvidenceArgs:   vitestEvidenceArgs,
 		VersionCmd:     vitestVersionCmd,
 		UnitNoCoverage: "no worker coverage: the run's V8 coverage named no project file, though corral ran the unit with --pool=threads; that is what vitest's forks pool gives (measured on vitest 3.2.7 and 5.0.3), so check whether the test file itself forces another pool",
-		Note:           "listing, one-test, one-file and several-file runs verified on vitest 3.2; the unit evidence pass runs each file with --pool=threads, because the forks pool wrote no worker coverage (measured on vitest 3.2.7 and 5.0.3); unit evidence counted through corral's vm source-map preload on vitest 3.2.7 and 5.0.3; vitest 1, 2 and 4 were not run",
+		Note:           "listing, one-test, one-file and several-file runs verified on vitest 3.2 and 5.1, salvage on 5.1; the unit evidence pass runs each file with --pool=threads, because the forks pool wrote no worker coverage (measured on vitest 3.2.7 and 5.0.3); unit evidence counted through corral's vm source-map preload on vitest 3.2.7 and 5.0.3; vitest 1, 2 and 4 were not run",
 	},
 	{
 		Name: "node --test", ID: "node-test", Languages: []string{"javascript", "typescript"}, Default: true,
@@ -347,9 +398,9 @@ var runners = []Runner{
 		Name: "phpunit", ID: "phpunit", Languages: []string{"php"}, Default: true, Words: []string{"phpunit"},
 		FailFast: []string{"--stop-on-failure"}, FirstFailure: phpFirstFailure, FailedTests: phpFailures, DeselectCmd: phpunitDeselectCmd,
 		ListCmd: phpunitListCmd, ParseList: phpunitParseList, SingleCmd: phpunitSingleCmd, ResolveByList: true,
-		ListUnits: phpunitListUnits, ParseUnits: phpunitParseUnits, UnitCmd: oneUnit(phpunitUnitsCmd),
+		ListUnits: phpunitListUnits, ParseUnits: phpunitParseUnits, ListUnitsSetup: phpunitUnitsSetup, UnitCmd: oneUnit(phpunitUnitsCmd),
 		UnitsCmd: phpunitUnitsCmd, UnitForFile: fileUnitForFile, UnitNoun: "test files",
-		Note: "listing, one-test, one-file and several-file runs (`--list-test-files`) verified on PHPUnit 11.5; other versions were not run",
+		Note: "listing, one-test, one-file and several-file runs verified on PHPUnit 11.5; the test-file listing (`--list-tests`, with PHP naming each test class's file) also on 9.6, 10.5 and 12.5, where one-file runs were run as well; PHPUnit 9 and 10 ignore `--group` and `--exclude-group` when listing, so a command carrying one gets no test-file listing there",
 	},
 	{
 		// FirstFailure and Flaky read the grammar off the output, not the
@@ -547,11 +598,31 @@ func RunsAlone(p Plugin, inv Invocation, listed []string, id string) bool {
 	return n == 1
 }
 
+// ReportHook is a runner's own record of its failing tests, as a command
+// wrapper. Wrap is cmd (the row's ReportArgs already added) turned into the
+// command that runs it with the hook loaded and prints the hook's record
+// after the runner's own output. Wrap must keep cmd's words as they are,
+// must exit with the code cmd would have exited with had the hook not been
+// there (a hook that cannot load included), and must return a command
+// ReportCmd cannot read again (a shell wrapper), so that applying it twice
+// wraps once. Wraps, when set, declines a command the hook is known not to
+// load in (at is the index of the runner's word); nil wraps every command
+// ReportCmd can read. Says is the scan line's sentence about it, after the
+// runner's name.
+type ReportHook struct {
+	Wrap  func(cmd []string) []string
+	Wraps func(cmd []string, at int) bool
+	Says  string
+}
+
 // RunDisclosures is what the scan line says about running testCmd in
-// repoDir that differs from how the project's own setup runs its suite —
-// said, never acted on: corral runs the operator's command as given and never
-// substitutes one of its own. Rust reports a project nextest.toml that
-// `cargo test` bypasses, and nextest's passed-on-retry grading. nil when the
+// repoDir that differs from how the project's own setup runs its suite.
+// corral runs the operator's command and never substitutes one of its own;
+// what it adds to it is said here: a row's ReportArgs, when ReportCmd adds
+// them (pytest's -rfE replaces a project's own -r), and a row's ReportHook,
+// when ReportCmd wraps the command in it (pytest's own plugin). Rust reports a project
+// nextest.toml that `cargo test` bypasses, and nextest's passed-on-retry
+// grading. nil when the
 // runner has nothing to say; the one way a caller asks, so no caller
 // switches on a language to decide whether there is anything to disclose.
 // It leads with how the runner was found when that was not the command
@@ -564,7 +635,7 @@ func RunDisclosures(p Plugin, repoDir string, inv Invocation) []string {
 	if r, ok := RunnerFor(p, inv); ok && r.Disclose != nil {
 		out = append(out, r.Disclose(repoDir, inv.Argv)...)
 	}
-	return out
+	return append(out, reportDisclosures(p, inv)...)
 }
 
 // FailureParserFor is argv's runner as the FailureParser adequacy holds, or

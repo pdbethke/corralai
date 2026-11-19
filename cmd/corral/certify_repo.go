@@ -71,8 +71,8 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	deriveModel := fs.String("derive-model", "", "model (or agent seat) that derives a goal per file when --goals is not given — REQUIRED unless --goals is supplied; corral has no default models")
 	// Per-role models. `certify --local` has had these all along; without them
 	// here a repo scan was locked to the Claude defaults with no override.
-	writerModelFlag := fs.String("writer-model", "", "model for the test-writer role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json), a concrete model name, or an agent seat (`codex`, `claude-code`, `antigravity`, or your own CORRALAI_AGENT_<NAME>)")
-	mutantModelFlag := fs.String("mutant-model", "", "model for the mutant-generator role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json), a concrete model name, or an agent seat (`codex`, `claude-code`, `antigravity`, or your own CORRALAI_AGENT_<NAME>). \"off\" leaves the seat empty, and is allowed only with --mutants-from, whose tool mutants are then the whole exam")
+	writerModelFlag := fs.String("writer-model", "", "model for the test-writer role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json), a hosted model as vendor/model (`anthropic/…`, `google/…`, `openai/…` — a bare cloud name is refused, corral never guesses a vendor), a local model the OLLAMA_URL daemon lists, or an agent seat (`codex`, `claude-code`, `antigravity`, or your own CORRALAI_AGENT_<NAME>)")
+	mutantModelFlag := fs.String("mutant-model", "", "model for the mutant-generator role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json), a hosted model as vendor/model (`anthropic/…`, `google/…`, `openai/…` — a bare cloud name is refused, corral never guesses a vendor), a local model the OLLAMA_URL daemon lists, or an agent seat (`codex`, `claude-code`, `antigravity`, or your own CORRALAI_AGENT_<NAME>). \"off\" leaves the seat empty, and is allowed only with --mutants-from, whose tool mutants are then the whole exam")
 	criticModelFlag := fs.String("critic-model", "", "model (or agent seat) for the test-critic role, which must differ from the writer's; \"off\" disables the critic entirely (it is advisory and never gates the verdict, so a single-vendor run with only one usable model can drop it). No default")
 	scopeTestsFlag := fs.Bool("scope-tests", false, "REMOVED — see --whole-suite. Selection by coverage evidence is now the default")
 	wholeSuiteFlag := fs.Bool("whole-suite", false, "grade every mutant against the project's WHOLE suite instead of the tests that demonstrably execute each file (the default, from one instrumented run per scan). Costs O(mutants x whole-suite runtime) per file and answers a different question — 'did ANY test catch it' rather than 'do this file's tests test it'. The verdict records which was used")
@@ -105,6 +105,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	runnerFlag := fs.String("runner", "", runnerHelp)
 	preflightFlag := fs.Bool("preflight", false, "run the project's test suite once with coverage instrumentation and report which source files it never executes. One extra suite run; reports coverage-grade evidence, not proof")
 	ledgerFlag := fs.String("ledger", "", "the ledger DIRECTORY this scan's entry is written to and earlier entries are read from as the prior (default: <repo>/.corral/ledger, or $CORRAL_LEDGER). One gzipped JSON entry per scan, naming the previous entry's hash, signed when a certify key is configured — the record, in plain text; DuckDB is its view (corral verify --ledger, seal --db <dir>, models rank --db <dir>). Make the directory a worktree of the corral/ledger branch and a laptop run and an Action run are one writer")
+	recordEveryFileFlag := fs.Bool("record-every-file", false, recordEveryFileHelp)
 	noLedgerFlag := fs.Bool("no-ledger", false, "write no ledger entry and read no prior from the default ledger directory (an explicit --prior still applies)")
 	priorFlag := fs.String("prior", "", "what earlier runs already tried, so this run plants DIFFERENT faults: a corral-mutants document (see --record-mutants), a ledger directory (see --ledger), or a directory holding any number of either — a document brings the hunks, a ledger the outcomes, merged per edit. Applied only to a file whose bytes are EXACTLY what the prior was recorded against; a file the prior knows under other bytes gets none, and the report says so. A run handed a prior sits a different exam from one without — the verdict, the ledger and the signed statement carry priorsApplied and the prior's digest, and the digest is in the cache key, so a repeat audit never reads as the tests changing when only the exam did")
 	mutantsFlag := fs.String("mutants", "", "REPLAY a recorded mutant set (see --record-mutants) instead of generating one: every audited file is graded against exactly the mutants in this file, and not one generator model call is made. Mutants are authored by a model, so an ordinary run re-draws the exam every time and two runs of the same audit are not two samples of one measurement — pin the set and a change to anything ELSE becomes measurable. Every selected file must appear in the set with the SAME bytes it was recorded from; a missing file or a changed one is refused (exit 2) up front, never half-replayed. Reads a corral-mutants-2 document, or an older corral-mutants-1 one, whose whole-file mutants still replay byte-for-byte.")
@@ -131,6 +132,15 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// does not do, and a silently inert flag would read as having worked.
 	if *evidenceFlag && !*dryRun {
 		fmt.Fprintln(stderr, "corral certify --repo: --evidence only changes --dry-run; a real run always collects evidence")
+		return 2
+	}
+	// Refused, not ignored, for the same reason as --evidence above: the flag
+	// changes what an entry holds, and with no entry written (and no warehouse
+	// push to carry the rows) it would read as having worked. --dry-run is
+	// not refused: it writes no entry either way and already lists every file.
+	runRecords := runRecordsAnything(*dryRun, *noLedgerFlag, *pushFlag)
+	if *recordEveryFileFlag && !runRecords && !*dryRun {
+		fmt.Fprintln(stderr, "corral certify --repo: --record-every-file changes what is recorded, and this run records nothing (--no-ledger with no --push)")
 		return 2
 	}
 	// Removed with a POINTER, not deprecated into a warning: --scope-tests
@@ -226,8 +236,21 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// key, the ledger or the signed statement, so every one of them records
 	// the CONCRETE model. An alias is a label for humans and is never
 	// authoritative.
-	seatReg, regErr := resolveSeatRegistry("corral certify --repo", *repoDir,
-		certifySeats(deriveModel, mutantModelFlag, writerModelFlag, criticModelFlag, shadow.model, shadow.writerModel), stderr)
+	// --local-endpoint placements are parsed BEFORE the seats resolve: a
+	// placement is itself a declared source for a seat with a bare local name,
+	// and the preflight below (resolveAuditRoles) must see it folded in.
+	localEndpoints, lerr := parseLocalEndpoints(localEndpointFlag)
+	if lerr != nil {
+		fmt.Fprintf(stderr, "corral certify --repo: %v\n", lerr)
+		return 2
+	}
+	// context.Background(): no cancellable context exists here. The SIGINT
+	// handler (auditContext) is installed after the goal derivation, on
+	// purpose — an interrupt before any audit has nothing to record, and
+	// TestAnInterruptedRepoScanRecordsNothing_APISeat depends on it. The one
+	// network call, listing OLLAMA_URL's daemon, has its own 10s bound.
+	seats, regErr := resolveSeatsPlaced(context.Background(), "corral certify --repo", *repoDir,
+		certifySeats(deriveModel, mutantModelFlag, writerModelFlag, criticModelFlag, shadow.model, shadow.writerModel), localEndpoints, stderr)
 	if regErr != nil {
 		fmt.Fprintf(stderr, "corral certify --repo: %v\n", regErr)
 		return 2
@@ -912,7 +935,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			criticModel:       *criticModelFlag,
 			shadowModel:       *shadow.model,
 			shadowWriterModel: *shadow.writerModel,
-			seatProviders:     seatReg.seatProviders(),
+			seats:             seats,
 			// The cap is checked here too, so a seat it cannot see (an
 			// unmetered agent) is refused before any goal is derived — the
 			// per-file resolution below would only find it after the scan
@@ -929,8 +952,11 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// The derive seat is under the same cap, so the same refusal: a
 		// derive seat the cap cannot see is refused before it derives.
 		// Only when it will be asked at all (--goals skips it).
-		if strings.TrimSpace(*goalsPath) == "" && strings.TrimSpace(*deriveModel) != "" && isAgentSeat(*deriveModel) {
-			db, err := agentbackend.ForSeat(*deriveModel, agentbackend.SeatOptions{})
+		// Whether it is an agent seat is read from its resolved Kind, never
+		// re-guessed from the name, and it is built by the same constructor
+		// every grading seat uses.
+		if rs := seats["derive-model"]; strings.TrimSpace(*goalsPath) == "" && rs.Kind == "agent" {
+			db, err := agentbackend.Build(rs, agentbackend.SeatOptions{})
 			if err == nil {
 				err = capCanSee(scanBudget, roleGoalDeriver, *deriveModel, db)
 			}
@@ -964,8 +990,8 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// the scan's record and its cost line (scanModelCallRowsWith). Keeping
 	// only the last would drop an earlier one's spend silently.
 	var scanDerivers deriverSet
-	keepDeriver := func(model, endpoint string) (reposcan.Deriver, error) {
-		d, err := certifyRepoDeriver(model, endpoint)
+	keepDeriver := func(rs agentbackend.ResolvedSeat) (reposcan.Deriver, error) {
+		d, err := certifyRepoDeriver(rs)
 		if err == nil && d != nil {
 			// The deriver draws on the scan's one budget, like every seat.
 			d = withDeriveBudget(d, scanBudget)
@@ -979,7 +1005,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
 		return 2
 	}
-	gs, disclosure, code := resolveGoalSource(stderr, *repoDir, *goalsPath, *deriveModel, seatReg.deriveEndpoint(), *dryRun, len(selected), keepDeriver, goalStore, *noGoalCacheFlag, !*noGoalCacheFlag)
+	gs, disclosure, code := resolveGoalSource(stderr, *repoDir, *goalsPath, seats["derive-model"], *dryRun, len(selected), keepDeriver, goalStore, *noGoalCacheFlag, !*noGoalCacheFlag)
 	if code != 0 {
 		return code
 	}
@@ -1020,7 +1046,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		shadowModel:       *shadow.model,
 		shadowWriterModel: *shadow.writerModel,
 	})
-	modelSet := modelSetKeyWith(scanTools, rmWriter, rmMutant, rmCritic, rmShadow, rmShadowWriter)
+	modelSet := modelSetKeyWith(scanTools, seats.providers(), rmWriter, rmMutant, rmCritic, rmShadow, rmShadowWriter)
 
 	// Evidence-first candidacy (the evidence-as-candidacy design), and the
 	// scan's one instrumented selection run underneath it (#163): collected
@@ -1373,18 +1399,8 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// HEAD leaves it unknown, never "clean against some other revision".
 	auditedTreeDirty := treeDirtyAt(*repoDir, *commit)
 
-	localEndpoints, lerr := parseLocalEndpoints(localEndpointFlag)
-	if lerr != nil {
-		fmt.Fprintf(stderr, "corral certify --repo: %v\n", lerr)
-		return 2
-	}
-	// A registry entry with a local provider carries its daemon endpoint, and
-	// it feeds the SAME role->url mechanism --local-endpoint does — one path,
-	// not two. An explicit --local-endpoint wins: it names one seat's daemon
-	// for this run, against a declaration that covers every run.
-	localEndpoints = mergeLocalEndpoints(localEndpoints, seatReg.localEndpoints())
 	if ex != nil {
-		ex.localEndpoints = localEndpoints
+		ex.seats = seats
 		ex.tokenBudget = scanBudget
 		ex.toolProbe = scanTools
 	}
@@ -1431,7 +1447,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
 			return 2
 		}
-		gs, disclosure, code = resolveGoalSource(stderr, *repoDir, *goalsPath, *deriveModel, seatReg.deriveEndpoint(), *dryRun, len(selected), keepDeriver, goalStore, *noGoalCacheFlag, !*noGoalCacheFlag)
+		gs, disclosure, code = resolveGoalSource(stderr, *repoDir, *goalsPath, seats["derive-model"], *dryRun, len(selected), keepDeriver, goalStore, *noGoalCacheFlag, !*noGoalCacheFlag)
 		if code != 0 {
 			return code
 		}
@@ -1493,13 +1509,22 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	}
 	selectionNote := ""
 	if ex != nil {
-		selectionNote = ex.selection.Said()
+		// The pass's Note, not Said(): the "selection:" or "units:" line
+		// above already printed what the terminal has to add (a failed
+		// listing's output, an error), and Said() here printed a runner's
+		// whole output a second and a third time (PHPUnit 9: its banner
+		// and "Unknown option" on the units line, the grading line and
+		// this one). The summary repeats the reason, once, in one line.
+		selectionNote = ex.selection.Note
+		if selectionNote == "" {
+			selectionNote = ex.selection.Said()
+		}
 		// For a language the unit pass serves, ITS reason is why candidacy
 		// is pairing-only; the selection note ("no selector for …") is
 		// about grading.
 		switch {
 		case ex.units.Note != "":
-			selectionNote = ex.units.Said()
+			selectionNote = ex.units.Note
 		case ex.unitLandingNote != "":
 			selectionNote = ex.unitLandingNote
 		case ex.units.Ran && !evidenceCandidacyOK:
@@ -1513,6 +1538,13 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		summary += fmt.Sprintf(" — unit evidence is partial: %d of %d unit(s) contributed none", unitPassFailed(ex.units), len(ex.units.Units))
 	}
 	fmt.Fprintln(stdout, summary)
+	// Said once, right after the walk summary the counts belong to, and only
+	// when the record will actually hold counted rows: a dry run writes none.
+	if runRecords && !*recordEveryFileFlag {
+		if line := recordCountsLine(excl); line != "" {
+			fmt.Fprintln(stdout, line)
+		}
+	}
 	// The record's inventory is taken from the SAME cands and excl the lines
 	// below print from.
 	inventory := newRecordedInventory(cands, excl)
@@ -1852,7 +1884,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// The custody switch the PUSH honours, distinct from the ledger's
 	// record of what happened: --push-source with no --push sends nothing.
 	pushSource := *pushSourceFlag && strings.TrimSpace(*pushFlag) != ""
-	files := buildScanFileRows(results, rep.Excluded, preflightResult, mutantsFromSHA, *repoDir, stderr)
+	files := buildScanFileRows(results, rep.Excluded, preflightResult, mutantsFromSHA, *repoDir, stderr, *recordEveryFileFlag)
 	mutants := buildScanMutantRows(0, results)
 	// modelCallRows was built above, before the scan row, so its totals could
 	// feed InputTokens/OutputTokens/ModelCalls without a second measurement.
@@ -1877,6 +1909,10 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// with an empty target).
 	bundleRepo, bundleCommit, subjErr := auditSubject(*repoDir, rep)
 	rosterJSON, _ := json.Marshal(models())
+	// Where each seat of that roster was served from, as the seat resolver
+	// decided it once for the whole scan: one value for the entry and the
+	// statement, as the roster is.
+	seatProviders := seats.providersFor(models())
 	// The roster's agent tools beside it, from the helper the verdict's
 	// SeatTools and review's record use; "" when no seat is an agent.
 	seatToolsJSON := ""
@@ -1887,9 +1923,10 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	bundle := buildBundle(scan, scanID, files, mutants, modelCallRows, eventRows,
 		auditpush.Link{}, pushSource, bundleRepo, bundleCommit, githubRunURL(),
 		bundleMeta{
-			ModelsByRole: string(rosterJSON),
-			SeatTools:    seatToolsJSON,
-			MinKillRate:  minKillRate, MaxProvenMissed: maxProvenMissed,
+			ModelsByRole:  string(rosterJSON),
+			SeatTools:     seatToolsJSON,
+			SeatProviders: seatProvidersJSON(seatProviders),
+			MinKillRate:   minKillRate, MaxProvenMissed: maxProvenMissed,
 			Passed:    boolPtr(exitCode == 0),
 			PushedBy:  auditpush.PushedByCertify,
 			TreeDirty: auditedTreeDirty, RepoIdentity: repoIdentity(*repoDir),
@@ -1918,7 +1955,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// --record was not given or its write failed).
 	var statementSHA256 string
 	if strings.TrimSpace(*attestFlag) != "" {
-		sha, signErr, err := writeAuditStatement(*attestFlag, *repoDir, rep, models(), minKillRate, maxProvenMissed, exitCode == 0, scanID, bundle)
+		sha, signErr, err := writeAuditStatement(*attestFlag, *repoDir, rep, models(), seatProviders, minKillRate, maxProvenMissed, exitCode == 0, scanID, bundle)
 		if err != nil {
 			fmt.Fprintf(stderr, "corral certify --repo: writing --attest statement: %v\n", err)
 			// On a runner a failed statement is worse than a failed push:
@@ -2008,7 +2045,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 				exitCode = 1
 			}
 		} else if c.Total() > 0 {
-			fmt.Fprintf(stdout, "  ledger: entry written to %s (%d file(s), %d mutant(s)) — `corral verify --ledger %s` walks the chain\n", ledgerDir, c.Files, c.Mutants, ledgerDir)
+			fmt.Fprintf(stdout, "  ledger: entry written to %s (%d file(s) in %d row(s), %d mutant(s)) — `corral verify --ledger %s` walks the chain\n", ledgerDir, ledger.FilesIn(entryBundle.Files), c.Files, c.Mutants, ledgerDir)
 		}
 		writeMachineLedgerCopy(entryBundle, *repoDir, ledgerDir, stdout, stderr)
 	}
@@ -2035,8 +2072,8 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 				// none, and should not learn that from a query.
 				runnerWarning(stderr, "corral push failed", "the audit ran, but pushing its rows to %s failed: %v", *pushFlag, perr)
 			case c.Total() > 0:
-				fmt.Fprintf(stdout, "  pushed %d scan, %d file(s), %d mutant(s), %d model-call row(s), %d event(s) to %s\n",
-					c.Scans, c.Files, c.Mutants, c.Calls, c.Events, *pushFlag)
+				fmt.Fprintf(stdout, "  pushed %d scan, %d file(s) in %d row(s), %d mutant(s), %d model-call row(s), %d event(s) to %s\n",
+					c.Scans, ledger.FilesIn(bundle.Files), c.Files, c.Mutants, c.Calls, c.Events, *pushFlag)
 			}
 		}
 	}
@@ -2600,12 +2637,12 @@ func changedFiles(root, baseRef string) ([]string, error) {
 	return changed, nil
 }
 
-// deriverFactory builds a Deriver for a model, served at endpoint when the
-// registry placed the derive seat on a local daemon ("" otherwise). Injected
+// deriverFactory builds a Deriver from the derive seat the resolver chose,
+// whatever it resolved to (a local daemon, a gateway, a vendor, an agent). Injected
 // so the goal-source wiring can be tested without a provider credential —
 // and, more importantly, without any possibility of a real model call from
 // a unit test.
-type deriverFactory func(model, endpoint string) (reposcan.Deriver, error)
+type deriverFactory func(rs agentbackend.ResolvedSeat) (reposcan.Deriver, error)
 
 // certifyRepoDeriver is the factory runCertifyRepo actually uses. A package
 // var rather than a direct call to newLLMDeriver so a test can prove a
@@ -2676,7 +2713,7 @@ func goalReceiptLine(dsn string, recordEnabled bool, fresh int) string {
 // cache already follows (see NewCachingGoalSource's doc).
 //
 // Returns the process exit code to use on failure; 0 means the source is good.
-func resolveGoalSource(stderr io.Writer, repoDir, goalsPath, deriveModel, deriveEndpoint string, dryRun bool, nSelected int, newDeriver deriverFactory, store reposcan.GoalCacheStore, noGoalCache, recordEnabled bool) (reposcan.GoalSource, string, int) {
+func resolveGoalSource(stderr io.Writer, repoDir, goalsPath string, derive agentbackend.ResolvedSeat, dryRun bool, nSelected int, newDeriver deriverFactory, store reposcan.GoalCacheStore, noGoalCache, recordEnabled bool) (reposcan.GoalSource, string, int) {
 	// --goals takes precedence when given, so hand-written goals keep working
 	// and that path needs no provider credential at all.
 	if goalsPath != "" {
@@ -2700,15 +2737,16 @@ func resolveGoalSource(stderr io.Writer, repoDir, goalsPath, deriveModel, derive
 		// refuses BEFORE the credential check below so the message names the
 		// actual problem (no model chosen) rather than the symptom a missing
 		// key would produce.
-		if strings.TrimSpace(deriveModel) == "" {
-			fmt.Fprintf(stderr, "corral certify --repo: no goal source. corral has no default models, so deriving a goal per file needs --derive-model <model>; or supply --goals <file> to skip derivation entirely (that path calls no model and needs no key)\n")
+		deriveModel := strings.TrimSpace(derive.Spec)
+		if deriveModel == "" {
+			fmt.Fprintf(stderr, "corral certify --repo: no goal source. corral has no default models, so deriving a goal per file needs --derive-model <model> (off names no model for this seat); or supply --goals <file> to skip derivation entirely (that path calls no model and needs no key)\n")
 			return nil, "", 2
 		}
 		// Constructed only when there is something to derive FOR. It fails
 		// closed on a missing credential, which is the right answer for a real
 		// scan — but demanding a provider key to report "0 candidates" would
 		// refuse a scan that was never going to call a model.
-		d, derr := newDeriver(deriveModel, deriveEndpoint)
+		d, derr := newDeriver(derive)
 		if derr != nil {
 			fmt.Fprintf(stderr, "corral certify --repo: %v\n", derr)
 			return nil, "", 2
@@ -3865,6 +3903,15 @@ func repoScanExitCode(r reposcan.RepoReport, nothingInScope bool, unpairableInDi
 // withheld. Nothing is silently dropped; the counts still add up.
 const maxListedExclusions = 20
 
+// runCacheShareable and placesWorkspace are the two backend questions the
+// scan header asks (adequacy.RunCacheShareable, sandbox.PlacesWorkspace),
+// named so a test can answer them for a fake backend: the sandbox's
+// capabilities are unexported methods no fake outside it can claim.
+var (
+	runCacheShareable = adequacy.RunCacheShareable
+	placesWorkspace   = sandbox.PlacesWorkspace
+)
+
 // printSearchPairings discloses every candidate whose test pairing came from
 // the recursive fallback (reposcan.Candidate.ViaSearch) rather than from the
 // language plugin's own naming convention — a test that EXISTS but that no
@@ -3878,6 +3925,7 @@ const maxListedExclusions = 20
 // once per language is enough.
 func printRunDisclosures(w io.Writer, ex *localExecutor, jobs []reposcan.Job) {
 	seen := map[string]bool{}
+	placementSaid := false
 	for _, j := range jobs {
 		if seen[j.Lang] {
 			continue
@@ -3893,6 +3941,40 @@ func printRunDisclosures(w io.Writer, ex *localExecutor, jobs []reposcan.Job) {
 		}
 		for _, line := range lang.RunDisclosures(p, ex.repoDir, inv) {
 			fmt.Fprintf(w, "  %s\n", line)
+		}
+		// Said once per language, and only where there is a jail whose
+		// grading runs could share one (the backend must overlay too): the workspace substrate runs the
+		// checkout itself. A file that cannot share it says so on its own
+		// lines (runCacheUnsharedLine).
+		if ex.substrate != substrateWorkspace {
+			// And only when the scan's base command is one the rewrite
+			// reads (RunCacheRewritten): a command it cannot read shares no
+			// cache, and the per-file lines say so.
+			base := ex.baseCmd(j)
+			if _, state := lang.RunCacheCmd(p, inv.WithArgv(base), base); state != lang.RunCacheRewritten {
+				continue
+			}
+			// And only where a run-cache jail would share its cache
+			// (adequacy.RunCacheShareable, the jail's own decision, which also
+			// checks the temporary directory's filesystem): a backend that
+			// cannot overlay (--jail container, sandbox-exec, an older bwrap),
+			// or a temp directory an overlay cannot sit on, shares no cache,
+			// and every file would then contradict this line.
+			if !runCacheShareable(ex.iso) {
+				continue
+			}
+			if env, ok := lang.RunCacheFor(p, inv); ok {
+				fmt.Fprintf(w, "  build cache: grading runs for %s share a frozen %s, warmed by the unmutated run\n", j.Lang, env)
+				// SAY IT ONCE when the cache is shared but the workspace is
+				// not placed (a bubblewrap whose start-up probe could overlay
+				// a directory at its own path and not at /corral-work): each
+				// run keeps its own path, so Go rebuilds the project's own
+				// packages every run, and nothing else would say why.
+				if !placementSaid && !placesWorkspace(ex.iso) {
+					placementSaid = true
+					fmt.Fprintf(w, "  sandbox: this bubblewrap cannot place a workspace at %s, so runs keep their own paths and a shared build cache reuses only the standard library\n", sandbox.WorkTarget)
+				}
+			}
 		}
 	}
 }
@@ -4666,7 +4748,7 @@ func printAuthoredSource(w io.Writer, src string) {
 func reasonGloss(reason string) string {
 	switch reason {
 	case reposcan.ReasonTestCmdCannotCollect:
-		return " — your test command would not run the test corral writes, so no gap could be proven; NOT a corral failure, and nothing was spent"
+		return " — your test command would not run the test corral writes, so no gap could be proven; NOT a corral failure, and no mutant was planted or test written for it"
 	case reposcan.ReasonUngoaled:
 		return " — no testable property: the file is purely declarative (interfaces, constants, generated code), so there is nothing a mutant could violate"
 	case reposcan.ReasonBaselineFailed:
@@ -5150,9 +5232,10 @@ type localExecutor struct {
 	// detect their runner as before.
 	runner string
 
-	// localEndpoints places local seats on specific ollama daemons for every
-	// file this scan audits — one daemon per GPU. See parseLocalEndpoints.
-	localEndpoints map[string]string
+	// seats is every seat of this scan, resolved once and shared by every
+	// file it audits; --local-endpoint placements (one daemon per GPU, see
+	// parseLocalEndpoints) are already folded in.
+	seats seatSet
 	// tokenBudget is the scan-wide --max-tokens cap, one for every file.
 	tokenBudget *agentbackend.TokenBudget
 	// toolProbe is the scan's one seatToolProbe, handed to every job.
@@ -5545,10 +5628,10 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 	// twice and disagree.
 	sel := l.selectionFor(j)
 	return localAuditInput{
-		localEndpoints: l.localEndpoints,
-		tokenBudget:    l.tokenBudget,
-		toolProbe:      l.toolProbe,
-		repoDir:        l.repoDir,
+		seats:       l.seats,
+		tokenBudget: l.tokenBudget,
+		toolProbe:   l.toolProbe,
+		repoDir:     l.repoDir,
 		// Read only when the job builds its own seed (no shared one): the
 		// scan's bound, so the two can never seed under different limits.
 		seedLimit: l.seedLimit,
@@ -5751,6 +5834,10 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 	// only, so N concurrent files never append into one shared slice.
 	var measured advpool.RunTelemetry
 	in.telemetry = func(t advpool.RunTelemetry) { measured = t }
+	// And for what its jail wiring decides about a shared tool cache: written
+	// by buildJailWiring through the pointer (the input travels by value),
+	// read back below onto this job's result only.
+	in.runCache = new(string)
 	// The job owns its private trees for as long as the job lasts — through
 	// the baseline-stability check AND the audit, which is the whole point of
 	// hanging them here rather than on the wiring's own cleanup (that one is
@@ -5811,6 +5898,9 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 	// the wall clock. Silent when nothing was measured (the jail substrate,
 	// which builds no trees).
 	l.noteConcurrency(j.Path, in.concurrency)
+	if line := runCacheUnsharedLine(j.Path, *in.runCache); line != "" {
+		l.note("%s\n", line)
+	}
 	// Deferred, not called inline: a panic in CheckBaselineStable or in the
 	// jail beneath it would otherwise leak the vendor staging dir. Released
 	// explicitly before l.audit too, since the audit builds its own jail and
@@ -5998,6 +6088,7 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 	// "terrible tests". (Scan re-asserts this; setting it here means the
 	// adapter is honest on its own, for any caller.)
 	res := reposcan.FileResult{Verdict: v, Gradable: !v.BaselineFailed && !v.SuiteIgnoresFile, Telemetry: measured}
+	res.RunCache = fileRunCache(reposcan.FileResult{Gradable: res.Gradable, RunCache: *in.runCache})
 	// Checked BEFORE BaselineFailed so the more specific diagnosis wins: a
 	// suite that passes on invalid source is not broken, it is pointed at
 	// something other than this file, and an operator told "baseline failed"
@@ -6509,7 +6600,7 @@ func preflightWritable(path string) error {
 // its sha256. signErr is the envelope's sign error, returned and never printed here: a
 // plain --attest run has no local key by design and must stay quiet, while
 // --transparency needs the real cause (review e1608f971235#R4).
-func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map[string]string, minKillRate *float64, maxProvenMissed *int, passed bool, scanID int64, bundle auditpush.Bundle) (sha string, signErr error, err error) {
+func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models, seatProviders map[string]string, minKillRate *float64, maxProvenMissed *int, passed bool, scanID int64, bundle auditpush.Bundle) (sha string, signErr error, err error) {
 	files := make([]certify.AuditedFile, 0, len(r.Weakest))
 	for _, f := range r.Weakest {
 		// The interval is signed only where the rate is: an uncovered
@@ -6632,6 +6723,7 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 		Audited:             r.Audited,
 		Candidates:          r.Candidates,
 		ModelsByRole:        models,
+		SeatProviders:       seatProviders,
 		MinKillRate:         minKillRate,
 		MaxProvenMissed:     maxProvenMissed,
 		Passed:              passed,

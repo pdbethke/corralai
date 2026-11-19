@@ -234,7 +234,7 @@ func runScansShow(args []string, open func(string) (scansReader, error), stdout,
 	fmt.Fprintln(tw, "PATH\tDISPOSITION\tREASON\tKILL RATE\tMUTANTS\tSURVIVORS\tPROVEN\tSELECTION\tCONCURRENCY\tEVIDENCE\tNOTE\t")
 	for _, f := range files {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%d\t%d\t%s\t%s\t%s\t%s\t\n",
-			f.Path, f.Disposition, f.Reason, formatKillRate(f.KillRate), scanFileBudget(f),
+			scanFileLabel(f), f.Disposition, f.Reason, formatKillRate(f.KillRate), scanFileBudget(f),
 			f.Survivors, f.ProvenMissed, scanFileSelectionWith(f, spreads[f.Path]),
 			concurrencyDisclosure(f.Trees, f.ConcurrencyNote, splitSharedDirs(f.SharedDirs)),
 			f.Evidence, scanFileNote(f))
@@ -765,4 +765,27 @@ func meteredCount(c scanstore.ModelCall, n int64) *int64 {
 		return nil
 	}
 	return &n
+}
+
+// scanFileLabel is what the PATH column and `corral brief` print for a row.
+// A one-file row is its path. A collapsed row stands for Files walked files
+// and says so, with the reason, because a bare "dist/" reads as one entry and
+// a path-less is-test row would print nothing at all. An is-test row is named
+// by its language.
+func scanFileLabel(f scanstore.File) string {
+	return collapsedLabel(f.Path, f.Lang, f.Reason, f.Files, f.FileCount())
+}
+
+// collapsedLabel is the one formatter behind scanFileLabel, shared with brief
+// (which holds ledger rows, not scanstore files). files is the stored count,
+// 0 for a row that is one file; n is the FileCount the caller already took.
+func collapsedLabel(path, lang, reason string, files, n int) string {
+	if files <= 0 {
+		return path
+	}
+	name := path
+	if reason == reposcan.ReasonIsTest {
+		name = strings.TrimSpace(lang + " test files")
+	}
+	return fmt.Sprintf("%s (%d file(s), %s)", name, n, reason)
 }

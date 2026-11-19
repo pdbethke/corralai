@@ -833,7 +833,7 @@ function apply(state){
       const dot = work ? roleColor(a.role) : (a.status==='awaiting_approval' ? 'var(--amber)' : '#5b5750');
       const doing = work ? (latest[a.name]||'…') : (a.status==='awaiting_approval' ? '⏸ awaiting approval' : 'idle');
       const sel = agentWindows.has(a.name) ? ' arowsel' : '';  // highlight agents with open windows
-      return `<div class="arow${sel}" onclick="selectAgent('${(a.name||'').replace(/'/g,"\\'")}')" title="open ${esc(displayName(a.name))} detail">`
+      return `<div class="arow${sel}" onclick="selectAgent(${jsArg(a.name||'')})" title="open ${esc(displayName(a.name))} detail">`
         + `<span class="adot" style="background:${dot}"></span>`
         + `<b style="color:${roleColor(a.role)}">${esc(displayName(leaf))}</b> <span class="ameta">${esc(a.role||'')}</span>`
         + `<span class="adoing">${esc(doing)}</span></div>`;
@@ -952,8 +952,8 @@ function renderProposals(){
       + `<div class="pr-hdr"><span class="pr-sig">${esc(p.signature)}</span><span class="pr-count">${p.count}</span></div>`
       + `<div class="pr-guidance">${esc(p.guidance || '(no guidance drafted yet)')}</div>`
       + skillChip
-      + `<div class="pr-actions"><button class="acc" onclick="approveProposal(${p.id})">approve</button>`
-      + `<button class="chg" onclick="rejectProposal(${p.id})">reject</button></div>`
+      + `<div class="pr-actions"><button class="acc" onclick="approveProposal(${jsArg(p.id)})">approve</button>`
+      + `<button class="chg" onclick="rejectProposal(${jsArg(p.id)})">reject</button></div>`
       + `</div>`;
   }).join('');
   return `<div class="proposals-wrap"><div class="proposals-title">${esc(skin().proposes)}</div>${cards}</div>`;
@@ -1164,17 +1164,17 @@ function loadLookbookItems() {
 
       container.innerHTML = items.map(item => `
         <div class="lb-card">
-          <div class="lb-card-thumb-wrap" onclick="zoomLookbook(${item.id})">
+          <div class="lb-card-thumb-wrap" onclick="zoomLookbook(${jsArg(item.id)})">
             <img class="lb-card-thumb" src="/api/lookbook/image?id=${item.id}" alt="${esc(item.name)}">
           </div>
           <div class="lb-card-body">
             <h3 class="lb-card-title">${esc(item.name)}</h3>
             <p class="lb-card-desc">${esc(item.description)}</p>
             <div class="lb-card-actions">
-              <button class="lb-card-btn" onclick="copyLookbookItemGuidelines(${item.id})">
+              <button class="lb-card-btn" onclick="copyLookbookItemGuidelines(${jsArg(item.id)})">
                 📋 Copy Prompt
               </button>
-              <button class="lb-card-btn delete" onclick="deleteLookbookItem(${item.id})">
+              <button class="lb-card-btn delete" onclick="deleteLookbookItem(${jsArg(item.id)})">
                 🗑 Delete
               </button>
             </div>
@@ -1242,13 +1242,13 @@ function renderCompletedTab(){
     const missions = d.missions || [];
     if(!missions.length){ list.innerHTML = '<div class="pmt">no finished missions yet.</div>'; return; }
     list.innerHTML = missions.map(m => `
-      <div class="cm-card" onclick="openMissionDetail(${m.id})">
+      <div class="cm-card" onclick="openMissionDetail(${jsArg(m.id)})">
         <div class="cm-hdr"><span class="cm-dir">${esc(m.directive)}</span><span class="cm-pill">${esc(m.status)}</span></div>
         <div class="cm-sum">${fmtDuration(m.duration_seconds)} · ${m.done_task_count}/${m.task_count} tasks · ${m.finding_count} finding${m.finding_count===1?'':'s'}</div>
         ${(m.learned_signatures||[]).length ? `<div class="cm-learned">learned: ${(m.learned_signatures||[]).map(esc).join(', ')}</div>` : ''}
         <div class="cm-actions">
-          <button class="cm-details-btn" onclick="event.stopPropagation(); openMissionDetail(${m.id})">details</button>
-          <button class="cm-details-btn" title="replay this mission's build" onclick="event.stopPropagation(); openReplay(${m.id});">▶ replay</button>
+          <button class="cm-details-btn" onclick="event.stopPropagation(); openMissionDetail(${jsArg(m.id)})">details</button>
+          <button class="cm-details-btn" title="replay this mission's build" onclick="event.stopPropagation(); openReplay(${jsArg(m.id)});">▶ replay</button>
         </div>
       </div>`).join('');
   }).catch(()=>{ list.innerHTML = '<div class="pmt">could not load mission history.</div>'; });
@@ -1303,7 +1303,7 @@ function openMissionDetail(id){
       <div class="cmd-section-title">learning</div>
       ${learned}
       ${pr}
-      <div class="cm-actions"><button class="cm-details-btn" title="replay this mission's build" onclick="openReplay(${mv.id});">▶ replay</button></div>`;
+      <div class="cm-actions"><button class="cm-details-btn" title="replay this mission's build" onclick="openReplay(${jsArg(mv.id)});">▶ replay</button></div>`;
     el.style.display = 'block';
     el.scrollIntoView({behavior:'smooth', block:'nearest'});
   }).catch(()=>{ el.innerHTML = '<div class="pmt">mission not found.</div>'; el.style.display = 'block'; });
@@ -1340,7 +1340,7 @@ function renderRecordsTab(){
     rows = rows || [];
     if(!rows.length){ list.innerHTML = '<div class="pmt">no certified builds yet — a build_record shows up here once a mission runs `corral certify` and the checks pass.</div>'; return; }
     const body = rows.map(rec => `
-      <tr onclick="openRecordDetail(${rec.ID})">
+      <tr onclick="openRecordDetail(${jsArg(rec.ID)})">
         <td>${esc(rec.Repo||'—')}</td>
         <td style="font-family:ui-monospace,monospace" title="open for the full commit message">${shortSha(rec.Commit)}</td>
         <td>${esc(rec.Actor||'—')}</td>
@@ -1474,7 +1474,7 @@ function renderProgress(){
     }).join('');
     const frows = fs.length ? '<div class="pfind">' + fs.slice().sort((a,b)=>(SEV_RANK[b.severity]??0)-(SEV_RANK[a.severity]??0)).map(f =>
       `<span class="pfrow"><b style="color:${sevColor(f.severity)}">${esc(f.severity)} ${esc(f.type)}</b> <span style="color:var(--fg)">${esc(f.target||'')}</span> <span style="color:#6b6452">· ${esc(displayName(f.reporter))} · ${esc(f.status)}</span></span>`).join('') + '</div>' : '';
-    return `<div class="pmission" onclick="openMissionDetail(${m.id})"><div class="phdr"><span class="ppill ${pillClass}">${esc(pillText)}</span><span class="pdir">${esc(m.directive)}</span>${sprintBadge}</div><div class="psum">${esc(summary)}</div><div class="psteps">${steps}</div>${frows}</div>`;
+    return `<div class="pmission" onclick="openMissionDetail(${jsArg(m.id)})"><div class="phdr"><span class="ppill ${pillClass}">${esc(pillText)}</span><span class="pdir">${esc(m.directive)}</span>${sprintBadge}</div><div class="psum">${esc(summary)}</div><div class="psteps">${steps}</div>${frows}</div>`;
   }).join('');
   el.innerHTML = missionsHtml;
 }
@@ -1598,7 +1598,7 @@ function renderExec(){
   const bees = []; const seen = {};
   everything.sort((a,b)=>(b.ts||0)-(a.ts||0)).forEach(e => { if(e.agent && !seen[e.agent]){ seen[e.agent]=1; bees.push({name:e.agent, role:e.role}); } });
   if(execFilter && !seen[execFilter]) execFilter = '';   // the isolated bee aged out of the window
-  const chip = (name, role, on) => `<span onclick="setExecFilter('${name.replace(/'/g,"\\'")}')" style="cursor:pointer;padding:1px 6px;margin-left:5px;border-radius:8px;font-size:10.5px;${on?`background:${role?roleColor(role):'#6b6452'};color:#15110a;font-weight:700`:`color:${role?roleColor(role):'var(--muted)'};border:1px solid ${hexA(role?roleColor(role):'#6b6452',.5)}`}">${esc(displayName(name))}</span>`;
+  const chip = (name, role, on) => `<span onclick="setExecFilter(${jsArg(name)})" style="cursor:pointer;padding:1px 6px;margin-left:5px;border-radius:8px;font-size:10.5px;${on?`background:${role?roleColor(role):'#6b6452'};color:#15110a;font-weight:700`:`color:${role?roleColor(role):'var(--muted)'};border:1px solid ${hexA(role?roleColor(role):'#6b6452',.5)}`}">${esc(displayName(name))}</span>`;
   const allChip = `<span onclick="setExecFilter('')" style="cursor:pointer;padding:1px 6px;margin-left:8px;border-radius:8px;font-size:10.5px;${execFilter?'color:var(--muted);border:1px solid '+hexA('#6b6452',.5):'background:#6b6452;color:#15110a;font-weight:700'}">all</span>`;
   const chips = allChip + bees.map(b => chip(b.name, b.role, execFilter===b.name)).join('');
   // Terminal order: oldest at the top, newest at the BOTTOM, auto-scroll — a live
@@ -1746,7 +1746,7 @@ function closeModal(){ document.getElementById('modal').classList.remove('show')
 addEventListener('keydown', e => { if(e.key==='Escape') closeModal(); });
 function fmtBody(s){
   let h = esc(s);
-  h = h.replace(/\[\[([a-z0-9_-]+)\]\]/gi, (m,n)=>`<span class="wl" onclick="openEntryModal('${n}')">${n}</span>`);
+  h = h.replace(/\[\[([a-z0-9_-]+)\]\]/gi, (m,n)=>`<span class="wl" onclick="openEntryModal(${jsArg(n)})">${n}</span>`);
   h = h.replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
   h = h.replace(/`([^`]+)`/g, '<code>$1</code>');
   return h;
@@ -2044,8 +2044,7 @@ function renderReplayAgentWindowBody(name) {
     h += `<div class="isec">produced <span class="ir">· click to inspect the artifact</span></div>`;
     produced.forEach(k => {
       const t = replayTasks.get(k) || { key: k, title: k };
-      const key = String(k).replace(/'/g, "\\'");   // escape like renderReplayTasks — a quoted key must not break out of the inline handler
-      h += `<div class="irow itlprod" role="button" tabindex="0" title="open this task’s story" onclick="replayTaskClick('${key}')" style="cursor:pointer">✓ ${esc(t.title || k)}</div>`;
+      h += `<div class="irow itlprod" role="button" tabindex="0" title="open this task’s story" onclick="replayTaskClick(${jsArg(String(k))})" style="cursor:pointer">✓ ${esc(t.title || k)}</div>`;
     });
   }
   if (ra && ra.lastTs) h += `<div class="isec">last activity</div><div class="irow ir">${esc(replayActivityLabel(ra))}</div>`;
@@ -2094,13 +2093,13 @@ function renderAgentWindowBody(name) {
 
   if (a.parent) {
     const pn = a.parent;
-    h += `<div class="irow"><span class="ir">subagent of </span><span style="cursor:pointer;color:var(--amber)" onclick="openAgentWindow('${esc(pn)}')">${esc(pn.split('/').pop() || pn)}</span></div>`;
+    h += `<div class="irow"><span class="ir">subagent of </span><span style="cursor:pointer;color:var(--amber)" onclick="openAgentWindow(${jsArg(pn)})">${esc(pn.split('/').pop() || pn)}</span></div>`;
   }
   if (kids.length) {
     h += `<div class="isec">subagents (${kids.length})</div>`;
     kids.forEach(k => {
       const kLeaf = k.name.split('/').pop() || k.name;
-      h += `<div class="irow" style="cursor:pointer" onclick="openAgentWindow('${esc(k.name)}')"><span style="color:var(--amber)">${esc(displayName(kLeaf))}</span>${k.role ? ` <span class="ir">· ${esc(k.role)}</span>` : ''}</div>`;
+      h += `<div class="irow" style="cursor:pointer" onclick="openAgentWindow(${jsArg(k.name)})"><span style="color:var(--amber)">${esc(displayName(kLeaf))}</span>${k.role ? ` <span class="ir">· ${esc(k.role)}</span>` : ''}</div>`;
     });
   }
 
@@ -2132,7 +2131,7 @@ function renderAgentWindowBody(name) {
     if (ad.memory) {
       h += `<div class="isec">memory it can recall (${ad.memory.total}${ad.memory.shared_only ? ' shared' : ''})</div>`;
       (ad.memory.sample || []).slice(0, 5).forEach(m => {
-        h += `<div class="irow" style="cursor:pointer" onclick="openEntryModal('${m.slug}')"><span style="color:var(--amber)">${esc(m.name || m.slug)}</span></div>`;
+        h += `<div class="irow" style="cursor:pointer" onclick="openEntryModal(${jsArg(m.slug)})"><span style="color:var(--amber)">${esc(m.name || m.slug)}</span></div>`;
       });
     }
     if (ad.capabilities) {
@@ -2212,10 +2211,10 @@ function renderInspector(){
     const claims=(st.live_claims||[]).filter(c=>c.agent===name);
     const done=(st.recent_completed||[]).filter(d=>d.agent_name===name);
     const kids=(st.active_agents||[]).filter(x=>x.parent===name);
-    h+=`<h3>${esc(displayName(selected.label))} <span class="irename" title="rename (display only, this browser)" onclick="renameBee('${(name||'').replace(/'/g,"\\'")}')">✎</span>${a.role?` <span style="color:var(--amber);font-size:12px">[${esc(a.role)}]</span>`:''}</h3><div class="isub">${esc(a.program||'agent')}${a.model?' · '+esc(a.model):''}${beeAlias[name]?` · really ${esc(name)}`:''}</div>`;
-    if(a.parent) h+=`<div class="irow ir">subagent of <span class="p" style="cursor:pointer" onclick="selectAgent('${esc(a.parent)}')">${esc(a.parent.split('/').pop()||a.parent)}</span></div>`;
+    h+=`<h3>${esc(displayName(selected.label))} <span class="irename" title="rename (display only, this browser)" onclick="renameBee(${jsArg(name||'')})">✎</span>${a.role?` <span style="color:var(--amber);font-size:12px">[${esc(a.role)}]</span>`:''}</h3><div class="isub">${esc(a.program||'agent')}${a.model?' · '+esc(a.model):''}${beeAlias[name]?` · really ${esc(name)}`:''}</div>`;
+    if(a.parent) h+=`<div class="irow ir">subagent of <span class="p" style="cursor:pointer" onclick="selectAgent(${jsArg(a.parent)})">${esc(a.parent.split('/').pop()||a.parent)}</span></div>`;
     if(kids.length){ h+=`<div class="isec">subagents (${kids.length})</div>`;
-      kids.forEach(k=>{ const leaf=k.name.split('/').pop()||k.name; h+=`<div class="irow" style="cursor:pointer" onclick="selectAgent('${esc(k.name)}')"><span class="p">${esc(displayName(leaf))}</span>${k.role?` <span class="ir">· ${esc(k.role)}</span>`:''}</div>`; }); }
+      kids.forEach(k=>{ const leaf=k.name.split('/').pop()||k.name; h+=`<div class="irow" style="cursor:pointer" onclick="selectAgent(${jsArg(k.name)})"><span class="p">${esc(displayName(leaf))}</span>${k.role?` <span class="ir">· ${esc(k.role)}</span>`:''}</div>`; }); }
     h+=`<div class="isec">stats</div>`;
     h+=`<div class="irow">active for <b>${ago(a.registered_ts)}</b> · last seen <b>${ago(a.last_active_ts)} ago</b></div>`;
     h+=`<div class="irow">holding <b>${claims.length}</b> · completed <b>${done.length}</b></div>`;
@@ -2239,7 +2238,7 @@ function renderInspector(){
       (ad.activity||[]).slice(0,8).forEach(a=>{ h+=`<div class="irow"><span class="igreen">${esc(a.action)}</span> <span class="ir">${ago(a.ts)} ago${summ(a.detail)?' · '+esc(summ(a.detail)):''}</span></div>`; });
       if(ad.memory){
         h+=`<div class="isec">memory it can recall (${ad.memory.total}${ad.memory.shared_only?' shared':''})</div>`;
-        (ad.memory.sample||[]).slice(0,5).forEach(m=>{ h+=`<div class="irow" style="cursor:pointer" onclick="openEntryModal('${m.slug}')"><span class="p">${esc(m.name||m.slug)}</span></div>`; });
+        (ad.memory.sample||[]).slice(0,5).forEach(m=>{ h+=`<div class="irow" style="cursor:pointer" onclick="openEntryModal(${jsArg(m.slug)})"><span class="p">${esc(m.name||m.slug)}</span></div>`; });
       }
       if(ad.capabilities){
         h+=`<div class="isec">mcp endpoints it can use (${ad.capabilities.length})</div>`;
@@ -2337,19 +2336,11 @@ function loadComposeOptions() {
     renderLaunchTab(true); // re-render the composer with the pickers populated
   }).catch(() => {});
 }
-// agentBackend: local_agents is a bare []string of names with no backend
-// field in the topology, so we derive the backend from the name via a
-// small heuristic; anything unrecognized (including real local models)
-// defaults to ollama.
-function agentBackend(name) {
-  const n = (name || '').toLowerCase();
-  if (n.includes('claude')) return 'anthropic';
-  if (n.includes('gemini')) return 'google';
-  if (n.includes('codex') || n.includes('gpt')) return 'openai';
-  if (n.includes('copilot')) return 'github';
-  if (n.includes('aider')) return 'ollama';
-  return 'ollama';
-}
+// No backend is ever worked out from a name. local_agents carries names only,
+// so a dragged agent has no backend ('' = not declared); a staffing proposal
+// carries the backend of the source the server found the model in. (This used
+// to be a helper that read "claude"/"gpt"/"gemini" off the spelling and
+// called everything else ollama — the vendor guess the CLI refuses.)
 function mcAllowDrop(ev) {
   ev.preventDefault();
   ev.currentTarget.classList.add('dragover');
@@ -2359,18 +2350,18 @@ function mcDragLeave(ev) {
 }
 function mcDrag(ev) {
   ev.dataTransfer.setData("text/plain", ev.target.dataset.agent);
-  ev.dataTransfer.setData("application/x-backend", ev.target.dataset.backend || agentBackend(ev.target.dataset.agent));
+  ev.dataTransfer.setData("application/x-backend", ev.target.dataset.backend || '');
 }
 function mcDrop(ev) {
   ev.preventDefault();
   ev.currentTarget.classList.remove('dragover');
   const agent = ev.dataTransfer.getData("text/plain");
-  const backend = ev.dataTransfer.getData("application/x-backend") || agentBackend(agent);
+  const backend = ev.dataTransfer.getData("application/x-backend") || '';
   const role = ev.currentTarget.dataset.role;
   mcAssign(role, agent, backend);
 }
 function mcAssign(role, agent, backend) {
-  mcAssignments[role] = {agent, backend: backend || agentBackend(agent)};
+  mcAssignments[role] = {agent, backend: backend || ''};
   const el = document.getElementById(`mc-assigned-${role}`);
   if(el){
     el.textContent = agent;
@@ -2385,15 +2376,13 @@ function getLocalAgents() {
       h.local_agents.forEach(la => agents.add(la));
     }
   });
-  if (agents.size === 0) {
-    return ["claude", "aider", "copilot", "ollama"];
-  }
+  // No stand-in list: with no agent reported, the pool is empty.
   return [...agents].sort();
 }
 function renderComposer() {
   const agents = getLocalAgents();
   const agentPoolHtml = agents.map(a => `
-    <span class="drag-agent" draggable="true" ondragstart="mcDrag(event)" data-agent="${esc(a)}" data-backend="${esc(agentBackend(a))}">${esc(a)}</span>
+    <span class="drag-agent" draggable="true" ondragstart="mcDrag(event)" data-agent="${esc(a)}" data-backend="">${esc(a)}</span>
   `).join('');
 
   const roles = ['tester', 'reviewer', 'pentester', 'writer'];
@@ -2497,7 +2486,7 @@ function submitMission() {
   const roleModels = {};
   for (const [r, a] of Object.entries(mcAssignments)) {
     if (a && a.agent) {
-      roleModels[r] = {backend: a.backend || 'ollama', model: a.agent};
+      roleModels[r] = {backend: a.backend || '', model: a.agent};
     }
   }
   const mcpEndpoints = [...document.querySelectorAll('.mc-endpoint:checked')].map(c => c.value);
@@ -2582,8 +2571,8 @@ function letCorralChoose() {
     btn.disabled = false;
     if (d.ok && d.assignments) {
       mcAssignments = {};
-      for (const [role, agent] of Object.entries(d.assignments)) {
-        mcAssign(role, agent);
+      for (const [role, ref] of Object.entries(d.assignments)) {
+        mcAssign(role, ref.model, ref.backend);
       }
     } else {
       alert('Corral could not automatically staff: ' + (d.error || 'unknown error'));

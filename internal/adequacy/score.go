@@ -10,7 +10,7 @@
 // wall-clock, only on what the Jail reports) and has no LLM or network calls.
 // It does read time.Now() once, around the compliant-baseline run, solely to
 // auto-derive a short per-mutant timeout from how long a healthy suite
-// actually took (see clampMutantTimeout) — that derived duration only ever
+// actually took (see mutantTimeoutCap) — that derived duration only ever
 // widens or narrows a timeout window, it never changes a kill/survive
 // verdict for a run that completes. The only external dependency for the
 // verdicts themselves is the injected Jail, which runs a test command
@@ -33,7 +33,7 @@ import (
 )
 
 // minMutantTimeout / maxMutantTimeout bound the auto-derived per-mutant
-// timeout (see scoreConfig.mutantTimeout / clampMutantTimeout): a floor so a
+// timeout (see scoreConfig.mutantTimeout / mutantTimeoutCap): a floor so a
 // pathologically fast healthy suite (sub-second) still gives a mutant enough
 // room to run at all, and a ceiling so a pathologically slow healthy suite
 // doesn't turn "3x baseline" into a per-mutant wait that is itself most of
@@ -54,22 +54,37 @@ const (
 	mutantTimeoutMultiple = 3
 )
 
-// clampMutantTimeout derives a per-mutant timeout from how long the
-// compliant run of THE SAME COMMAND took: mutantTimeoutMultiple x that,
-// clamped to [minMutantTimeout, maxMutantTimeout]. Auto-adapts to any
-// repo's suite with no operator tuning. Per command, not per file: under
-// per-mutant selection one mutant's command runs two tests and another's
-// three hundred, and a cap derived from the file's shared baseline gave the
-// two-test mutant five minutes to hang in.
-func clampMutantTimeout(baseDur time.Duration) time.Duration {
-	d := baseDur * mutantTimeoutMultiple
-	if d < minMutantTimeout {
-		return minMutantTimeout
-	}
-	if d > maxMutantTimeout {
-		return maxMutantTimeout
-	}
-	return d
+// mutantTimeoutCap derives a per-mutant timeout from how long the compliant
+// run of THE SAME COMMAND took (baseDur): mutantTimeoutMultiple x that,
+// clamped to [floor, maxMutantTimeout] (floor is minMutantTimeout outside
+// tests). Auto-adapts to any repo's suite with no operator tuning. Per
+// command, not per file: under per-mutant selection one mutant's command runs
+// two tests and another's three hundred, and a cap derived from the file's
+// shared baseline gave the two-test mutant five minutes to hang in.
+//
+// THE CAP ASSUMES THE BASELINE AND THE MUTANT DO THE SAME BUILD WORK. A
+// timed-out mutant is credited as a kill when the compliant code, re-run
+// under the same cap, passes (KillConfirmedReprobed), which reads "the box
+// finished the unmutated run in this budget, so the mutant hung". That held
+// while every run rebuilt the project at its own path. It does not hold on a
+// jail whose runs share a warmed build cache (RunCacheJail): there a frozen
+// compliant run of unchanged code is a full cache hit, while a mutant must
+// rebuild the package it changed and everything that depends on it —
+// measured outside the jail on this repository at 2.7× to 6.9× the cached
+// build, so past the multiple, and only the floor stood between a slow
+// rebuild and a credited kill. In the authored-test pass that kill becomes a
+// proven gap from a test that never ran.
+//
+// So warmDur, the duration of the jail's warming run (RunCacheJail.
+// WarmDuration: the one run that paid for a full build), floors the cap at
+// the same multiple: max(multiple x baseDur, multiple x warmDur, floor),
+// under the ceiling. Zero (no run cache, or never warmed) changes nothing,
+// and a cap can only grow from it. This is the ONE place a cap is derived
+// from a baseline; every budget in Score comes from it or from a cap it
+// returned.
+func mutantTimeoutCap(baseDur, warmDur, floor time.Duration) time.Duration {
+	d := max(baseDur, warmDur) * mutantTimeoutMultiple
+	return min(max(d, floor), maxMutantTimeout)
 }
 
 // ScoreOption configures a single Score call. The zero value of every option
@@ -77,6 +92,10 @@ func clampMutantTimeout(baseDur time.Duration) time.Duration {
 type ScoreOption func(*scoreConfig)
 
 type scoreConfig struct {
+	// warmBaseline routes the baseline through RunCacheJail.WarmRun, the one
+	// run that may write the jail's shared cache. Off by default: see
+	// WithWarmBaseline.
+	warmBaseline bool
 	// capFloor overrides minMutantTimeout for this Score call. Unexported,
 	// test-only: the per-command cap derivation is invisible under the 30s
 	// floor unless a baseline exceeds 10s, and a test that sleeps 12s to
@@ -106,6 +125,9 @@ type scoreConfig struct {
 	// nil does NOT turn confirmation off: every candidate kill is still
 	// confirmed, by repeating its grading run (step B). There is no off.
 	killConfirmer KillerCmdFor
+	// rewrite, when set, is applied to a COPY of every command Score hands
+	// the jail, at the one point it does so (see toJail in Score).
+	rewrite func(cmd []string) []string
 }
 
 // The values of MutantGrading.KillConfirmation: what the confirmation of a
@@ -204,6 +226,19 @@ func WithMutantCompileCheck(cmds [][]string) ScoreOption {
 	return func(c *scoreConfig) { c.mutantCompileCheck = cmds }
 }
 
+// WithWarmBaseline makes this Score call's baseline, the run on the unmutated
+// code, the run that WARMS the jail's shared cache (RunCacheJail.WarmRun, the
+// cache writable). Without it, even a RunCacheJail runs its baseline frozen
+// like any other run, exactly as a jail with no run cache would.
+//
+// OPT-IN, because the warming run writes what every later run reads: only a
+// caller that knows the tree holds the project's own code and tests, and no
+// test a model wrote, may ask for it. Score cannot tell, so it never warms on
+// its own.
+func WithWarmBaseline() ScoreOption {
+	return func(c *scoreConfig) { c.warmBaseline = true }
+}
+
 // WithFailureParser names, for each KILLED mutant, the first test the runner
 // reported as failing — best effort, and only ever the id the output itself
 // printed (see lang.FailureParser).
@@ -244,6 +279,18 @@ func WithFailureParser(p lang.FailureParser) ScoreOption {
 // proportional to the mutant count.
 func WithMutantFailFast(f FailFastFor) ScoreOption {
 	return func(c *scoreConfig) { c.failFast = f }
+}
+
+// WithCommandRewrite rewrites EVERY command Score hands the jail: the
+// baseline, the fail-fast probe, each mutant's command (after selection and
+// fail-fast arguments are added), each confirmation command (alone or
+// repeated), the compile gate and the canary. It is applied in the one place
+// commands reach the jail, to a copy, after the command is fully assembled, so
+// f never sees the same slice twice and never mutates the caller's. Grading
+// keys (the per-command timeout cap) stay on the raw command. nil is no
+// rewrite.
+func WithCommandRewrite(f func(cmd []string) []string) ScoreOption {
+	return func(c *scoreConfig) { c.rewrite = f }
 }
 
 // WithConcurrency scores up to n mutants at once. The default (and anything
@@ -461,11 +508,18 @@ type Enumerator interface {
 }
 
 // CanaryCode is deliberately invalid source in every language corral
-// supports (go, python, ruby, javascript, typescript). Any check command
+// supports (TestCanaryCodeIsInvalidSourceInEveryLanguage runs each
+// registered language's own syntax check on it). Any check command
 // that genuinely compiles or imports the file under audit MUST fail on it.
 // A suite that still passes provably never reads the file, so nothing it
 // reports about that file can mean anything.
-const CanaryCode = "!!!corral canary!!!"
+//
+// It opens with `<?php` because in PHP, text outside that tag is not code but
+// literal output: the bare "!!!corral canary!!!" this used to be was VALID
+// PHP. PHPUnit loaded a canary test file, printed it and passed, so the
+// authored-test positive control refused every PHP `certify --repo` as not
+// collected. The tag is itself a syntax error in every other language.
+const CanaryCode = "<?php !!!corral canary!!!"
 
 // Report is the outcome of scoring a candidate test against compliant code
 // and a set of mutants.
@@ -718,6 +772,37 @@ type DetailedJail interface {
 	RunTestDetailed(ctx context.Context, files map[string]string, testCmd []string) (ok bool, output []byte, err error)
 }
 
+// maxEndsHead is how much of the START of a run an EndsJail keeps: 16 KiB,
+// the cap the jail's RunTestVerbose has always kept of a run's opening
+// (sandbox.Run's default), which is what the test writer was shown of a
+// failing run in the jail until 2026-11-18.
+const maxEndsHead = 16 << 10
+
+// EndsJail is a Jail that can hand back BOTH ends of what a run printed: its
+// first maxEndsHead bytes and its last maxDetailedOutput bytes, with one
+// elision line between them counting the bytes not shown (clip.Elision), and
+// the whole output when it fits. It is for the one door whose readers need
+// both, the clean-code run of an authored test (advpool's
+// JailScorer.CompliantRun):
+//
+//   - a runner names its failing tests LAST (pytest's summary and report
+//     hook block, rspec's "Failed examples"), which salvage reads;
+//   - some failures are named FIRST: a Go test that hangs under `go test
+//     -timeout` prints `panic: test timed out` and the running test's name,
+//     then every goroutine's stack, hundreds of KiB of them, so the last
+//     64 KiB of that run say nothing about which test hung. The test writer,
+//     who is shown this output to repair the test, needs that opening.
+//
+// The door that names a killing test keeps the tail alone (DetailedJail) and
+// is unchanged: it runs once per mutant, and its one reader reads the end.
+//
+// Optional, as DetailedJail and VerboseJail are: the bwrap jail, the
+// workspace runner and the workspace pool implement it; a Jail without it is
+// run through RunTestVerbose and hands back what that keeps.
+type EndsJail interface {
+	RunTestEnds(ctx context.Context, files map[string]string, testCmd []string) (ok bool, output string, err error)
+}
+
 // tailBytes keeps the last n bytes of b, copying rather than aliasing so the
 // runner's buffer can be reused.
 func tailBytes(b []byte, n int) []byte {
@@ -756,7 +841,8 @@ func (r Report) KillRate() float64 {
 // common on iterator/loop-heavy code) can make the candidate suite hang
 // forever. Score protects against that by timing the compliant baseline and
 // deriving a short per-MUTANT timeout from it (mutantTimeoutMultiple x the
-// baseline's own wall-clock, clamped — see clampMutantTimeout), or by using
+// baseline's own wall-clock, floored at the same multiple of a warmed run
+// cache's warming run, clamped — see mutantTimeoutCap), or by using
 // the caller's explicit WithMutantTimeout override. A mutant run that times
 // out (Jail.RunTest returning an error matching ErrTestTimeout) is scored as
 // KILLED: non-termination is a detected divergence from the baseline's own
@@ -772,13 +858,25 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 		o(&cfg)
 	}
 
+	// toJail is THE door every grading command passes through on its way to
+	// the jail: runCmd, runCmdDetailed, runCmdVerbose and baselineRun below all
+	// call it as their last step, and there is no other call of the jail in
+	// this function. It hands the rewrite a copy, so the rewrite never sees
+	// the caller's slice nor one it has already seen.
+	toJail := func(cmd []string) []string {
+		if cfg.rewrite == nil {
+			return cmd
+		}
+		return cfg.rewrite(append([]string(nil), cmd...))
+	}
+
 	runCmd := func(rctx context.Context, code string, cmd []string) (bool, error) {
 		files := make(map[string]string, len(base)+1)
 		for k, v := range base {
 			files[k] = v
 		}
 		files[codePath] = code
-		return j.RunTest(rctx, files, cmd)
+		return j.RunTest(rctx, files, toJail(cmd))
 	}
 
 	run := func(rctx context.Context, code string) (bool, error) {
@@ -797,7 +895,7 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 			files[k] = v
 		}
 		files[codePath] = code
-		return dj.RunTestDetailed(rctx, files, cmd)
+		return dj.RunTestDetailed(rctx, files, toJail(cmd))
 	}
 
 	// runCmdVerbose keeps the checker's OUTPUT when the Jail can report it.
@@ -815,7 +913,7 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 			files[k] = v
 		}
 		files[codePath] = code
-		return vj.RunTestVerbose(rctx, files, cmd)
+		return vj.RunTestVerbose(rctx, files, toJail(cmd))
 	}
 
 	// The BASELINE run alone keeps its output when the jail can: it is a
@@ -834,8 +932,19 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 			files[k] = v
 		}
 		files[codePath] = code
+		// WARM THE RUN CACHE with this run, only when the caller asked
+		// (WithWarmBaseline): the warming run writes what every later run
+		// reads, so it must be a run of the project's own code and tests. A
+		// caller whose tree holds a test a model wrote does not ask, and its
+		// baseline is a frozen run like any other. Taken whether or not the
+		// cache is shared (an unshared jail's WarmRun is a detailed run), so
+		// no branch on RunCache() here.
+		if rj, ok := j.(RunCacheJail); ok && cfg.warmBaseline {
+			p, out, err := rj.WarmRun(rctx, files, toJail(testCmd))
+			return p, string(out), err
+		}
 		if dj, ok := j.(DetailedJail); ok {
-			p, out, err := dj.RunTestDetailed(rctx, files, testCmd)
+			p, out, err := dj.RunTestDetailed(rctx, files, toJail(testCmd))
 			return p, string(out), err
 		}
 		vj, ok := j.(VerboseJail)
@@ -843,7 +952,7 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 			p, err := run(rctx, code)
 			return p, "", err
 		}
-		return vj.RunTestVerbose(rctx, files, testCmd)
+		return vj.RunTestVerbose(rctx, files, toJail(testCmd))
 	}
 
 	start := time.Now()
@@ -856,7 +965,8 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 			// score mutants against a baseline that can't even pass. The
 			// output rides along: "which test hung" is exactly the question a
 			// timed-out baseline leaves open.
-			return Report{CompliantPass: false, BaselineOutput: baseOut, BaselineDuration: baseDur, BaselineTimedOut: true}, nil
+			trep := Report{CompliantPass: false, BaselineOutput: baseOut, BaselineDuration: baseDur, BaselineTimedOut: true}
+			return trep, nil
 		}
 		return Report{}, err
 	}
@@ -895,15 +1005,21 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 		}
 	}
 
+	// clamp is every cap below: mutantTimeoutCap over a command's own
+	// baseline, floored by the jail's warming run when its cache was warmed.
+	// The warm duration is read from the jail at each cap, so a cap computed
+	// after the jail was warmed sees it.
+	floor := minMutantTimeout
+	if cfg.capFloor > 0 {
+		floor = cfg.capFloor
+	}
+	rcj, _ := j.(RunCacheJail)
 	clamp := func(d time.Duration) time.Duration {
-		if cfg.capFloor > 0 {
-			if x := d * mutantTimeoutMultiple; x < cfg.capFloor {
-				return cfg.capFloor
-			} else if x < minMutantTimeout {
-				return x
-			}
+		var warm time.Duration
+		if rcj != nil {
+			warm = rcj.WarmDuration()
 		}
-		return clampMutantTimeout(d)
+		return mutantTimeoutCap(d, warm, floor)
 	}
 	perMutant := cfg.mutantTimeout
 	if perMutant <= 0 {

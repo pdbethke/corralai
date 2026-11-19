@@ -43,9 +43,9 @@ func TestForSeatRunsAnOperatorAgentAndReadsItsOutFile(t *testing.T) {
 	}
 }
 
-func TestForSeatDefersToForModelForAnAPIName(t *testing.T) {
+func TestForSeatDefersToForVendorForTheVendorForm(t *testing.T) {
 	t.Setenv("GEMINI_API_KEY", "x")
-	b, err := ForSeat("gemini-3.8-flash", SeatOptions{})
+	b, err := ForSeat("google/gemini-3.8-flash", SeatOptions{})
 	if err != nil || modelOf(b) != "gemini-3.8-flash" {
 		t.Fatalf("got %v, %v", b, err)
 	}
@@ -58,24 +58,26 @@ func TestForSeatCloudNameWithoutItsKeyFailsRatherThanFallingBackLocal(t *testing
 	t.Setenv("GEMINI_API_KEY", "")
 	t.Setenv("GOOGLE_API_KEY", "")
 	t.Setenv("OPENAI_API_KEY", "")
-	if b, err := ForSeat("gemini-3.8-flash", SeatOptions{}); err == nil {
+	if b, err := ForSeat("google/gemini-3.8-flash", SeatOptions{}); err == nil {
 		t.Fatalf("want a missing-key error, got backend %v", b)
 	}
 }
 
-// An unprefixed name is a local model, as review's seat always served it.
-func TestForSeatServesAnUnprefixedNameFromTheLocalDaemon(t *testing.T) {
-	b, err := ForSeat("llama-local-7b", SeatOptions{})
-	if err != nil || modelOf(b) != "llama-local-7b" {
-		t.Fatalf("got %v, %v", b, err)
-	}
-}
-
-func TestForSeatEmptySpecIsTheSameErrorAsForModel(t *testing.T) {
-	_, want := ForModel("")
-	_, got := ForSeat("", SeatOptions{})
-	if want == nil || got == nil || got.Error() != want.Error() {
-		t.Fatalf("ForSeat(\"\") = %v, want %v", got, want)
+// ForSeat takes an agent seat or the explicit vendor/model form and nothing
+// else: a bare cloud name is refused with its key set, because routing it by
+// its prefix is the guess that sent a local gpt-oss name toward OpenAI.
+func TestForSeatRefusesABareName(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "sk-test")
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+	for _, spec := range []string{"", "claude-sonnet-5", "gpt-6", "gpt-oss:20b", "hf.co/x/y:q4"} {
+		b, err := ForSeat(spec, SeatOptions{})
+		if err == nil {
+			t.Errorf("ForSeat(%q) = %T; want a refusal", spec, b)
+			continue
+		}
+		if !strings.Contains(err.Error(), "vendor/model") {
+			t.Errorf("ForSeat(%q) error %q should name the vendor/model form", spec, err)
+		}
 	}
 }
 

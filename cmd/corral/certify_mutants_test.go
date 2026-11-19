@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
+	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/reposcan"
 )
@@ -90,9 +91,9 @@ func TestCertifyRepoRefusesAStaleMutantSet(t *testing.T) {
 	prev := certifyRepoDeriver
 	t.Cleanup(func() { certifyRepoDeriver = prev })
 	derived := false
-	certifyRepoDeriver = func(model, _ string) (reposcan.Deriver, error) {
+	certifyRepoDeriver = func(rs agentbackend.ResolvedSeat) (reposcan.Deriver, error) {
 		derived = true
-		return prev(model, "")
+		return prev(rs)
 	}
 
 	var out, errb bytes.Buffer

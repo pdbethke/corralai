@@ -153,6 +153,7 @@ func TestRankCountsTheCandidatesItCouldNotSize(t *testing.T) {
 // accepts it, and the printed line carries the same seed, pool size and
 // parameters.
 func TestTheShadowDrawReachesTheLedgerAndReplays(t *testing.T) {
+	declareLocalSeats(t, "localmodel-a:1", "localmodel-b:1")
 	f := flagsWith("", "localmodel-a:1,localmodel-b:1", "", "", "")
 	var errb bytes.Buffer
 	sels, err := drawShadowSeats("corral certify --local", t.TempDir(), "go", f, nil, filepath.Join(t.TempDir(), "none.duckdb"), &errb)
@@ -238,7 +239,7 @@ func TestTheMutantAndWriterCountsReachTheRowAndMatchTheScreen(t *testing.T) {
 			ExamCoverage: advpool.ExamCoverage{Symbols: 4, SymbolsProbed: 2, Decisions: 3, DecisionsProbed: 1, Unplaced: 2, Measured: true},
 		}
 		res := reposcan.FileResult{Job: reposcan.Job{Path: "pkg/a.go", Lang: "go"}, Gradable: true, Verdict: v}
-		files := buildScanFileRows([]reposcan.FileResult{res}, nil, reposcan.CoverageMap{}, "", "", io.Discard)
+		files := buildScanFileRows([]reposcan.FileResult{res}, nil, reposcan.CoverageMap{}, "", "", io.Discard, false)
 		b := buildBundle(scanstore.Scan{Repo: "o/r", Commit: "c"}, 1, files, nil, nil, nil, auditpush.Link{}, false, "o/r", "c", "", bundleMeta{})
 		r := b.Files[0]
 		if r.MutantsUnplaced == nil || *r.MutantsUnplaced != 2 || r.MutantsUnmeasured == nil || *r.MutantsUnmeasured != 3 ||
@@ -286,7 +287,7 @@ func TestTheMutantAndWriterCountsReachTheRowAndMatchTheScreen(t *testing.T) {
 func TestAnUnscoredVerdictRecordsNoMutantCounts(t *testing.T) {
 	v := advpool.Verdict{Lang: "go", TimedOut: true, WriterMode: advpool.WriterModeBatched}
 	res := reposcan.FileResult{Job: reposcan.Job{Path: "pkg/a.go", Lang: "go"}, Gradable: true, Verdict: v}
-	r := buildScanFileRows([]reposcan.FileResult{res}, nil, reposcan.CoverageMap{}, "", "", io.Discard)[0]
+	r := buildScanFileRows([]reposcan.FileResult{res}, nil, reposcan.CoverageMap{}, "", "", io.Discard, false)[0]
 	if r.MutantsUnplaced != nil || r.MutantsUnmeasured != nil || r.MutantsDuplicate != nil || r.WriterAttempts != "" {
 		t.Errorf("recorded %v %v %v %q for a verdict that scored nothing", r.MutantsUnplaced, r.MutantsUnmeasured, r.MutantsDuplicate, r.WriterAttempts)
 	}

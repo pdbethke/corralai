@@ -323,9 +323,9 @@ the outer boundary instead of trusting the container boundary. Set
 
 | env | default | meaning |
 |---|---|---|
-| `MODEL_BACKEND` | `ollama` | `ollama` \| `openai` (OpenAI-compatible: Gemini/OpenRouter/local) \| `anthropic` |
+| `MODEL_BACKEND` | `ollama` (set by the compose file; corral itself has no default) | `ollama` \| `openai` (OpenAI-compatible: Gemini/OpenRouter/local) \| `anthropic` |
 | `AGENT_ALLOW_EXEC` | `1` for `demo-models`' exec-capable agents, else `0` | `0` flips those agents back to narrate-only |
-| `AGENT_MODEL` | `qwen2.5-coder:7b` | the model name for the chosen backend |
+| `AGENT_MODEL` | `qwen2.5-coder:7b` (set by the compose file; corral itself has no default) | the model name for the chosen backend |
 | `OLLAMA_MODELS_DIR` | `ollama-models` (volume) | set to `~/.ollama` to reuse a host download and skip the pull |
 | `AGENT_ROLE` | per service | `builder` \| `tester` \| `pentester` \| `reviewer` |
 | `AGENT_ROUNDS` | `0` (forever) | passes over the backlog |

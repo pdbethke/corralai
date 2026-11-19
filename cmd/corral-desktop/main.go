@@ -3,6 +3,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -10,6 +12,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -241,6 +244,7 @@ const configHTML = `
         <p>Enter the URL and authentication token of your running Corralai brain instance to begin.</p>
         
         <form action="/save" method="POST">
+            <input type="hidden" name="setup_token" value="{{.SetupToken}}">
             <div class="form-group">
                 <label for="brain_url">Brain Server URL</label>
                 <input type="url" id="brain_url" name="brain_url" placeholder="e.g. http://localhost:8080" value="{{.BrainURL}}" required>
@@ -316,57 +320,20 @@ func main() {
 		log.Fatalf("Failed to bind local configuration server: %v", err)
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
-	url := fmt.Sprintf("http://127.0.0.1:%d", port)
+	appURL := fmt.Sprintf("http://127.0.0.1:%d", port)
 
-	mux := http.NewServeMux()
-	server := &http.Server{Handler: mux}
-
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		t, err := template.New("config").Parse(configHTML)
-		if err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-		_ = t.Execute(w, cfg)
-	})
-
-	mux.HandleFunc("/save", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "POST" {
-			http.Error(w, "Method Not Allowed", 405)
-			return
-		}
-		newCfg := Config{
-			BrainURL: strings.TrimSuffix(r.FormValue("brain_url"), "/"),
-			Token:    r.FormValue("token"),
-		}
-		if err := saveConfig(newCfg); err != nil {
-			http.Error(w, fmt.Sprintf("Failed to save config: %v", err), 500)
-			return
-		}
-		cfg = newCfg // update the in-memory config /done launches with — saveConfig alone only persists to disk
-
-		w.Header().Set("Content-Type", "text/html")
-		_, _ = io.WriteString(w, `
-			<script>
-				window.location.href = "/done";
-			</script>
-		`)
-	})
-
-	mux.HandleFunc("/done", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html")
-		_, _ = io.WriteString(w, `
-			<div style="background:#09090b;color:#fafafa;font-family:sans-serif;height:100vh;display:flex;justify-content:center;align-items:center;flex-direction:column;">
-				<h2>Connecting…</h2>
-				<p style="color:#a1a1aa;">The application is launching. You can close this tab.</p>
-			</div>
-		`)
+	server := &http.Server{ReadHeaderTimeout: 10 * time.Second}
+	handler, _, err := newSetupServer(&cfg, saveConfig, func(c Config) {
 		go func() {
 			time.Sleep(500 * time.Millisecond)
 			_ = server.Close()
-			launchApp(browser, cfg.BrainURL, cfg.Token)
+			launchApp(browser, c.BrainURL, c.Token)
 		}()
 	})
+	if err != nil {
+		log.Fatalf("Failed to start configuration server: %v", err)
+	}
+	server.Handler = handler
 
 	go func() {
 		_ = server.Serve(listener)
@@ -374,12 +341,101 @@ func main() {
 
 	// Launch Chrome in application mode targeting our local server
 	// #nosec G204
-	cmd := exec.Command(browser, fmt.Sprintf("--app=%s", url))
+	cmd := exec.Command(browser, fmt.Sprintf("--app=%s", appURL))
 	if err := cmd.Start(); err != nil {
 		log.Fatalf("Failed to launch desktop application window: %v", err)
 	}
 
 	_ = cmd.Wait()
+}
+
+// newSetupServer is the first-run page that asks for the brain address and
+// token. It listens on loopback, but loopback is not a boundary a browser
+// respects: any page the operator has open can make the browser POST a form to
+// 127.0.0.1, with no preflight. Unguarded, that page could save a brain of its
+// choosing into the config every later launch connects to. So a save, and the
+// launch after it, must carry the per-launch token embedded in this page's
+// own form, arrive from this page's origin, and name a loopback Host (the
+// DNS-rebinding guard); these are the console's own checks
+// (console.LoopbackHost, console.SameOrigin, console.ConstEq). The brain must
+// be an http(s) URL with a host and no credentials.
+func newSetupServer(cfg *Config, save func(Config) error, done func(Config)) (http.Handler, string, error) {
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return nil, "", fmt.Errorf("mint setup token: %w", err)
+	}
+	token := hex.EncodeToString(raw)
+	page, err := template.New("config").Parse(configHTML)
+	if err != nil {
+		return nil, "", err
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = page.Execute(w, struct {
+			Config
+			SetupToken string
+		}{*cfg, token})
+	})
+	mux.HandleFunc("/save", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if !console.SameOrigin(r) || !console.ConstEq(r.PostFormValue("setup_token"), token) {
+			http.Error(w, "this save did not come from the setup page", http.StatusForbidden)
+			return
+		}
+		brain, err := setupBrainURL(r.PostFormValue("brain_url"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		newCfg := Config{BrainURL: brain, Token: r.PostFormValue("token")}
+		if err := save(newCfg); err != nil {
+			http.Error(w, fmt.Sprintf("Failed to save config: %v", err), http.StatusInternalServerError)
+			return
+		}
+		*cfg = newCfg // the in-memory config /done launches with; save only persists it
+
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = io.WriteString(w, `<script>window.location.href = "/done?setup_token=`+token+`";</script>`)
+	})
+	mux.HandleFunc("/done", func(w http.ResponseWriter, r *http.Request) {
+		if !console.ConstEq(r.URL.Query().Get("setup_token"), token) {
+			http.Error(w, "this launch did not come from the setup page", http.StatusForbidden)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = io.WriteString(w, `
+			<div style="background:#09090b;color:#fafafa;font-family:sans-serif;height:100vh;display:flex;justify-content:center;align-items:center;flex-direction:column;">
+				<h2>Connecting…</h2>
+				<p style="color:#a1a1aa;">The application is launching. You can close this tab.</p>
+			</div>
+		`)
+		done(*cfg)
+	})
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !console.LoopbackHost(r) {
+			http.Error(w, "setup: request Host is not loopback — refused (DNS-rebinding guard)", http.StatusForbidden)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	}), token, nil
+}
+
+// setupBrainURL accepts an http(s) URL with a host and no credentials, and
+// returns it without a trailing slash.
+func setupBrainURL(raw string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {
+		return "", fmt.Errorf("the brain address must be an http:// or https:// URL with a host and no credentials, e.g. https://brain.example.com")
+	}
+	return strings.TrimSuffix(u.String(), "/"), nil
 }
 
 // desktopBrowserURL is the address the browser is pointed at: always the

@@ -9,10 +9,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/reposcan"
 )
@@ -64,8 +66,8 @@ func TestNoGoalCacheFlagDerivesEveryTime(t *testing.T) {
 	callsFor := func(store reposcan.GoalCacheStore) int {
 		calls := 0
 		var errb bytes.Buffer
-		gs, _, code := resolveGoalSource(&errb, root, "", "test-model-x", "", false, 1,
-			func(string, string) (reposcan.Deriver, error) { return countingDeriver{calls: &calls}, nil },
+		gs, _, code := resolveGoalSource(&errb, root, "", testDeriveSeat("test-model-x"), false, 1,
+			func(agentbackend.ResolvedSeat) (reposcan.Deriver, error) { return countingDeriver{calls: &calls}, nil },
 			store, false, true)
 		if code != 0 {
 			t.Fatalf("resolveGoalSource: code=%d stderr=%s", code, errb.String())
@@ -98,8 +100,8 @@ func TestResolveGoalSourceGoalsFilePathNeverWiresTheCache(t *testing.T) {
 	mustWrite(t, goals, `{"a.go": "hand written"}`)
 	store := newGoalLedgerCache(filepath.Join(t.TempDir(), "scans.duckdb"))
 
-	gs, disclosure, code := resolveGoalSource(&bytes.Buffer{}, root, goals, "test-model-x", "", false, 1,
-		func(string, string) (reposcan.Deriver, error) {
+	gs, disclosure, code := resolveGoalSource(&bytes.Buffer{}, root, goals, testDeriveSeat("test-model-x"), false, 1,
+		func(agentbackend.ResolvedSeat) (reposcan.Deriver, error) {
 			t.Fatal("the --goals path must never construct a deriver")
 			return nil, nil
 		}, store, false, true)
@@ -131,7 +133,7 @@ func TestGoalReusedRoundTripsTheLedger(t *testing.T) {
 		Gradable: true,
 		Verdict:  advpool.Verdict{DevKillRate: 1, MutantsTotal: 1},
 	}}
-	files := buildScanFileRows(results, nil, reposcan.CoverageMap{}, "", dir, io.Discard)
+	files := buildScanFileRows(results, nil, reposcan.CoverageMap{}, "", dir, io.Discard, false)
 	if len(files) != 1 {
 		t.Fatalf("buildScanFileRows returned %d row(s), want 1", len(files))
 	}
@@ -156,7 +158,7 @@ func TestGoalReusedFalseNeverFabricated(t *testing.T) {
 		Gradable: true,
 		Verdict:  advpool.Verdict{DevKillRate: 1, MutantsTotal: 1},
 	}}
-	files := buildScanFileRows(results, nil, reposcan.CoverageMap{}, "", dir, io.Discard)
+	files := buildScanFileRows(results, nil, reposcan.CoverageMap{}, "", dir, io.Discard, false)
 	if files[0].GoalReused != nil {
 		t.Errorf("a file whose goal was not reused must carry a nil GoalReused, got %v", *files[0].GoalReused)
 	}
@@ -175,7 +177,7 @@ func TestAttestationCarriesGoalReusedOnlyWhenTrue(t *testing.T) {
 			{Path: "fresh.go", KillRate: 0.5, Survivors: 1, GoalReused: false},
 		},
 	}
-	if _, _, err := writeAuditStatement(out, dir, rep, map[string]string{"test-writer": "w"}, nil, nil, true, 0, auditpush.Bundle{}); err != nil {
+	if _, _, err := writeAuditStatement(out, dir, rep, map[string]string{"test-writer": "w"}, nil, nil, nil, true, 0, auditpush.Bundle{}); err != nil {
 		t.Fatalf("writeAuditStatement: %v", err)
 	}
 	b, err := os.ReadFile(out) // #nosec G304 -- test-local path
@@ -248,8 +250,8 @@ func TestGoalCacheNoPutWithoutRecord(t *testing.T) {
 		calls := 0
 		var errb bytes.Buffer
 		store := newGoalLedgerCache(dsn)
-		gs, _, code := resolveGoalSource(&errb, root, "", "test-model-x", "", false, 1,
-			func(string, string) (reposcan.Deriver, error) { return countingDeriver{calls: &calls}, nil },
+		gs, _, code := resolveGoalSource(&errb, root, "", testDeriveSeat("test-model-x"), false, 1,
+			func(agentbackend.ResolvedSeat) (reposcan.Deriver, error) { return countingDeriver{calls: &calls}, nil },
 			store, false, recordEnabled)
 		if code != 0 {
 			t.Fatalf("resolveGoalSource: code=%d stderr=%s", code, errb.String())
@@ -284,8 +286,8 @@ func TestGoalCacheGetHitsWithoutRecord(t *testing.T) {
 	calls1 := 0
 	var errb1 bytes.Buffer
 	store1 := newGoalLedgerCache(dsn)
-	gs1, _, code := resolveGoalSource(&errb1, root, "", "test-model-x", "", false, 1,
-		func(string, string) (reposcan.Deriver, error) { return countingDeriver{calls: &calls1}, nil },
+	gs1, _, code := resolveGoalSource(&errb1, root, "", testDeriveSeat("test-model-x"), false, 1,
+		func(agentbackend.ResolvedSeat) (reposcan.Deriver, error) { return countingDeriver{calls: &calls1}, nil },
 		store1, false, true)
 	if code != 0 {
 		t.Fatalf("resolveGoalSource (scan 1): code=%d stderr=%s", code, errb1.String())
@@ -302,8 +304,8 @@ func TestGoalCacheGetHitsWithoutRecord(t *testing.T) {
 	calls2 := 0
 	var errb2 bytes.Buffer
 	store2 := newGoalLedgerCache(dsn)
-	gs2, _, code := resolveGoalSource(&errb2, root, "", "test-model-x", "", false, 1,
-		func(string, string) (reposcan.Deriver, error) { return countingDeriver{calls: &calls2}, nil },
+	gs2, _, code := resolveGoalSource(&errb2, root, "", testDeriveSeat("test-model-x"), false, 1,
+		func(agentbackend.ResolvedSeat) (reposcan.Deriver, error) { return countingDeriver{calls: &calls2}, nil },
 		store2, false, false)
 	if code != 0 {
 		t.Fatalf("resolveGoalSource (scan 2): code=%d stderr=%s", code, errb2.String())
@@ -333,7 +335,7 @@ func TestAttestationDisclosesAReusedVerdict(t *testing.T) {
 			{Path: "fresh.go", KillRate: 0.5, Survivors: 1},
 		},
 	}
-	if _, _, err := writeAuditStatement(out, dir, rep, map[string]string{"test-writer": "w"}, nil, nil, true, 0, auditpush.Bundle{}); err != nil {
+	if _, _, err := writeAuditStatement(out, dir, rep, map[string]string{"test-writer": "w"}, nil, nil, nil, true, 0, auditpush.Bundle{}); err != nil {
 		t.Fatalf("writeAuditStatement: %v", err)
 	}
 	b, err := os.ReadFile(out) // #nosec G304 -- test-local path
@@ -364,6 +366,23 @@ func TestAttestationDisclosesAReusedVerdict(t *testing.T) {
 	for _, k := range []string{"verdictReused", "verdictComputedAt"} {
 		if _, ok := fresh[k]; ok {
 			t.Errorf("fresh.go must not sign %s at all: %+v", k, fresh)
+		}
+	}
+}
+
+// "--derive-model off" resolves to no derive seat. The refusal must say that
+// off names no model here, and point at --goals, so an operator who typed it
+// does not read "needs --derive-model" as their flag being ignored.
+func TestNoGoalSourceRefusalSaysOffNamesNoModel(t *testing.T) {
+	var errb bytes.Buffer
+	_, _, code := resolveGoalSource(&errb, t.TempDir(), "", agentbackend.ResolvedSeat{}, false, 1,
+		nil, nil, true, false)
+	if code != 2 {
+		t.Fatalf("code = %d, want 2", code)
+	}
+	for _, want := range []string{"--goals", "off"} {
+		if !strings.Contains(errb.String(), want) {
+			t.Errorf("refusal %q does not mention %q", errb.String(), want)
 		}
 	}
 }

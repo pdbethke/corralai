@@ -109,7 +109,10 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	// exists to answer "would this run work", and it can only answer that
 	// about the CONCRETE model a seat would really use. Its refusals are the
 	// registry's, so a broken declaration is caught here for free.
-	seatReg, regErr := resolveSeatRegistry("corral doctor", *repoDir,
+	//
+	// context.Background(): doctor has no cancellable context at this point,
+	// and the one network call (listing OLLAMA_URL's daemon) is bounded at 10s.
+	seats, regErr := resolveSeats(context.Background(), "corral doctor", *repoDir,
 		certifySeats(deriveModel, mutantModel, writerModel, criticModel, shadow.model, shadow.writerModel), stderr)
 	if regErr != nil {
 		fmt.Fprintf(stderr, "corral doctor: %v\n", regErr)
@@ -140,8 +143,8 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 		}
 		results = append(results, checkToolchain(iso, cmd, nil, plug))
 	}
-	results = append(results, checkHerd(*mutantModel, *writerModel, *criticModel, *shadow.model, *shadow.writerModel, seatReg)...)
-	derive := checkDeriveSeat(*deriveModel, seatReg.deriveEndpoint())
+	results = append(results, checkHerd(*mutantModel, *writerModel, *criticModel, *shadow.model, *shadow.writerModel, seats)...)
+	derive := checkDeriveSeat(seats["derive-model"])
 	results = append(results, derive...)
 	if strings.TrimSpace(*code) != "" {
 		results = append(results, checkPairing(*code, *test))
@@ -158,9 +161,9 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	// a failed call). It runs AFTER the other checks have printed and is
 	// announced before the call, so a fatal check above can never hide a
 	// call that was spent (review I1, ruling R25).
-	if model := strings.TrimSpace(*deriveModel); model != "" && checksPassed(derive) {
-		fmt.Fprintf(stdout, "  spending one derive call on %s…\n", model)
-		printCheck(stdout, probeDeriveSeat(model, seatReg.deriveEndpoint()), &failed)
+	if rs := seats["derive-model"]; strings.TrimSpace(rs.Spec) != "" && checksPassed(derive) {
+		fmt.Fprintf(stdout, "  spending one derive call on %s…\n", rs.Spec)
+		printCheck(stdout, probeDeriveSeat(rs), &failed)
 	}
 	printAgentsSection(stdout)
 	if failed > 0 {
@@ -387,7 +390,7 @@ func toolchainDirHint(tool string) string {
 // The unnamed-seat findings stay doctor's own, because certify's refusal
 // for those is one message about the run and doctor's job is one finding
 // per seat.
-func checkHerd(mutant, writer, critic, shadow, shadowWriter string, reg *seatResolution) []checkResult {
+func checkHerd(mutant, writer, critic, shadow, shadowWriter string, seats seatSet) []checkResult {
 	var out []checkResult
 	named := true
 	for _, r := range []struct{ role, flag, model string }{
@@ -424,22 +427,19 @@ func checkHerd(mutant, writer, critic, shadow, shadowWriter string, reg *seatRes
 		cmdName:     "corral doctor",
 		mutantModel: mutant, writerModel: writer, criticModel: critic, shadowModel: shadow, shadowWriterModel: shadowWriter,
 	}
-	if reg != nil {
-		in.seatProviders = reg.providers
-		in.localEndpoints = reg.endpoints
-	}
+	in.seats = seats
 	name := fmt.Sprintf("herd accepted by certify's own preflight (mutant-generator=%s, test-writer=%s, test-critic=%s)",
 		strings.TrimSpace(mutant), strings.TrimSpace(writer), advpool.ResolveOptionalModel(critic, "(off)"))
 	// The per-seat lines print whatever the preflight says: a missing binary
 	// fails the preflight too, and its one line names only the first seat it
 	// met, while these name every seat and its binary.
-	seats := agentSeatChecks(mutant, writer, critic, shadow, shadowWriter)
+	agentChecks := agentSeatChecks(mutant, writer, critic, shadow, shadowWriter)
 	if _, err := resolveAuditRoles(in, io.Discard); err != nil {
 		out = append(out, checkResult{name: name, detail: err.Error()})
-		return append(out, seats...)
+		return append(out, agentChecks...)
 	}
 	out = append(out, checkResult{name: name, ok: true})
-	return append(out, seats...)
+	return append(out, agentChecks...)
 }
 
 // agentSeatChecks is one line per distinct AGENT seat the herd names. What
@@ -481,15 +481,17 @@ func agentSeatChecks(specs ...string) []checkResult {
 }
 
 // checkDeriveSeat rehearses the derive seat the same way certify --repo
-// constructs it (newLLMDeriver): the credential under the operator's pin,
-// or the registry's daemon. Skipped when no derive model is named — a
-// certify --local run has no such seat, and --goals replaces it on --repo.
-func checkDeriveSeat(model, endpoint string) []checkResult {
-	model = strings.TrimSpace(model)
+// constructs it: from the ResolvedSeat the resolver chose, through
+// newLLMDeriver, so doctor and certify cannot disagree about where the seat
+// runs or whose key it needs. Skipped when no derive model is named (the
+// zero ResolvedSeat) — a certify --local run has no such seat, and --goals
+// replaces it on --repo.
+func checkDeriveSeat(rs agentbackend.ResolvedSeat) []checkResult {
+	model := strings.TrimSpace(rs.Spec)
 	if model == "" {
 		return nil
 	}
-	if isAgentSeat(model) {
+	if rs.Kind == "agent" {
 		// An agent seat has no credential to check: it has a binary, and gets
 		// the same line every other agent seat gets. Only when that line is
 		// not a failure is the seat itself built (an endpoint placement can
@@ -501,13 +503,13 @@ func checkDeriveSeat(model, endpoint string) []checkResult {
 		if len(lines) == 1 && !lines[0].ok {
 			return lines
 		}
-		if _, err := newLLMDeriver(model, endpoint); err != nil {
+		if _, err := newLLMDeriver(rs); err != nil {
 			lines = append(lines, checkResult{name: "derive seat (" + model + ")", detail: err.Error()})
 		}
 		return lines
 	}
 	name := "credential for the derive seat (" + model + ")"
-	if _, err := newLLMDeriver(model, endpoint); err != nil {
+	if _, err := newLLMDeriver(rs); err != nil {
 		return []checkResult{{name: name, detail: err.Error()}}
 	}
 	return []checkResult{{name: name, ok: true}}
@@ -542,9 +544,10 @@ const deriveProbeSource = "package probe\n\n// Clamp returns v limited to the cl
 // one is a seat that produced nothing, which a certify run turns into
 // derive-failed files (and once turned into "ungoaled — purely
 // declarative", B6). It spends one call, and says so.
-func probeDeriveSeat(model, endpoint string) checkResult {
+func probeDeriveSeat(rs agentbackend.ResolvedSeat) checkResult {
+	model := rs.Spec
 	name := "derive seat answers (" + model + ") — spends one call"
-	d, err := doctorDeriver(model, endpoint)
+	d, err := doctorDeriver(rs)
 	if err != nil {
 		return checkResult{name: name, detail: err.Error()}
 	}

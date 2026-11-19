@@ -33,7 +33,7 @@ func reviewLedgerFixtureAt(t *testing.T, root string, extra ...string) (string, 
 
 	orig := newReviewerBackend
 	t.Cleanup(func() { newReviewerBackend = orig })
-	newReviewerBackend = func(string, string) (agentbackend.Backend, error) {
+	newReviewerBackend = func(agentbackend.ResolvedSeat, agentbackend.SeatOptions) (agentbackend.Backend, error) {
 		return cannedReviewer{reply: `{"opinion":"o","findings":[{"claim":"a caller might overflow","tier":"HYPOTHESIS"}],"sound":[]}`}, nil
 	}
 	var o, e bytes.Buffer
@@ -45,6 +45,7 @@ func reviewLedgerFixtureAt(t *testing.T, root string, extra ...string) (string, 
 // TestReviewWritesMachineLedger: a review lands in the repo ledger AND, as the
 // same entry, in the machine ledger; and --no-ledger writes to neither.
 func TestReviewWritesMachineLedger(t *testing.T) {
+	declareLocalSeats(t, "reviewer-x")
 	machine := filepath.Join(t.TempDir(), "machine")
 	t.Setenv("CORRALAI_MACHINE_LEDGER", machine)
 	// No --ledger: the repo's own default, <repo>/.corral/ledger, so the
@@ -88,6 +89,7 @@ func TestReviewWritesMachineLedger(t *testing.T) {
 // whoever chose the path (the repo ledger is a separate write). The skip is printed with its reason, the repo entry still lands, and
 // the exit code stands.
 func TestReviewMachineLedgerInsideCheckoutIsSkipped(t *testing.T) {
+	declareLocalSeats(t, "reviewer-x")
 	requireReviewSandbox(t)
 	// The fixture builds the repo, so the machine ledger path must be known
 	// first: a fixed child of a root we create here.
@@ -114,6 +116,7 @@ func TestReviewMachineLedgerInsideCheckoutIsSkipped(t *testing.T) {
 // (review.go's werr branch): the box's record does not depend on the repo's
 // directory being writable.
 func TestReviewKeepsMachineCopyWhenRepoWriteFails(t *testing.T) {
+	declareLocalSeats(t, "reviewer-x")
 	machine := filepath.Join(t.TempDir(), "machine")
 	t.Setenv("CORRALAI_MACHINE_LEDGER", machine)
 	blocker := filepath.Join(t.TempDir(), "not-a-dir")
@@ -133,6 +136,7 @@ func TestReviewKeepsMachineCopyWhenRepoWriteFails(t *testing.T) {
 // --ledger pointed AT the machine ledger is one entry, not two in one chain;
 // and an unusable machine ledger is printed without changing the exit code.
 func TestReviewMachineLedgerDedupAndFailureAreSafe(t *testing.T) {
+	declareLocalSeats(t, "reviewer-x")
 	machine := filepath.Join(t.TempDir(), "machine")
 	t.Setenv("CORRALAI_MACHINE_LEDGER", machine)
 	if _, code, out, errs := reviewLedgerFixture(t, "--ledger", machine); code != 0 {

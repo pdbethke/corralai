@@ -22,9 +22,9 @@ mutant in a jail, and score what fraction it kills.
 corral certify --local \
   --code path/to/file.py \
   --goal "what this code must guarantee" \
-  --writer-model claude-sonnet-5 \
-  --mutant-model claude-sonnet-5 \
-  --critic-model claude-haiku-4-5 \
+  --writer-model anthropic/claude-sonnet-5 \
+  --mutant-model anthropic/claude-sonnet-5 \
+  --critic-model anthropic/claude-haiku-4-5 \
   --out verdict.json \
   -- python -m pytest
 ```

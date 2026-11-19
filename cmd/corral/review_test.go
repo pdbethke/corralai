@@ -9,6 +9,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +19,7 @@ import (
 	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/certify"
+	"github.com/pdbethke/corralai/internal/models"
 	"github.com/pdbethke/corralai/internal/review"
 )
 
@@ -38,6 +41,7 @@ func (c cannedReviewer) Chat(msgs []agentbackend.Message, _ []any) (agentbackend
 // CODE-READ, one HYPOTHESIS; the entry written; `review show` reading it;
 // an adjudication taken and shown; `verify --ledger` naming both.
 func TestReviewRunsReproductionsRecordsTheEntryAndTakesAdjudications(t *testing.T) {
+	declareLocalSeats(t, "reviewer-x")
 	requireReviewSandbox(t)
 	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
 	root := t.TempDir()
@@ -52,7 +56,8 @@ func TestReviewRunsReproductionsRecordsTheEntryAndTakesAdjudications(t *testing.
 
 	orig := newReviewerBackend
 	t.Cleanup(func() { newReviewerBackend = orig })
-	newReviewerBackend = func(model, _ string) (agentbackend.Backend, error) {
+	newReviewerBackend = func(rs agentbackend.ResolvedSeat, _ agentbackend.SeatOptions) (agentbackend.Backend, error) {
+		model := rs.Spec
 		if model != "reviewer-x" {
 			t.Fatalf("seat resolved to %q", model)
 		}
@@ -163,6 +168,7 @@ func TestReviewRefusesWithoutASeatOrAScopeOrACommit(t *testing.T) {
 // the finding; a refutation whose script fails is itself demoted and moves
 // nothing; the verifier's model may never be the reviewer's.
 func TestReviewVerifierSeatRefutesByReproductionAndIsDecorrelated(t *testing.T) {
+	declareLocalSeats(t, "reviewer-x", "verifier-y")
 	requireReviewSandbox(t)
 	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
 	root := t.TempDir()
@@ -176,7 +182,8 @@ func TestReviewVerifierSeatRefutesByReproductionAndIsDecorrelated(t *testing.T) 
 	var verifierSaw string
 	orig := newReviewerBackend
 	t.Cleanup(func() { newReviewerBackend = orig })
-	newReviewerBackend = func(model, _ string) (agentbackend.Backend, error) {
+	newReviewerBackend = func(rs agentbackend.ResolvedSeat, _ agentbackend.SeatOptions) (agentbackend.Backend, error) {
+		model := rs.Spec
 		switch model {
 		case "reviewer-x":
 			return cannedReviewer{reply: `{"opinion":"o","findings":[
@@ -249,6 +256,7 @@ func TestReviewRefusesAVerifierThatIsTheReviewerInAnotherCase(t *testing.T) {
 // reproductions' hash — and an entry whose findings were edited after the
 // statement was signed is named as such.
 func TestReviewAttestSignsTheReproductionsAndTheEntryNamesTheStatement(t *testing.T) {
+	declareLocalSeats(t, "m")
 	requireReviewSandbox(t)
 	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
 	t.Setenv("CORRALAI_CERTIFY_KEY_FILE", filepath.Join(t.TempDir(), "certify_key"))
@@ -261,7 +269,7 @@ func TestReviewAttestSignsTheReproductionsAndTheEntryNamesTheStatement(t *testin
 
 	orig := newReviewerBackend
 	t.Cleanup(func() { newReviewerBackend = orig })
-	newReviewerBackend = func(string, string) (agentbackend.Backend, error) {
+	newReviewerBackend = func(agentbackend.ResolvedSeat, agentbackend.SeatOptions) (agentbackend.Backend, error) {
 		return cannedReviewer{reply: `{"opinion":"o","findings":[{"claim":"pkg exists","tier":"REPRODUCED","file":"pkg/a.go","line":1,"severity":"low","script":"test -f pkg/a.go"}],"sound":["s"]}`}, nil
 	}
 	ledger := filepath.Join(t.TempDir(), "ledger")
@@ -334,6 +342,7 @@ func gzipBytesFor(t *testing.T, b []byte) []byte {
 // 450 KB brain scope) is recorded as unverified with its reply kept, and
 // said on stderr — never as a silent, verified-looking review.
 func TestReviewSaysWhenTheVerifierReturnedNoVerdicts(t *testing.T) {
+	declareLocalSeats(t, "rev", "ver")
 	requireReviewSandbox(t)
 	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
 	root := t.TempDir()
@@ -344,7 +353,8 @@ func TestReviewSaysWhenTheVerifierReturnedNoVerdicts(t *testing.T) {
 	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
 	orig := newReviewerBackend
 	t.Cleanup(func() { newReviewerBackend = orig })
-	newReviewerBackend = func(model, _ string) (agentbackend.Backend, error) {
+	newReviewerBackend = func(rs agentbackend.ResolvedSeat, _ agentbackend.SeatOptions) (agentbackend.Backend, error) {
+		model := rs.Spec
 		if model == "rev" {
 			return cannedReviewer{reply: `{"opinion":"o","findings":[{"claim":"c","tier":"CODE-READ","file":"pkg/a.go","line":1}],"sound":[]}`}, nil
 		}
@@ -377,6 +387,7 @@ func (m meteredReviewer) Chat([]agentbackend.Message, []any) (agentbackend.Messa
 // tokens. The record counts them: dropping them would make an unverified
 // review read cheaper than it was.
 func TestReviewRecordsTheVerifiersTokensWhenItsReplyDoesNotParse(t *testing.T) {
+	declareLocalSeats(t, "rev", "ver")
 	requireReviewSandbox(t)
 	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
 	root := t.TempDir()
@@ -387,7 +398,8 @@ func TestReviewRecordsTheVerifiersTokensWhenItsReplyDoesNotParse(t *testing.T) {
 	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
 	orig := newReviewerBackend
 	t.Cleanup(func() { newReviewerBackend = orig })
-	newReviewerBackend = func(model, _ string) (agentbackend.Backend, error) {
+	newReviewerBackend = func(rs agentbackend.ResolvedSeat, _ agentbackend.SeatOptions) (agentbackend.Backend, error) {
+		model := rs.Spec
 		if model == "rev" {
 			return meteredReviewer{reply: `{"opinion":"o","findings":[{"claim":"c","tier":"CODE-READ","file":"pkg/a.go","line":1}],"sound":[]}`,
 				usage: agentbackend.Usage{InputTokens: 100, OutputTokens: 10}}, nil
@@ -516,7 +528,7 @@ func TestAgenticSeatsRunInAWorktreeWithTheBriefOnStdin(t *testing.T) {
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	var out, errb bytes.Buffer
-	if code := runReview([]string{"--repo", root, "--scope", "pkg", "--reviewer-model", "claude-code:claude-sonnet-5", "--verifier-model", "claude-sonnet-5", "--no-ledger"}, &out, &errb); code != 2 || !strings.Contains(errb.String(), "resolves to the reviewer's own model") {
+	if code := runReview([]string{"--repo", root, "--scope", "pkg", "--reviewer-model", "claude-code:claude-sonnet-5", "--verifier-model", "anthropic/claude-sonnet-5", "--no-ledger"}, &out, &errb); code != 2 || !strings.Contains(errb.String(), "resolves to the reviewer's own model") {
 		t.Fatalf("a verifier that is the agent's own model must be refused: exit %d %s", code, errb.String())
 	}
 	out.Reset()
@@ -630,5 +642,73 @@ func TestAnyAgentCanBeDefinedAsASeat(t *testing.T) {
 	// An unknown name is an API model, not an agent.
 	if _, _, ok := agentbackend.AgentSeat("gemini-3.6-flash"); ok {
 		t.Error("a provider model name is not an agentic seat")
+	}
+}
+
+// TestReviewHonoursRegistryEndpoint: a reviewer named by a registry alias that
+// declares a local daemon must be SERVED by that daemon. review used to throw
+// the resolution away (it kept only the in-place alias rewrite) and rebuild
+// the seat from the bare concrete name, so a declared local reviewer was sent
+// to whatever OLLAMA_URL (or, unset, the old built-in default address) said —
+// never to the endpoint the registry declared. OLLAMA_URL is unset here, so
+// the registry is the only source there is, and the seam is NOT stubbed: the
+// real constructor is what is under test.
+func TestReviewHonoursRegistryEndpoint(t *testing.T) {
+	requireReviewSandbox(t)
+	clearSeatEnv(t)
+	var asked []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Model string `json:"model"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		asked = append(asked, r.URL.Path+" "+req.Model)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"message":{"role":"assistant","content":"{\"opinion\":\"nothing to report\",\"findings\":[],\"sound\":[\"the package\"]}"}}`)
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv(models.EnvInline, `{"edge":{"provider":"ollama","model":"local-reviewer:1","endpoint":"`+srv.URL+`"}}`)
+
+	root := t.TempDir()
+	gitRun := gitCmd(t, root)
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n")
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+
+	var out, errb bytes.Buffer
+	code := runReview([]string{"--repo", root, "--scope", "pkg", "--reviewer-model", "edge", "--no-ledger"}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d: stdout=%s stderr=%s", code, out.String(), errb.String())
+	}
+	if len(asked) != 1 || asked[0] != "/api/chat local-reviewer:1" {
+		t.Fatalf("the registry-declared daemon was asked %q, want exactly one /api/chat for local-reviewer:1", asked)
+	}
+}
+
+// review is a door like certify: a bare local name that no declared source
+// serves is refused before anything is spent, naming the seat and the ways to
+// declare a source. It used to be passed through to a built-in default
+// address and fail at the first call, hours into a paid run.
+func TestReviewRefusesASeatNoSourceServes(t *testing.T) {
+	clearSeatEnv(t)
+	root := t.TempDir()
+	gitRun := gitCmd(t, root)
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n")
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+	var out, errb bytes.Buffer
+	code := runReview([]string{"--repo", root, "--scope", "pkg", "--reviewer-model", "qwen3.5:9b", "--no-ledger"}, &out, &errb)
+	if code != 2 {
+		t.Fatalf("exit %d, want 2: %s", code, errb.String())
+	}
+	for _, want := range []string{"--reviewer-model", "qwen3.5:9b", "no declared source serves this model", "OLLAMA_URL", "MODEL_BACKEND"} {
+		if !strings.Contains(errb.String(), want) {
+			t.Errorf("refusal lacks %q: %s", want, errb.String())
+		}
+	}
+	if strings.Contains(errb.String(), "--local-endpoint") {
+		t.Errorf("review takes no --local-endpoint, so the refusal must not offer it: %s", errb.String())
 	}
 }

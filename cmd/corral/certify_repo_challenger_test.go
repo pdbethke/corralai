@@ -33,7 +33,7 @@ func challengerRow(t *testing.T, pair *modelcorr.Pair) (jaccard *float64, kappa 
 			ChallengerAgreement: pair,
 		},
 	}}
-	rows := buildScanFileRows(results, nil, reposcan.CoverageMap{}, "", challengerFixtureRepo(t), os.Stderr)
+	rows := buildScanFileRows(results, nil, reposcan.CoverageMap{}, "", challengerFixtureRepo(t), os.Stderr, false)
 	if len(rows) != 1 {
 		t.Fatalf("got %d row(s), want 1", len(rows))
 	}

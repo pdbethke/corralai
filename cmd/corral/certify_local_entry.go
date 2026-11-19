@@ -96,6 +96,9 @@ func localFileResult(in localAuditInput, v advpool.Verdict, t advpool.RunTelemet
 		Verdict: v, Gradable: !v.BaselineFailed && !v.SuiteIgnoresFile,
 		ComputedAt: at, Telemetry: t,
 	}
+	if in.runCache != nil {
+		res.RunCache = fileRunCache(reposcan.FileResult{Gradable: res.Gradable, RunCache: *in.runCache})
+	}
 	switch {
 	case v.SuiteIgnoresFile:
 		res.Reason = reposcan.ReasonSuiteIgnoresFile
@@ -128,7 +131,7 @@ func localEntryBundle(in localAuditInput, v advpool.Verdict, t advpool.RunTeleme
 	if stderr == nil {
 		stderr = io.Discard
 	}
-	files := buildScanFileRows(results, nil, reposcan.CoverageMap{}, run.mutantsFrom, in.repoDir, stderr)
+	files := buildScanFileRows(results, nil, reposcan.CoverageMap{}, run.mutantsFrom, in.repoDir, stderr, false)
 	mutants := buildScanMutantRows(0, results)
 	calls := buildScanModelCallRows(results)
 	inTokens, outTokens, callCount := modelCallRowTotals(calls)
@@ -157,7 +160,7 @@ func localEntryBundle(in localAuditInput, v advpool.Verdict, t advpool.RunTeleme
 		Substrate:         substrateJail,
 		EngineVersion:     version,
 		VerdictGeneration: reposcan.VerdictGeneration,
-		ModelSet:          modelSetKeyWith(in.toolProbe, in.writerModel, in.mutantModel, in.criticModel, in.shadowModel, in.shadowWriterModel),
+		ModelSet:          modelSetKeyWith(in.toolProbe, in.seats.providers(), in.writerModel, in.mutantModel, in.criticModel, in.shadowModel, in.shadowWriterModel),
 		Candidates:        1, Audited: audited,
 		KillRate:  killRate,
 		StartedAt: started, FinishedAt: finished,
@@ -207,6 +210,9 @@ func localEntryBundle(in localAuditInput, v advpool.Verdict, t advpool.RunTeleme
 			TreeDirty: run.treeDirty, RepoIdentity: run.repoIdentity,
 			Sandbox: run.sandbox, SeedSkipped: run.seedSkipped,
 			ToolMutants: run.toolMutants,
+			// The verdict's own providers, as its roster is: the seats this
+			// run signed, never re-read from the invocation's flags.
+			SeatProviders: seatProvidersJSON(v.SeatProviders),
 		})
 	if run.recorder != nil {
 		run.recorder.stampHunks(b.Mutants)

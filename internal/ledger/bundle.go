@@ -670,7 +670,9 @@ type Bundle struct {
 // be a sum, and a sum cannot tell "3 mutants" from "3 events" — which is the
 // difference between a scan that graded something and one that did not.
 type Counts struct {
-	Scans   int
+	Scans int
+	// Files is ROWS written to corral_audits, not files: a counted row stands
+	// for many (Row.Files). Print files with FilesIn over the rows.
 	Files   int
 	Mutants int
 	Calls   int

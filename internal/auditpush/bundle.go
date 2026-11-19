@@ -268,7 +268,10 @@ CREATE TABLE IF NOT EXISTS corral_audits (
   authored_landing            VARCHAR,
   baseline_flaky              VARCHAR,
   seat_tools                  VARCHAR,
-  covering_units              INTEGER
+  covering_units              INTEGER,
+  seat_providers              VARCHAR,
+  files                       INTEGER,
+  run_cache                   VARCHAR
 );`
 
 // The mutant grain's outcome CHECK is the same discipline scan_files'
@@ -471,6 +474,17 @@ var corralAuditsMigrationCols = []struct{ name, ddl string }{
 	// NULL on every row before it, and on every row whose evidence was not a
 	// unit pass.
 	{"covering_units", "covering_units INTEGER"},
+	// Where each roster seat was served from, beside models_by_role
+	// (Row.SeatProviders). NULL on every row before it: not recorded, never
+	// to be filled in from a model's name.
+	{"seat_providers", "seat_providers VARCHAR"},
+	// How many walked files the row stands for (Row.Files). NULL on every
+	// row before it and on a one-file row: read back as 0, which FileCount
+	// turns into one.
+	{"files", "files INTEGER"},
+	// Whether the file's grading runs shared a tool cache (Row.RunCache).
+	// NULL on every row before it and on a file with nothing to say.
+	{"run_cache", "run_cache VARCHAR"},
 }
 
 // The other four tables are NEW at schema_version 2, so nothing predates
@@ -1094,7 +1108,7 @@ func pushBundleOnce(target string, b Bundle) (Counts, error) {
 	}
 	defer db.Close()
 	now, uid := mintPush(b)
-	return insertBundle(db, b, now, uid)
+	return insertBundle(db, b, now, uid, loadFilter{})
 }
 
 // ledgerSigner signs ledger-directory entries; set by SetLedgerSigner from
@@ -1118,7 +1132,7 @@ func mintPush(b Bundle) (time.Time, string) {
 // insertBundle writes b's five grains into db (attached and USE'd, schema
 // ensured) under the given push stamp. Shared by the warehouse push and by
 // LoadDir, which replays JSON bundles into an in-memory view.
-func insertBundle(db *sql.DB, b Bundle, now time.Time, uid string) (Counts, error) {
+func insertBundle(db *sql.DB, b Bundle, now time.Time, uid string, f loadFilter) (Counts, error) {
 	tx, err := db.Begin()
 	if err != nil {
 		return Counts{}, fmt.Errorf("auditpush: begin: %w", err)
@@ -1188,12 +1202,18 @@ func insertBundle(db *sql.DB, b Bundle, now time.Time, uid string) (Counts, erro
 	}
 
 	for _, r := range b.Files {
+		if f.auditedRowsOnly && fileDisposition(r) != "audited" {
+			continue
+		}
 		if err := insertFileRow(tx, uid, now, r); err != nil {
 			return Counts{}, err
 		}
 		c.Files++
 	}
 
+	if f.skipRunDetail {
+		b.Mutants, b.Calls, b.Events = nil, nil, nil
+	}
 	for _, m := range b.Mutants {
 		// Code IS the audited source. It is already withheld — PushBundle
 		// ran BlankUnpushedSource before this transaction opened — so all
@@ -1260,6 +1280,11 @@ func insertBundle(db *sql.DB, b Bundle, now time.Time, uid string) (Counts, erro
 	return c, nil
 }
 
+// fileDisposition is the value the disposition column holds for r. One
+// function so the INSERT and the rank-view filter in insertBundle cannot
+// disagree about which rows are "audited".
+func fileDisposition(r Row) string { return r.Disposition }
+
 // insertFileRow writes one corral_audits row. Kept as its own function only
 // because seventy columns in the middle of the transaction loop hid the four
 // rules that actually matter — the NULL-not-zero conversions below.
@@ -1317,8 +1342,8 @@ func insertFileRow(tx *sql.Tx, uid string, now time.Time, r Row) error {
 	    symbols, symbols_probed, decisions, decisions_probed,
 	    mutants_unplaced, mutants_unmeasured, mutants_duplicate, writer_attempts,
 	    challenger_mutants, challenger_survived_writer, challenger_survived_shadow, challenger_union, challenger_shared,
-	    priors_applied, prior_digest, computed_at, mutants_from, authored_landing, baseline_flaky, seat_tools, covering_units
-	  ) VALUES (`+placeholders(104)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+	    priors_applied, prior_digest, computed_at, mutants_from, authored_landing, baseline_flaky, seat_tools, covering_units, seat_providers, files, run_cache
+	  ) VALUES (`+placeholders(107)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 		uid, now, r.Repo, r.Commit, r.Path, r.Lang,
 		killRate, r.Survivors, r.ProvenMissed,
 		r.TimedOut, r.TestWriterFailed, r.PoolTestUnsound,
@@ -1332,7 +1357,7 @@ func insertFileRow(tx *sql.Tx, uid string, now time.Time, r Row) error {
 		// carries none. A 0 in an INTEGER column is a value a cross-repo
 		// query will average and rank on.
 		nullIfZeroInt(r.Trees), nullIfEmpty(r.ConcurrencyNote), nullIfEmpty(r.SharedDirs), r.ScanID,
-		r.Disposition, nullIfEmpty(r.Reason), r.PreflightState, r.Evidence,
+		fileDisposition(r), nullIfEmpty(r.Reason), r.PreflightState, r.Evidence,
 		nullIfEmpty(r.Detail), nullIfEmpty(r.Status),
 		r.CacheHit, r.ReusedFromScanID, nullIfEmpty(r.CacheKey), nullIfEmpty(r.ParentSHA256),
 		r.MutantsGraded, r.MutantsInvalid, r.MutantsTimedOut, r.MutantsDistinct, r.MutantsDistinctSurvived,
@@ -1351,6 +1376,7 @@ func insertFileRow(tx *sql.Tx, uid string, now time.Time, r Row) error {
 		r.ChallengerMutants, r.ChallengerSurvivedWriter, r.ChallengerSurvivedShadow, r.ChallengerUnion, r.ChallengerShared,
 		r.PriorsApplied, nullIfEmpty(r.PriorDigest), nullTime(r.ComputedAt), nullIfEmpty(r.MutantsFrom),
 		nullIfEmpty(r.AuthoredLanding), nullIfEmpty(r.BaselineFlaky), nullIfEmpty(r.SeatTools), r.CoveringUnits,
+		nullIfEmpty(r.SeatProviders), nullIfZeroInt(r.Files), nullIfEmpty(r.RunCache),
 	)
 	if err != nil {
 		return fmt.Errorf("auditpush: insert %s: %w", r.Path, err)

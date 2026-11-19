@@ -381,7 +381,105 @@ package reposcan
 // exclude from its narrowed command salvages nothing. A "40" verdict's
 // salvaged files may claim "alone" for a whole-suite run, so they must be
 // re-measured, not reused. Behaviour bump.
-const VerdictGeneration = "41"
+// "42" (2026-11-12): the Verdict gained SeatProviders, the provider each
+// seat's model was served from as the seat resolver decided it (the vendor
+// of a vendor/model seat, the registry entry's provider, the pinned gateway,
+// ollama for a discovered or placed daemon, an agent seat's vendor label).
+// Since the seat resolver (#522) a vendor/model seat is recorded as its bare model, so
+// openai/x and anthropic/x signed the same roster and the record could not
+// say where the audited source was sent. A cached "41" document unmarshals
+// SeatProviders as nil, which reads as "not recorded" for a seat whose
+// provider this generation would have named; "41" has reached main, so this
+// is a shape bump, not a ride-along. The verdict cache key's model set now
+// names each seat's provider too (modelSetKeyWith in cmd/corral keys a seat
+// as provider/model), so a verdict measured on one provider is never served
+// to a run naming the same bare model on another; without it one entry could
+// carry an ollama verdict under a row saying openai. Changing the key costs
+// nothing extra: this bump already retires every "41" verdict.
+// "43" (2026-11-16): merged Python proven tests parse when their parts
+// disagree about `from __future__ import …`. Headers were hoisted in
+// first-seen order, so a part without the line followed by a part with it
+// put the directive below other imports, which Python rejects: the delivered
+// merged file was a SyntaxError and authored_together recorded "fail" for
+// tests that each pass alone (Kludex/starlette 271c277: 7 of 25 files'
+// merged tests, 6 of them flagged by the together run). The Python merge now
+// emits those headers first (lang.pyPlugin.ConcatTests). A "42" verdict for
+// such a file carries a merged test that does not compile and a together
+// result that describes the merge, not the tests, so it is re-measured
+// rather than reused. Behaviour bump; the shape is unchanged.
+// "44" (2026-11-17): a timed-out mutant on a warmed run cache is graded under
+// a cap floored at the warming run. Since a jailed run sees its tree at one
+// path (sandbox.WorkTarget), a frozen compliant run of a Go file is a full
+// build-cache hit while a mutant rebuilds its package and every dependent
+// (2.7× to 6.9× the cached build, measured outside the jail on this
+// repository), so the per-mutant cap, 3× the compliant run with a 30s floor,
+// could time out a mutant that was only rebuilding, and the compliant
+// re-probe then credited it as a kill (KillConfirmedReprobed); in the
+// authored pass, a proven gap from a test that never ran. The cap is now also
+// at least 3× the warming run (adequacy.mutantTimeoutCap). A cap can only
+// grow from this, so a "43" verdict graded on a warmed jail (where a narrowed
+// command's compliant run could be far shorter than the warming run) may hold
+// a timeout kill this generation would grade by the run's own result, so it
+// is re-measured rather than reused. In the same generation, an authored
+// test that names that path (/corral-work) is refused and reissued to the
+// writer (advpool.checkAuthoredTest), since it passes in every jailed run and
+// fails on the developer's machine (it rides along: under "43" no run saw
+// that path, so such a test could not have passed). Behaviour bump; the shape is unchanged.
+// "45" (2026-11-17): every pytest command grading runs carries -rfE
+// (lang.Runner.ReportArgs, applied by lang.ReportCmd through the scorer's one
+// command rewrite on the jail and the workspace substrate). A project whose
+// pytest config sets its own -r (Kludex/starlette's addopts carry -rXs)
+// printed no `FAILED <node id>` line, so a "44" verdict on such a project
+// recorded no killing test, confirmed every kill by repeating the grading run
+// rather than by the killing test alone, and could not salvage an authored
+// test whose cases partly failed. With the lines back, killed_by is filled,
+// confirmation runs the blamed test alone (a kill the whole run repeats but
+// that test alone does not is still confirmed by the repeat), and salvage can
+// keep the passing cases, so proven counts can rise. "44" has reached main,
+// so it gets its own generation rather than riding along. Behaviour bump; the
+// shape is unchanged.
+// "46" (2026-11-18): a graded pytest run that corral can rewrite has pytest
+// itself record its failing tests, through a plugin loaded by the wrapper
+// lang.ReportCmd puts around the command (lang.Runner.ReportHook), and the readers take that
+// record before pytest's printed lines. A "45" verdict could differ in two
+// ways. On a project whose config carries --no-summary or -p no:terminal,
+// which hide the `FAILED <node id>` lines whatever -r says, it recorded no
+// killing test, confirmed every kill by repeating the grading run, and could
+// not salvage a partly failing authored test; now killed_by is filled, the
+// blamed test is run alone, and salvage can keep the passing cases, so proven
+// counts can rise. And a killing test whose id holds a space (a parametrized
+// `test_x[a b]`) was recorded cut at the space, an id that
+// names no test; now the id is whole. "45" has reached
+// main, so this gets its own generation. In the same generation, for every
+// language: the clean-code run of an authored test (JailScorer.CompliantRun)
+// hands back the first 16 KiB and the last 64 KiB of its output, where it
+// handed back the first 16 KiB alone in the bwrap jail and all of it on the
+// workspace substrate. A verdict from a jailed run whose clean-code failure
+// printed more than 16 KiB recorded no salvage, because the failing tests
+// are named at the end; it can now record one, so proven counts can rise.
+// The writer's retry is fed the first and last 16 KiB of that run on both
+// substrates, so the test a retry produces can differ, and
+// authored_together_output is the run's true last 2000 bytes rather than the
+// end of its first 16 KiB. It rides along: "46" has not left this branch.
+// Behaviour bump; the shape is unchanged.
+//
+// "47" (2026-11-18): PHPUnit's test-file listing is `--list-tests` with PHP
+// naming each test class's file (lang.phpunitListUnits), where it was
+// `--list-test-files`, an option PHPUnit 9 and 10 do not have. A "46" scan
+// of a project on PHPUnit 9 or 10 had no unit listing: no unit evidence, so
+// its files were candidates by name pairing only and every one was graded by
+// the whole suite. Now those projects list, so a file can be paired by
+// evidence and graded by the test files that execute it, which can change
+// which files are audited and, through per-mutant time caps and fail-fast
+// order, what a file's verdict holds. PHPUnit 11 and 12 list the same files
+// as before (captured on both). In the same generation, the PHP coverage
+// run names `extension=pcov` only when PHP lacks it under the injected scan
+// path: the second load's stderr warning failed every test PHPUnit runs in
+// a separate process, so such a test file gave no unit evidence and was
+// added to every file's selection instead (ramsey/uuid: 59 of 67 test files
+// reported before, 67 after). "46" was released in rc.34, so this gets its
+// own generation.
+const VerdictGeneration = "47"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.
@@ -403,4 +501,4 @@ const VerdictGeneration = "41"
 // Verdict's own FIELDS") and nothing wider. Nor can any fingerprint catch the
 // behaviour half: a scorer that computes a DIFFERENT number into the SAME
 // field is invisible here, and remains a review responsibility.
-const VerdictShapeSHA256 = "15d4b6d3dbcbec3b66fcbe12a8b03c6b5e73d81a07657181fd99dabcf3dfdbc8"
+const VerdictShapeSHA256 = "21a4e1eafa4589ddc215061ac93b0295fb169f384a26fbb48cf951c2234cbff0"

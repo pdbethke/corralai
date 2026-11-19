@@ -5,6 +5,7 @@ package recordview
 import (
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -328,5 +329,92 @@ func TestUnconfirmedKillsCarryACaveat(t *testing.T) {
 		if strings.Contains(page("ffffffffffff"), chip) || strings.Contains(index, chip) {
 			t.Errorf("%s: a confirmed entry carries the unconfirmed caveat", c)
 		}
+	}
+}
+
+// A whole-directory audit listed every file it audited inline in the
+// "audited" cell: hashie's 25 paths, wrapped in a narrow column, made one row
+// a screen tall. A row now says how many files it audited and keeps the list
+// one click away; a single file still shows its path.
+func TestAnAuditRowSummarisesManyFilesAndShowsOne(t *testing.T) {
+	many := warpLikeScan("aaaaaaaaaaaa", true)
+	audited := many.Bundle.Files[2]
+	many.Bundle.Files = nil
+	for _, p := range []string{"src/a.rs", "src/b.rs", "src/c.rs"} {
+		f := audited
+		f.Path = p
+		many.Bundle.Files = append(many.Bundle.Files, f)
+	}
+	one := warpLikeScan("bbbbbbbbbbbb", true)
+	one.Pushed = one.Pushed.Add(time.Hour)
+
+	index, _ := renderOne(t, []auditpush.LedgerEntry{many, one})
+	row := func(short string) string {
+		i := strings.Index(index, `href="entry/`+short)
+		if i < 0 {
+			t.Fatalf("index has no row for %s", short)
+		}
+		j := strings.Index(index[i:], "</tr>")
+		return index[i : i+j]
+	}
+
+	r := row("aaaaaaaaaaaa")
+	if !strings.Contains(r, "<details") || !strings.Contains(r, "<summary") || !strings.Contains(r, ">3 files</summary>") {
+		t.Errorf("a three-file row should collapse to a \"3 files\" summary:\n%s", r)
+	}
+	for _, p := range []string{"src/a.rs", "src/b.rs", "src/c.rs"} {
+		if !strings.Contains(r, "<div>"+string(pathBreaks(p))+"</div>") {
+			t.Errorf("the collapsed list dropped %s:\n%s", p, r)
+		}
+	}
+
+	r = row("bbbbbbbbbbbb")
+	if strings.Contains(r, "<details") {
+		t.Errorf("a one-file row should show its path, not a summary:\n%s", r)
+	}
+	if !strings.Contains(r, "src/lib.rs") {
+		t.Errorf("a one-file row lost its path:\n%s", r)
+	}
+
+	// The kill-rate cell was nowrap as a whole, so a caveat chip held the
+	// column at the chip's full length on every row and squeezed the
+	// repository and commit columns into mid-word breaks. The number stays on
+	// one line; the chip may wrap.
+	if !strings.Contains(r, UnconfirmedKillsCaveat) {
+		t.Fatalf("the fixture should carry the unconfirmed-kills caveat:\n%s", r)
+	}
+	if strings.Contains(r, `<td class="nowrap">0.32`) || !strings.Contains(r, `<span class="nowrap">0.32`) {
+		t.Errorf("only the rate itself should be nowrap, not the cell holding the caveat:\n%s", r)
+	}
+	if !strings.Contains(r, `<span class="chip warn caveat">`) {
+		t.Errorf("the caveat chip should be marked to wrap (.chip.caveat):\n%s", r)
+	}
+}
+
+// An expanded file list widened the table past its column: a path has no
+// break opportunity, so its longest member set the column's width and pushed
+// the commit column out of view. pathBreaks lets a path wrap after each
+// slash. Its output is template.HTML, so the path is escaped first: a file
+// name comes from the audited repository, and the page must not run it.
+func TestPathBreaksWrapsAtSlashesAndEscapes(t *testing.T) {
+	pb := funcs()["pathBreaks"].(func(string) template.HTML)
+	if got, want := string(pb("lib/hashie/mash.rb")), "lib/<wbr>hashie/<wbr>mash.rb"; got != want {
+		t.Errorf("pathBreaks = %q, want %q", got, want)
+	}
+	if got := string(pb(`a/<script>x</script>&"`)); strings.Contains(got, "<script>") || !strings.Contains(got, "&lt;script&gt;") {
+		t.Errorf("pathBreaks did not escape the path: %q", got)
+	}
+
+	many := warpLikeScan("cccccccccccc", true)
+	audited := many.Bundle.Files[2]
+	many.Bundle.Files = nil
+	for _, p := range []string{"src/one/a.rs", "src/two/b.rs"} {
+		f := audited
+		f.Path = p
+		many.Bundle.Files = append(many.Bundle.Files, f)
+	}
+	index, _ := renderOne(t, []auditpush.LedgerEntry{many})
+	if !strings.Contains(index, "<div>src/<wbr>one/<wbr>a.rs</div>") {
+		t.Errorf("the expanded list should break its paths at slashes:\n%s", index)
 	}
 }

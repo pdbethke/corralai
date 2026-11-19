@@ -33,12 +33,12 @@ func TestEachRoleHasItsOwnMeter(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-test")
 
 	assign := advpool.RoleAssignment{
-		advpool.RoleMutantGenerator: "claude-sonnet-5",
-		advpool.RoleTestWriter:      "claude-haiku-4-5",
-		advpool.RoleTestCritic:      "claude-opus-4-1",
+		advpool.RoleMutantGenerator: "anthropic/claude-sonnet-5",
+		advpool.RoleTestWriter:      "anthropic/claude-haiku-4-5",
+		advpool.RoleTestCritic:      "anthropic/claude-opus-4-1",
 	}
 	meters := auditRoleMeters(assign)
-	chatterFor, err := localChatterFor(assign, meters, nil, nil)
+	chatterFor, err := localChatterFor(seatsForAssign(t, assign, nil), meters, nil)
 	if err != nil {
 		t.Fatalf("localChatterFor: %v", err)
 	}
@@ -86,8 +86,8 @@ func TestEachRoleHasItsOwnMeter(t *testing.T) {
 // critic ran and cost nothing".
 func TestARoleWithNoCallsHasNoRow(t *testing.T) {
 	assign := advpool.RoleAssignment{
-		advpool.RoleMutantGenerator: "claude-sonnet-5",
-		advpool.RoleTestWriter:      "claude-haiku-4-5",
+		advpool.RoleMutantGenerator: "anthropic/claude-sonnet-5",
+		advpool.RoleTestWriter:      "anthropic/claude-haiku-4-5",
 		advpool.RoleTestCritic:      "off",
 	}
 	meters := auditRoleMeters(assign)
@@ -109,8 +109,8 @@ func TestARoleWithNoCallsHasNoRow(t *testing.T) {
 // dispatched — must still produce no row.
 func TestModelCallsFromMetersOmitsUnusedRoles(t *testing.T) {
 	assign := advpool.RoleAssignment{
-		advpool.RoleMutantGenerator: "claude-sonnet-5",
-		advpool.RoleTestWriter:      "claude-haiku-4-5",
+		advpool.RoleMutantGenerator: "anthropic/claude-sonnet-5",
+		advpool.RoleTestWriter:      "anthropic/claude-haiku-4-5",
 	}
 	meters := auditRoleMeters(assign)
 	// Only the mutant-generator is ever actually called.

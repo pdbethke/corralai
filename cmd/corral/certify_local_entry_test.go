@@ -321,7 +321,7 @@ func TestLocalEntryFieldsSurvive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := buildScanFileRows([]reposcan.FileResult{localFileResult(in, v, tel, time.Now())}, nil, reposcan.CoverageMap{}, "", dir, io.Discard)
+	want := buildScanFileRows([]reposcan.FileResult{localFileResult(in, v, tel, time.Now())}, nil, reposcan.CoverageMap{}, "", dir, io.Discard, false)
 	if len(want) != 1 || len(b.Files) != 1 {
 		t.Fatalf("file rows: ledger %d, entry %d; want 1 and 1", len(want), len(b.Files))
 	}

@@ -4,7 +4,6 @@ package advpool
 
 import (
 	"context"
-	"errors"
 	"github.com/pdbethke/corralai/internal/agentworker"
 	"log"
 	"strings"
@@ -366,7 +365,7 @@ func (d *Driver) runShadowWriterPass(ctx context.Context, missionID int64, run *
 	}
 
 	shadowTest := d.Validator.ParseTest(task.Result)
-	if cerr := d.Validator.CompileTest(ctx, run.rs.CodePath, run.rs.Code, shadowTest); cerr != nil {
+	if cerr := d.checkAuthoredTest(ctx, run, shadowTest); cerr != nil {
 		// The challenger's OWN budget — never run.testWriterAttempts.
 		run.shadowWriterCompileRetries++
 		if run.shadowWriterCompileRetries >= MaxShadowWriterAttempts {
@@ -380,12 +379,7 @@ func (d *Driver) runShadowWriterPass(ctx context.Context, missionID int64, run *
 		// a fresh prompt.
 		instr := task.Instruction
 		if strings.TrimSpace(shadowTest) != "" {
-			var ce *CompileError
-			compileMsg := cerr.Error()
-			if errors.As(cerr, &ce) && strings.TrimSpace(ce.Output) != "" {
-				compileMsg = ce.Output
-			}
-			instr = renderTestWriterWithRepair(run.rs, run.sigs, run.devSurvivors, shadowTest, compileMsg)
+			instr = renderTestWriterWithRepair(run.rs, run.sigs, run.devSurvivors, shadowTest, writerFeedback(cerr))
 		}
 		newID, serr := d.Q.SupersedeTask(task.ID, queue.TaskSpec{
 			Key:         RoleTestWriterShadow,
@@ -564,7 +558,7 @@ func (d *Driver) runShadowWriterFanout(ctx context.Context, missionID int64, run
 		}
 
 		test := d.Validator.ParseTest(task.Result)
-		if cerr := d.Validator.CompileTest(ctx, run.rs.CodePath, run.rs.Code, test); cerr != nil {
+		if cerr := d.checkAuthoredTest(ctx, run, test); cerr != nil {
 			a.repairs++
 			if a.repairs >= MaxShadowWriterAttempts {
 				log.Printf("advpool: run %d: the challenger produced no compiling test for survivor %s after %d attempt(s) — UNMEASURED, not zero kills: %v",
@@ -574,12 +568,7 @@ func (d *Driver) runShadowWriterFanout(ctx context.Context, missionID int64, run
 			}
 			sys, instr := renderTestWriterSeat(run.rs, run.sigs, a.mutant, "", "", "")
 			if strings.TrimSpace(test) != "" {
-				var ce *CompileError
-				msg := cerr.Error()
-				if errors.As(cerr, &ce) && strings.TrimSpace(ce.Output) != "" {
-					msg = ce.Output
-				}
-				sys, instr = renderTestWriterSeat(run.rs, run.sigs, a.mutant, test, msg, "")
+				sys, instr = renderTestWriterSeat(run.rs, run.sigs, a.mutant, test, writerFeedback(cerr), "")
 			}
 			newID, serr := d.Q.SupersedeTask(task.ID, queue.TaskSpec{
 				Key:         ShadowTestWriterTaskKey(a.mutant.ID),

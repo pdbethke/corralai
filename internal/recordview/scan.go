@@ -133,7 +133,7 @@ func buildScanView(e auditpush.LedgerEntry, c ChainView, retraction *auditpush.L
 			if r == "" {
 				r = "not audited"
 			}
-			reasons[r]++
+			reasons[r] += f.FileCount()
 			continue
 		}
 		fv := ScanFileView{Row: f, HasAuthored: strings.TrimSpace(f.AuthoredTest) != ""}

@@ -381,12 +381,81 @@ type JailScorer struct {
 	// FailureParser is: the ONE place that resolves a plugin for a run also
 	// decides whether the operator asked for this at all.
 	FailFast adequacy.FailFastFor
+	// CommandRewrite, when non-nil, rewrites EVERY command this scorer hands
+	// its Jail, through one helper (rewriteCmd): Score's own commands by way
+	// of adequacy.WithCommandRewrite in baseScoreOpts, and the commands the
+	// other doors run (CompliantRun, the positive control). cmd/corral sets
+	// it (gradingRewrite) to two rewrites, either of which may be absent:
+	// when the Jail shares a tool cache among its runs, the no-replay rewrite,
+	// because such a cache also holds test RESULTS and a command that reached
+	// the jail unrewritten could replay one instead of running the test; then,
+	// last, the runner row's report rewrite (lang.ReportArgv: pytest's -rfE
+	// and its failure hook's `sh -c` wrapper, without which a project's own
+	// report settings hide what FailureParser and salvage read), on the jail
+	// and on the workspace substrate alike. Because that wrapper is a command
+	// nothing can narrow, every door derives its command from the operator's
+	// own words and calls this as its last step before the Jail. nil
+	// — every existing JailScorer{} literal, the daemon's included — hands
+	// the jail the operator's command byte for byte.
+	//
+	// Passed in rather than derived from Lang here for the reason
+	// FailureParser is: the ONE place that builds the grading jail also
+	// decides whether it shares a cache at all, and an unshared run must keep
+	// the operator's command but for the report rewrite (the runner row's
+	// report flags, and its failure hook's wrapper around the same words).
+	CommandRewrite func(cmd []string) []string
+	// WarmCheck, when non-nil, says whether the DEV pass's own baseline
+	// command forbids a cached test result once rewritten (cmd/corral sets it
+	// from lang.RunCacheCmd: true only for RunCacheRewritten). The dev pass,
+	// and only the dev pass (ScoreDevReport), asks it of the exact command it
+	// is about to run on the unmutated tree, and warms the jail's shared
+	// cache with that baseline only when it answers true. nil — every
+	// existing JailScorer{} literal, the daemon's included — never warms.
+	WarmCheck func(cmd []string) bool
+}
+
+// ScoreDevReport is ScoreReport / ScoreReportFor for the run's DEV-suite
+// pass, the one pass that may warm the grading jail's shared cache: it runs
+// the developer's own tests on the unmutated tree, so what its baseline writes
+// to the cache is the project's own build. WarmCheck is asked of the exact
+// baseline command here, where it is known. A nil cmdFor is ScoreReport.
+func (s JailScorer) ScoreDevReport(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string, cmdFor adequacy.CommandFor) (adequacy.Report, error) {
+	scoreBase, cmd := s.scoreWorkspace(codePath, test, testCmd)
+
+	opts := s.gatedScoreOpts(codePath, scoreBase)
+	if cmdFor != nil {
+		opts = append(opts, adequacy.WithCommandFor(cmdFor))
+	}
+	if s.WarmCheck != nil && s.WarmCheck(cmd) {
+		opts = append(opts, adequacy.WithWarmBaseline())
+	}
+	rep, err := adequacy.Score(ctx, s.Jail, scoreBase, codePath, code, mutants, cmd, opts...)
+	if err != nil {
+		return adequacy.Report{}, fmt.Errorf("advpool: score dev report: %w", err)
+	}
+	return rep, nil
+}
+
+// rewriteCmd is cmd as the jail is handed it: through f when f is set, else
+// untouched. The one helper behind every door that runs a command outside
+// adequacy.Score, so a door cannot be added that forgets the rewrite.
+func rewriteCmd(f func([]string) []string, cmd []string) []string {
+	if f == nil {
+		return cmd
+	}
+	return f(slices.Clone(cmd))
 }
 
 // scoreOpts is the option list every adequacy.Score call in this file shares.
 // Factored out because there are three such calls with identical options and a
 // fourth would be added by the next feature — a per-call copy is exactly how
 // one path silently keeps scoring sequentially while the others parallelize.
+//
+// WithWarmBaseline is deliberately NOT in this list. Every Score call shares
+// it, and most of them run a tree that holds a test a model wrote (the
+// authored and salvage passes) or are not the developer's own suite (the
+// critic's checks, the matrix); warming writes the cache every later run
+// reads. It is added at ONE call site, ScoreDevReport.
 func (s JailScorer) baseScoreOpts() []adequacy.ScoreOption {
 	return []adequacy.ScoreOption{
 		adequacy.WithMutantTimeout(s.MutantTimeout),
@@ -394,6 +463,7 @@ func (s JailScorer) baseScoreOpts() []adequacy.ScoreOption {
 		adequacy.WithFailureParser(s.FailureParser),
 		adequacy.WithKillConfirmer(s.KillerCmd),
 		adequacy.WithMutantFailFast(s.FailFast),
+		adequacy.WithCommandRewrite(s.CommandRewrite),
 	}
 }
 
@@ -689,10 +759,11 @@ func (s JailScorer) scoreAuthoredReport(ctx context.Context, codePath, code, tes
 // CompliantFailure runs the authored test against the UNMUTATED code and
 // returns the runner's own combined output — the detail that turns a
 // clean-code-failure retry into a corrective one, exactly as CompileError's
-// output does for a build failure.
+// output does for a build failure. It is CompliantRun's whole captured
+// output; the caller that shows it to the writer clips it
+// (writerFailureDetail).
 //
-// Reuses the SAME verboseJail optional extension CompileTest already uses, so
-// a backend that can surface output does, and one that cannot degrades to ""
+// A backend that can surface output does, and one that cannot degrades to ""
 // rather than failing the run. Costs one extra run, and only on the failure
 // path — the scoring run that produced CompliantPass=false has already
 // returned by the time this is called, and Report carries no output to reuse.
@@ -710,9 +781,47 @@ func (s JailScorer) CompliantFailure(ctx context.Context, codePath, code, test, 
 // (checkAuthoredTogether) needs the verdict, the retry needs only the output.
 // A jail that cannot surface output is an error here, so a caller records
 // "not checked" rather than a pass.
+//
+// WHICH PART OF THE OUTPUT. BOTH ENDS, from one run: the first 16 KiB and
+// the last 64 KiB with an elision line between them, and all of it when it
+// fits (adequacy.EndsJail's RunTestEnds), on every jail that offers that
+// run: the bwrap jail, the workspace runner and the workspace pool. This
+// output has three readers:
+//
+//   - salvage (salvageByDeselect) reads the failing tests' names from it, and
+//     a runner names those LAST: pytest's summary lines and the report hook's
+//     marker block, rspec's "Failed examples". It is given the whole captured
+//     string;
+//   - the test writer is shown it when a test fails on clean code
+//     (writerFailureDetail). What the writer needs can be at either end: an
+//     assertion failure is reported after the tests have run, but a Go test
+//     that hangs under `go test -timeout` prints `panic: test timed out` and
+//     the running test's name FIRST and then every goroutine's stack (264,781
+//     bytes in the run that showed this: the last 64 KiB named no test). So
+//     the writer is shown the first 16 KiB and the last 16 KiB, which bounds
+//     a retry prompt at 32 KiB on every substrate;
+//   - the together check keeps the last 2000 bytes for the record
+//     (authored_together_output), as it always did.
+//
+// Until 2026-11-18 this door ran RunTestVerbose, which in the bwrap jail
+// keeps the FIRST 16 KiB of a run and on the workspace substrate keeps all
+// of it. In the jail, a run noisier than that lost the failing tests' names
+// and nothing was salvaged; on the workspace substrate nothing bounded what
+// went into the writer's prompt. (For a few commits on the branch that made
+// this change the door kept the last 64 KiB alone, on the claim that the
+// failing assertion "too is at the end". The Go hang above is the run that
+// showed that claim false.)
+//
+// A jail that offers no such run (only RunTestVerbose) is run as it always
+// was and hands back whatever that run keeps. The door that names a killing
+// test (adequacy.Score, through DetailedJail) is unchanged: it keeps the
+// tail alone. What remains: a runner's record of its failures that is
+// itself larger than the kept tail loses its beginning, or is split by the
+// elision, and the readers then treat it as incomplete.
 func (s JailScorer) CompliantRun(ctx context.Context, codePath, code, test, testCmd string) (bool, string, error) {
-	vj, ok := s.Jail.(verboseJail)
-	if !ok {
+	ej, ends := s.Jail.(adequacy.EndsJail)
+	vj, verbose := s.Jail.(verboseJail)
+	if !ends && !verbose {
 		return false, "", errors.New("this jail cannot report a run's output")
 	}
 	ws, base := s.scoreWorkspace(codePath, test, testCmd)
@@ -735,7 +844,10 @@ func (s JailScorer) CompliantRun(ctx context.Context, codePath, code, test, test
 	// The UNMUTATED code: this asks "why does your test fail on software that
 	// is correct", which is the only question worth feeding back.
 	ws[codePath] = code
-	return vj.RunTestVerbose(ctx, ws, cmd)
+	if ends {
+		return ej.RunTestEnds(ctx, ws, rewriteCmd(s.CommandRewrite, cmd))
+	}
+	return vj.RunTestVerbose(ctx, ws, rewriteCmd(s.CommandRewrite, cmd))
 }
 
 // authoredWorkspace builds the repo-aware scoring workspace with `content`
@@ -786,7 +898,7 @@ func (s JailScorer) authoredWorkspace(codePath, content string) map[string]strin
 //     reaches=false.
 func (s JailScorer) verifyAuthoredTestReaches(ctx context.Context, codePath string, cmd []string) (bool, error) {
 	ws := s.authoredWorkspace(codePath, adequacy.CanaryCode)
-	passed, err := s.Jail.RunTest(ctx, ws, cmd)
+	passed, err := s.Jail.RunTest(ctx, ws, rewriteCmd(s.CommandRewrite, cmd))
 	if err != nil {
 		if errors.Is(err, adequacy.ErrTestTimeout) {
 			return true, nil // hung on invalid source at the authored test's path -> it reacted
@@ -1205,6 +1317,11 @@ type JailValidator struct {
 	// same reason: ParseTest lands the writer's body for it, and CompileTest
 	// composes it there.
 	Landing AuthoredLanding
+	// CommandRewrite mirrors JailScorer.CommandRewrite and MUST be the same
+	// value: the compile check runs in the same jail, and a command that
+	// reached a cache-sharing jail unrewritten could replay a cached test
+	// result. nil hands the jail the plugin's command untouched.
+	CommandRewrite func(cmd []string) []string
 }
 
 // CompileError is returned by CompileTest when the authored test builds a
@@ -1355,6 +1472,7 @@ func outputNamesFile(output, path string) bool {
 // when the jail can surface it (verboseJail) and without otherwise — still a
 // correct pass/fail, just nothing to feed back to the writer.
 func (v JailValidator) runCompileCmd(ctx context.Context, ws map[string]string, cmd []string) (bool, string, error) {
+	cmd = rewriteCmd(v.CommandRewrite, cmd)
 	if vj, ok := v.Jail.(verboseJail); ok {
 		return vj.RunTestVerbose(ctx, ws, cmd)
 	}

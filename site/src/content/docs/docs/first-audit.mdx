@@ -71,9 +71,9 @@ export ANTHROPIC_API_KEY=sk-ant-...
 corral certify --local \
   --code passwd.go \
   --test passwd_gappy_test.go \
-  --writer-model claude-sonnet-5 \
-  --mutant-model claude-sonnet-5 \
-  --critic-model claude-haiku-4-5 \
+  --writer-model anthropic/claude-sonnet-5 \
+  --mutant-model anthropic/claude-sonnet-5 \
+  --critic-model anthropic/claude-haiku-4-5 \
   --goal "Valid must require length >= 12, an uppercase letter, a lowercase letter, a digit, and a symbol" \
   --out verdict.json \
   -- go test ./...
@@ -212,8 +212,8 @@ python3 -m venv .venv && .venv/bin/pip install pytest
 corral certify --local --repo-dir . \
   --code sportspicker_core/awards.py --test tests_core/test_awards.py \
   --goal "A contest contributes exactly its budget: for any round, the points awarded across the field sum to that round's pot — whatever normalization strategy is chosen, however many members played, and however they scored, including a round nobody scored in. min_participants gates on members who SCORED, not members who merely submitted picks." \
-  --mutant-model gemini-3.6-flash --writer-model gemini-3.6-flash \
-  --critic-model claude-haiku-4-5-20251001 \
+  --mutant-model google/gemini-3.6-flash --writer-model google/gemini-3.6-flash \
+  --critic-model anthropic/claude-haiku-4-5-20251001 \
   -- .venv/bin/python -m pytest tests_core -q
 ```
 

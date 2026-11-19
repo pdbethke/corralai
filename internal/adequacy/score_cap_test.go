@@ -65,10 +65,10 @@ func TestMutantCapIsDerivedPerCommand(t *testing.T) {
 	if mutantTimeoutMultiple != 3 {
 		t.Fatalf("mutantTimeoutMultiple = %d, want 3 — PIT's 1.25× plus room for six-tree contention; 8 let a hang cost five minutes", mutantTimeoutMultiple)
 	}
-	if got := clampMutantTimeout(20 * time.Second); got != 60*time.Second {
+	if got := mutantTimeoutCap(20*time.Second, 0, minMutantTimeout); got != 60*time.Second {
 		t.Errorf("a 20s baseline caps at %v, want 60s (3×)", got)
 	}
-	if got := clampMutantTimeout(2 * time.Minute); got != maxMutantTimeout {
+	if got := mutantTimeoutCap(2*time.Minute, 0, minMutantTimeout); got != maxMutantTimeout {
 		t.Errorf("a 2m baseline caps at %v, want the %v ceiling", got, maxMutantTimeout)
 	}
 	for _, id := range []string{"x = 1\n", "x = 2\n"} {
@@ -88,7 +88,7 @@ func TestMutantCapFollowsASlowerNarrowedCommand(t *testing.T) {
 	// Simulate with the pure derivation: the loop records time.Since of the
 	// proving run per command key and capFor reads it. Exercised end to end
 	// above with sub-second holds; here the arithmetic on a real duration.
-	if got := clampMutantTimeout(45 * time.Second); got != 135*time.Second {
+	if got := mutantTimeoutCap(45*time.Second, 0, minMutantTimeout); got != 135*time.Second {
 		t.Errorf("45s baseline → %v, want 2m15s", got)
 	}
 }

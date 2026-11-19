@@ -40,6 +40,8 @@ tbody tr:hover{background:var(--card)}
 padding:1px 9px;font-size:.74rem;white-space:nowrap}
 .chip.ok{color:var(--ok)} .chip.bad{color:var(--bad)} .chip.warn{color:var(--warn)}
 .chip.mute{color:var(--muted)}
+/* a caveat is a sentence: it wraps instead of holding its column open */
+.chip.caveat{white-space:normal;border-radius:8px}
 .meta{display:grid;grid-template-columns:max-content 1fr;gap:6px 18px;font-size:.9rem;margin:1em 0}
 .meta dt{color:var(--muted)} .meta dd{margin:0;word-break:break-word}
 .finding{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:16px;margin:16px 0}
@@ -51,10 +53,16 @@ footer{margin-top:60px;padding-top:20px;border-top:1px solid var(--line);color:v
 .scroll{overflow-x:auto;max-width:100%}
 /* long hashes, model names and paths break instead of widening the page */
 .mono,.meta dd,h1,h2,.claim{overflow-wrap:anywhere}
+/* in a table, anywhere lets the layout shrink a column to one character and
+   break "pdbethke/hashie" mid-word; break-word sizes columns to their words */
+td.mono{overflow-wrap:break-word}
 .stat{min-width:0}
 details{margin:.5em 0}
 summary{cursor:pointer;color:var(--accent);padding:3px 0}
 summary:hover{text-decoration:underline}
+details.files{margin:0} details.files summary{padding:0;white-space:nowrap}
+/* a path that wraps indents its second line, so it does not read as another file */
+details.files div{padding-left:1.5em;text-indent:-1.5em}
 ul.tight{margin:.4em 0;padding-left:1.2em} ul.tight li{margin:.15em 0}
 @media (max-width:640px){.meta{grid-template-columns:1fr}.wrap{padding:24px 16px 60px}
 table{font-size:.8rem}th,td{padding:6px}}
@@ -419,8 +427,8 @@ const rowTmpls = `
 {{define "scanrow"}}<tr>
 <td class="nowrap"><a href="{{entryURL .Short}}">{{date .Pushed}}</a>{{if .Retracted}} <span class="chip bad">retracted</span>{{end}}</td>
 <td class="mono small">{{.RepoName}}{{with .Scan.Scope}}<br><span class="small">{{.}}</span>{{end}}</td>
-<td class="mono small">{{range $i, $f := .Audited}}{{if $i}}, {{end}}{{$f.Path}}{{else}}<span class="chip mute">none</span>{{end}}</td>
-<td class="nowrap">{{if .Graded}}{{.Rate}} <span class="small">({{.Killed}} of {{.Graded}})</span>{{if .Caveat}} <span class="chip warn">{{.Caveat}}</span>{{end}}{{else}}<span class="chip mute">not graded</span>{{end}}</td>
+<td class="mono small">{{if gt (len .Audited) 1}}<details class="files"><summary>{{len .Audited}} files</summary>{{range .Audited}}<div>{{pathBreaks .Path}}</div>{{end}}</details>{{else}}{{range .Audited}}{{.Path}}{{else}}<span class="chip mute">none</span>{{end}}{{end}}</td>
+<td>{{if .Graded}}<span class="nowrap">{{.Rate}} <span class="small">({{.Killed}} of {{.Graded}})</span></span>{{if .Caveat}} <span class="chip warn caveat">{{.Caveat}}</span>{{end}}{{else}}<span class="chip mute">not graded</span>{{end}}</td>
 <td>{{.Survived}}</td>
 <td>{{if .Proven}}<span class="chip ok">{{.Proven}}</span>{{else}}0{{end}}</td>
 <td class="mono small">{{if .CommitURL}}<a href="{{.CommitURL}}">{{.ShortSHA}}</a>{{else}}{{.ShortSHA}}{{end}}</td>

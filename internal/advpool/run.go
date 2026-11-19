@@ -156,7 +156,16 @@ type RunSpec struct {
 	// SeatTools is each agent seat's tool and version
 	// (agentbackend.SeatTool), keyed by role; API seats are absent. Carried
 	// to Verdict.SeatTools by signedSeats on BOTH construction paths.
-	SeatTools       map[string]string
+	SeatTools map[string]string
+	// SeatProviders is each seat's provider as the CLI's seat resolver
+	// decided it (cmd/corral seatSet.providers: the registry entry's
+	// provider, the vendor of a vendor/model seat, the pinned gateway,
+	// ollama for a discovered or placed daemon, an agent seat's vendor
+	// label), keyed by role. A seat whose provider was not resolved is
+	// absent, never filled in: the brain's daemon path resolves none and
+	// leaves this nil. Carried to Verdict.SeatProviders by signedSeats on
+	// BOTH construction paths.
+	SeatProviders   map[string]string
 	ShadowSelection []shadowpool.Selection
 
 	// WriterMode is HOW the writer seat attacks the survivors:

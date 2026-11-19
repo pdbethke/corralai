@@ -55,7 +55,10 @@ type bundleMeta struct {
 	// migration.
 	ModelsByRole string
 	// SeatTools is the roster's agent tools as JSON, beside ModelsByRole.
-	SeatTools       string
+	SeatTools string
+	// SeatProviders is the roster's providers as JSON, beside ModelsByRole
+	// (seatProvidersJSON); "" when no seat's provider was resolved.
+	SeatProviders   string
 	MinKillRate     *float64
 	MaxProvenMissed *int
 	Passed          *bool // nil when the outcome is not recoverable (scans push)
@@ -180,7 +183,7 @@ func buildAuditRows(files []scanstore.File, scanID int64, meta bundleMeta) []aud
 	for _, f := range files {
 		rows = append(rows, auditpush.Row{
 			Repo: meta.Repo, Commit: meta.Commit, RunURL: meta.RunURL, ScanID: scanID,
-			Path: f.Path, Lang: f.Lang,
+			Path: f.Path, Lang: f.Lang, Files: f.Files,
 			KillRate: f.KillRate, Survivors: f.Survivors, ProvenMissed: f.ProvenMissed,
 			TimedOut: f.TimedOut, TestWriterFailed: f.TestWriterFailed,
 			PoolTestUnsound: f.PoolTestUnsound,
@@ -198,6 +201,7 @@ func buildAuditRows(files []scanstore.File, scanID int64, meta bundleMeta) []aud
 			MutantsPlanted: f.MutantsGraded + f.MutantsInvalid,
 			ModelsByRole:   meta.ModelsByRole,
 			SeatTools:      meta.SeatTools,
+			SeatProviders:  meta.SeatProviders,
 			MinKillRate:    meta.MinKillRate, MaxProvenMissed: meta.MaxProvenMissed,
 			Passed:    meta.Passed,
 			StartedAt: meta.StartedAt,
@@ -251,6 +255,7 @@ func buildAuditRows(files []scanstore.File, scanID int64, meta bundleMeta) []aud
 			AuthoredTest:             f.AuthoredTest,
 			AuthoredLanding:          f.AuthoredLanding,
 			BaselineFlaky:            f.BaselineFlaky,
+			RunCache:                 f.RunCache,
 			VerdictJSON:              f.VerdictJSON,
 			PromptShape:              f.PromptShape,
 			CoveringTests:            f.CoveringTests,
@@ -307,7 +312,7 @@ func buildMutantRows(mutants []scanstore.Mutant, scanID int64, meta bundleMeta) 
 }
 
 func buildModelCallRows(calls []scanstore.ModelCall, scanID int64, meta bundleMeta) []auditpush.ModelCallRow {
-	// Whether a seat was an agent is what agentbackend.ForSeat resolved when
+	// Whether a seat was an agent is what the seat resolver and agentbackend.Build resolved when
 	// the run started, which SeatTools already records per role. Read here
 	// rather than re-resolved: the cost must follow the record, and a
 	// re-resolution could disagree with it (a CLI installed since).

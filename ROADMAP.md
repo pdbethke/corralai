@@ -2,7 +2,7 @@
 # Corralai Roadmap
 
 > **Directional, not committed.** Solo-maintained and moving fast
-> (v1.0.0-rc.31). This is where corral is heading and *why*. No dates —
+> (v1.0.0-rc.35). This is where corral is heading and *why*. No dates —
 > priorities shift with what real use surfaces.
 
 **Corral is an auditing engine.** It judges code it did not write — by execution
@@ -53,8 +53,11 @@ of these has happened, with the evidence linked here:
    candidate finds nothing that makes corral say something false about a
    suite. This is the same stopping rule the review loop already uses.
 4. **No known defect in what a verdict or a review records.** None is open
-   as of 2026-10-17: the last one found (workspace reproductions sharing a
-   tree, so one script's edits could change the next one's result) was fixed
+   as of 2026-11-16. This item has reopened once since the hold: on
+   2026-11-10 a salvaged authored pass was found to run the whole suite while
+   the record said the gap was proven by the authored test alone (fixed in
+   #519, shipped in rc.32). The one before it (workspace reproductions sharing
+   a tree, so one script's edits could change the next one's result) was fixed
    in #440. A new finding of this kind reopens this item.
 
 ## Shipped
@@ -64,8 +67,10 @@ of these has happened, with the evidence linked here:
   ends, whatever it measured is gone, and GitHub is not a database. Corral turns
   the two into one. Every verdict — an audit, a review, a human ruling — is one
   gzipped JSON entry committed to an **orphan branch**, `corral/ledger`, each
-  entry carrying the hash of the one before it and signed with the certify key.
-  The branch shares no history with `main`, never appears in a diff, and lives
+  entry carrying the hash of the one before it and signed: with the certify key
+  when one is configured, or keylessly by the GitHub Actions workflow that ran
+  the audit (rc.29). An entry written with neither is hash-linked and unsigned,
+  and the verifier says so. The branch shares no history with `main`, never appears in a diff, and lives
   somewhere every runner already has credentials for. No server, no schema to
   adopt, no bill.
 - **DuckDB reads it in place.** Any DuckDB opens the branch straight off GitHub
@@ -79,9 +84,12 @@ of these has happened, with the evidence linked here:
   store.
 - **Anyone can check it, including against us.** `corral ledger verify` walks the
   chain from a clean checkout, so a stranger verifies the record against its own
-  signatures rather than against our word. The signed statement is also entered
-  into **Sigstore Rekor**, and the log index rides on the entry, so the walk ends
-  in a transparency log corral does not run. `RequireIntactChain` is one shared
+  signatures rather than against our word. A keyless entry is one **Sigstore
+  Rekor** entry, and `--attest --transparency` logs a key-signed statement
+  there too, so the walk can end in a transparency log corral does not run. An
+  entry with neither has no outside anchor: a chain verifies against itself, so
+  removing its newest entries leaves the rest valid, and `--expect-head` is the
+  check from outside that catches it. `RequireIntactChain` is one shared
   guard and the doors that append, delete, push, load, or prime a later run all
   call it — a rule that took four doors and three cold-review rounds to arrive at
   as one function.
@@ -93,16 +101,56 @@ of these has happened, with the evidence linked here:
   which changed since. Every verdict discloses whether it was primed.
 - **Reading it back** — `corral scans list|show --ledger`, `corral verify --db`,
   `corral models rank --db` and `corral brief <scope>` all open a checkout of the
-  branch as the same tables. *(This supersedes the local `--record` DuckDB scan
+  branch as the same tables. A bare `corral models rank` reads this machine's
+  ledger the same way, loading only the rows a ranking reads. *(This supersedes the local `--record` DuckDB scan
   ledger described further down; `--cache-db` is the only local file left.)*
+- **Who may sign, and what each field is worth.** A ledger can register the
+  keys and the GitHub workflows allowed to sign it, under a root key
+  (`corral ledger signer`, rc.26 through rc.30), and every verified entry reports
+  its signature level (rc.30). Signing proves who wrote an entry, not that its
+  contents are true, so every recorded field carries a trust tier: measured,
+  declared or meta (`docs/corral/record-fields.md`, generated from
+  `internal/ledger/tiers.go`). The signed entry also holds every number a
+  certify run prints (rc.30) and which provider served each seat (rc.32).
+- **`certify --local` writes an entry too (rc.26)**, to the machine ledger in
+  corral's state directory, never under the repository it audits.
+  `certify --repo` and `review` keep a copy there as well.
+- **One renderer for the record (rc.26).** `corral ui` and the public page at
+  `corralai.dev/ledger` render the ledger with the same code
+  (`internal/recordview`). The Languages page (rc.32) is derived from signed
+  entries: a language with no qualifying run shows "—".
+- **The public record restarted on 2026-11-09.** The branch was checkpointed
+  to a new genesis entry. The 168 entries before it (27 scans, 55 reviews, 86
+  adjudications) are kept in the tag `ledger-archive/2026-11-09`.
+
+**Seats — the operator names every model.**
+- **No default models, and no vendor guessed from a name.** An unnamed seat
+  has been a refused run since v0.4.0. Since rc.32 a hosted seat is named
+  `vendor/model` and a bare hosted name is refused, because a guess decides
+  where the audited source and a credential go. There is no default backend,
+  agent model or Ollama address either.
+- **A model registry** (`.corral/models.json`, `CORRALAI_MODELS_FILE`,
+  `CORRALAI_MODELS`) declares aliases once. The wire follows the provider, so
+  an OpenAI-compatible local server is spoken to as one, and a hosted `openai`
+  or `openrouter` entry may carry an `endpoint` and `key_env` to reach a
+  company proxy (rc.32). The registry declares what is available, never what
+  is chosen.
+- **Any seat can be a coding-agent CLI (rc.20)**, in every verb that takes a
+  seat: `claude-code`, `codex` and `antigravity` are defined, and
+  `CORRALAI_AGENT_<NAME>` defines another. Seats start cold. A seat whose
+  wire reports no tokens is `not metered` and is refused under `--max-tokens`.
+- **`--max-tokens` caps a certify run** across every seat, goal derivation
+  included (rc.20), and holds under parallel calls (rc.22). `corral review`
+  has no token cap yet.
 
 **The review — a stranger reads your code.**
 - **`corral review --scope`.** A coding agent that has never seen the repository
   gets a disposable copy of the checkout and one instruction: assume this is
   wrong, find where, and prove it. Claims come back **tiered**, and the tier is
   not the reviewer's to award — a claim called *reproduced* must ship a script
-  that exits 0 only if the defect is demonstrated, corral runs it in a detached
-  worktree, and the harness is **demote-only**: it can take a tier away, never
+  that exits 0 only if the defect is demonstrated, corral runs it in the same
+  offline sandbox certify grades in (since rc.24; `--substrate workspace` runs
+  it in a detached worktree on the host instead), and the harness is **demote-only**: it can take a tier away, never
   grant one. A reviewer that overclaims is recorded overclaiming, with
   `declared:` beside `tier:` on the entry.
 - **A second seat argues the other side**, never the reviewer's own model, and a
@@ -119,7 +167,8 @@ of these has happened, with the evidence linked here:
 - **Run on corral itself, repeatedly.** Seven rounds over 2026-09-08/09 found,
   among others, two ways the merge gate could report a pass on an audit that had
   measured nothing. Those reviews — including three claims a reviewer declared
-  reproduced whose scripts did not hold up — are entries on the public branch.
+  reproduced whose scripts did not hold up — are entries in the record, kept in
+  the `ledger-archive/2026-11-09` tag since the public branch restarted.
 
 **Certify by execution.**
 - **`corral certify -- <check>`** — one line in a pipeline runs the check *itself*
@@ -151,8 +200,9 @@ of these has happened, with the evidence linked here:
   *disclosed, unadjudicated* until a compiling test actually kills it — corral never
   calls an unproven survivor a real bug), **feeding the compiler's own error back on a
   non-compiling attempt so it corrects rather than blindly repeats**, and a decorrelated
-  **test-critic** returns one verdict per test (sound, vacuous, or a dead check; for Go
-  and Python it is handed every test name and must judge each) as **unverified advice
+  **test-critic** returns one verdict per test (sound, vacuous, or a dead check; in
+  every language it is handed every test name and must judge each, and a "this test
+  can never fail" claim is checked by running that test alone) as **unverified advice
   that never gates** — and because it never gates, it can be turned off entirely
   (`--critic-model off`), which a deliberately single-vendor run needs whenever that
   vendor offers only one model worth running (the critic must otherwise differ from the
@@ -209,9 +259,27 @@ of these has happened, with the evidence linked here:
   host path), so it always copies dep dirs into the seed, same as `--no-bind-deps`.
   Local-only today; the brain-gate path (hosted `start_adversarial_run`) is the
   remaining follow-up.
-- **Multi-language** — Go, Python (pytest), Ruby (minitest/RSpec), JavaScript
-  (node:test), TypeScript (tsc + node:test), PHP (phpunit), the language inferred from the code
-  path's extension, fail-closed on an unknown language or a failed preflight. C is next.
+- **A kill is confirmed before it is credited (rc.31).** A mutant counts as
+  killed only when the kill repeats: by running the killing test alone where
+  the runner can (Go, Python, jest, vitest), otherwise by repeating the grading
+  run. Kill rates can fall because of it. The killing test is named, a partly
+  failing authored test keeps its passing part (rc.24), and proven tests are
+  also run together once on the unmodified code (`authored_together`, rc.25).
+- **An established mutation tool's mutants (rc.30, rc.31).**
+  `--mutants-from <tool>[@<version>]:<report>` adds a StrykerJS report's
+  mutants to the exam, or with `--mutant-model off` is the whole exam. corral
+  re-grades every one itself. See `docs/corral/mutant-sources.md`.
+- **Multi-language** — Go, Python, Ruby, JavaScript, TypeScript, PHP and Rust,
+  the language inferred from the code path's extension, fail-closed on an
+  unknown language or a failed preflight. Test runners are one table
+  (`internal/lang/runner.go`): `go test`, gotestsum, pytest, unittest, jest,
+  vitest, mocha, `node --test`, RSpec, minitest, PHPUnit, `cargo test` and
+  `cargo nextest`. What each can do is generated from that table into
+  `docs/corral/language-support.md`; what has been executed on real
+  repositories is the record's Languages page. Rust audits only a source whose
+  tests live in a separate file, and `certify --repo --path <dir>` (rc.20)
+  scopes a scan to one crate or package. Swift is next, after the shipped
+  languages are re-proven on the restarted record.
 - **The bug-catching scorecard + eval harness** — which model actually *catches* bugs,
   execution-proven (recall from `ProvenMissed`, never a self-report), DuckDB-native;
   the eval harness runs the pool over a versioned known-adequacy corpus to give the
@@ -255,8 +323,9 @@ of these has happened, with the evidence linked here:
   the runner is the isolation boundary. `--diff-base <ref>` scopes a scan to the
   files a PR actually touched (a three-dot range against the merge base), so a normal
   PR audits the handful of files it changed rather than the whole repo — an
-  auditor's-own-time cost the *unbounded* case is deliberately not: roughly 84 suite
-  runs per audited file.
+  auditor's-own-time cost the *unbounded* case is deliberately not: between 5 and
+  40 suite runs per audited file, one per mutant, the count sized to the file's
+  complexity (double with a shadow model named).
 
   **Measured, 2026-08-03, on this repo: 11m12s for one audited file** (40 mutants,
   `workspace` substrate, 2-core GitHub runner). The suite-run COUNT above is right;
@@ -267,7 +336,7 @@ of these has happened, with the evidence linked here:
   a whole-repo scan of this repo's 205 candidates would be roughly 37 hours, which
   is why `top` exists.
 
-  `action.yml` wraps this as `pdbethke/corralai@main` (tags are cut — `@v1.0.0-rc.31` is current; pin a commit SHA for immutability against a re-tag); it installs `corral` itself via
+  `action.yml` wraps this as `pdbethke/corralai@main` (tags are cut — `@v1.0.0-rc.35` is current; pin a commit SHA for immutability against a re-tag); it installs `corral` itself via
   `go install`, using whatever Go toolchain the runner already has (never
   `actions/setup-go`, which would swap out the toolchain the audited project's own
   tests run under). Check out with `fetch-depth: 0` (required — the diff needs the merge
@@ -276,7 +345,14 @@ of these has happened, with the evidence linked here:
   unset, a file that grades at 0.00 still exits 0 (today's behavior, unchanged); set,
   ANY audited file scoring below it fails the scan (exit 1) — checked per file against
   `reposcan.RepoReport.Weakest`, never the aggregate, so one well-tested file can't mask
-  a weak one.
+  a weak one. **`--max-proven-missed` (`max-proven-missed` on the Action) is
+  the gate we now recommend instead:** it fails the run when an audited file
+  has more proven missing tests than you allow. A kill rate is a proportion of
+  freshly generated faults and moves between runs on unchanged code, so a
+  threshold near a healthy value fails good work at random. The Action has
+  since gained `path`, `max-tokens`, `timeout`, `ledger`, the review seats,
+  and token inputs for agent seats, and it signs its ledger entries keylessly
+  (rc.29).
 
   **Shipped 2026-08-03 (#66–#71), and it now audits this repo.** The run's verdict
   goes to `$GITHUB_STEP_SUMMARY` *verbatim* — chosen over a PR comment because it
@@ -312,8 +388,8 @@ of these has happened, with the evidence linked here:
   irreducibly ambiguous multi-language scan, or the coverage tool itself missing from
   the runner — and names zero files on any of those paths. A multi-language scan is
   no longer an automatic refusal: with an explicit `-- <cmd>` that unambiguously names
-  one candidate language (Python + TypeScript with `-- pytest -q` — TypeScript has no
-  plugin, so Python is the only candidate, not merely the likeliest), the pre-flight
+  one candidate language (Python + TypeScript with `-- pytest -q`: each reporter
+  claims only its own runners, so pytest names Python alone), the pre-flight
   now runs instead of declining.
   Proven on a foreign-repo sweep (`pallets/flask`, `psf/requests`, `andrewyng/aisuite`,
   `gin-gonic/gin`, plus corral's own tree as the large-Go-module case): the design's
@@ -336,7 +412,9 @@ of these has happened, with the evidence linked here:
   and 135 of grpc-go's), which the docs now say plainly rather than implying "executed"
   always means "tested" — and Python's version of that is **wider**, since every
   module-scope `def`/`class` is a counted statement, so importing a module clears it
-  outright. all six languages have a plugin now. Not wired into the GitHub
+  outright. All six of those languages have a reporter now, and Rust gained
+  one with evidence pairing (rc.29; the generated
+  `docs/corral/language-support.md` lists it). Not wired into the GitHub
   Action as an input — CLI flag only for now.
 
   A **final whole-branch review** then hunted a fifth false accusation across 15
@@ -417,7 +495,10 @@ of these has happened, with the evidence linked here:
   `requests/adapters.py` 1 symbol → 19, `rubocop` 729 of 736 files measured,
   `express/lib/response.js` 2 → 20. PHP's own extractor shipped later
   (2026-08-31), receiver-scoped to the enclosing class/trait from the start.
-- **Coverage-guided test selection is now the default for Python**, replacing
+  Rust's followed with its plugin (`internal/repoindex/extract_rust_cgo.go`).
+- **Coverage-guided test selection is the default in every language** (Python
+  first; the generated language-support table lists the rest, Ruby under
+  RSpec), replacing
   the paired-file scoping this section used to describe (`--scope-tests`,
   since removed): a file is graded by the tests execution evidence shows
   actually run it, not by a filename convention, with `--whole-suite` as the
@@ -430,8 +511,9 @@ of these has happened, with the evidence linked here:
   their per-file rows — and, crucially, **why a proven-gap count of 0 is 0**:
   writer-failed, test-unsound, or a genuine "tried and missed" where a sound
   test graded and proved nothing. The ledger stored the flags telling those
-  apart from the start; nothing could say it out loud. Local DuckDB file, no
-  brain required, read-only by design (a scan ledger records what happened;
+  apart from the start; nothing could say it out loud. It reads the ledger
+  directory now (`--ledger <dir>`), not the retired DuckDB file: no brain and
+  no database required, read-only by design (a scan ledger records what happened;
   it is not adjudicated after the fact the way critic findings are). NULL kill
   rates render `—`, never `0.00`, all the way to the terminal — the same
   discipline that governs the column type now governs the display.
@@ -509,7 +591,10 @@ it becomes the way a team **accounts** for what its agents — the herd's, or a 
 own — actually produced. The engine that already contains, certifies, and records is
 exactly the engine that can *attest* and *federate*.
 
-- **One-command agent onboarding.** Independent, dev-driven agents (starting with
+- **One-command agent onboarding.** The first half shipped as `corral setup`
+  (rc.29): it detects your coding agents, shows the plan, asks first, and wires
+  corral's read-only MCP server and skill into them. Still ahead, and not
+  built: independent, dev-driven agents (starting with
   **Claude Code**, richest hooks) join with `corral hooks install` — deterministic
   passive telemetry to the brain via the agent's own hooks, no behavior change, no
   reliance on the model *choosing* to report. Capture is deterministic — the same
@@ -553,9 +638,12 @@ in August 2026 reversed an assumption this roadmap previously carried.
   a product. Coverage-derived pairing, using the preflight's own instrumented run
   to observe which tests actually execute which files, SHIPPED: it is the
   `evidence-paired` count on the report's candidacy line, and it widens
-  candidacy past filename pairing on a real run. What is left is that it needs
-  `--preflight` to have run, so a repo audited without coverage still falls
-  back to filenames — the direction is not the remaining work, the default is.
+  candidacy past filename pairing on a real run. Since rc.29 the pass runs on
+  every real run with no flag, in all seven languages, and `--dry-run
+  --evidence` shows its result for free. What is left: a Rust file whose tests
+  are inline has nowhere to land a written test and is never audited, and a
+  suite the jail cannot run needs `--substrate workspace` for the pass to see
+  anything (`docs/corral/evidence-pairing.md` records both on real repositories).
 - **Make the substrate that works go faster.** An audit costs `O(mutants × the
   TARGET's suite runtime)` — measured at 1.46s/suite on flask but ~74s on
   `psf/requests`, a 50× spread between two ordinary Python projects. Parallel

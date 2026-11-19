@@ -5,6 +5,7 @@
 package sandbox
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -503,5 +504,179 @@ func TestBwrapArgvCacheFrozenAndWarm(t *testing.T) {
 	}
 	if _, err := overlayIso(func(string) bool { return false }).Wrap("true", frozen, nil); err == nil {
 		t.Error("a frozen cache on a filesystem that cannot be overlaid was wrapped")
+	}
+}
+
+// overlayAtIso is a bwrap whose probes proved it overlays, both at a
+// directory's own path and at a target that is not.
+func overlayAtIso() bwrapIsolator {
+	b := overlayIso(func(string) bool { return true })
+	b.overlayAt = true
+	return b
+}
+
+// A workspace placed at a target: bound there, the command started there, and
+// the host path appears in neither the bind's target nor --chdir.
+func TestBwrapArgvPlacesTheWorkspaceAtItsTarget(t *testing.T) {
+	for _, iso := range []bwrapIsolator{{}, overlayAtIso()} {
+		argv, err := iso.Wrap("true", Options{Workspace: "/tmp/ws", Target: WorkTarget}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !argvHas(argv, "--bind", "/tmp/ws", "/corral-work", "--chdir", "/corral-work") {
+			t.Errorf("want --bind /tmp/ws /corral-work --chdir /corral-work: %v", argv)
+		}
+		if argvHas(argv, "--chdir", "/tmp/ws") || argvHas(argv, "--bind", "/tmp/ws", "/tmp/ws") {
+			t.Errorf("the host path leaked into the jail: %v", argv)
+		}
+	}
+	// A target must be an absolute, clean path other than the root.
+	for _, bad := range []string{"corral-work", "/", "/corral-work/", "/a/../corral-work", "/./corral-work"} {
+		if _, err := (bwrapIsolator{}).Wrap("true", Options{Workspace: "/tmp/ws", Target: bad}, nil); err == nil {
+			t.Errorf("Target %q was accepted", bad)
+		}
+	}
+}
+
+// A seed overlaid at the target: the seed (the HOST path, still equal to
+// Workspace) is the lower layer, the target is the mountpoint. Never a
+// writable bind of the seed, whatever the bwrap cannot do.
+func TestBwrapArgvOverlaysTheSeedAtItsTarget(t *testing.T) {
+	const s = "/tmp/seed"
+	opts := Options{Workspace: s, SeedLower: s, Target: WorkTarget}
+	argv, err := overlayAtIso().Wrap("true", opts, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !argvHas(argv, "--overlay-src", s, "--tmp-overlay", "/corral-work", "--chdir", "/corral-work") {
+		t.Errorf("want --overlay-src /tmp/seed --tmp-overlay /corral-work --chdir /corral-work: %v", argv)
+	}
+	for i := range argv {
+		if argv[i] == "--bind" && i+1 < len(argv) && argv[i+1] == s {
+			t.Errorf("the seed is bound writable: %v", argv[i:i+3])
+		}
+	}
+	if argvHas(argv, "--tmp-overlay", s) || argvHas(argv, "--chdir", s) {
+		t.Errorf("the host path leaked into the jail: %v", argv)
+	}
+
+	// The seed is still the workspace; anything else is refused.
+	if _, err := overlayAtIso().Wrap("true", Options{Workspace: "/elsewhere", SeedLower: s, Target: WorkTarget}, nil); err == nil {
+		t.Error("a seed other than the workspace was wrapped at a target")
+	}
+	// A bwrap that cannot overlay, or overlays only at a directory's own
+	// path, refuses: never a writable bind in its place.
+	for name, iso := range map[string]bwrapIsolator{"no overlay": {}, "own path only": overlayIso(func(string) bool { return true })} {
+		_, err := iso.Wrap("true", opts, nil)
+		if !errors.Is(err, ErrNoOverlay) {
+			t.Errorf("%s: Wrap = %v, want a refusal matching ErrNoOverlay", name, err)
+		}
+	}
+}
+
+// The construction probe for a seed at a target fails closed for a bwrap that
+// refuses the overlay or hangs, within its timeout.
+func TestBwrapOverlayAtProbeFailsClosed(t *testing.T) {
+	for _, c := range []struct{ name, script string }{
+		{"refuses", "#!/bin/sh\necho 'bwrap: Unknown option --overlay-src' >&2\nexit 1\n"},
+		{"hangs", "#!/bin/sh\nexec sleep 60\n"},
+		// A bwrap that "succeeds" without running the command proves nothing:
+		// the probe's command must have read the lower and printed its marker.
+		{"no-op", "#!/bin/sh\nexit 0\n"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			bin := t.TempDir()
+			if err := os.WriteFile(filepath.Join(bin, "bwrap"), []byte(c.script), 0o755); err != nil { // #nosec G306 -- a test's fake executable
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", bin+":/usr/bin:/bin")
+			old := probeTimeout
+			probeTimeout = 500 * time.Millisecond
+			t.Cleanup(func() { probeTimeout = old })
+			start := time.Now()
+			if probeOverlayAt() {
+				t.Error("probeOverlayAt = true")
+			}
+			if d := time.Since(start); d > 5*time.Second {
+				t.Errorf("the probe took %s", d)
+			}
+		})
+	}
+}
+
+// PlacesWorkspace for bwrap: a bwrap places every workspace it can run. One
+// that cannot overlay at all runs no seeded workspace, and binds at a target;
+// one whose probes proved both overlays places a seed at a target too; one
+// that overlays only at a directory's own path would refuse a seeded run at a
+// target, so it reports false and the caller keeps the host path.
+func TestPlacesWorkspaceBwrap(t *testing.T) {
+	for name, c := range map[string]struct {
+		iso  bwrapIsolator
+		want bool
+	}{
+		"no overlay":    {bwrapIsolator{}, true},
+		"both overlays": {overlayAtIso(), true},
+		"own path only": {overlayIso(func(string) bool { return true }), false},
+	} {
+		if got := PlacesWorkspace(c.iso); got != c.want {
+			t.Errorf("%s: PlacesWorkspace = %v, want %v", name, got, c.want)
+		}
+	}
+}
+
+// A Target that collides with a mount the jail makes itself is refused, naming
+// what it collides with: the workspace would hide that mount or be hidden by
+// it. The worst is the cache's own target, where the run would execute inside
+// the shared cache.
+func TestBwrapRefusesATargetThatCollidesWithTheJailsOwnMounts(t *testing.T) {
+	cache := &CacheMount{Host: "/tmp/cache", Target: CacheTarget, Frozen: false}
+	for _, bad := range []string{
+		"/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc", "/var", "/proc", "/dev", "/tmp", "/home",
+		"/usr/x", "/etc/ssl", "/tmp/work", "/home/agent", "/var/lib/gems",
+		CacheTarget, CacheTarget + "/inner",
+	} {
+		_, err := overlayAtIso().Wrap("true", Options{Workspace: "/tmp/ws", Target: bad, Cache: cache}, nil)
+		if err == nil {
+			t.Errorf("Target %q collides with a jail mount and was accepted", bad)
+		} else if !strings.Contains(err.Error(), bad) {
+			t.Errorf("the refusal for %q does not name it: %v", bad, err)
+		}
+	}
+	// An ancestor of the cache target ("/" is refused already; a parent of a
+	// cache that is not at the root is the case).
+	deep := &CacheMount{Host: "/tmp/cache", Target: "/corral-work/cache", Frozen: false}
+	if _, err := overlayAtIso().Wrap("true", Options{Workspace: "/tmp/ws", Target: WorkTarget, Cache: deep}, nil); err == nil {
+		t.Error("a Target that is an ancestor of the cache target was accepted")
+	}
+	// The fixed target is accepted, with a cache and without one.
+	for _, c := range []*CacheMount{nil, cache} {
+		if _, err := overlayAtIso().Wrap("true", Options{Workspace: "/tmp/ws", Target: WorkTarget, Cache: c}, nil); err != nil {
+			t.Errorf("%s was refused (cache %v): %v", WorkTarget, c != nil, err)
+		}
+	}
+}
+
+// A dependency bind whose target is under the HOST workspace, when the
+// workspace is seen elsewhere, would be mounted where the run never looks: a
+// stale caller fails rather than mounting invisibly.
+func TestBindUnderTheHostWorkspaceIsRefusedWhenATargetIsSet(t *testing.T) {
+	stale := []Bind{{Host: "/deps/nm", Target: "/tmp/ws/node_modules", PerEntry: true}}
+	_, err := overlayAtIso().Wrap("true", Options{Workspace: "/tmp/ws", Target: WorkTarget, ReadOnlyBinds: stale}, nil)
+	if err == nil || !strings.Contains(err.Error(), "/tmp/ws/node_modules") {
+		t.Errorf("bwrap: a stale bind was not refused by name: %v", err)
+	}
+	c := containerIsolator{runtime: "docker", image: "img"}
+	_, err = c.Wrap("true", Options{Workspace: "/tmp/ws", Target: WorkTarget, ReadOnlyBinds: stale}, nil)
+	if err == nil || !strings.Contains(err.Error(), "/tmp/ws/node_modules") {
+		t.Errorf("container: a stale bind was not refused by name: %v", err)
+	}
+	// Without a Target the host path IS where the run looks.
+	if _, err := overlayAtIso().Wrap("true", Options{Workspace: "/tmp/ws", ReadOnlyBinds: stale}, nil); err != nil {
+		t.Errorf("a bind under the workspace without a Target was refused: %v", err)
+	}
+	// A bind at the target is the right one.
+	ok := []Bind{{Host: "/deps/nm", Target: WorkTarget + "/node_modules", PerEntry: true}}
+	if _, err := overlayAtIso().Wrap("true", Options{Workspace: "/tmp/ws", Target: WorkTarget, ReadOnlyBinds: ok}, nil); err != nil {
+		t.Errorf("a bind at the target was refused: %v", err)
 	}
 }

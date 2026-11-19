@@ -365,7 +365,7 @@ func vitestDeselectCmd(argv, ids []string) ([]string, bool) {
 	if len(ids) == 0 || vitestIndex(argv) < 0 || !vitestNarrowable(argv) {
 		return nil, false
 	}
-	return append(slices.Clone(argv), "-t", "^(?!(?:"+alternation(ids, jsNames)+")$)"), true
+	return append(slices.Clone(argv), "-t", "^(?!(?:"+alternation(ids, vitestName)+")$)"), true
 }
 
 // mochaDeselectCmd inverts a grep over full titles.

@@ -30,6 +30,9 @@ func TestStaffPanicIsRecoveredAndReturnsError(t *testing.T) {
 		LLM:        &panicLLM{},
 		Perf:       &fakePerf{},
 		RoleModels: rolemodel.New(),
+		// A candidate, so the pass reaches the planner: with none, Judge
+		// refuses before asking it anything.
+		Declared: []rolemodel.ModelRef{{Backend: "ollama", Model: "m"}},
 	}
 
 	err := mgr.Staff("add a wishlist feature")

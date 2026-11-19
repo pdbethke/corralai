@@ -258,8 +258,8 @@ required as on any run; the model names are an example):
 
 ```bash
 corral certify --repo . --push md:my_database \
-  --writer-model gemini-3.8-flash --mutant-model gemini-3.8-flash \
-  --derive-model gemini-3.8-flash --critic-model claude-haiku-4-5 \
+  --writer-model google/gemini-3.8-flash --mutant-model google/gemini-3.8-flash \
+  --derive-model google/gemini-3.8-flash --critic-model anthropic/claude-haiku-4-5 \
   -- .venv/bin/python -m pytest -q
 ```
 

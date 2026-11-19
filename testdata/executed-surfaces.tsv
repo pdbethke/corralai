@@ -135,6 +135,7 @@ corral certify --repo --max-tokens	executed	test:cmd/corral/local_endpoint_test.
 corral certify --repo --prior	executed	test:cmd/corral/certify_repo_evidence_candidacy_test.go
 corral certify --repo --ledger	executed	test:cmd/corral/ledger_test.go
 corral certify --repo --jail	attested	run:2026-10-21 20261021T160348Z-1a3a401c0d33-7b286eff1936 and 20261021T163025Z-1a3a401c0d33-bc9901e0ab28 (the second records SandboxBackend container and SandboxImage pinned to the image id; --jail container, Kludex/starlette@1a3a401c, CORRALAI_EXEC_IMAGE with the suite's deps; 1396-test baseline passed offline, 7 proven gaps; scratch ledger; refusals in test:cmd/corral/certify_repo_jail_test.go)
+corral certify --repo --record-every-file	executed	test:cmd/corral/certify_repo_record_flag_test.go (TestCertifyRepoCollapsesByDefaultAndListsEveryFileWhenAsked)
 corral certify --repo --no-ledger	executed	test:cmd/corral/ledger_test.go
 corral certify --repo --seed-limit	executed	test:cmd/corral/run_bounds_test.go (TestCertifyRepoSeedLimitFlagBoundsTheJailSeed: a --dry-run --evidence jail seed over the limit is refused naming it; refused on --substrate workspace)
 corral certify --repo --top	executed	run:2026-09-02 md:corral_public scans 22-26
@@ -216,6 +217,7 @@ corral models rank --json	executed	test:cmd/corral/models_rank_test.go (runRank)
 corral models rank --seat	executed	test:cmd/corral/models_rank_test.go (runRank)
 corral models rank --lang	executed	test:cmd/corral/models_rank_test.go (runRank)
 corral models rank --min-runs	executed	test:cmd/corral/models_rank_test.go (runRank)
+corral models rank --source	executed	test:cmd/corral/models_rank_machine_test.go (TestRankSourceScorecardReadsTheOldStore, TestRankRefusesContradictorySources)
 corral matrix list --json	executed	test:cmd/corral/matrix_test.go (runMatrix)
 corral scans list --ledger	executed	test:cmd/corral/scans_test.go (runScans)
 corral scans list --json	executed	test:cmd/corral/scans_test.go (runScans)

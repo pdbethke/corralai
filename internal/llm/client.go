@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -20,65 +21,73 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/ollamareq"
 )
 
 // Client is a single-shot text chat client. Construct with FromEnv.
 type Client struct {
-	backend       string
-	openAIBase    string
-	openAIKey     string
-	anthropicBase string
-	anthropicKey  string
-	ollamaURL     string
-	model         string
-	hc            *http.Client
-}
-
-func env(k, def string) string {
-	if v := os.Getenv(k); v != "" {
-		return v
-	}
-	return def
+	backend  string
+	endpoint agentbackend.Endpoint
+	model    string
+	// unavailable says why the client cannot be called; "" when it can.
+	unavailable string
+	hc          *http.Client
 }
 
 // FromEnv builds a Client from the same model environment the agents use, so the
-// narrator runs on whatever backend the swarm is configured for.
+// narrator runs on whatever backend the swarm is configured for — resolved by
+// agentbackend.EndpointFor, the rules corral-agent's FromEnv applies.
+//
+// There are no defaults. This used to mean ollama at 127.0.0.1:11434 running
+// qwen2.5-coder:7b when nothing was set, so the daemon's staffing planner and
+// narrator sent prompts to a backend and model nobody chose. An unset or
+// unknown backend, or an unset AGENT_MODEL, now leaves the client unavailable
+// with the reason (Unavailable), and every caller already checks Available.
 func FromEnv() *Client {
-	return &Client{
-		backend:       env("MODEL_BACKEND", "ollama"),
-		openAIBase:    env("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-		openAIKey:     os.Getenv("OPENAI_API_KEY"),
-		anthropicBase: env("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
-		anthropicKey:  os.Getenv("ANTHROPIC_API_KEY"),
-		ollamaURL:     env("OLLAMA_URL", "http://127.0.0.1:11434"),
-		model:         env("AGENT_MODEL", "qwen2.5-coder:7b"),
-		hc:            &http.Client{Timeout: 60 * time.Second},
+	c := &Client{
+		backend: strings.TrimSpace(os.Getenv("MODEL_BACKEND")),
+		model:   strings.TrimSpace(os.Getenv("AGENT_MODEL")),
+		hc:      &http.Client{Timeout: 60 * time.Second},
 	}
+	ep, err := agentbackend.EndpointFor(c.backend)
+	switch {
+	case err != nil:
+		c.unavailable = err.Error()
+	case c.model == "":
+		c.unavailable = fmt.Sprintf("llm: AGENT_MODEL is not set — name the model MODEL_BACKEND=%s should serve (there is no default model)", c.backend)
+	case ep.Wire == "anthropic" && ep.Key == "":
+		c.unavailable = "llm: MODEL_BACKEND=" + c.backend + " needs ANTHROPIC_API_KEY"
+	case c.backend == "openai" && ep.Key == "" && strings.TrimSpace(os.Getenv("OPENAI_BASE_URL")) == "":
+		// A keyless OpenAI-compatible server is fine when you named it; with
+		// neither a key nor a base URL there is nothing to call.
+		c.unavailable = "llm: MODEL_BACKEND=openai needs OPENAI_API_KEY, or OPENAI_BASE_URL for a keyless OpenAI-compatible server"
+	}
+	c.endpoint = ep
+	return c
 }
 
-// Available reports whether the configured backend can actually be called (an API
-// key is present, or it's local Ollama). The narrator UI is hidden when false.
-func (c *Client) Available() bool {
-	switch c.backend {
-	case "openai", "gemini", "openrouter":
-		return c.openAIKey != ""
-	case "anthropic", "claude":
-		return c.anthropicKey != ""
-	default: // ollama is keyless/local
-		return true
-	}
-}
+// Available reports whether the configured backend can actually be called. The
+// narrator UI (and the staffing planner) is off when false.
+func (c *Client) Available() bool { return c.unavailable == "" }
+
+// Unavailable is why Available is false, naming what to set; "" when available.
+func (c *Client) Unavailable() string { return c.unavailable }
 
 // Ask returns the model's answer to user, steered by system. Single-shot, no tools.
 func (c *Client) Ask(ctx context.Context, system, user string) (string, error) {
-	switch c.backend {
-	case "anthropic", "claude":
+	if c.unavailable != "" {
+		return "", errors.New(c.unavailable)
+	}
+	switch c.endpoint.Wire {
+	case "anthropic":
 		return c.askAnthropic(ctx, system, user)
-	case "openai", "gemini", "openrouter":
+	case "openai-chat":
 		return c.askOpenAI(ctx, system, user)
-	default:
+	case "ollama":
 		return c.askOllama(ctx, system, user)
+	default:
+		return "", fmt.Errorf("llm: no wire for MODEL_BACKEND=%q", c.backend)
 	}
 }
 
@@ -110,10 +119,10 @@ func (c *Client) askOpenAI(ctx context.Context, system, user string) (string, er
 		} `json:"choices"`
 	}
 	hdr := map[string]string{}
-	if c.openAIKey != "" {
-		hdr["Authorization"] = "Bearer " + c.openAIKey
+	if c.endpoint.Key != "" {
+		hdr["Authorization"] = "Bearer " + c.endpoint.Key
 	}
-	err := c.post(ctx, c.openAIBase+"/chat/completions", hdr, map[string]any{
+	err := c.post(ctx, strings.TrimSuffix(c.endpoint.Base, "/")+"/chat/completions", hdr, map[string]any{
 		"model": c.model, "temperature": 0.2,
 		"messages": []map[string]string{
 			{"role": "system", "content": system},
@@ -136,8 +145,8 @@ func (c *Client) askAnthropic(ctx context.Context, system, user string) (string,
 			Text string `json:"text"`
 		} `json:"content"`
 	}
-	hdr := map[string]string{"x-api-key": c.anthropicKey, "anthropic-version": "2023-06-01"}
-	err := c.post(ctx, c.anthropicBase+"/v1/messages", hdr, map[string]any{
+	hdr := map[string]string{"x-api-key": c.endpoint.Key, "anthropic-version": "2023-06-01"}
+	err := c.post(ctx, strings.TrimSuffix(c.endpoint.Base, "/")+"/v1/messages", hdr, map[string]any{
 		"model": c.model, "max_tokens": 1024, "temperature": 0.2, "system": system,
 		"messages": []map[string]any{{"role": "user", "content": user}},
 	}, &out)
@@ -168,7 +177,7 @@ func (c *Client) askOllama(ctx context.Context, system, user string) (string, er
 	}
 	// See ollamareq.Decorate: num_ctx plus think-suppression, in one place.
 	ollamareq.Decorate(body, c.model)
-	err := c.post(ctx, c.ollamaURL+"/api/chat", nil, body, &out)
+	err := c.post(ctx, strings.TrimSuffix(c.endpoint.Base, "/")+"/api/chat", nil, body, &out)
 	if err != nil {
 		return "", ollamareq.WrapErr(err)
 	}

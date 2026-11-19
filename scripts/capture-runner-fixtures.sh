@@ -30,15 +30,27 @@ DIR="${1:-$(mktemp -d)}"
 [ "$KEEP" = 1 ] || trap 'rm -rf "$DIR"' EXIT
 RSPEC="${RSPEC:-rspec}"
 
-JEST=30.5.2 VITEST=3.2.7 MOCHA=11.8.0 PHPUNIT=11.5.57
+JEST=30.5.2 VITEST=5.1.0 MOCHA=12.0.3 PHPUNIT=11.5.57 PHPUNIT9=9.6.39 PHPUNIT10=10.5.67 PHPUNIT12=12.5.44
 
 mkdir -p "$DIR"
 cp -r "$OUT/src/." "$DIR/"
 cd "$DIR"
-# The versions are spelled out here, not interpolated, so a pin scanner can read them;
-# the guard below keeps them equal to the variables the manifest reports.
-[ "$JEST $VITEST $MOCHA" = "30.5.2 3.2.7 11.8.0" ] || { echo "JEST/VITEST/MOCHA drifted from the npm install line" >&2; exit 1; }
-npm install --silent --no-audit --no-fund jest@30.5.2 vitest@3.2.7 mocha@11.8.0 >/dev/null
+# The runners come from scripts/npm-pins/runner-fixtures/package-lock.json via
+# `npm ci`, so every package is pinned by its integrity hash. They are installed
+# beside the fixtures, not into them: a lockfile in the copied src/ would be one
+# more file the runner tests see. The guard keeps the lockfile equal to the
+# variables the manifest reports.
+PINS="$REPO/scripts/npm-pins/runner-fixtures"
+for pin in "jest $JEST" "vitest $VITEST" "mocha $MOCHA"; do
+  set -- $pin
+  got=$(node -e 'console.log(require(process.argv[1]).packages["node_modules/"+process.argv[2]].version)' "$PINS/package-lock.json" "$1")
+  [ "$got" = "$2" ] || { echo "$1 is $got in $PINS/package-lock.json but $2 here" >&2; exit 1; }
+done
+TOOLS="$(mktemp -d)"
+cp "$PINS/package.json" "$PINS/package-lock.json" "$TOOLS/"
+npm ci --prefix "$TOOLS" --silent --no-audit --no-fund >/dev/null
+mv "$TOOLS/node_modules" "$DIR/node_modules"
+rm -rf "$TOOLS"
 [ -f vendor/bin/phpunit ] || composer require -q --dev "phpunit/phpunit:$PHPUNIT"
 
 # --- list commands: stdout only, as the enumerator keeps it ---------------
@@ -88,7 +100,11 @@ want() { # want <runner> <expected> <got>
   if [ "$2" = "$3" ]; then echo "ok   $1: ran $3"; else echo "FAIL $1: ran $3, want $2"; fail=1; fi
 }
 want jest 1 "$(npx jest --json --testNamePattern '^Calc adds \(a\+b\)$' calc.jest.test.js 2>/dev/null | node -e 'const j=JSON.parse(require("fs").readFileSync(0));console.log(j.numPassedTests+j.numFailedTests)')"
-want vitest 1 "$(npx vitest run --reporter=json -t '^Calc neg adds$' calc.vitest.test.mjs 2>/dev/null | node -e 'const j=JSON.parse(require("fs").readFileSync(0));console.log(j.numPassedTests+j.numFailedTests)')"
+# The -t patterns below are the ones corral builds (vitestName): either joiner,
+# since vitest 3 matched titles joined by a space and vitest 5 by " > ".
+# vitest 5 writes its JSON report to a file, so the count is read from one.
+npx vitest run --reporter=json --outputFile=vitest-one.json -t '^Calc(?: | > )neg(?: | > )adds$' calc.vitest.test.mjs >/dev/null 2>&1 || true
+want vitest 1 "$(node -e 'const j=JSON.parse(require("fs").readFileSync("vitest-one.json"));console.log(j.numPassedTests+j.numFailedTests)')"
 want mocha-fullname-collision 2 "$(npx mocha --reporter spec --reporter json --grep '^Calc adds$' calc.mocha.js 2>/dev/null | node -e 'const j=JSON.parse(require("fs").readFileSync(0));console.log(j.stats.tests)')"
 want mocha 1 "$(npx mocha --reporter spec --reporter json --grep '^Calc neg adds$' calc.mocha.js 2>/dev/null | node -e 'const j=JSON.parse(require("fs").readFileSync(0));console.log(j.stats.tests)')"
 want node 1 "$(node --test --test-reporter=tap --test-name-pattern '^Calc neg adds$' calc.node.test.js 2>/dev/null | sed -n 's/^# pass //p')"
@@ -162,15 +178,34 @@ want rspec-no-profile-reads-no-word 2 "$(cd units/rspec && $RSPEC --no-profile s
 help rspec-help.txt $RSPEC --help
 
 # vendor/bin/phpunit -c units/phpunit/phpunit.xml --testsuite unit  /  ... --group slow
-PHPC="vendor/bin/phpunit -c units/phpunit/phpunit.xml"
-units phpunit-units.txt $PHPC --testsuite unit --list-test-files
-units phpunit-units-group.txt $PHPC --group slow --list-test-files
 phpran() { sed -n 's/^OK (\([0-9]*\) tests\{0,1\}.*/\1/p'; }
+PHPC="vendor/bin/phpunit -c units/phpunit/phpunit.xml"
+# PHPUnit's listing runs under the row's own setup (phpunitUnitsSetup, which
+# has PHP name each test class's file), so its script comes from the row and
+# is not copied here.
+PHPPRELUDE="$(cd "$REPO" && go run ./scripts/listunitscmd php vendor/bin/phpunit)"
+phpunits() { # phpunits <fixture> <cmd...>: units, under the PHPUnit row's listing script
+  local f="$1"; shift
+  sh -c "$PHPPRELUDE" corral-units "$@" 2>/dev/null | sed -e "s#$PDIR#/fixture#g" -e "s#$HOME#~#g" > "$OUT/$f" || true
+}
+phpunits phpunit-units.txt $PHPC --testsuite unit --list-tests
+phpunits phpunit-units-group.txt $PHPC --group slow --list-tests
+# The same listing on the other PHPUnit lines, each installed beside the
+# fixtures. 9 and 10 have no --list-test-files, which is why the row lists
+# tests and not files; under a group option both say they ignore it, and
+# the row reads that as no listing (phpunit9-units-group.txt).
+for line in "9 $PHPUNIT9" "10 $PHPUNIT10" "12 $PHPUNIT12"; do
+  set -- $line
+  [ -f "pv/$1/vendor/bin/phpunit" ] || { mkdir -p "pv/$1" && composer require -q --working-dir "pv/$1" --dev "phpunit/phpunit:$2"; }
+  phpunits "phpunit$1-units.txt" "pv/$1/vendor/bin/phpunit" -c units/phpunit/phpunit.xml --testsuite unit --list-tests
+  want "phpunit$1-unit" 2 "$("pv/$1/vendor/bin/phpunit" -c units/phpunit/phpunit.xml --testsuite unit units/phpunit/tests/ATest.php 2>&1 | phpran)"
+done
+phpunits phpunit9-units-group.txt pv/9/vendor/bin/phpunit -c units/phpunit/phpunit.xml --group slow --list-tests
 want phpunit-unit 2 "$($PHPC --testsuite unit units/phpunit/tests/ATest.php 2>&1 | phpran)"
 want phpunit-args-union 5 "$($PHPC units/phpunit/tests units/phpunit/tests/ATest.php 2>&1 | phpran)"
 want phpunit-file-replaces-testsuite 2 "$($PHPC --testsuite other units/phpunit/tests/ATest.php 2>&1 | phpran)"
 want phpunit-option-after-file 1 "$($PHPC units/phpunit/tests/ATest.php --group slow 2>&1 | phpran)"
-want phpunit-exclude-group-lists-no-empty-file 0 "$($PHPC --exclude-group slow --list-test-files units/phpunit/excl units/phpunit/tests 2>&1 | grep -c DTest || true)"
+want phpunit-exclude-group-lists-no-empty-file 0 "$($PHPC --exclude-group slow --list-tests units/phpunit/excl units/phpunit/tests 2>&1 | grep -c ' - DTest' || true)"
 want phpunit-colors-takes-no-next-word 'Test file "never" not found' "$($PHPC --colors never units/phpunit/tests/ATest.php 2>&1 | grep -o 'Test file "never" not found')"
 help phpunit-help.txt vendor/bin/phpunit --help
 
@@ -296,7 +331,7 @@ skipok() { # skipok <name> <cmd...>
   want "$name-skip" "1 exit 0" "$(printf '%s' "$out" | sed 's/\x1b\[[0-9;]*m//g' | passed) exit $rc"
 }
 skipok jest npx jest fail/f.jest.test.js --testNamePattern '^(?!(?:Calc adds \(a\+b\)|Calc neg adds|top level)$)'
-skipok vitest npx vitest run fail/f.vitest.test.mjs -t '^(?!(?:Calc adds \(a\+b\)|Calc neg adds|top level)$)'
+skipok vitest npx vitest run fail/f.vitest.test.mjs -t '^(?!(?:Calc(?: | > )adds \(a\+b\)|Calc(?: | > )neg(?: | > )adds|top level)$)'
 skipok mocha npx mocha fail/f.mocha.js --grep '^(?:Calc adds \(a\+b\)|Calc neg adds|top level)$' --invert
 skipok node node --test --test-skip-pattern '^(?:Calc adds \(a\+b\)|Calc neg adds|top level)$' fail/f.node.test.js
 # node reads options only before the first file (runner_node.go nodeWith): after it, ignored.

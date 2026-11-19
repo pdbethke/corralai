@@ -19,9 +19,7 @@ SyntaxError:
 # ~/.local/share/gem/ruby/3.3.0/gems/rspec-core-3.13.6/lib/rspec/core/runner.rb:86:in `run'
 # ~/.local/share/gem/ruby/3.3.0/gems/rspec-core-3.13.6/lib/rspec/core/runner.rb:71:in `run'
 # ~/.local/share/gem/ruby/3.3.0/gems/rspec-core-3.13.6/lib/rspec/core/runner.rb:45:in `invoke'
-# ~/.local/share/gem/ruby/3.3.0/gems/rspec-core-3.13.6/exe/rspec:4:in `<top (required)>'
-# /usr/local/bin/rspec:25:in `load'
-# /usr/local/bin/rspec:25:in `<main>'
+# /usr/bin/rspec:4:in `<main>'
 # 
 #   Showing full backtrace because every line was filtered out.
 #   See docs for RSpec::Configuration#backtrace_exclusion_patterns and

@@ -462,7 +462,7 @@ func TestCertifyLocalAuditGradesToolMutants(t *testing.T) {
 		writerMode:  advpool.WriterModeBatched,
 		toolSources: s,
 		stdout:      &out, stderr: io.Discard,
-	})
+	}.withSeats(t))
 	if err != nil {
 		t.Fatalf("auditOneFile: %v\n%s", err, out.String())
 	}
@@ -483,6 +483,10 @@ func TestCertifyLocalAuditGradesToolMutants(t *testing.T) {
 // commands, and still names the way out.
 func TestMutantsFromDoesNotExcuseAnOmittedMutantModel(t *testing.T) {
 	noKeys(t)
+	// The writer's bare name needs a declared source, or the seat is refused
+	// before the empty mutant seat is ever reached.
+	t.Setenv("OLLAMA_URL", "http://ollama.test.invalid:11434")
+	fakeOllama(t, "w")
 	root, report := toolFixtureRepo(t, toolFixtureSrc)
 	for name, run := range map[string]func() (int, string){
 		"local": func() (int, string) {
@@ -521,9 +525,9 @@ func TestMutantsFromDoesNotExcuseAnOmittedMutantModel(t *testing.T) {
 func TestAnUnassignedRoleIsNeverServedByTheBaseBackend(t *testing.T) {
 	noKeys(t)
 	wiredAgent(t, "fakew", "", "x")
-	chatterFor, err := localChatterFor(advpool.RoleAssignment{
+	chatterFor, err := localChatterFor(seatsForAssign(t, advpool.RoleAssignment{
 		advpool.RoleMutantGenerator: "", advpool.RoleTestWriter: "fakew",
-	}, nil, nil, nil)
+	}, nil), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

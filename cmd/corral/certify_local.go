@@ -116,9 +116,9 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 	langFlag := fs.String("lang", "", "source language (default: inferred from --code extension)")
 	goal := fs.String("goal", "", "the correctness/security goal the code must satisfy (required)")
 	nMutants := fs.Int("n-mutants", 0, "PER-SEAT seeded-violation mutant budget, when you want to set the exam by hand. Unset (0), the budget is DERIVED from the file's complexity — about one fault per decision point, floor "+fmt.Sprint(advpool.BudgetFloor)+", ceiling "+fmt.Sprint(advpool.BudgetCeiling)+" — and the verdict says which rule it used. Set, it is NOT the run's total: total mutants scale with --max-shards (default "+fmt.Sprint(advpool.DefaultMaxShards)+") seats, and DOUBLE again if you name a --shadow-model. E.g. `--n-mutants 5` with 8 seats means up to ~40 full dev-suite executions; `--n-mutants 20` roughly ~320")
-	writerModel := fs.String("writer-model", "", "model for the test-writer role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json), a concrete model name, or an agent seat (`codex`, `claude-code`, `antigravity`, or your own CORRALAI_AGENT_<NAME>)")
+	writerModel := fs.String("writer-model", "", "model for the test-writer role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json), a hosted model as vendor/model (`anthropic/…`, `google/…`, `openai/…` — a bare cloud name is refused, corral never guesses a vendor), a local model the OLLAMA_URL daemon lists, or an agent seat (`codex`, `claude-code`, `antigravity`, or your own CORRALAI_AGENT_<NAME>)")
 	criticModel := fs.String("critic-model", "", "model (or agent seat) for the test-critic role, which must differ from the writer's; \"off\" disables the critic entirely (it is advisory and never gates the verdict, so a single-vendor run with only one usable model can drop it). No default")
-	mutantModel := fs.String("mutant-model", "", "model for the mutant-generator role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json), a concrete model name, or an agent seat (`codex`, `claude-code`, `antigravity`, or your own CORRALAI_AGENT_<NAME>). \"off\" leaves the seat empty, and is allowed only with --mutants-from, whose tool mutants are then the whole exam")
+	mutantModel := fs.String("mutant-model", "", "model for the mutant-generator role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json), a hosted model as vendor/model (`anthropic/…`, `google/…`, `openai/…` — a bare cloud name is refused, corral never guesses a vendor), a local model the OLLAMA_URL daemon lists, or an agent seat (`codex`, `claude-code`, `antigravity`, or your own CORRALAI_AGENT_<NAME>). \"off\" leaves the seat empty, and is allowed only with --mutants-from, whose tool mutants are then the whole exam")
 	jailFlag := fs.String("jail", "", "sandbox backend: bwrap|container (Linux), sandbox-exec (macOS) (default: auto-detect for this OS; \"none\" is not supported — --local always sandboxes). \"container\" needs CORRALAI_EXEC_IMAGE set to a toolchain image, e.g. CORRALAI_EXEC_IMAGE=python:3.12-bookworm")
 	timeout := fs.Duration("timeout", defaultRunTimeout, "WALL-CLOCK budget for the whole run, measured from its start — not a no-progress timer. A run still making steady progress is stopped when it exceeds this, and banks a needs-review TIMEOUT verdict: the dev kill rate and survivors survive (they were measured), the PROVING half does not. A file with many survivors needs room — 13 survivors measured at ~21-24 minutes — so raise it rather than lose the proofs. One in-flight LLM call can overshoot slightly, since the deadline is checked between ticks")
 	testTimeout := fs.Duration("test-timeout", 0, "hard cap on a SINGLE test-suite run in the jail (0 = auto: derived from the healthy suite's own runtime, so a mutant that makes the suite hang is killed fast instead of eating the whole --timeout). Raise it only if your suite legitimately runs long")
@@ -237,12 +237,27 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 		return 2
 	}
 
-	// The model registry (docs/design/model-registry.md). Same contract as the
-	// --repo path: a declared alias resolves to its concrete model HERE, before
-	// anything else reads the value, and anything that is not a declared alias
-	// stays exactly as typed. With no registry declared this changes nothing.
-	seatReg, regErr := resolveSeatRegistry("corral certify --local", *repoDirFlag,
-		certifySeats(nil, mutantModel, writerModel, criticModel, shadow.model, shadow.writerModel), stderr)
+	// --local-endpoint placements are parsed BEFORE the seats resolve: a
+	// placement is itself a declared source for a seat with a bare local name.
+	localEndpoints, lerr := parseLocalEndpoints(localEndpointFlag)
+	if lerr != nil {
+		fmt.Fprintf(stderr, "corral certify --local: %v\n", lerr)
+		return 2
+	}
+	// Every seat resolves ONCE, here (docs/design/model-registry.md): a
+	// declared alias becomes its concrete model before anything else reads the
+	// value, and each seat's provider, wire and endpoint are decided in one
+	// stated order (resolveSeats) so no later door re-guesses them from the
+	// model's name. A registry entry places its local seat on its own daemon;
+	// an explicit --local-endpoint overrides it. With no registry, this
+	// changes only what a bare name that no source serves does: it refuses.
+	//
+	// context.Background(): no cancellable context exists yet — the SIGINT
+	// handler (auditContext) is installed after the preflight, so an
+	// interrupt before this point has nothing to unwind. The one network call
+	// (listing OLLAMA_URL's daemon) has its own 10s bound.
+	seats, regErr := resolveSeatsPlaced(context.Background(), "corral certify --local", *repoDirFlag,
+		certifySeats(nil, mutantModel, writerModel, criticModel, shadow.model, shadow.writerModel), localEndpoints, stderr)
 	if regErr != nil {
 		fmt.Fprintf(stderr, "corral certify --local: %v\n", regErr)
 		return 2
@@ -268,15 +283,6 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 	// --code path. Without --repo-dir they'd be silently unread — refuse
 	// loudly instead so an operator's misplaced flag doesn't look like a
 	// no-op.
-	localEndpoints, lerr := parseLocalEndpoints(localEndpointFlag)
-	if lerr != nil {
-		fmt.Fprintf(stderr, "corral certify --local: %v\n", lerr)
-		return 2
-	}
-	// A local registry entry places its seat on its own daemon through the
-	// SAME role->url map --local-endpoint fills; the explicit flag wins.
-	localEndpoints = mergeLocalEndpoints(localEndpoints, seatReg.localEndpoints())
-
 	if strings.TrimSpace(*repoDirFlag) == "" && (len(bindDirFlag) > 0 || *noBindDepsFlag) {
 		fmt.Fprintln(stderr, "corral certify --local: --bind-dir/--no-bind-deps require --repo-dir (they configure how the cloned tree is seeded into the jail; a single --code file has no dependency dirs to bind or copy)")
 		return 2
@@ -460,6 +466,9 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 	// seedSkipped is what the jail's copy left out as not text, handed back
 	// by the audit (localAuditInput.seedSink) for the ledger entry.
 	var seedSkipped []seedSkip
+	// runCache is what the jail wiring decided about a shared tool cache
+	// (localAuditInput.runCache), for the file row of the ledger entry.
+	runCache := new(string)
 	// toolCounts is the file's account of --mutants-from's report, handed
 	// back by the audit (localAuditInput.toolSink) for the scan row.
 	var toolCounts []ledger.ToolMutantCounts
@@ -540,13 +549,12 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 		mutantModel: *mutantModel, shadowModel: *shadow.model,
 		shadowWriterModel: *shadow.writerModel,
 		shadowSelection:   shadowSels,
-		seatProviders:     seatReg.seatProviders(),
+		seats:             seats,
 		writerMode:        writerMode,
 
 		jail: *jailFlag, checkArgv: checkArgv,
-		localEndpoints: localEndpoints,
-		tokenBudget:    agentbackend.NewTokenBudget(*maxTokensFlag),
-		bindDirs:       bindDirFlag, noBindDeps: *noBindDepsFlag,
+		tokenBudget: agentbackend.NewTokenBudget(*maxTokensFlag),
+		bindDirs:    bindDirFlag, noBindDeps: *noBindDepsFlag,
 		seedLimit: seedLimit,
 
 		repo: subjectRepo, commit: subjectCommit, subjectResolved: true,
@@ -554,6 +562,7 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 		presetMutants: presetMutants, mutantSink: mutantSink,
 		toolSources: toolSources,
 		seedSink:    func(s []seedSkip) { seedSkipped = s },
+		runCache:    runCache,
 		toolSink:    func(c ledger.ToolMutantCounts) { toolCounts = append(toolCounts, c) },
 		prior:       loadedPrior,
 
@@ -685,12 +694,13 @@ type localAuditInput struct {
 	// verdict and the signed record say which member ran and why.
 	shadowSelection []shadowpool.Selection
 
-	// seatProviders is role -> provider for the seats the model registry
-	// resolved (and, for a concrete model name, the provider inferred from it).
-	// Empty is the ordinary case and means "infer from the model name", which
-	// is what every caller did before the registry existed. Its only use today
-	// is DISCLOSURE: decorrelation still refuses on the model name alone.
-	seatProviders map[string]string
+	// seats is every seat of this invocation, resolved once (resolveSeats):
+	// the provider, wire, endpoint and key each model is served by. Provider
+	// feeds the decorrelation DISCLOSURE (decorrelation still refuses on the
+	// model name alone); the rest is what localChatterFor builds the
+	// backends from. A seat's --local-endpoint placement is already folded in.
+	// A role with a model but no seat here is refused by resolveAuditRoles.
+	seats seatSet
 
 	// writerMode is the resolved --writer-mode: how the writer seat attacks
 	// this file's survivors. Already validated by ResolveWriterMode at the
@@ -698,11 +708,6 @@ type localAuditInput struct {
 	// it reaches here — never an operator's raw string.
 	writerMode string
 
-	// localEndpoints places a LOCAL seat on a specific ollama daemon
-	// (role -> base URL). A daemon is pinned to a GPU by its own environment,
-	// so this is how two models occupy two cards at once; corral selects the
-	// daemon, never the device. Empty keeps every local seat on OLLAMA_URL.
-	localEndpoints map[string]string
 	// tokenBudget is the RUN-WIDE cap on model tokens (--max-tokens),
 	// shared by every seat and, on a scan, every file; nil is no cap. See
 	// agentbackend.TokenBudget.
@@ -795,6 +800,14 @@ type localAuditInput struct {
 	// nil records nothing, which is every caller that is not on the workspace
 	// substrate: the jail builds no trees and has nothing to disclose.
 	concurrency *adequacy.Disclosure
+
+	// runCache, when non-nil, is where the jail wiring RECORDS whether this
+	// file's grading runs share a tool cache (gradingRunCache.Record: "shared",
+	// "unshared: <reason>", or ""). A pointer sink for the reason concurrency
+	// is: the input travels by value, so a value field would be written on a
+	// copy. It is NOT part of the verdict (the Verdict's shape is pinned to the
+	// verdict cache's generation); it rides on the file's own result.
+	runCache *string
 
 	// selectionDuration is how long the SCAN's single instrumented coverage
 	// run took (cmd/corral's collectSelection), handed down so this file's
@@ -961,6 +974,19 @@ func (e localAuditError) ScanReason() string { return e.scanReason }
 func auditUsageErr(format string, a ...any) error {
 	return localAuditError{usage: true, msg: fmt.Sprintf(format, a...), causes: errorArgs(a)}
 }
+
+// notCollectedAdvice is the refusal for a test command that would not run
+// the authored test. It says what this file's audit did not do (no mutant, no
+// test) and never that "nothing was spent": on certify --repo the file's goal
+// was already derived, at a cost the run's cost line reports. It said
+// "Nothing was spent" until ramsey/uuid (2026-11-15) printed it 25 times
+// above a cost line of 78.1k tokens.
+const notCollectedAdvice = "your test command would not run the test this audit writes, so it could not prove a gap even if it found one.\n" +
+	"  corral writes its killing test beside your own, as: %s\n" +
+	"  Your command does not collect that file — a command naming a single test file is the usual cause.\n" +
+	"  Widen it to the directory or the runner's own discovery: `-- pytest tests/` rather than `-- pytest tests/test_one.py`;\n" +
+	"  `-- npx jest tests/` rather than a single spec path.\n" +
+	"  This is checked before any mutant is planted or test written for this file."
 
 // auditNotCollectedErr is auditUsageErr for the ONE refusal a repo scan must
 // report distinctly: the caller's test command would not run the test this
@@ -1311,7 +1337,10 @@ func prepareAuditJail(ctx context.Context, in localAuditInput, plug lang.Plugin,
 	if err != nil {
 		return p, auditErr("%v", err)
 	}
-	for _, line := range lang.RunDisclosures(plug, repoDir, inv.WithArgv(in.checkArgv)) {
+	// Disclosed off the command grading actually runs (gradingBase), the one
+	// gradingRewrite gives the report flags: a single-file run with no `--`
+	// command is graded with the plugin's own.
+	for _, line := range lang.RunDisclosures(plug, repoDir, inv.WithArgv(gradingBase(plug, repoDir, in.checkArgv))) {
 		fmt.Fprintf(stdout, "  %s\n", line)
 	}
 
@@ -1324,9 +1353,13 @@ func prepareAuditJail(ctx context.Context, in localAuditInput, plug lang.Plugin,
 		bindDirFlag: in.bindDirs, noBindDepsFlag: in.noBindDeps, seedLimit: in.seedLimit, stdout: stdout,
 		seed: in.seed, seedSink: in.seedSink, substrate: in.substrate, mutantConcurrency: in.mutantConcurrency,
 		concurrency: in.concurrency, pool: in.pool, noFailFast: in.noFailFast,
+		runCache: in.runCache,
 	})
 	if err != nil {
 		return p, auditUsageErr("%v", err)
+	}
+	if line := runCacheUnsharedLine(in.codePath, wiring.runCache); line != "" {
+		fmt.Fprintf(stdout, "  %s\n", line)
 	}
 
 	// Derive the test-writer's real import fact NOW, while a real filesystem
@@ -1503,6 +1536,10 @@ type auditRoles struct {
 	// by role — see seatToolProbe.toolsFor. Carried to the RunSpec so the verdict's
 	// SeatTools records what sat in each seat besides its model.
 	tools map[string]string
+	// providers is each seat's provider as the seat resolver decided it
+	// (seatSet.providers), by role. Carried to the RunSpec so the verdict's
+	// SeatProviders records where each seat's model was served from.
+	providers map[string]string
 }
 
 // herdNotConfiguredErr refuses a run whose grading seats have no model, and
@@ -1583,8 +1620,9 @@ func herdNotConfiguredErr(cmdName, writer, mutant, criticRaw string, toolOnly bo
 		"no model is assigned to %s.\n"+
 			"corral has no default models on purpose — it is model-agnostic, so every seat is yours to name.\n"+
 			"credentials visible here: %s\n"+
-			"assign each seat a model that provider serves, e.g.:\n"+
-			"  %s --writer-model <model> --mutant-model <model> --critic-model <model>\n"+
+			"assign each seat a model; a hosted one names its vendor (anthropic, google or openai), e.g.:\n"+
+			"  %s --writer-model <vendor>/<model> --mutant-model <vendor>/<model> --critic-model <vendor>/<model>\n"+
+			"a seat may instead be a .corral/models.json alias, a model your OLLAMA_URL daemon lists, or a coding-agent seat (see -h); corral never guesses a vendor from a bare name.\n"+
 			"the only rule is that the critic must differ from the writer (that is the decorrelation the verdict rests on);\n"+
 			"--critic-model off drops the critic entirely — it is advisory and never gates the verdict.\n"+
 			"%s"+
@@ -1641,17 +1679,35 @@ func resolveRoleModels(in localAuditInput) (writer, mutant, critic, shadow, shad
 // rather than being dropped: "the critic was deliberately disabled" and "the
 // critic ran" are different audits and must key differently.
 func modelSetKey(writer, mutant, critic, shadow, shadowWriter string) string {
-	return modelSetKeyWith(nil, writer, mutant, critic, shadow, shadowWriter)
+	return modelSetKeyWith(nil, nil, writer, mutant, critic, shadow, shadowWriter)
 }
 
 // modelSetKeyWith is modelSetKey with the scan's tool probe, so the version
-// in the key is the version every verdict of the scan records.
-func modelSetKeyWith(probe *seatToolProbe, writer, mutant, critic, shadow, shadowWriter string) string {
+// in the key is the version every verdict of the scan records, and with each
+// seat's provider (seatSet.providers, keyed by advpool role), so the key
+// names where each seat was served from.
+//
+// The provider is in the key because the seat value is the BARE model (a
+// vendor/model seat is rewritten to its model by the resolver): without it a
+// file audited with ollama's gpt-x and a later run naming openai/gpt-x share
+// a key, the later run is served the cached verdict, and one signed entry
+// says ollama in the file's verdict and openai on its row. A seat with a
+// provider keys as "<provider>/<keyName(spec)>"; a seat with none (off, an
+// empty seat, an operator-defined agent that declares no maker) keys as the
+// spec alone, never with a guessed provider.
+func modelSetKeyWith(probe *seatToolProbe, providers map[string]string, writer, mutant, critic, shadow, shadowWriter string) string {
+	name := func(role, spec string) string {
+		k := probe.keyName(spec)
+		if p := strings.TrimSpace(providers[role]); p != "" {
+			return p + "/" + k
+		}
+		return k
+	}
 	kv := map[string]string{
-		"test-writer":      probe.keyName(writer),
-		"mutant-generator": probe.keyName(mutant),
-		"critic":           probe.keyName(critic),
-		"shadow":           probe.keyName(shadow),
+		"test-writer":      name(advpool.RoleTestWriter, writer),
+		"mutant-generator": name(advpool.RoleMutantGenerator, mutant),
+		"critic":           name(advpool.RoleTestCritic, critic),
+		"shadow":           name(advpool.RoleMutantGeneratorShadow, shadow),
 	}
 	// Omitted when off, DELIBERATELY breaking the keep-disabled-seats-in-the-key
 	// convention the other optional seats follow. The critic's on/off changes
@@ -1664,7 +1720,7 @@ func modelSetKeyWith(probe *seatToolProbe, writer, mutant, critic, shadow, shado
 	// enabling the challenger would hit a cached verdict, skip the run, and
 	// silently collect no measurement at all.
 	if shadowWriter != "" {
-		kv["test-writer-shadow"] = probe.keyName(shadowWriter)
+		kv["test-writer-shadow"] = name(advpool.RoleTestWriterShadow, shadowWriter)
 	}
 	return reposcan.CanonicalKV(kv)
 }
@@ -1722,72 +1778,40 @@ func resolveAuditRoles(in localAuditInput, stderr io.Writer) (auditRoles, error)
 	// Said once, at the seam where decorrelation is decided, so the operator
 	// reads it before spending rather than inferring it from two model names
 	// afterwards.
-	if v := sharedSeatProvider(in.seatProviders, writer, critic); v != "" {
+	if v := sharedSeatProvider(in.seats.providers(), writer, critic); v != "" {
 		fmt.Fprintf(stderr, "%s: decorrelation: test-writer (%s) and test-critic (%s) are different models from the SAME provider (%s) — the critic is an independent MODEL but not an independent VENDOR. Point one seat at another provider for a cross-vendor read.\n",
 			orDefault(in.cmdName, "corral certify --local"), writer, critic, v)
 	}
 	// The spec's other half of that disclosure: a seat whose vendor corral
 	// cannot tell makes the check above silent, and silence reads as "two
 	// vendors". Said once, naming the seat(s).
-	if seats := untellableAgentSeats(in.seatProviders, writer, critic); len(seats) > 0 {
+	if seats := untellableAgentSeats(in.seats.providers(), writer, critic); len(seats) > 0 {
 		fmt.Fprintf(stderr, "%s: decorrelation: the vendor of %s cannot be told — an operator-defined agent declares no maker and corral will not guess — so the same-vendor check could not compare it.\n",
 			orDefault(in.cmdName, "corral certify --local"), strings.Join(seats, " and "))
 	}
 
-	// Require a provider key for whatever the operator actually named. There
-	// are no default models, so nothing here assumes a vendor: the backend a
-	// run needs is the one its ASSIGNED models imply.
-	backendSel := strings.TrimSpace(os.Getenv("MODEL_BACKEND"))
-	// When MODEL_BACKEND is unset, the backend this run needs is the one its
-	// ASSIGNED MODELS imply — not Claude by assumption. Naming gemini-* models
-	// for every seat has already said which vendor the run uses; requiring
-	// MODEL_BACKEND as well is requiring the operator to say it twice, and the
-	// error when they don't names the WRONG vendor ("export your Claude key"
-	// on an all-Gemini run — found by the first real CI run of the Action).
+	// There is no default vendor and no whole-run backend: each seat was
+	// resolved on its own (resolveSeats), so the credential a seat needs is the
+	// one ITS provider names, and building the router below is what asks for
+	// it. This block used to infer a single MODEL_BACKEND from the assigned
+	// models and export it into the process, which a mixed herd could not
+	// use and which named the wrong vendor in its refusal.
 	//
-	// Only the unambiguous case is inferred: every seat on one cloud vendor.
-	// A mixed assignment is the cross-vendor critic design and is left to
-	// localChatterFor below; an explicit MODEL_BACKEND is an operator pointing
-	// every seat at one endpoint on purpose and is never overruled.
-	if backendSel == "" {
-		if vendor, model := soleAssignedCloudModel(assign); vendor != "" {
-			// ForSeat (which defers to ForModel for a cloud name) is the single source of truth for which credential a
-			// model needs, and its error already names the right variable —
-			// so this both validates the key and refuses with an actionable
-			// message, before any jail or store is opened.
-			if _, err := agentbackend.ForSeat(model, agentbackend.SeatOptions{}); err != nil {
-				return r, auditUsageErr("%v", err)
-			}
-			backendSel = backendForVendor(vendor)
-			if err := os.Setenv("MODEL_BACKEND", backendSel); err != nil {
-				return r, auditErr("selecting %s backend: %v", backendSel, err)
-			}
-			// The challenger seat is excluded from the inference above (it
-			// never gates a verdict), but it still runs and still needs a
-			// credential — and it carries a CLAUDE default, so an otherwise
-			// all-Gemini scan really does contain an Anthropic seat. Refuse
-			// here naming THAT seat: the old message said "export your Claude
-			// key" about a run with no Claude in it anywhere the operator
-			// could see, which describes a configuration they never chose.
-			if sm := strings.TrimSpace(assign[advpool.RoleMutantGeneratorShadow]); sm != "" && agentbackend.VendorOf(sm) != vendor {
-				if _, err := agentbackend.ForSeat(sm, agentbackend.SeatOptions{}); err != nil {
-					return r, auditUsageErr("the challenger seat (--shadow-model) is %q, a different vendor from this run's graded %s seats, and %v. It only records a comparison and never gates the verdict — pass --shadow-model off to drop it, or give it a %s model", sm, vendor, err, vendor)
-				}
-			}
+	// What is checked here is that every assigned seat WAS resolved. A role
+	// with a model but no seat would get no chatter and fail mid-run, so it
+	// is refused now, naming the role.
+	for _, role := range []string{
+		advpool.RoleMutantGenerator, advpool.RoleTestWriter, advpool.RoleTestCritic,
+		advpool.RoleMutantGeneratorShadow, advpool.RoleTestWriterShadow,
+	} {
+		m := strings.TrimSpace(assign[role])
+		if m == "" || strings.EqualFold(m, "off") {
+			continue
+		}
+		if _, ok := in.seats.byRole(role); !ok {
+			return r, auditErr("seat %s (%q) was never resolved to a provider — a caller built the audit input without resolving its seats (resolveSeats)", role, m)
 		}
 	}
-	// THERE IS NO DEFAULT VENDOR. This used to be a Claude special case: an
-	// UNSET MODEL_BACKEND was read as "the default Claude path", so a run
-	// demanded ANTHROPIC_API_KEY no matter which models the operator had
-	// named. Unset does not mean Claude — it means "infer from the assigned
-	// models", which the block above now does for every vendor including
-	// Anthropic.
-	//
-	// When the models name no cloud vendor at all (local/ollama names, or a
-	// name matching no prefix), nothing is demanded and FromEnv builds its
-	// ollama default, which needs no key. Asking for an Anthropic key there
-	// named a vendor the operator had not chosen and could not see anywhere in
-	// their own command.
 
 	// Resolve the role→backend router NOW, before opening the jail or any
 	// store: a cross-vendor critic (e.g. a Gemini critic against a Claude
@@ -1795,12 +1819,12 @@ func resolveAuditRoles(in localAuditInput, stderr io.Writer) (auditRoles, error)
 	// run here — fail closed at the top, not mid-run after jails, stores and
 	// mutants are already in flight.
 	meters := auditRoleMeters(assign)
-	chatterFor, err := localChatterFor(assign, meters, in.localEndpoints, in.tokenBudget)
+	chatterFor, err := localChatterFor(in.seats, meters, in.tokenBudget)
 	if err != nil {
 		return r, auditUsageErr("%v", err)
 	}
 
-	return auditRoles{assign: assign, shadow: shadow, shadowWriter: shadowWriter, writer: writer, mutant: mutant, critic: critic, chatterFor: chatterFor, meters: meters, tools: in.toolProbe.toolsFor(assign)}, nil
+	return auditRoles{assign: assign, shadow: shadow, shadowWriter: shadowWriter, writer: writer, mutant: mutant, critic: critic, chatterFor: chatterFor, meters: meters, tools: in.toolProbe.toolsFor(assign), providers: in.seats.providers()}, nil
 }
 
 // runSubject is the FILE-and-repo half of a RunSpec: everything
@@ -1957,6 +1981,7 @@ func newAuditRunSpec(in localAuditInput, roles auditRoles, subj runSubject) advp
 		ShadowWriterModel: roles.shadowWriter,
 		ShadowSelection:   in.shadowSelection,
 		SeatTools:         roles.tools,
+		SeatProviders:     roles.providers,
 		// HOW the writer attacks. The CLI's default is per-survivor; an
 		// EMPTY value here means batched, which is what a caller outside the
 		// CLI (the brain, a test) gets — see RunSpec.WriterMode.
@@ -2321,14 +2346,7 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 	// the run had already solved.
 	authoredArgv := scorer.AuthoredCommand(rs.CodePath, adequacy.ShellSplit(rs.TestCmd))
 	if collected, cerr := scorer.AuthoredTestWouldBeCollected(ctx, rs.CodePath, authoredArgv); cerr == nil && !collected {
-		return zero, auditNotCollectedErr(
-			"your test command would not run the test this audit writes, so it could not prove a gap even if it found one.\n"+
-				"  corral writes its killing test beside your own, as: %s\n"+
-				"  Your command does not collect that file — a command naming a single test file is the usual cause.\n"+
-				"  Widen it to the directory or the runner's own discovery: `-- pytest tests/` rather than `-- pytest tests/test_one.py`;\n"+
-				"  `-- npx jest tests/` rather than a single spec path.\n"+
-				"  Nothing was spent — this is checked before any model runs.",
-			advpool.AuthoredTestPathFor(rs.Landing, rs.CodePath, rs.DevTestPath))
+		return zero, auditNotCollectedErr(notCollectedAdvice, advpool.AuthoredTestPathFor(rs.Landing, rs.CodePath, rs.DevTestPath))
 	}
 
 	verdict, err := driveLocalRun(ctx, d, q, localMissionID, chatterFor, poll, time.Sleep, stdout, rec, actorFor, swarm)
@@ -2351,7 +2369,8 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 	// stdout line reports below.
 	verdict.ModelCalls = modelCallsFromMeters(roles.meters)
 
-	renderAdvVerdict(stdout, in.codePath, advVerdictFromPool(*verdict))
+	av := advVerdictFromPool(*verdict)
+	renderAdvVerdict(stdout, in.codePath, av)
 	renderModelSpend(stdout, verdict.ModelCalls)
 	if line := budgetLine(in.tokenBudget, 0); line != "" {
 		fmt.Fprintln(stdout, line)
@@ -2478,6 +2497,9 @@ type jailWiringInput struct {
 	// filled in here on first use and closed by the job's owner. nil means
 	// this wiring builds and owns a pool of its own.
 	pool *workspacePool
+	// runCache is localAuditInput.runCache, threaded through: where the
+	// wiring records what it decided about the run cache. nil records nothing.
+	runCache *string
 }
 
 // Substrate names for jailWiringInput.substrate / localAuditInput.substrate,
@@ -2563,6 +2585,11 @@ type jailWiring struct {
 	codeKey    string
 	devTestKey string
 	depBinds   []adequacy.DepBind
+	// runCache is the file row's RunCache (see gradingRunCache.Record): what
+	// newGradingJail decided about sharing a tool cache among this file's
+	// grading runs. "" on a substrate with no jail and for a runner with no
+	// run cache.
+	runCache string
 	// cleanup releases any temp staging dir created for dependency vendoring
 	// (see ensureVendored). Always non-nil; a no-op when nothing was staged.
 	// The caller MUST defer it after the run completes — the jail bind-mounts
@@ -2766,8 +2793,11 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		// has ONE tree, and a scorer told to run six mutants at once against
 		// it would queue five of them behind the borrow channel for the whole
 		// audit. The number that scores must be the number that exists.
-		w.scorer = advpool.JailScorer{Jail: pool, RepoDir: in.repoDir, BaseFiles: base, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Landing: w.landing, Concurrency: pool.Trees(), Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, KillerCmd: killerCmd, FailFast: failFast}
-		w.validator = advpool.JailValidator{Jail: pool, RepoDir: in.repoDir, BaseFiles: base, DevTestPath: w.devTestKey, Landing: w.landing}
+		// The workspace has no run cache; its one rewrite is the report flags,
+		// through the same door the jail's commands take.
+		rewrite := gradingRewrite(gradingPlugin(in.langName), in.inv, in.checkArgv, nil)
+		w.scorer = advpool.JailScorer{Jail: pool, RepoDir: in.repoDir, BaseFiles: base, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Landing: w.landing, Concurrency: pool.Trees(), Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, KillerCmd: killerCmd, FailFast: failFast, CommandRewrite: rewrite}
+		w.validator = advpool.JailValidator{Jail: pool, RepoDir: in.repoDir, BaseFiles: base, DevTestPath: w.devTestKey, Landing: w.landing, CommandRewrite: rewrite}
 		w.jailEnum = advpool.JailEnumerator{Jail: pool, BaseFiles: base}
 		// w.depBinds stays nil: there is nothing to bind read-only when the
 		// real tree is already present.
@@ -2818,7 +2848,8 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 			w.codeKey:    string(in.code),
 			w.devTestKey: string(in.devTest),
 		})
-		jail := newRunJail(in.iso, in.timeout, depBinds)
+		jail, gc := newGradingJail(in.iso, in.timeout, depBinds, gradingPlugin(in.langName), in.inv.WithArgv(in.checkArgv), in.checkArgv)
+		w.closeWithCleanup(jail, in.runCache, gc)
 		// enumerator backs the tests×mutants matrix's test-listing step
 		// (--matrix). Wired unconditionally off the SAME backend/timeout/binds
 		// as jail (bwrapJail satisfies both interfaces) — a nil
@@ -2826,8 +2857,9 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		// RunSpec.Matrix, so wiring it here costs nothing when --matrix is off
 		// (the flag is the real gate).
 		enumerator := newRunEnumerator(in.iso, in.timeout, depBinds)
-		w.scorer = advpool.JailScorer{Jail: jail, RepoDir: in.repoDir, BaseFiles: repoFiles, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Landing: w.landing, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, KillerCmd: killerCmd, FailFast: failFast}
-		w.validator = advpool.JailValidator{Jail: jail, RepoDir: in.repoDir, BaseFiles: repoFiles, DevTestPath: w.devTestKey, Landing: w.landing}
+		rewrite := gradingRewrite(gradingPlugin(in.langName), in.inv, in.checkArgv, gc.Rewrite)
+		w.scorer = advpool.JailScorer{Jail: jail, RepoDir: in.repoDir, BaseFiles: repoFiles, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Landing: w.landing, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, KillerCmd: killerCmd, FailFast: failFast, CommandRewrite: rewrite, WarmCheck: warmCheckFor(gradingPlugin(in.langName), in.inv, gc)}
+		w.validator = advpool.JailValidator{Jail: jail, RepoDir: in.repoDir, BaseFiles: repoFiles, DevTestPath: w.devTestKey, Landing: w.landing, CommandRewrite: rewrite}
 		w.jailEnum = advpool.JailEnumerator{Jail: enumerator, BaseFiles: repoFiles}
 		if len(depBinds) > 0 {
 			names := make([]string, 0, len(depBinds))
@@ -2839,13 +2871,63 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 	} else {
 		w.codeKey = filepath.Base(in.codePath)
 		w.devTestKey = filepath.Base(in.testPath)
-		jail := newRunJail(in.iso, in.timeout, nil)
+		// The single-file scorer runs the plugin's own command when the run
+		// names none (scoreWorkspace), so that is the warming command here.
+		plug := gradingPlugin(in.langName)
+		warm := gradingBase(plug, "", in.checkArgv)
+		jail, gc := newGradingJail(in.iso, in.timeout, nil, plug, in.inv.WithArgv(warm), warm)
+		w.closeWithCleanup(jail, in.runCache, gc)
 		enumerator := newRunEnumerator(in.iso, in.timeout, nil)
-		w.scorer = advpool.JailScorer{Jail: jail, MutantTimeout: in.testTimeout, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, KillerCmd: killerCmd, FailFast: failFast}
-		w.validator = advpool.JailValidator{Jail: jail}
+		rewrite := gradingRewrite(plug, in.inv, warm, gc.Rewrite)
+		w.scorer = advpool.JailScorer{Jail: jail, MutantTimeout: in.testTimeout, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, KillerCmd: killerCmd, FailFast: failFast, CommandRewrite: rewrite, WarmCheck: warmCheckFor(plug, in.inv, gc)}
+		w.validator = advpool.JailValidator{Jail: jail, CommandRewrite: rewrite}
 		w.jailEnum = advpool.JailEnumerator{Jail: enumerator}
 	}
 	return w, nil
+}
+
+// gradingBase is the command a file's grading runs as its baseline: the
+// operator's, or, in single-file mode (no repoDir) when they gave none, the
+// plugin's own (scoreWorkspace runs it then). The one answer behind the
+// single-file wiring's warming command and the scan line's disclosures.
+func gradingBase(plug lang.Plugin, repoDir string, checkArgv []string) []string {
+	if len(checkArgv) == 0 && repoDir == "" && plug != nil {
+		return plug.TestCmd()
+	}
+	return checkArgv
+}
+
+// gradingPlugin is the language plugin for a wiring's langName, nil when the
+// name resolves to none (a run with no plugin has no run cache).
+func gradingPlugin(langName string) lang.Plugin {
+	p, ok := lang.ByName(langName)
+	if !ok {
+		return nil
+	}
+	return p
+}
+
+// closeWithCleanup files gc's decision on the wiring and makes the file's
+// cleanup remove the jail's cache directory, after whatever cleanup the
+// wiring already holds (a vendor staging dir). buildJailWiring's own deferred
+// cleanup covers a wiring that fails after this point, and the caller defers
+// w.cleanup on every other path, so the directory is removed on success,
+// COULD-NOT-GRADE, timeout, cancel and panic alike.
+func (w *jailWiring) closeWithCleanup(jail adequacy.Jail, sink *string, gc gradingRunCache) {
+	w.runCache = gc.Record
+	if sink != nil {
+		*sink = gc.Record
+	}
+	prev := w.cleanup
+	w.cleanup = func() {
+		prev()
+		// The file's run has ended: record what the jail did, then (and only
+		// then) close it, which removes the cache the answer comes from.
+		if sink != nil {
+			*sink = gc.final(jail)
+		}
+		closeGradingJail(jail)
+	}
 }
 
 // depMountWords is how iso mounts the dependency directory at host, for the
@@ -3034,7 +3116,7 @@ func advVerdictFromPool(v advpool.Verdict) advVerdict {
 		DevKillRate: v.DevKillRate, MutantsTotal: v.MutantsTotal,
 		MutantsInvalid: v.MutantsInvalid, MutantsUnmeasured: v.MutantsUnmeasured,
 		Survivors: v.Survivors, ProvenMissed: v.ProvenMissed,
-		ModelsByRole: v.ModelsByRole, SeatTools: v.SeatTools, Status: v.Status,
+		ModelsByRole: v.ModelsByRole, SeatTools: v.SeatTools, SeatProviders: v.SeatProviders, Status: v.Status,
 		RecordID: v.RecordID, RecordHead: v.RecordHead,
 		RegionsTotal: v.RegionsTotal, RegionsProbed: v.RegionsProbed,
 		DroppedRegions:   v.DroppedRegions,

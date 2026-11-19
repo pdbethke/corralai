@@ -3,6 +3,7 @@
 package lang
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -215,4 +216,100 @@ spl_autoload_register(function ($c) {
 // which is not a line of the file and must not make it read as executed.
 func TestPHPCoverageCountsFromRealRun(t *testing.T) {
 	assertFixtureCounts(t, capturedCounts(t, "php"), "lib/Calc.php", "lib/Dead.php", "lib/Unloaded.php", "lib/Shape.php")
+}
+
+// The coverage run loads pcov ONCE. The injected ini used to name
+// `extension=pcov` whether or not the machine already loaded it, and a
+// second load makes PHP print `PHP Warning:  Module "pcov" is already loaded`
+// on stderr at every start-up. PHPUnit fails a test it runs in a separate
+// process when that process writes to stderr, so on ramsey/uuid (2026-11-18,
+// PHPUnit 9.6.39, PHP 8.5.4) eight test files failed under coverage and
+// passed without it, and gave no unit evidence. The run still measures: the
+// extension is named when, under the same ini scan path, PHP does not have
+// it.
+func TestPHPCoverageLoadsPcovOnce(t *testing.T) {
+	if _, err := phpInterpreter(nil); err != nil {
+		t.Skipf("SKIP php coverage: no php on PATH: %v", err)
+	}
+	if out, err := exec.Command("php", "-r", `exit(extension_loaded("pcov") ? 0 : 1);`).CombinedOutput(); err != nil {
+		t.Skipf("SKIP php coverage: this php does not load pcov: %v %s", err, out)
+	}
+	dir := t.TempDir()
+	for rel, body := range map[string]string{
+		"lib/Calc.php": "<?php\nfunction add(int $a, int $b): int {\n    return $a + $b;\n}\nfunction unused(): int {\n    return 0;\n}\n",
+		"main.php":     "<?php\nrequire __DIR__ . '/lib/Calc.php';\nexit(add(1, 2) === 3 ? 0 : 1);\n",
+	} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, rel)), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, rel), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd, ok := phpPlugin{}.CoverageCmd([]string{"php", "main.php"})
+	if !ok {
+		t.Fatal("no coverage command")
+	}
+	var stdout, stderr bytes.Buffer
+	x := exec.Command(cmd[0], cmd[1:]...) // #nosec G204 -- the plugin's own coverage command, in a temp dir
+	x.Dir = dir
+	x.Stdout, x.Stderr = &stdout, &stderr
+	if err := x.Run(); err != nil {
+		t.Fatalf("coverage run: %v\n%s", err, stderr.String())
+	}
+	if strings.Contains(stderr.String(), "already loaded") {
+		t.Errorf("the coverage run loaded pcov a second time:\n%s", stderr.String())
+	}
+	root, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	counts, err := phpPlugin{}.CoverageCounts(stdout.String(), root)
+	if err != nil {
+		t.Fatalf("CoverageCounts: %v\n%s", err, stdout.String())
+	}
+	if c := counts["lib/Calc.php"]; c.Executed == 0 || c.Executed >= c.Executable {
+		t.Errorf("lib/Calc.php: one function ran and one did not, got %+v (all: %v)", c, counts)
+	}
+}
+
+// The other half of TestPHPCoverageLoadsPcovOnce: when the probe says PHP
+// has no pcov under the injected scan path, the extension IS named. The
+// probe is answered "no" here by a `php` shim that passes every other call
+// to the real php; this machine does load pcov, so the line the wrapper
+// then writes shows as PHP's "already loaded" warning, which is the proof
+// it was written.
+func TestPHPCoverageNamesPcovWhenTheProbeFindsNone(t *testing.T) {
+	real, err := exec.LookPath("php")
+	if err != nil {
+		t.Skipf("SKIP php coverage: no php on PATH: %v", err)
+	}
+	if out, err := exec.Command(real, "-r", `exit(extension_loaded("pcov") ? 0 : 1);`).CombinedOutput(); err != nil {
+		t.Skipf("SKIP php coverage: this php does not load pcov: %v %s", err, out)
+	}
+	dir := t.TempDir()
+	shim := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(shim, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\ncase \"$*\" in *extension_loaded*) exit 1;; esac\nexec " + real + " \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(shim, "php"), []byte(script), 0o700); err != nil { // #nosec G306 -- an executable shim in a temp dir
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "main.php"), []byte("<?php\nexit(0);\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd, ok := phpPlugin{}.CoverageCmd([]string{"php", "main.php"})
+	if !ok {
+		t.Fatal("no coverage command")
+	}
+	var stderr bytes.Buffer
+	x := exec.Command(cmd[0], cmd[1:]...) // #nosec G204 -- the plugin's own coverage command, in a temp dir
+	x.Dir = dir
+	x.Env = append(os.Environ(), "PATH="+shim+string(os.PathListSeparator)+os.Getenv("PATH"))
+	x.Stderr = &stderr
+	_ = x.Run()
+	if !strings.Contains(stderr.String(), `Module "pcov" is already loaded`) {
+		t.Errorf("a probe that finds no pcov must name the extension; stderr:\n%s", stderr.String())
+	}
 }

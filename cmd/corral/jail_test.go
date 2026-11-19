@@ -185,7 +185,9 @@ func TestNewRunJailIsTheOnlyJailBuilder(t *testing.T) {
 	}
 	for _, name := range []string{"doctor.go", "certify_local.go"} {
 		s := sourceOf(t, name)
-		if !strings.Contains(s, "newRunJail(") {
+		// certify_local.go builds the GRADING jail through newGradingJail,
+		// which is newRunJail plus the run-cache decision (jail.go).
+		if !strings.Contains(s, "newRunJail(") && !strings.Contains(s, "newGradingJail(") {
 			t.Errorf("%s must build its jail via newRunJail, the shared builder", name)
 		}
 	}

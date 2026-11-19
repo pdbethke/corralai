@@ -63,6 +63,7 @@ func (interruptedSeat) Chat([]agentbackend.Message, []any) (agentbackend.Message
 // push — and exits non-zero saying it was interrupted, whichever seat the
 // interrupt stopped.
 func TestAnInterruptedReviewWritesNoEntry(t *testing.T) {
+	declareLocalSeats(t, "rev", "ver")
 	requireReviewSandbox(t)
 	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
 	root := t.TempDir()
@@ -74,7 +75,8 @@ func TestAnInterruptedReviewWritesNoEntry(t *testing.T) {
 	orig := newReviewerBackend
 	t.Cleanup(func() { newReviewerBackend = orig })
 	for _, stopped := range []string{"rev", "ver"} {
-		newReviewerBackend = func(model, _ string) (agentbackend.Backend, error) {
+		newReviewerBackend = func(rs agentbackend.ResolvedSeat, _ agentbackend.SeatOptions) (agentbackend.Backend, error) {
+			model := rs.Spec
 			if model == stopped {
 				return interruptedSeat{}, nil
 			}
@@ -107,6 +109,7 @@ func (v lateSignalVerifier) Chat([]agentbackend.Message, []any) (agentbackend.Me
 // A signal after the last agent call still stops the record: review checks
 // the one predicate right before its statement, ledger entry and push.
 func TestAReviewInterruptedAfterItsLastCallWritesNoEntry(t *testing.T) {
+	declareLocalSeats(t, "rev", "ver")
 	requireReviewSandbox(t)
 	t.Cleanup(agentbackend.ResetInterrupted)
 	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
@@ -118,7 +121,8 @@ func TestAReviewInterruptedAfterItsLastCallWritesNoEntry(t *testing.T) {
 	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
 	orig := newReviewerBackend
 	t.Cleanup(func() { newReviewerBackend = orig })
-	newReviewerBackend = func(model, _ string) (agentbackend.Backend, error) {
+	newReviewerBackend = func(rs agentbackend.ResolvedSeat, _ agentbackend.SeatOptions) (agentbackend.Backend, error) {
+		model := rs.Spec
 		if model == "rev" {
 			return cannedReviewer{reply: `{"opinion":"o","findings":[{"claim":"c","tier":"CODE-READ","file":"pkg/a.go","line":1}],"sound":[]}`}, nil
 		}

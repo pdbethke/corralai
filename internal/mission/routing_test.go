@@ -13,10 +13,13 @@ import (
 type fakeLLM struct {
 	response string
 	called   bool
+	system   string
+	prompt   string
 }
 
 func (f *fakeLLM) Generate(ctx context.Context, system, prompt string) (string, error) {
 	f.called = true
+	f.system, f.prompt = system, prompt
 	return f.response, nil
 }
 
@@ -47,7 +50,7 @@ func TestStaffingJudgeAndClamp(t *testing.T) {
 			"role_assignments": {
 				"security-breaker": "qwen2.5-coder:14b",
 				"correctness-reviewer": "qwen2.5-coder:7b",
-				"exploit-attempter": "claude-3-5-sonnet"
+				"exploit-attempter": "anthropic/claude-sonnet-5"
 			},
 			"load_order": ["qwen2.5-coder:14b", "qwen2.5-coder:7b"]
 		}`,
@@ -57,19 +60,14 @@ func TestStaffingJudgeAndClamp(t *testing.T) {
 			{Model: "qwen2.5-coder:14b", Role: "security-breaker", TasksCompleted: 10, AvgTaskDuration: 15.0, ExecPassRatePct: 90.0},
 		},
 	}
-	policy := rolemodel.New()
-
-	mgr := &StaffingManager{
-		Perf:       perf,
-		LLM:        llm,
-		RoleModels: policy,
-	}
+	mgr := &StaffingManager{Perf: perf, LLM: llm, RoleModels: rolemodel.New()}
 
 	resources := WorkstationResources{
-		CPUCores:     8,
-		TotalRAMGB:   32.0,
-		GPUVRAMGB:    12.0, // fits 14b (9.8G) or 7b (4.9G) but not both (14.7G total)
-		PulledModels: []string{"qwen2.5-coder:14b", "qwen2.5-coder:7b"},
+		CPUCores:       8,
+		TotalRAMGB:     32.0,
+		GPUVRAMGB:      12.0, // fits 14b (9.8G) or 7b (4.9G) but not both (14.7G total)
+		PulledModels:   []string{"qwen2.5-coder:14b", "qwen2.5-coder:7b", "llama3.2:3b"},
+		DeclaredModels: []rolemodel.ModelRef{{Backend: "anthropic", Model: "claude-sonnet-5"}},
 	}
 
 	assignments, _, err := mgr.Judge(context.Background(), "certify a dashboard change", resources, perf.GetRoleModelStats(), 3, 3)
@@ -82,17 +80,18 @@ func TestStaffingJudgeAndClamp(t *testing.T) {
 
 	clamped := mgr.Clamp(assignments, resources)
 
-	// Since 14b (9.8G) + 7b (4.9G) = 14.7G, which is > 12.0GB GPU VRAM,
-	// Clamp should consolidate local roles to default model (qwen2.5-coder:7b).
-	if clamped["security-breaker"] != "qwen2.5-coder:7b" {
-		t.Errorf("expected security-breaker clamped to default qwen2.5-coder:7b due to VRAM limits, got %q", clamped["security-breaker"])
+	// 14b + 7b = 14.7G > 12G, so local roles consolidate onto the smallest
+	// model the PLANNER proposed (7b) — not the smaller llama3.2:3b it never
+	// chose, and not a model picked for its name.
+	want := rolemodel.ModelRef{Backend: "ollama", Model: "qwen2.5-coder:7b"}
+	for _, role := range []string{"security-breaker", "correctness-reviewer"} {
+		if clamped[role] != want {
+			t.Errorf("%s = %+v, want %+v", role, clamped[role], want)
+		}
 	}
-	if clamped["correctness-reviewer"] != "qwen2.5-coder:7b" {
-		t.Errorf("expected correctness-reviewer clamped to qwen2.5-coder:7b, got %q", clamped["correctness-reviewer"])
-	}
-	// exploit-attempter is a cloud model, should remain unchanged
-	if clamped["exploit-attempter"] != "claude-3-5-sonnet" {
-		t.Errorf("expected exploit-attempter to remain claude-3-5-sonnet, got %q", clamped["exploit-attempter"])
+	// The declared cloud model keeps its seat and the backend it was declared with.
+	if got := clamped["exploit-attempter"]; got != (rolemodel.ModelRef{Backend: "anthropic", Model: "claude-sonnet-5"}) {
+		t.Errorf("exploit-attempter = %+v, want the declared anthropic ref", got)
 	}
 }
 

@@ -239,6 +239,7 @@ func TestDocsCLIReferenceDocumentsNoVerbThatDoesNotExist(t *testing.T) {
 // that reproduced stands after the run, the entry written first either
 // way; a review whose reproductions all fell exits 0.
 func TestReviewFailOnReproducedIsAGateAfterTheRecord(t *testing.T) {
+	declareLocalSeats(t, "m")
 	requireReviewSandbox(t)
 	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
 	t.Setenv("CORRALAI_CERTIFY_KEY_FILE", filepath.Join(t.TempDir(), "certify_key"))
@@ -252,7 +253,9 @@ func TestReviewFailOnReproducedIsAGateAfterTheRecord(t *testing.T) {
 	orig := newReviewerBackend
 	t.Cleanup(func() { newReviewerBackend = orig })
 	reply := `{"opinion":"o","findings":[{"claim":"Add subtracts","tier":"REPRODUCED","file":"pkg/a.go","line":3,"severity":"high","script":"grep -q 'a - b' pkg/a.go"}],"sound":["go.mod","a","b"]}`
-	newReviewerBackend = func(string, string) (agentbackend.Backend, error) { return cannedReviewer{reply: reply}, nil }
+	newReviewerBackend = func(agentbackend.ResolvedSeat, agentbackend.SeatOptions) (agentbackend.Backend, error) {
+		return cannedReviewer{reply: reply}, nil
+	}
 	ledger := filepath.Join(t.TempDir(), "ledger")
 	var out, errb bytes.Buffer
 	code := runReview([]string{"--repo", root, "--scope", "pkg", "--reviewer-model", "m", "--ledger", ledger, "--fail-on", "reproduced"}, &out, &errb)

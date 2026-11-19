@@ -1,5 +1,5 @@
-# argv: ruby -S rspec --format documentation units/multi/rspec
-$ ruby -S rspec --format documentation units/multi/rspec/spec/a_spec.rb units/multi/rspec/spec/b_spec.rb
+# argv: rspec --format documentation units/multi/rspec
+$ rspec --format documentation units/multi/rspec/spec/a_spec.rb units/multi/rspec/spec/b_spec.rb
 
 Multi A
   a one

@@ -195,7 +195,7 @@ func TestDeselectCmds(t *testing.T) {
 		{"jest", jestDeselectCmd, []string{"npx", "jest"}, []string{"Calc::adds (a+b)", "Calc::neg::adds", "top level"},
 			[]string{"npx", "jest", "--testNamePattern", `^(?!(?:Calc adds \(a\+b\)|Calc neg adds|top level)$)`}},
 		{"vitest", vitestDeselectCmd, []string{"npx", "vitest", "run"}, []string{"Calc::adds (a+b)", "top level"},
-			[]string{"npx", "vitest", "run", "-t", `^(?!(?:Calc adds \(a\+b\)|top level)$)`}},
+			[]string{"npx", "vitest", "run", "-t", `^(?!(?:Calc(?: | > )adds \(a\+b\)|top level)$)`}},
 		{"mocha", mochaDeselectCmd, []string{"npx", "mocha"}, []string{"top level", "Calc::adds (a+b)", "Calc neg::adds"},
 			[]string{"npx", "mocha", "--grep", `^(?:top level|Calc adds \(a\+b\)|Calc neg adds)$`, "--invert"}},
 		{"node", nodeDeselectCmd, []string{"node", "--test", "tests/"}, []string{"Calc::adds (a+b)", "top level"},

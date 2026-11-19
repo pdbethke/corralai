@@ -34,8 +34,8 @@ func TestCertifyRepoAcceptsPerRoleModelFlags(t *testing.T) {
 	var out, errb bytes.Buffer
 	code := runCertifyRepo([]string{
 		"--repo", t.TempDir(),
-		"--writer-model", "gemini-3.6-flash",
-		"--critic-model", "gemini-3.6-flash", // same as the writer: must be refused
+		"--writer-model", "google/gemini-3.6-flash",
+		"--critic-model", "google/gemini-3.6-flash", // same as the writer: must be refused
 		// NOT --dry-run: the scan-wide preflights (jail, then role models) are
 		// deliberately skipped on a dry run, since demanding a sandbox and a
 		// provider key to print the jobs a scan WOULD emit would refuse the one

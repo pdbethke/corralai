@@ -324,6 +324,7 @@ func TestLocalEntryRecordsToolMutantCounts(t *testing.T) {
 		toolSink:    func(c ledger.ToolMutantCounts) { sunk = append(sunk, c) },
 		stdout:      io.Discard, stderr: io.Discard,
 	}
+	in = in.withSeats(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	v, err := auditOneFile(ctx, in)

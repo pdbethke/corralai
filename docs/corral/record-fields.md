@@ -259,6 +259,7 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `ReviewerModelResolved` | measured |  |
 | `ReviewerTool` | measured |  |
 | `Scope` | measured |  |
+| `SeatProviders` | measured | the provider corral resolved and sent the seat's calls to; not a check of what served the model behind that endpoint, and for an agent seat a vendor label |
 | `Sound` | meta | a model's opinion: advisory, signed but not verified as true |
 | `StartedAt` | measured |  |
 | `StatementSHA256` | key |  |
@@ -309,6 +310,7 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `Disposition` | measured |  |
 | `DroppedRegions` | measured |  |
 | `Evidence` | measured |  |
+| `Files` | measured |  |
 | `GenerationMillis` | measured |  |
 | `GoalReused` | measured |  |
 | `GoalsDerived` | measured |  |
@@ -349,8 +351,10 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `RegionsTotal` | measured |  |
 | `Repo` | key |  |
 | `ReusedFromScanID` | key |  |
+| `RunCache` | meta | the run's own account of itself: signed, but not verified as true |
 | `RunURL` | key |  |
 | `ScanID` | key |  |
+| `SeatProviders` | measured | the provider corral resolved and sent the seat's calls to; not a check of what served the model behind that endpoint, and for an agent seat a vendor label |
 | `SeatTools` | measured |  |
 | `SelectedTests` | measured |  |
 | `SelectionExcluded` | measured |  |

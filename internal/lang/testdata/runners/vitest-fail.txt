@@ -1,14 +1,12 @@
 
- RUN  v3.2.7 $DIR
+ RUN  v5.1.0 $DIR
 
- ❯ fail/f.vitest.test.mjs (4 tests | 3 failed) 7ms
-   × Calc > adds (a+b) 5ms
-     → expected 2 to be 3 // Object.is equality
-   ✓ Calc > ok 0ms
-   × Calc > neg > adds 0ms
-     → boom
+ ❯ fail/f.vitest.test.mjs (4 tests | 3 failed) 6ms
+   ❯ Calc (3)
+     × adds (a+b) 4ms
+     ❯ neg (1)
+       × adds 0ms
    × top level 0ms
-     → expected 1 to be 2 // Object.is equality
 
 ⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯
 
@@ -57,7 +55,7 @@ AssertionError: expected 1 to be 2 // Object.is equality
       7| });
       8| test('top level', () => { expect(1).toBe(2); });
        |                                     ^
-      9| 
+      9|
 
 ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/3]⎯
 

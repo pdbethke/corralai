@@ -32,6 +32,7 @@ func requireReviewSandbox(t *testing.T) {
 // dependency directories (read-only), and nothing else of the host. Before
 // this it ran in a plain worktree on the host, with the network on.
 func TestReviewReproductionsRunInTheJail(t *testing.T) {
+	declareLocalSeats(t, "reviewer-x")
 	requireReviewSandbox(t)
 	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
 	root := t.TempDir()
@@ -49,7 +50,7 @@ func TestReviewReproductionsRunInTheJail(t *testing.T) {
 	escaped := filepath.Join(host, "escaped")
 	orig := newReviewerBackend
 	t.Cleanup(func() { newReviewerBackend = orig })
-	newReviewerBackend = func(string, string) (agentbackend.Backend, error) {
+	newReviewerBackend = func(agentbackend.ResolvedSeat, agentbackend.SeatOptions) (agentbackend.Backend, error) {
 		return cannedReviewer{reply: `{"opinion":"R1 sees the tree; R2 writes to the host.",
 "findings":[
  {"claim":"the tree and its dependencies are there","tier":"REPRODUCED","file":"pkg/a.go","line":3,"severity":"high","script":"grep -q 'return a - b' pkg/a.go && test -f node_modules/dep/index.js && test ! -e .git"},
@@ -84,6 +85,7 @@ func TestReviewReproductionsRunInTheJail(t *testing.T) {
 // With no sandbox, review refuses before any seat is called — the same rule
 // certify keeps, never a fallback to the host.
 func TestReviewRefusesWithoutASandboxBeforeAnySpend(t *testing.T) {
+	declareLocalSeats(t, "reviewer-x")
 	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
 	root := t.TempDir()
 	gitRun := gitCmd(t, root)
@@ -97,7 +99,7 @@ func TestReviewRefusesWithoutASandboxBeforeAnySpend(t *testing.T) {
 	resolveJailFn = func(string, bool) (sandbox.Isolator, error) { return nil, errors.New("no bwrap here") }
 	orig := newReviewerBackend
 	t.Cleanup(func() { newReviewerBackend = orig })
-	newReviewerBackend = func(string, string) (agentbackend.Backend, error) {
+	newReviewerBackend = func(agentbackend.ResolvedSeat, agentbackend.SeatOptions) (agentbackend.Backend, error) {
 		t.Fatal("a seat was called with no sandbox to run its scripts in")
 		return nil, nil
 	}
@@ -113,6 +115,7 @@ func TestReviewRefusesWithoutASandboxBeforeAnySpend(t *testing.T) {
 // old detached worktree on the host, needing no sandbox, and the entry says
 // which one ran. Anything else is refused before any spend.
 func TestReviewSubstrateWorkspaceIsOptInAndRecorded(t *testing.T) {
+	declareLocalSeats(t, "reviewer-x")
 	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
 	root := t.TempDir()
 	gitRun := gitCmd(t, root)
@@ -126,7 +129,7 @@ func TestReviewSubstrateWorkspaceIsOptInAndRecorded(t *testing.T) {
 	resolveJailFn = func(string, bool) (sandbox.Isolator, error) { return nil, errors.New("no bwrap here") }
 	orig := newReviewerBackend
 	t.Cleanup(func() { newReviewerBackend = orig })
-	newReviewerBackend = func(string, string) (agentbackend.Backend, error) {
+	newReviewerBackend = func(agentbackend.ResolvedSeat, agentbackend.SeatOptions) (agentbackend.Backend, error) {
 		return cannedReviewer{reply: `{"opinion":"o","findings":[{"claim":"a.go exists","tier":"REPRODUCED","file":"a.go","line":1,"severity":"low","script":"test -f a.go"}],"sound":[]}`}, nil
 	}
 	ledger := filepath.Join(t.TempDir(), "ledger")
@@ -200,6 +203,7 @@ func TestRecheckOfAWorkspaceEntryDoesNotReadAJailFailureAsAFix(t *testing.T) {
 // The sandbox's seed — the tree copy, vendoring, the 64 MiB text cap — can
 // fail, and it is built before any seat is paid, so a failure costs nothing.
 func TestReviewBuildsItsSandboxBeforeAnySeatIsPaid(t *testing.T) {
+	declareLocalSeats(t, "reviewer-x")
 	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
 	root := t.TempDir()
 	gitRun := gitCmd(t, root)
@@ -214,7 +218,7 @@ func TestReviewBuildsItsSandboxBeforeAnySeatIsPaid(t *testing.T) {
 	}
 	orig := newReviewerBackend
 	t.Cleanup(func() { newReviewerBackend = orig })
-	newReviewerBackend = func(string, string) (agentbackend.Backend, error) {
+	newReviewerBackend = func(agentbackend.ResolvedSeat, agentbackend.SeatOptions) (agentbackend.Backend, error) {
 		t.Fatal("a seat was paid before the sandbox it must be checked in existed")
 		return nil, nil
 	}

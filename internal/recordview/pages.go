@@ -33,16 +33,17 @@ type Pages struct {
 
 func funcs() template.FuncMap {
 	return template.FuncMap{
-		"short":     shortHash,
-		"tierNote":  ledger.NoteOf,
-		"hasPre":    func(s string) bool { return strings.TrimSpace(s) != "" },
-		"date":      func(t time.Time) string { return t.UTC().Format("2006-01-02") },
-		"stamp":     func(t time.Time) string { return t.UTC().Format("2006-01-02 15:04 UTC") },
-		"join":      func(s []string) string { return strings.Join(s, ", ") },
-		"lower":     strings.ToLower,
-		"ctl":       func(f FindingView, sha string) controlsData { return controlsData{f, sha} },
-		"shortHash": shortHash,
-		"entryURL":  func(short string) string { return "entry/" + short + ".html" },
+		"short":      shortHash,
+		"tierNote":   ledger.NoteOf,
+		"hasPre":     func(s string) bool { return strings.TrimSpace(s) != "" },
+		"date":       func(t time.Time) string { return t.UTC().Format("2006-01-02") },
+		"stamp":      func(t time.Time) string { return t.UTC().Format("2006-01-02 15:04 UTC") },
+		"join":       func(s []string) string { return strings.Join(s, ", ") },
+		"lower":      strings.ToLower,
+		"ctl":        func(f FindingView, sha string) controlsData { return controlsData{f, sha} },
+		"shortHash":  shortHash,
+		"entryURL":   func(short string) string { return "entry/" + short + ".html" },
+		"pathBreaks": pathBreaks,
 		"thousands": func(n int64) string {
 			if n >= 1_000_000 {
 				return fmt.Sprintf("%.1fM", float64(n)/1e6)
@@ -53,6 +54,18 @@ func funcs() template.FuncMap {
 			return fmt.Sprint(n)
 		},
 	}
+}
+
+// pathBreaks lets a file path wrap after each slash, so a list of long paths
+// in a table cell wraps at path boundaries instead of widening the table. A
+// path comes from the audited repository, so each segment is escaped before
+// the <wbr> marks are added.
+func pathBreaks(path string) template.HTML {
+	parts := strings.Split(path, "/")
+	for i, p := range parts {
+		parts[i] = template.HTMLEscapeString(p)
+	}
+	return template.HTML(strings.Join(parts, "/<wbr>")) // #nosec G203 -- every segment escaped above
 }
 
 // NewPages parses every template. An error here is a bug in this package.

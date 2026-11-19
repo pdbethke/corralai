@@ -25,6 +25,7 @@ import (
 	_ "github.com/marcboeker/go-duckdb/v2"
 
 	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/reposcan"
@@ -35,8 +36,8 @@ import (
 // corral has no default models, so every fixture that reaches role resolution
 // must name its own herd. These are the TEST's models, not product defaults.
 const (
-	testHerdWriter = "claude-sonnet-5"
-	testHerdMutant = "claude-sonnet-5"
+	testHerdWriter = "anthropic/claude-sonnet-5"
+	testHerdMutant = "anthropic/claude-sonnet-5"
 )
 
 // gitCmd returns a helper that runs a git command in dir for a test fixture,
@@ -531,7 +532,7 @@ func TestCertifyRepoRecordRoundTripsReportedFiles(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d: stdout=%s stderr=%s", code, out.String(), errb.String())
 	}
-	if errb.Len() != 0 {
+	if stripModelsDisclosure(errb.String()) != "" {
 		t.Fatalf("the ledger write must not fail on a writable directory, stderr=%q", errb.String())
 	}
 
@@ -551,7 +552,14 @@ func TestCertifyRepoRecordRoundTripsReportedFiles(t *testing.T) {
 	for _, m := range matches {
 		path, wantReason := m[1], m[2]
 		var disposition, gotReason string
-		row := db.QueryRow(`SELECT disposition, reason FROM corral_audits WHERE path = ?`, path)
+		query, arg := `SELECT disposition, reason FROM corral_audits WHERE path = ?`, path
+		if wantReason == reposcan.ReasonIsTest {
+			// The default record stands one counted row per language for
+			// test files, so the file has no row of its own; the row for its
+			// reason must exist and count at least this file.
+			query, arg = `SELECT disposition, reason FROM corral_audits WHERE reason = ? AND files >= 1 LIMIT 1`, wantReason
+		}
+		row := db.QueryRow(query, arg)
 		if err := row.Scan(&disposition, &gotReason); err != nil {
 			t.Fatalf("no corral_audits row for %s (printed as excluded with reason %s): %v", path, wantReason, err)
 		}
@@ -575,7 +583,7 @@ func TestBuildScanFileRowsCarriesProvenMissed(t *testing.T) {
 		{Job: reposcan.Job{Path: "src/flask/cli.py", Lang: "python"}, Gradable: true,
 			Verdict: advpool.Verdict{DevKillRate: 0.467, Survivors: 16, MutantsTotal: 30, ProvenMissed: 7, DevScored: true}},
 	}
-	rows := buildScanFileRows(results, nil, reposcan.CoverageMap{}, "", "", io.Discard)
+	rows := buildScanFileRows(results, nil, reposcan.CoverageMap{}, "", "", io.Discard, false)
 	if len(rows) != 1 {
 		t.Fatalf("buildScanFileRows returned %d rows, want 1", len(rows))
 	}
@@ -594,7 +602,7 @@ func TestBuildScanFileRowsCarriesPoolTestUnsound(t *testing.T) {
 		{Job: reposcan.Job{Path: "unsound.py", Lang: "python"}, Gradable: true,
 			Verdict: advpool.Verdict{DevKillRate: 0.5, Survivors: 4, MutantsTotal: 10, PoolTestUnsound: true, DevScored: true}},
 	}
-	rows := buildScanFileRows(results, nil, reposcan.CoverageMap{}, "", "", io.Discard)
+	rows := buildScanFileRows(results, nil, reposcan.CoverageMap{}, "", "", io.Discard, false)
 	if len(rows) != 1 {
 		t.Fatalf("buildScanFileRows returned %d rows, want 1", len(rows))
 	}
@@ -616,7 +624,7 @@ func TestBuildScanFileRowsCarriesConcurrency(t *testing.T) {
 			Verdict: advpool.Verdict{DevKillRate: 0.5, Survivors: 4, MutantsTotal: 10, DevScored: true,
 				Concurrency: advpool.Concurrency{Trees: 1, Note: "baseline failed in 3 private trees at once (the suite may not be concurrency-safe, or the copies lack something it needs — e.g. a Cargo workspace root outside --repo)"}}},
 	}
-	rows := buildScanFileRows(results, nil, reposcan.CoverageMap{}, "", "", io.Discard)
+	rows := buildScanFileRows(results, nil, reposcan.CoverageMap{}, "", "", io.Discard, false)
 	if len(rows) != 2 {
 		t.Fatalf("buildScanFileRows returned %d rows, want 2", len(rows))
 	}
@@ -698,7 +706,7 @@ func TestCertifyRepoRecordCoversExecutionStageRejections(t *testing.T) {
 	if !strings.Contains(out.String(), "COULD-NOT-GRADE") {
 		t.Fatalf("fixture precondition failed: want the baseline-failed shape:\n%s", out.String())
 	}
-	if errb.Len() != 0 {
+	if stripModelsDisclosure(errb.String()) != "" {
 		t.Fatalf("the ledger write must not fail on a writable directory, stderr=%q", errb.String())
 	}
 
@@ -811,7 +819,7 @@ func TestCertifyRepoRecordTopReflectsTheEffectiveBound(t *testing.T) {
 	if code2 != 1 {
 		t.Fatalf("exit %d, want 1 (COULD-NOT-GRADE): stdout=%s stderr=%s", code2, out2.String(), errb2.String())
 	}
-	if errb2.Len() != 0 {
+	if stripModelsDisclosure(errb2.String()) != "" {
 		t.Fatalf("the ledger write must not fail on a writable directory, stderr=%q", errb2.String())
 	}
 
@@ -901,7 +909,7 @@ func TestCertifyRepoRecordPreflightOverlayRoundTrips(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d: stdout=%s stderr=%s", code, out.String(), errb.String())
 	}
-	if errb.Len() != 0 {
+	if stripModelsDisclosure(errb.String()) != "" {
 		t.Fatalf("the ledger write must not fail on a writable directory, stderr=%q", errb.String())
 	}
 	if !strings.Contains(out.String(), "file(s) executed at least once") {
@@ -921,7 +929,13 @@ func TestCertifyRepoRecordPreflightOverlayRoundTrips(t *testing.T) {
 		{"go.mod", ""},        // not a language-detected source file
 	} {
 		var got string
-		if err := db.QueryRow(`SELECT preflight_state FROM corral_audits WHERE path = ?`, tc.path).Scan(&got); err != nil {
+		query, arg := `SELECT preflight_state FROM corral_audits WHERE path = ?`, tc.path
+		if strings.HasSuffix(tc.path, "_test.go") {
+			// Test files are one collapsed row per language in the default
+			// record (no path of its own); it must carry no pre-flight state.
+			query, arg = `SELECT coalesce(preflight_state, '') FROM corral_audits WHERE reason = ? AND files >= 1 LIMIT 1`, reposcan.ReasonIsTest
+		}
+		if err := db.QueryRow(query, arg).Scan(&got); err != nil {
 			t.Fatalf("%s: no corral_audits row: %v", tc.path, err)
 		}
 		if got != tc.want {
@@ -1813,7 +1827,7 @@ func TestResolveAuditRolesWarningCarriesTheCommandPrefix(t *testing.T) {
 	var errb bytes.Buffer
 	// critic != writer keeps decorrelation happy; shadow == mutant fires the
 	// warning, which is written before any credential check.
-	_, _ = resolveAuditRoles(localAuditInput{
+	_, _ = resolveRoles(t, localAuditInput{
 		writerModel: "w", criticModel: "c", mutantModel: "m", shadowModel: "m",
 	}, &errb)
 	if !strings.Contains(errb.String(), "corral certify --local: warning: --shadow-model") {
@@ -1821,7 +1835,7 @@ func TestResolveAuditRolesWarningCarriesTheCommandPrefix(t *testing.T) {
 	}
 
 	errb.Reset()
-	_, _ = resolveAuditRoles(localAuditInput{
+	_, _ = resolveRoles(t, localAuditInput{
 		cmdName:     "corral certify --repo",
 		writerModel: "w", criticModel: "c", mutantModel: "m", shadowModel: "m",
 	}, &errb)
@@ -2216,7 +2230,7 @@ func TestRunCertifyLegacyRepoFlagIsNotHijacked(t *testing.T) {
 // model as the writer is a judge in her own cause, and must be a USAGE error
 // (exit 2), not an internal failure.
 func TestResolveAuditRolesRejectsCollapsedDecorrelation(t *testing.T) {
-	_, err := resolveAuditRoles(localAuditInput{
+	_, err := resolveRoles(t, localAuditInput{
 		writerModel: "same-model", criticModel: "same-model",
 		mutantModel: "same-model", shadowModel: "off",
 	}, io.Discard)
@@ -3050,11 +3064,11 @@ func TestCertifyRepoPreflightsBeforeSpendingOnDerivation(t *testing.T) {
 func TestResolveGoalSourceDerivedPathDisclosesTheModel(t *testing.T) {
 	var errb bytes.Buffer
 	called := 0
-	gs, disclosure, code := resolveGoalSource(&errb, t.TempDir(), "", "test-model-x", "", false, 3,
-		func(model, _ string) (reposcan.Deriver, error) {
+	gs, disclosure, code := resolveGoalSource(&errb, t.TempDir(), "", testDeriveSeat("test-model-x"), false, 3,
+		func(rs agentbackend.ResolvedSeat) (reposcan.Deriver, error) {
 			called++
-			if model != "test-model-x" {
-				t.Errorf("factory got model %q", model)
+			if rs.Spec != "test-model-x" {
+				t.Errorf("factory got model %q", rs.Spec)
 			}
 			return stubDeriver{}, nil
 		}, nil, false, true)
@@ -3083,8 +3097,8 @@ func TestResolveGoalSourceGoalsFileDisclosesNothingAndDerivesNothing(t *testing.
 	mustWrite(t, goals, `{"pkg/a.go": "hand written"}`)
 
 	var errb bytes.Buffer
-	gs, disclosure, code := resolveGoalSource(&errb, root, goals, "test-model-x", "", false, 3,
-		func(string, string) (reposcan.Deriver, error) {
+	gs, disclosure, code := resolveGoalSource(&errb, root, goals, testDeriveSeat("test-model-x"), false, 3,
+		func(agentbackend.ResolvedSeat) (reposcan.Deriver, error) {
 			t.Fatal("the --goals path must never construct a deriver")
 			return nil, nil
 		}, nil, false, true)
@@ -3100,8 +3114,8 @@ func TestResolveGoalSourceGoalsFileDisclosesNothingAndDerivesNothing(t *testing.
 // provider credential either.
 func TestResolveGoalSourceNothingSelectedNeedsNoDeriver(t *testing.T) {
 	var errb bytes.Buffer
-	gs, disclosure, code := resolveGoalSource(&errb, t.TempDir(), "", "test-model-x", "", false, 0,
-		func(string, string) (reposcan.Deriver, error) {
+	gs, disclosure, code := resolveGoalSource(&errb, t.TempDir(), "", testDeriveSeat("test-model-x"), false, 0,
+		func(agentbackend.ResolvedSeat) (reposcan.Deriver, error) {
 			t.Fatal("no candidate was selected; a deriver must not be built")
 			return nil, nil
 		}, nil, false, true)
@@ -3113,8 +3127,10 @@ func TestResolveGoalSourceNothingSelectedNeedsNoDeriver(t *testing.T) {
 // A missing credential is a USAGE error (exit 2), reported before any spend.
 func TestResolveGoalSourceDeriverFailureIsAUsageError(t *testing.T) {
 	var errb bytes.Buffer
-	gs, _, code := resolveGoalSource(&errb, t.TempDir(), "", "test-model-x", "", false, 3,
-		func(string, string) (reposcan.Deriver, error) { return nil, errors.New("goal deriver: no key") }, nil, false, true)
+	gs, _, code := resolveGoalSource(&errb, t.TempDir(), "", testDeriveSeat("test-model-x"), false, 3,
+		func(agentbackend.ResolvedSeat) (reposcan.Deriver, error) {
+			return nil, errors.New("goal deriver: no key")
+		}, nil, false, true)
 	if code != 2 || gs != nil {
 		t.Fatalf("code=%d gs=%v, want 2 and nil", code, gs)
 	}

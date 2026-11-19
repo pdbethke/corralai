@@ -62,8 +62,8 @@ corral certify --repo "$PWD" --substrate workspace \
   --owner "$OWNER" --commit "$COMMIT_SHA" \
   --diff-base "origin/$TARGET_BRANCH" \
   --ledger .corral-ledger --record-mutants ".corral-ledger/mutants/$COMMIT_SHA.json" \
-  --derive-model gemini-3.6-flash --mutant-model gemini-3.6-flash \
-  --writer-model gemini-3.6-flash --critic-model claude-haiku-4-5 \
+  --derive-model google/gemini-3.6-flash --mutant-model google/gemini-3.6-flash \
+  --writer-model google/gemini-3.6-flash --critic-model anthropic/claude-haiku-4-5 \
   --min-kill-rate 0.6 \
   -- pytest -q
 code=$?
@@ -112,7 +112,7 @@ corral:
     # CORRALAI_CERTIFY_KEY (hex seed), CORRAL_LEDGER_TOKEN, GEMINI_API_KEY and
     # ANTHROPIC_API_KEY are masked CI/CD variables, never in this file.
   before_script:
-    - go install github.com/pdbethke/corralai/cmd/corral@v1.0.0-rc.31
+    - go install github.com/pdbethke/corralai/cmd/corral@v1.0.0-rc.35
     - export PATH="$PATH:$(go env GOPATH)/bin"
     - git remote set-url origin "https://oauth2:${CORRAL_LEDGER_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"
   script:
@@ -135,7 +135,7 @@ checks it anywhere.
 
 The recipe is the same shell; only the push credential and the
 target-branch variable change. Gitea Actions runs GitHub-style workflows,
-so the Action's own YAML works there with `uses: pdbethke/corralai@v1.0.0-rc.31`
+so the Action's own YAML works there with `uses: pdbethke/corralai@v1.0.0-rc.35`
 pointed at a mirror (Gitea resolves `uses:` against `github.com` by
 default), with `attest` left unset and the ledger recipe's
 `actions/attest-build-provenance` step dropped — there is no attestation

@@ -35,8 +35,8 @@ func interruptedRepoRun(t *testing.T, mutant, writer string) {
 
 	prev := certifyRepoDeriver
 	t.Cleanup(func() { certifyRepoDeriver = prev })
-	certifyRepoDeriver = func(model, _ string) (reposcan.Deriver, error) {
-		return newMeteredDeriver(&fakeBackend{reply: "A returns 1 for positive input"}, model), nil
+	certifyRepoDeriver = func(rs agentbackend.ResolvedSeat) (reposcan.Deriver, error) {
+		return newMeteredDeriver(&fakeBackend{reply: "A returns 1 for positive input"}, rs.Spec), nil
 	}
 
 	ledgerDir := filepath.Join(t.TempDir(), "ledger")
@@ -81,6 +81,14 @@ func TestAnInterruptedRepoScanRecordsNothing_AgentSeat(t *testing.T) {
 	}
 	t.Setenv("CORRALAI_AGENT_INTR", path+" {model:--model}")
 	fakeAgent(t, "quiet", "x")
+	// The derive seat is a bare local name, so it needs a declared source like
+	// any other: a daemon that lists it. Nothing here is ever called.
+	tags := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"models":[{"name":"local-deriver"}]}`))
+	}))
+	defer tags.Close()
+	t.Setenv("OLLAMA_URL", tags.URL)
 	interruptedRepoRun(t, "intr", "quiet")
 }
 
@@ -92,6 +100,16 @@ func TestAnInterruptedRepoScanRecordsNothing_APISeat(t *testing.T) {
 	// default action and kill the test binary.
 	var once sync.Once
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Seat resolution lists the daemon BEFORE auditContext installs its
+		// handler, so the listing must answer (it is what declares these
+		// bare names as served here) and the signal must wait for the first
+		// model call, which is mid-scan. A signal on the listing would hit
+		// the default action and kill the test binary.
+		if r.URL.Path == "/api/tags" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"models":[{"name":"local-mutant"},{"name":"local-writer"},{"name":"local-deriver"}]}`))
+			return
+		}
 		once.Do(func() { _ = syscall.Kill(os.Getpid(), syscall.SIGINT) })
 		http.Error(w, "stopped", http.StatusServiceUnavailable)
 	}))

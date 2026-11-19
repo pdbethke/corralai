@@ -25,7 +25,7 @@ invariant hiding as ordinary bugs — see "The bug shape that keeps recurring".
 
 ## Build, test, and the gates that will fail your PR
 
-Go 1.26.10 (see `go.mod`). There IS a `Makefile` (`build`, `install`, `test`, `vet`, `tidy`, `clean`) — it wraps the version stamping — but nothing depends on it and the Go toolchain directly is equally fine.
+Go 1.26.11 (see `go.mod`). There IS a `Makefile` (`build`, `install`, `test`, `vet`, `tidy`, `clean`) — it wraps the version stamping — but nothing depends on it and the Go toolchain directly is equally fine.
 
 ```bash
 go build ./...
@@ -110,7 +110,7 @@ and exactly where is below.
 - `certify --repo` writes one entry to the repo ledger (`<repo>/.corral/ledger`,
   or `--ledger` / `$CORRAL_LEDGER`) and a copy to the **machine ledger**
   (`statedir.MachineLedger`: the state directory's `ledger`, override
-  `CORRALAI_MACHINE_LEDGER`; `corral state paths` prints it). A `--repo` tree
+  `CORRALAI_MACHINE_LEDGER`; `corral state paths` prints it). Its rows count files in skipped or gitignored directories and test files (one row per directory, one `<parent>/*` row for loose gitignored files, one per language) instead of listing each; `--record-every-file` restores one row per file. A `--repo` tree
   with no commit writes neither entry.
 - `corral review` does the same: repo ledger entry plus the machine copy.
 - `certify --local` writes its entry to the machine ledger by default, plus
@@ -227,6 +227,50 @@ user-local install.
 
 **The jail is offline.** Anything needing the network fails inside it, by design.
 
+**A Go file's grading runs share a build cache, and one rule keeps that safe.** A
+cache shared among runs also holds test RESULTS, and `go` replays one instead of
+running the test. So `newGradingJail` (`cmd/corral/jail.go`, the ONE place a grading
+jail is built) shares the cache only when the command that warms it (the baseline on
+the unmutated code) comes back `lang.RunCacheRewritten` from `lang.RunCacheCmd`
+(`-count=1`, added only when the operator gave no `-count` of their own: any explicit
+`-count` already stops go storing or replaying a result, and is kept as given); a shell wrapper, an env prefix or an unlisted flag is `unreadable` and
+gets no cache and no rewrite. Every command the grading jail is handed is rewritten
+through `JailScorer.CommandRewrite` / `JailValidator.CommandRewrite`: `adequacy.Score`
+by `baseScoreOpts`, the other doors (`CompliantRun`, the positive control, the compile
+check) by `rewriteCmd`. A new door that runs a command on that jail must call it. Only
+ONE run ever has the cache writable: the dev pass's baseline, the developer's own
+tests on the unmutated tree (`JailScorer.ScoreDevReport` adds
+`adequacy.WithWarmBaseline`, only when `WarmCheck` clears that pass's exact baseline
+command as `RunCacheRewritten`). `adequacy.Score` never warms unasked, `baseScoreOpts`
+must not carry the option, and a jail warms at most once, so a run that includes a test
+corral wrote (authored, salvage, critic checks, matrix) can never write what later runs
+read. Only bwrap that can overlay a directory shares a run cache (`makeSharedCacheDir`
+asks `sandbox.OverlaysDir`). With it, a jailed run sees its workspace at the fixed path
+`/corral-work` (`sandbox.WorkTarget`) whatever host directory holds it, and because Go
+keys the project's own packages and its vendored dependencies on their directory, the
+shared cache serves them as well as the standard library. A bwrap that overlays but
+fails the start-up probe of overlaying at a target (`probeOverlayAt`) keeps each run's
+host path, and its shared cache reuses only the standard library; the scan header
+says so once. The container backend places the workspace at `/corral-work` (checked on
+its command line only, never executed) and shares no build cache; macOS
+`sandbox-exec` keeps the host path and shares none. A placed run's `TMPDIR` is the
+jail's own `/tmp`, not the host's, which names a directory the jail does not have;
+the sandbox withholds it (`dropsHostVar`), for every caller. Because a frozen run of
+unchanged code is then a full cache hit while a mutant rebuilds what it changed,
+every per-mutant time cap is floored at three times the warming run
+(`adequacy.mutantTimeoutCap`, `RunCacheJail.WarmDuration`). An authored test that names
+`/corral-work` is refused at every writer door (`advpool.checkAuthoredTest`): it would
+pass in every jailed run and fail on the developer's machine. A shared cache costs one build cache's worth
+of temporary disk space per file being audited at once, removed when that file's run
+ends; a corral process killed outright (kill -9, out of memory) can leave
+`corral-cache-*` directories in the temporary directory, which nothing removes. The
+file's row records `RunCache`, read when the file's run ends and from what the jail did
+(`gradingRunCache.final`, `RunCacheJail.Warmed`): `shared` only if a warming run ran on
+the cache, `unshared: never warmed (<why>)` if it was mounted and never filled,
+`unshared: <reason>` otherwise, `""` for a file not graded. It is a field of the file's
+result and not of the `Verdict`, whose shape is pinned to the verdict cache. `internal/adequacy/run_cache_replay_test.go`
+runs the safety argument against the real jail.
+
 ## Trying it quickly
 
 `corral demo --writer-model <m> --mutant-model <m> --critic-model <m>` writes a
@@ -294,14 +338,22 @@ subscription; and `codex`'s read-only sandbox still lets it read the host. (This
 a subscription and `certify` could not, and pointed at
 `cmd/corral/review_agent.go`, which no longer exists. The brain's Pro/Max line in
 `docs/corral/brain.md` is a separate thing: that is the frozen brain's harness.)
-`ollama` is `MODEL_BACKEND`'s default and is local and free, the other
-zero-cost way to run seats.
+`ollama` is local and free, the other zero-cost way to run seats. It is a
+daemon you declare (`.corral/models.json`, `OLLAMA_URL`, or a pinned
+`MODEL_BACKEND` gateway), never a default: there is no default backend, model or
+address.
 
-**A key alone does not move providers.** Each role resolves its own backend from
-its own model name; a Gemini model name with only an Anthropic key configured is
-a 404 from Anthropic, not a Gemini call. Set the role models *and* the matching
-key. An explicit `MODEL_BACKEND` pointing at a gateway (OpenRouter, Ollama) is
-never re-routed — those front many vendors behind one endpoint.
+**No vendor is ever guessed from a model's name.** A hosted seat is named
+`vendor/model` (`anthropic/claude-sonnet-5`, `google/gemini-3.6-flash`,
+`openai/gpt-6`; a closed set), a registry entry, or a model a declared daemon
+serves; a bare `claude-sonnet-5` is refused. The guess used to decide where the
+audited source and a credential went: a local `gpt-oss:20b` was routed to OpenAI
+by its `gpt-` prefix (founder ruling 2026-11-12). The prefix table
+(`apiVendorOf`) survives only to LABEL recorded entries and agent seats, and
+`TestNoRoutingPathReachesTheNamePrefixTable` fails any function returning a
+Backend that reaches it. A key alone does not move providers either: set the
+seat *and* the matching key. An explicit `MODEL_BACKEND` pointing at a gateway
+(OpenRouter, Ollama) receives every seat verbatim and is never re-routed.
 
 `CheckDecorrelation` enforces only **critic ≠ writer** — a property, not a
 vendor, so any two distinct models satisfy it. It is legal to run every seat on

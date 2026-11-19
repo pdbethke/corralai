@@ -4,7 +4,6 @@ package advpool
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"github.com/pdbethke/corralai/internal/shadowpool"
 	"log"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/agentbackend"
+	"github.com/pdbethke/corralai/internal/clip"
 	golang "github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/matrix"
 	"github.com/pdbethke/corralai/internal/modelcorr"
@@ -91,6 +91,13 @@ func scoreSalvaged(ctx context.Context, scorer Scorer, codePath, code, test stri
 	return scoreAuthored(ctx, scorer, codePath, code, test, mutants, deselectedCmd)
 }
 
+// DevWarmingScorer is the optional Scorer extension for the run's DEV-suite
+// pass, the one pass that may warm a jail's shared cache (see
+// JailScorer.ScoreDevReport). A nil cmdFor is the run's single shared command.
+type DevWarmingScorer interface {
+	ScoreDevReport(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string, cmdFor adequacy.CommandFor) (adequacy.Report, error)
+}
+
 // PerMutantScorer is the optional RICHER contract: a Scorer that can grade
 // each mutant with its OWN command — the tests that actually reach the lines
 // that mutant changed — instead of the one command the whole file shares.
@@ -120,6 +127,11 @@ type PerMutantScorer interface {
 // is a statement about the exam, not about which command the run chose.
 func scoreDevReport(ctx context.Context, scorer Scorer, rs RunSpec, mutants []adequacy.Mutant) (adequacy.Report, bool, error) {
 	cmd := DevCommand(rs)
+	if dw, ok := scorer.(DevWarmingScorer); ok {
+		cmdFor := DevCommandFor(rs)
+		rep, err := dw.ScoreDevReport(ctx, rs.CodePath, rs.Code, rs.DevTestCode, mutants, cmd, cmdFor)
+		return rep, cmdFor != nil, err
+	}
 	if pm, ok := scorer.(PerMutantScorer); ok {
 		if cmdFor := DevCommandFor(rs); cmdFor != nil {
 			rep, err := pm.ScoreReportFor(ctx, rs.CodePath, rs.Code, rs.DevTestCode, mutants, cmd, cmdFor)
@@ -975,6 +987,17 @@ type Verdict struct {
 	// both construction paths carry it, and JSON-tagged, so the --local
 	// signed digest covers it.
 	SeatTools map[string]string `json:"seat_tools,omitempty"`
+	// SeatProviders is WHERE each seat's model was served from: the
+	// provider the CLI's seat resolver decided for it (RunSpec.SeatProviders),
+	// keyed by role, for the seats the signed roster names. ModelsByRole
+	// holds the bare model, so without this `openai/x` and `anthropic/x`
+	// sign the same roster and the record cannot say where the audited
+	// source was sent. Absent for a seat with no resolved provider and nil
+	// on a verdict whose seats were resolved elsewhere (the brain's daemon
+	// path): not recorded, never a guess from the model's name. Set by
+	// signedSeats, so both construction paths carry it, and JSON-tagged, so
+	// the --local signed digest covers it.
+	SeatProviders map[string]string `json:"seat_providers,omitempty"`
 	// MutantSources is where each mutant of the exam came from (graded, or
 	// refused by the compile gate, or unmeasured — so waste can be counted
 	// per source too), keyed by mutant ID: Kind model (with the generator seat's model) for what this run's
@@ -2335,6 +2358,21 @@ type CompliantFailureExplainer interface {
 	CompliantFailure(ctx context.Context, codePath, code, test, testCmd string) string
 }
 
+// writerFailureEnd is how much of each end of a clean-code failure's output
+// the test writer is shown.
+const writerFailureEnd = 16 << 10
+
+// writerFailureDetail is a clean-code failure's output as the test writer is
+// shown it: its first and last 16 KiB with an elision line between them, and
+// all of it when it fits. Both ends, because what names the failure can be at
+// either (JailScorer.CompliantRun says which runs put it where), and bounded,
+// because it goes into a prompt: 32 KiB and one line, on every substrate.
+// The failure READERS are not given this: salvage reads the whole captured
+// output.
+func writerFailureDetail(output string) string {
+	return clip.Ends(output, writerFailureEnd, writerFailureEnd)
+}
+
 // compliantFailureOutput asks the Scorer for the clean-code failure detail,
 // tolerating a Scorer that cannot supply it.
 func compliantFailureOutput(ctx context.Context, s Scorer, run *runState, test string) string {
@@ -2843,7 +2881,7 @@ func (d *Driver) tickPoolAdequacy(ctx context.Context, missionID int64, run *run
 	}
 	writerTest := d.Validator.ParseTest(tw.Result)
 
-	if cerr := d.Validator.CompileTest(ctx, run.rs.CodePath, run.rs.Code, writerTest); cerr != nil {
+	if cerr := d.checkAuthoredTest(ctx, run, writerTest); cerr != nil {
 		run.testWriterAttempts++
 		if run.testWriterAttempts < MaxTestWriterAttempts {
 			// CORRECTIVE retry: re-render the test-writer WITH the compiler error
@@ -2862,12 +2900,7 @@ func (d *Driver) tickPoolAdequacy(ctx context.Context, missionID int64, run *run
 				// Re-issue a FRESH prompt instead — a clean shot, not a repair.
 				newInstr = renderTestWriter(run.rs, run.sigs, run.devSurvivors)
 			} else {
-				var ce *CompileError
-				compileMsg := cerr.Error()
-				if errors.As(cerr, &ce) && strings.TrimSpace(ce.Output) != "" {
-					compileMsg = ce.Output
-				}
-				newInstr = renderTestWriterWithRepair(run.rs, run.sigs, run.devSurvivors, writerTest, compileMsg)
+				newInstr = renderTestWriterWithRepair(run.rs, run.sigs, run.devSurvivors, writerTest, writerFeedback(cerr))
 			}
 			newID, serr := d.Q.SupersedeTask(tw.ID, queue.TaskSpec{
 				Key:         RoleTestWriter,
@@ -2883,7 +2916,7 @@ func (d *Driver) tickPoolAdequacy(ctx context.Context, missionID int64, run *run
 			if _, perr := d.Q.PromoteReady(missionID); perr != nil {
 				return fmt.Errorf("advpool: promote test-writer after compile-feedback reissue: %w", perr)
 			}
-			return fmt.Errorf("advpool: test-writer result does not compile, reissued for retry (%d/%d): %w",
+			return fmt.Errorf("advpool: test-writer result rejected (did not compile, or names the sandbox's path), reissued for retry (%d/%d): %w",
 				run.testWriterAttempts, MaxTestWriterAttempts, cerr)
 		}
 		// Exhausted: STOP reopening. A hard survivor whose only authored tests
@@ -2981,7 +3014,7 @@ func (d *Driver) tickPoolAdequacy(ctx context.Context, missionID int64, run *run
 
 	if !rep.CompliantPass && run.testWriterAttempts < MaxTestWriterAttempts-1 {
 		run.testWriterAttempts++
-		failure := compliantFailureOutput(ctx, d.Scorer, run, writerTest)
+		failure := writerFailureDetail(compliantFailureOutput(ctx, d.Scorer, run, writerTest))
 		newID, serr := d.Q.SupersedeTask(tw.ID, queue.TaskSpec{
 			Key:         RoleTestWriter,
 			Role:        RoleTestWriter,
@@ -3120,11 +3153,10 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	// execution-proven judgment (kill-rate + proven_missed), never an LLM's
 	// opinion, which can hallucinate. blockingFindingOpen remains for a future
 	// execution-verified finding path.
-	roster, seatedSelection, seatTools := run.signedSeats(d.Assign)
-	v := aggregate(run.rs, roster, run.devKillRate, run.mutantsTotal, len(run.devSurvivors), run.provenMissed,
+	seated := run.signedSeats(d.Assign)
+	v := aggregate(run.rs, seated.roster, run.devKillRate, run.mutantsTotal, len(run.devSurvivors), run.provenMissed,
 		criticFindings, d.Threshold, d.CertifyIntervalWidth, run.examSample, false, run.testWriterFailed, run.poolTestUnsound)
-	v.ShadowSelection = seatedSelection
-	v.SeatTools = seatTools
+	seated.stamp(&v)
 	v.CriticIncomplete = criticIncomplete
 	v.RegionsTotal = run.regionsTotal
 	v.PromptShape = run.promptShape
@@ -3768,7 +3800,7 @@ func (d *Driver) timeoutVerdict(run *runState) Verdict {
 	v.MutantSources = run.mutantSources
 	v.PromptShape = run.promptShape
 	v.MutantBudget = run.mutantBudget
-	v.ModelsByRole, v.ShadowSelection, v.SeatTools = run.signedSeats(d.Assign)
+	run.signedSeats(d.Assign).stamp(&v)
 	// A stalled run still spent everything it spent, and it is the run an
 	// operator most needs the clock for: "which phase was it sitting in when
 	// the deadline hit" is answerable only from the phases that DID close,
@@ -3877,13 +3909,34 @@ func (d *Driver) feedLeaderboard(v Verdict, testWriterMoot bool, criticObs []Cri
 	}
 }
 
-// signedSeats is the roster a verdict signs AND the pool draws it discloses,
-// returned together so the two cannot disagree. A challenger drawn and then
-// never dispatched (an unsharded run, no shardable region) is dropped from
-// the roster by modelsByRole; its selection must go with it, or the record
-// would say a seat was drawn for a run the roster says it never sat in.
-// Both verdict construction sites call this, never modelsByRole alone.
-func (r *runState) signedSeats(assign RoleAssignment) (map[string]string, []shadowpool.Selection, map[string]string) {
+// signedRoster is everything a verdict signs about its seats: the roster,
+// the pool draws it discloses, and each named seat's agent tool and
+// provider. One value, stamped by one method, so the two verdict construction
+// sites cannot carry a different subset of it — timeoutVerdict has been the
+// place a field was forgotten more than once.
+type signedRoster struct {
+	roster    map[string]string
+	selection []shadowpool.Selection
+	tools     map[string]string
+	providers map[string]string
+}
+
+// stamp writes the signed seats onto v.
+func (s signedRoster) stamp(v *Verdict) {
+	v.ModelsByRole = s.roster
+	v.ShadowSelection = s.selection
+	v.SeatTools = s.tools
+	v.SeatProviders = s.providers
+}
+
+// signedSeats is the roster a verdict signs AND the pool draws, tools and
+// providers it discloses, returned together so they cannot disagree. A
+// challenger drawn and then never dispatched (an unsharded run, no shardable
+// region) is dropped from the roster by modelsByRole; its selection, tool and
+// provider must go with it, or the record would say a seat was drawn, or
+// served, for a run the roster says it never sat in. Both verdict
+// construction sites call this, never modelsByRole alone.
+func (r *runState) signedSeats(assign RoleAssignment) signedRoster {
 	roster := r.modelsByRole(assign)
 	var sels []shadowpool.Selection
 	for _, sel := range r.rs.ShadowSelection {
@@ -3891,21 +3944,33 @@ func (r *runState) signedSeats(assign RoleAssignment) (map[string]string, []shad
 			sels = append(sels, sel)
 		}
 	}
-	// The tools of the seats the roster names, and only those: a challenger
-	// never dispatched is not in the roster, so its tool is not either. Nil
-	// when no named seat is an agent, so an all-API verdict serializes
-	// exactly as it did before the field existed.
-	var tools map[string]string
-	for role, tool := range r.rs.SeatTools {
-		if strings.TrimSpace(tool) == "" || strings.TrimSpace(roster[role]) == "" {
+	return signedRoster{
+		roster: roster, selection: sels,
+		tools:     SeatedOnly(r.rs.SeatTools, roster),
+		providers: SeatedOnly(r.rs.SeatProviders, roster),
+	}
+}
+
+// SeatedOnly is the entries of a role-keyed map whose role the roster seats
+// (names a model that is not "off") and whose value is set. Nil when none
+// is, so a verdict with no agent seat (or no resolved provider) serializes
+// exactly as it did before the field existed. It is the ONE narrowing of a
+// per-seat fact to a roster: the verdict's tools and providers here, and the
+// --repo entry's providers in cmd/corral (seatSet.providersFor), so the two
+// records cannot disagree about which seats a roster names.
+func SeatedOnly(byRole, roster map[string]string) map[string]string {
+	var out map[string]string
+	for role, v := range byRole {
+		m := strings.TrimSpace(roster[role])
+		if strings.TrimSpace(v) == "" || m == "" || strings.EqualFold(m, "off") {
 			continue
 		}
-		if tools == nil {
-			tools = map[string]string{}
+		if out == nil {
+			out = map[string]string{}
 		}
-		tools[role] = tool
+		out[role] = v
 	}
-	return roster, sels, tools
+	return out
 }
 
 // modelsByRole is the roster a verdict SIGNS: the assignment, minus any

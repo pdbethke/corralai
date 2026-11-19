@@ -1,0 +1,9 @@
+corral-units-cwd /fixture
+PHPUnit 12.5.44 by Sebastian Bergmann and contributors.
+
+Available tests:
+ - ATest::testOne
+ - ATest::testTwo
+ - BTest::testOne
+corral-unit-class ATest	/fixture/units/phpunit/tests/ATest.php
+corral-unit-class BTest	/fixture/units/phpunit/tests/BTest.php

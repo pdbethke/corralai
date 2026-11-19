@@ -4,7 +4,6 @@ package advpool
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"sort"
@@ -166,7 +165,7 @@ func (d *Driver) advanceWriterAttempt(ctx context.Context, missionID int64, run 
 	a.attempts++
 
 	test := d.Validator.ParseTest(task.Result)
-	if cerr := d.Validator.CompileTest(ctx, run.rs.CodePath, run.rs.Code, test); cerr != nil {
+	if cerr := d.checkAuthoredTest(ctx, run, test); cerr != nil {
 		a.repairs++
 		if a.repairs >= MaxTestWriterAttempts {
 			// EXHAUSTED, and only this survivor is. Under the batched shape
@@ -184,17 +183,12 @@ func (d *Driver) advanceWriterAttempt(ctx context.Context, missionID int64, run 
 			// when the model returned nothing at all — a repair prompt over
 			// an empty test only begets more emptiness and burns the budget
 			// in a degenerate loop, so that case gets a FRESH prompt instead.
-			var ce *CompileError
-			msg := cerr.Error()
-			if errors.As(cerr, &ce) && strings.TrimSpace(ce.Output) != "" {
-				msg = ce.Output
-			}
-			sys, instr = renderTestWriterSeat(run.rs, run.sigs, a.mutant, test, msg, "")
+			sys, instr = renderTestWriterSeat(run.rs, run.sigs, a.mutant, test, writerFeedback(cerr), "")
 		}
 		if rerr := d.reissueWriterSeat(missionID, run, a, task, sys, instr); rerr != nil {
 			return true, rerr
 		}
-		return true, fmt.Errorf("advpool: writer seat for survivor %s does not compile, reissued for retry (%d/%d): %w",
+		return true, fmt.Errorf("advpool: writer seat for survivor %s rejected (did not compile, or names the sandbox's path), reissued for retry (%d/%d): %w",
 			a.mutant.ID, a.repairs, MaxTestWriterAttempts, cerr)
 	}
 
@@ -223,7 +217,7 @@ func (d *Driver) advanceWriterAttempt(ctx context.Context, missionID int64, run 
 		}
 		if a.repairs < MaxTestWriterAttempts-1 {
 			a.repairs++
-			failure := compliantFailureOutput(ctx, d.Scorer, run, test)
+			failure := writerFailureDetail(compliantFailureOutput(ctx, d.Scorer, run, test))
 			sys, instr := renderTestWriterSeat(run.rs, run.sigs, a.mutant, test, "", failure)
 			if rerr := d.reissueWriterSeat(missionID, run, a, task, sys, instr); rerr != nil {
 				return true, rerr

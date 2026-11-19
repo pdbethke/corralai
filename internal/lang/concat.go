@@ -444,6 +444,7 @@ func mergeParts(parts []AuthoredPart, spec concatSpec, headerPrefix string, head
 
 var (
 	pyImportRe = regexp.MustCompile(`^(import\s+\S|from\s+\S+\s+import\s)`)
+	pyFutureRe = regexp.MustCompile(`^from\s+__future__\s+import\s`)
 	pyDefRe    = regexp.MustCompile(`^def\s+([A-Za-z_]\w*)\s*\(`)
 	pyClassRe  = regexp.MustCompile(`^class\s+([A-Za-z_]\w*)\b`)
 )
@@ -451,6 +452,18 @@ var (
 // ConcatTests folds several proven pytest/unittest files into one: imports
 // hoisted and de-duplicated, colliding test names suffixed with their mutant
 // id, a colliding helper refused. See TestConcatenator.
+//
+// `from __future__ import …` headers are emitted before every other header,
+// in the order first seen. Python accepts them nowhere else, and first-seen
+// order alone put one below another part's imports whenever an earlier part
+// did not carry it: the merged file was a SyntaxError (starlette, 6 of 25
+// files). The cost is stated rather than hidden: the directive then applies
+// to the whole merged file, including parts whose writer did not ask for it,
+// and `annotations` changes how those parts' annotations are evaluated. The
+// alternative, refusing to merge parts that disagree, would hand back one
+// file per proven test for a difference that rarely matters to a test. What
+// does matter is caught by execution: the merged file is run once on the
+// unmodified code (authored_together), and each part's proof is its own run.
 func (pyPlugin) ConcatTests(parts []AuthoredPart) (string, error) {
 	return mergeParts(parts, concatSpec{
 		isHeader: func(line string) bool { return pyImportRe.MatchString(line) },
@@ -461,7 +474,20 @@ func (pyPlugin) ConcatTests(parts []AuthoredPart) (string, error) {
 			return strings.HasPrefix(name, "test") || strings.HasPrefix(name, "Test")
 		},
 		literals: literalSyntax{quotes: `"'`, tripleQuotes: true, lineComments: []string{"#"}},
-	}, "", func(headers []string) string { return strings.Join(headers, "\n") })
+	}, "", func(headers []string) string {
+		ordered := make([]string, 0, len(headers))
+		for _, h := range headers {
+			if pyFutureRe.MatchString(h) {
+				ordered = append(ordered, h)
+			}
+		}
+		for _, h := range headers {
+			if !pyFutureRe.MatchString(h) {
+				ordered = append(ordered, h)
+			}
+		}
+		return strings.Join(ordered, "\n")
+	})
 }
 
 var (

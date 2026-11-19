@@ -87,7 +87,11 @@ func TestPromptGroupPhraseFollowsSkin(t *testing.T) {
 // generates with a persona the server didn't define. (Reached only when a
 // narrator is configured; the 400 fires before any model call.)
 func TestChatterRejectsUnknownSkin(t *testing.T) {
-	t.Setenv("MODEL_BACKEND", "ollama") // keyless local backend: Available()==true, never called
+	// A fully declared keyless local backend: Available()==true, never called
+	// (the address is unroutable, and the 400 fires before any model call).
+	t.Setenv("MODEL_BACKEND", "ollama")
+	t.Setenv("AGENT_MODEL", "m")
+	t.Setenv("OLLAMA_URL", "http://127.0.0.1:1")
 	s := &Server{narrator: llm.FromEnv()}
 	for _, bad := range []string{"bogus", "<script>alert(1)</script>", ""} {
 		req := httptest.NewRequest(http.MethodGet, "/api/chatter?agent=Bob&skin="+bad, nil)

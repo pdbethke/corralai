@@ -386,7 +386,7 @@ func TestWriteAuditStatementReturnsTheSignError(t *testing.T) {
 	dir := t.TempDir()
 	att := filepath.Join(t.TempDir(), "statement.json")
 
-	sha, signErr, err := writeAuditStatement(att, dir, oneAuditedFileReport(), map[string]string{"writer": "m"}, nil, nil, true, 0, oneAuditedFileBundle(0))
+	sha, signErr, err := writeAuditStatement(att, dir, oneAuditedFileReport(), map[string]string{"writer": "m"}, nil, nil, nil, true, 0, oneAuditedFileBundle(0))
 	if err != nil || sha == "" {
 		t.Fatalf("the plain statement must still be written: sha=%q err=%v", sha, err)
 	}

@@ -1,0 +1,14 @@
+{
+ "name": "corral-runner-fixture-tools",
+ "private": true,
+ "description": "The JS test runners scripts/capture-runner-fixtures.sh records output from. Installed with npm ci from the lockfile beside this file, so every package is pinned by its integrity hash. The overrides lift glob and minimatch, which jest and mocha pull in at advised-against versions, to their first patched releases.",
+ "dependencies": {
+  "jest": "30.5.2",
+  "mocha": "12.0.3",
+  "vitest": "5.1.0"
+ },
+ "overrides": {
+  "glob": "14.0.2",
+  "minimatch": "11.0.1"
+ }
+}

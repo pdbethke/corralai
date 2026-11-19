@@ -247,7 +247,7 @@ func TestTheLandingReachesTheLedgerAndTheRepoOutput(t *testing.T) {
 			v.AuthoredLanding = landing.AppendTo()
 			results := []reposcan.FileResult{{Job: reposcan.Job{Path: "src/foo.rs", Lang: "rust"}, Gradable: true, Verdict: v}}
 
-			files := buildScanFileRows(results, nil, reposcan.CoverageMap{}, "", t.TempDir(), io.Discard)
+			files := buildScanFileRows(results, nil, reposcan.CoverageMap{}, "", t.TempDir(), io.Discard, false)
 			b := buildBundle(scanstore.Scan{Repo: "o/r", Commit: "c"}, 1, files, nil, nil, nil, auditpush.Link{}, false, "o/r", "c", "", bundleMeta{})
 			raw, err := json.Marshal(auditpush.LedgerEntry{Format: "test", Bundle: b})
 			if err != nil {
@@ -440,7 +440,7 @@ func TestBaselineFlakyIsOneValueFromTheRunnerToTheWarehouse(t *testing.T) {
 	}
 
 	res.Job = job
-	files := buildScanFileRows([]reposcan.FileResult{res}, nil, reposcan.CoverageMap{}, "", t.TempDir(), io.Discard)
+	files := buildScanFileRows([]reposcan.FileResult{res}, nil, reposcan.CoverageMap{}, "", t.TempDir(), io.Discard, false)
 	b := buildBundle(scanstore.Scan{Repo: "o/r", Commit: "c"}, 1, files, nil, nil, nil, auditpush.Link{}, false, "o/r", "c", "", bundleMeta{})
 	raw, err := json.Marshal(auditpush.LedgerEntry{Format: "test", Bundle: b})
 	if err != nil {

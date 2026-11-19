@@ -14,7 +14,7 @@ import (
 
 // unitRows are the rows with a unit pass. A row joins this list when it
 // gains ListUnits; TestEveryUnitRowRunsSeveralUnits fails until it does.
-var unitRows = []string{"go-test", "gotestsum", "jest", "vitest", "node-test", "rspec", "phpunit", "cargo-nextest", "cargo-test"}
+var unitRows = []string{"go-test", "gotestsum", "jest", "vitest", "node-test", "rspec", "phpunit", "cargo-nextest", "cargo-test", "swift-test"}
 
 // Every row with a one-unit command has the multi-unit command and names the
 // unit a test file belongs to; a row with no unit pass has none of the three,
@@ -88,6 +88,7 @@ func TestUnitsCmdWithOneUnitEqualsUnitCmd(t *testing.T) {
 		"CargoUnitsFromNoRunJSON":                 TestCargoUnitsFromNoRunJSON,
 		"CargoUnitCmdKeepsPackageScope":           TestCargoUnitCmdKeepsPackageScope,
 		"NextestUnitsFromList":                    TestNextestUnitsFromList,
+		"SwiftUnitsFromDescribe":                  TestSwiftUnitsFromDescribe,
 		"BundledShortNameFilterIsRefused":         TestBundledShortNameFilterIsRefused,
 	} {
 		t.Run(name, f)
@@ -121,6 +122,8 @@ func TestUnitsCmdRefusesANameFilter(t *testing.T) {
 		{"phpunit", []string{"phpunit", "--filter", "foo"}, []string{"tests/ATest.php", "tests/BTest.php"}},
 		{"cargo-test", []string{"cargo", "test", "--", "foo"}, []string{"a/lib", "b/lib"}},
 		{"cargo-nextest", []string{"cargo", "nextest", "run", "-E", "test(foo)"}, []string{"a", "b"}},
+		{"swift-test", []string{"swift", "test", "--filter", "foo"}, []string{"ATests", "BTests"}},
+		{"swift-test", []string{"swift", "test", "--skip=foo"}, []string{"ATests", "BTests"}},
 	} {
 		r := rowByID(t, c.row)
 		if cmd, ok := r.UnitsCmd(c.argv, c.units); ok {
@@ -137,11 +140,12 @@ func TestUnitsCmdRefusesAnythingButASet(t *testing.T) {
 		"go-test": {"go", "test", "./..."}, "gotestsum": {"gotestsum"}, "jest": {"jest"}, "vitest": {"vitest", "run"},
 		"node-test": {"node", "--test"}, "rspec": {"rspec"}, "phpunit": {"phpunit"},
 		"cargo-test": {"cargo", "test"}, "cargo-nextest": {"cargo", "nextest", "run"},
+		"swift-test": {"swift", "test"},
 	}
 	unit := map[string]string{
 		"go-test": "example.com/m/a", "gotestsum": "example.com/m/a", "jest": "a.test.js", "vitest": "a.test.ts",
 		"node-test": "a.test.js", "rspec": "spec/a_spec.rb", "phpunit": "tests/ATest.php",
-		"cargo-test": "a/lib", "cargo-nextest": "a",
+		"cargo-test": "a/lib", "cargo-nextest": "a", "swift-test": "ATests",
 	}
 	for _, id := range unitRows {
 		r := rowByID(t, id)

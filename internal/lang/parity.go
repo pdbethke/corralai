@@ -195,23 +195,15 @@ var ParityExemptions = []Exemption{
 
 	{"rust", "failure-hook", "not built: corral reads the lines cargo test and cargo-nextest print. nextest writes a JUnit file when a profile in the project's .config/nextest.toml asks for one, and libtest's JSON output is an unstable option; a way to ask for either from the command line was not looked for"},
 
-	{"swift", "list", "not built yet: corral has no reader for the list `swift test` prints"},
+	{"swift", "confirm-alone", "not built: the failure line swift-testing prints names a failing test by its function or display name alone (`✘ Test fails() failed after ...`), not its suite or target, and XCTest's names Class.method without the target (measured on Swift 6.3.2), so the killing test cannot be narrowed by name to exactly one test; kills are confirmed by repeating the grading run"},
 
-	{"swift", "single", "not built yet: corral has no command that runs one Swift test alone"},
+	{"swift", "fail-fast", "`swift test` has no option to stop at the first failure: the --help of Swift 6.3.2 lists none"},
 
-	{"swift", "first-failure", "not built yet: corral has no reader for the failure lines `swift test` prints"},
+	{"swift", "readable-failures", "not built: the --help of Swift 6.3.2 names no project file that sets `swift test`'s options, so no project setting is known to hide the lines corral reads; this was read from the help text, not tested against a project that tried"},
 
-	{"swift", "confirm-alone", "not built yet: it needs the command that runs one Swift test alone, which is not built"},
+	{"swift", "failure-hook", "not built: corral reads the lines `swift test` prints. Its `--xunit-output <path>` (in the --help of Swift 6.3.2) writes a record of each test to a file and would be the hook; corral does not add it, and it has not been run for this"},
 
-	{"swift", "fail-fast", "not built yet"},
-
-	{"swift", "readable-failures", "not built yet: no Swift failure reader exists to protect, and whether a project can hide `swift test`'s failure lines was not checked"},
-
-	{"swift", "failure-hook", "not built yet"},
-
-	{"swift", "salvage", "not built yet: it needs a reader for failing Swift tests and a way to skip them, neither of which is built"},
-
-	{"swift", "units", "not built yet"},
+	{"swift", "salvage", "not built: `swift test --skip` can leave tests out, but the failure lines name a swift-testing test without its suite or target and an XCTest test without its target (measured on Swift 6.3.2), so a skip built from them could leave out a passing test of the same name elsewhere and narrow the run"},
 
 	{"swift", "critic-list", "not built yet: corral does not read the tests a Swift test file declares"},
 
@@ -219,5 +211,5 @@ var ParityExemptions = []Exemption{
 
 	{"swift", "selection", "not built yet: it needs Swift coverage, which is not built"},
 
-	{"swift", "run-cache", "not built, and not measured: whether sharing a SwiftPM build directory between sandboxed runs would save time, or stay correct, has not been looked at"},
+	{"swift", "run-cache", "not built. measured 2026-11-19 on taplin/Lariat at be0c5fd with Swift 6.3.2 (the swift:6.3.2-noble container) on one 32-core machine, in Docker, not in the sandbox: a cold `swift build --build-tests` took 142.5 s and a rebuild after one source file changed took 13.6 s. Before a build directory is shared we must settle how one mutant's build output is kept from being read by another's run"},
 }

@@ -51,6 +51,18 @@ type poolSeating struct {
 	SeatEvidence string            // what the ranking read, as the plan's evidence line says it; "" when no seat was seated by evidence
 }
 
+// proposed reports whether --models chose any seat (by evidence or order),
+// which is when a door that asks nothing says so under the plan. False
+// without --models and when every seat was pinned, where no plan is printed.
+func (s poolSeating) proposed() bool {
+	for _, by := range s.SeatedBy {
+		if by != autoseat.ByOperator {
+			return true
+		}
+	}
+	return false
+}
+
 // poolRole ties a role to the flag variable the door already has.
 type poolRole struct {
 	role string
@@ -68,7 +80,31 @@ type poolDeps struct {
 	confirm func(plan string) (accepted bool, interactive bool, err error)
 	stdout  io.Writer
 	stderr  io.Writer
+	// noCredentialCheck skips each member's credential check, and is set
+	// by certify --repo --dry-run alone: a dry run demands no credential
+	// for any seat (validateShadowPools is called there with
+	// checkCredentials false), so a pool member is held to the same. The
+	// zero value checks, so a door that forgets this field is strict.
+	noCredentialCheck bool
 }
+
+// doorPoolDeps is the production wiring every door hands seatFromPool: the
+// evidence the ranking reads from the machine ledger (defaultRankLoader, as
+// `corral models rank` reads it) and a question on the terminal. A variable,
+// as listOllama and shadowMemberRunnable are, because the doors' entry
+// points are called from dozens of tests by a fixed signature; a test
+// replaces it with a fake loader and confirm, so no door test reads the real
+// ledger or a terminal. doctor and certify --repo --dry-run keep the loader
+// and replace the confirm with one that asks nothing.
+var doorPoolDeps = func(stdout, stderr io.Writer) poolDeps {
+	return poolDeps{load: defaultRankLoader, confirm: terminalConfirm(os.Stdin, stdout), stdout: stdout, stderr: stderr}
+}
+
+// acceptUnasked is the confirm of a door that runs nothing (doctor, a dry
+// run): it accepts the plan without a question, because there is nothing to
+// spend and so nothing for the operator to agree to. The door then states,
+// under the plan, that it asked nothing.
+func acceptUnasked(string) (accepted bool, interactive bool, err error) { return true, true, nil }
 
 // seatFromPool returns done=true with an exit code when the door must stop
 // (refusal: 2; declined or no terminal: 0). With --models unset it returns
@@ -99,7 +135,7 @@ func seatFromPool(ctx context.Context, cmdName, repoRoot, lang string, f *models
 	if err != nil {
 		return refuse("%v", err)
 	}
-	pool, err := resolveModelsPool(ctx, cmdName, repoRoot, typed)
+	pool, err := resolveModelsPool(ctx, cmdName, repoRoot, typed, !deps.noCredentialCheck)
 	if err != nil {
 		return refuse("%v", err)
 	}
@@ -203,10 +239,11 @@ func parseModelsPool(text string) ([]string, error) {
 
 // resolveModelsPool resolves each member as its own seat, with one shared
 // listing of OLLAMA_URL's daemon (shadowCandidates' pattern), and checks each
-// with shadowMemberRunnable, the one per-member credential check. The
+// with shadowMemberRunnable, the one per-member credential check, unless
+// checkCredentials is false (poolDeps.noCredentialCheck). The
 // resolver rewrites the value it is handed, so it resolves a copy and the
 // member keeps what the operator typed as Given.
-func resolveModelsPool(ctx context.Context, cmdName, repoRoot string, typed []string) ([]autoseat.Member, error) {
+func resolveModelsPool(ctx context.Context, cmdName, repoRoot string, typed []string, checkCredentials bool) ([]autoseat.Member, error) {
 	listing := &ollamaListing{}
 	byRecorded := map[string]string{}
 	var out []autoseat.Member
@@ -217,8 +254,12 @@ func resolveModelsPool(ctx context.Context, cmdName, repoRoot string, typed []st
 			return nil, fmt.Errorf("member %q: %v", given, err)
 		}
 		rs := set["models"]
-		if err := shadowMemberRunnable(rs); err != nil {
-			return nil, fmt.Errorf("member %q cannot run: %v — every member is checked before anything is proposed, so fix or remove it", given, err)
+		// Without checkCredentials (a dry run) the member is still resolved,
+		// so one no source serves is refused, and is never asked for a key.
+		if checkCredentials {
+			if err := shadowMemberRunnable(rs); err != nil {
+				return nil, fmt.Errorf("member %q cannot run: %v — every member is checked before anything is proposed, so fix or remove it", given, err)
+			}
 		}
 		// Two spellings of one model (an alias and its concrete name) would
 		// make the ranking's row ambiguous between them.

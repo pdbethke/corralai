@@ -143,6 +143,7 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 		writerPool:  "a comma-separated POOL of challenger WRITER models, drawn per run exactly as --shadow-pool is. Mutually exclusive with --shadow-writer-model. OFF unless named; NEVER gates the verdict",
 		seed:        shadowSeedReplayHelp,
 	})
+	modelsPool := registerModelsFlags(fs, "a comma-separated `POOL` of models you name; corral proposes which of them seats the mutant-generator, test-writer and test-critic for this file, ranked by the recorded evidence for its language (--lang, or detected from --code), prints that plan, and nothing runs until you accept it on a terminal (with no terminal it prints the equivalent seat flags and exits). A pool is not a default: a seat you also name by its own flag is pinned, and a seat no member qualifies for is refused, never filled from outside the pool")
 	writerModeFlag := fs.String("writer-mode", "", "how the test-writer attacks this file's survivors: `per-survivor` (the default) makes ONE call per survivor — each carrying the file once as a cacheable shared prefix plus that survivor's diff, each repaired on its own budget and each PROVEN ALONE against its own mutant — or `batched`, the original shape: one call carrying every survivor, one repair budget, one proof pass over all of them. Nothing measured changes between them (a survivor is proven iff an authored test kills it alone and passes on the original, either way); what changes is that one unbuildable test no longer spends the whole file's retries and takes every other survivor down with it. Each survivor's proof in per-survivor mode runs its OWN compliant baseline (a compliant pass plus a canary, per seat), so a file with N survivors pays N baselines where batched paid one: on a repo whose suite takes a minute, prefer --writer-mode batched or expect N baselines' worth of wall clock.")
 	matrixFlag := fs.Bool("matrix", false, "opt into the tests×mutants matrix: after the primary pass, re-score EVERY dev test ALONE against the run's mutants — a per-test adequacy readout + a delete-candidate list, instead of one dev-suite-wide number. COSTLY: T tests × M mutants extra jail runs (T×M, on top of the primary pass), so leave off by default on a big suite")
 	var localEndpointFlag stringSlice
@@ -201,8 +202,10 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 	// The shadow draw happens HERE, before the registry resolves any seat, so
 	// the drawn member — as typed — is resolved exactly like a named one.
 	pooled := strings.TrimSpace(*shadow.pool) != "" || strings.TrimSpace(*shadow.writerPool) != ""
+	// --models reads the evidence for the same language the draw reads.
+	modelsGiven := modelsPool.pool != nil
 	drawLang := strings.TrimSpace(*langFlag)
-	if drawLang != "" && pooled {
+	if drawLang != "" && (pooled || modelsGiven) {
 		// Refused HERE, before the draw reads the store: an unknown name
 		// would otherwise print a measured "0 row(s)" for a language corral
 		// does not have, and only then be refused below.
@@ -220,6 +223,23 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 		// Can precede the --code-required refusal, so it names both fixes.
 		fmt.Fprintln(stderr, "corral certify --local: a shadow pool reads history for the audited file's language, and it cannot be detected — pass --lang (or --code)")
 		return 2
+	}
+	if drawLang == "" && modelsGiven {
+		fmt.Fprintln(stderr, "corral certify --local: --models ranks evidence for the audited file's language, and it cannot be detected — pass --lang (or --code)")
+		return 2
+	}
+	// --models proposes the seats HERE: after the flags are parsed and before
+	// the shadow draw (which reads the primary writer and generator) and the
+	// seat resolution, so a proposed member is drawn against and resolved
+	// exactly as the same model typed into its flag would be. The flags the
+	// operator did type are pins.
+	seating, poolExit, poolDone := seatFromPool(context.Background(), "corral certify --local", *repoDirFlag, drawLang, modelsPool, []poolRole{
+		{role: advpool.RoleMutantGenerator, val: mutantModel},
+		{role: advpool.RoleTestWriter, val: writerModel},
+		{role: advpool.RoleTestCritic, val: criticModel},
+	}, doorPoolDeps(stdout, stderr))
+	if poolDone {
+		return poolExit
 	}
 	// The bug-catching scorecard store: a --local run's per-seat metrics
 	// (including the shadow head-to-head) persist next to the signed build
@@ -550,6 +570,7 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 		shadowWriterModel: *shadow.writerModel,
 		shadowSelection:   shadowSels,
 		seats:             seats,
+		seating:           seating,
 		writerMode:        writerMode,
 
 		jail: *jailFlag, checkArgv: checkArgv,
@@ -693,6 +714,12 @@ type localAuditInput struct {
 	// when every challenger was named or off), carried onto the RunSpec so the
 	// verdict and the signed record say which member ran and why.
 	shadowSelection []shadowpool.Selection
+
+	// seating is how --models chose each seat and what the ranking read
+	// (seatFromPool), carried onto the RunSpec so the verdict, and from it
+	// the ledger row, records it. Zero when --models was not given: every
+	// seat was named by flag, and nothing is recorded.
+	seating poolSeating
 
 	// seats is every seat of this invocation, resolved once (resolveSeats):
 	// the provider, wire, endpoint and key each model is served by. Provider
@@ -1982,6 +2009,8 @@ func newAuditRunSpec(in localAuditInput, roles auditRoles, subj runSubject) advp
 		ShadowSelection:   in.shadowSelection,
 		SeatTools:         roles.tools,
 		SeatProviders:     roles.providers,
+		SeatedBy:          in.seating.SeatedBy,
+		SeatEvidence:      in.seating.SeatEvidence,
 		// HOW the writer attacks. The CLI's default is per-survivor; an
 		// EMPTY value here means batched, which is what a caller outside the
 		// CLI (the brain, a test) gets — see RunSpec.WriterMode.

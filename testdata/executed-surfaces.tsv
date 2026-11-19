@@ -60,6 +60,7 @@ corral certify --local --matrix	executed	test:cmd/corral/certify_local_test.go
 corral certify --local --ledger	executed	test:cmd/corral/certify_local_entry_test.go (TestLocalLedgerFlagWritesBoth: written beside the machine ledger, deduplicated against it, refused inside --repo-dir)
 corral certify --local --max-shards	executed	run:2026-09-02 record 89
 corral certify --local --max-tokens	executed	test:cmd/corral/local_endpoint_test.go
+corral certify --local --models	executed	test:cmd/corral/seated_by_record_test.go (TestLocalEntryRecordsHowEachSeatWasChosen: a fake ledger and an accepting operator; the real machine ledger and terminal are never read)
 corral certify --local --prior	executed	test:cmd/corral/certify_repo_evidence_candidacy_test.go
 corral certify --local --mutant-model	executed	test:cmd/corral/certify_repo_writer_mode_test.go
 corral certify --local --mutants	executed	test:cmd/corral/certify_repo_evidence_candidacy_test.go
@@ -104,6 +105,7 @@ corral certify --repo --json	executed	test:cmd/corral/models_rank_test.go
 corral certify --repo --local-endpoint	executed	test:cmd/corral/local_endpoint_test.go (parseLocalEndpoints, shared by both paths)
 corral certify --repo --max-proven-missed	executed	test:cmd/corral/certify_repo_test.go (gate logic; flag parsing still unexercised)
 corral certify --repo --min-kill-rate	executed	test:cmd/corral/certify_repo_test.go
+corral certify --repo --models	executed	test:cmd/corral/seated_by_record_test.go (TestRepoEntryRecordsHowEachSeatWasChosen), cmd/corral/models_doors_test.go (TestRepoDryRunModelsAsksNothingAndChecksNoCredential)
 corral certify --repo --mutant-model	executed	test:cmd/corral/certify_repo_writer_mode_test.go
 corral certify --repo --mutants	executed	test:cmd/corral/certify_repo_evidence_candidacy_test.go
 corral certify --repo --mutants-from	executed	test:cmd/corral/mutants_from_test.go
@@ -149,6 +151,7 @@ corral certify verify --pubkey	executed	test:cmd/corral/verify_test.go
 corral certify verify --rekor-url	unexecuted	
 corral demo --critic-model	executed	test:cmd/corral/certify_repo_writer_mode_test.go
 corral demo --dir	unexecuted	
+corral demo --models	executed	test:cmd/corral/models_doors_test.go (TestDemoForwardsModelsToCertifyLocal: parsed and forwarded to certify --local, which proposes the seats)
 corral demo --mutant-model	executed	test:cmd/corral/certify_repo_writer_mode_test.go
 corral demo --writer-model	executed	test:cmd/corral/certify_repo_writer_mode_test.go
 corral doctor --code	executed	test:cmd/corral/certify_adversarial_test.go
@@ -157,6 +160,7 @@ corral doctor --derive-model	executed	test:cmd/corral/doctor_test.go
 corral doctor --repo	executed	test:cmd/corral/doctor_test.go
 corral doctor --shadow-model	executed	test:cmd/corral/doctor_test.go
 corral doctor --jail	executed	test:cmd/corral/jail_test.go
+corral doctor --models	executed	test:cmd/corral/models_doors_test.go (TestDoctorModelsPrintsThePlanAndAsksNothing)
 corral doctor --mutant-model	executed	test:cmd/corral/certify_repo_writer_mode_test.go
 corral doctor --shadow-pool	executed	test:cmd/corral/shadow_draw_test.go (TestDoctorValidatesShadowPools)
 corral doctor --shadow-seed	executed	test:cmd/corral/shadow_draw_test.go (TestDoctorValidatesShadowPools: parsed and refused without a pool, never drawn)

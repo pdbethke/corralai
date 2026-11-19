@@ -58,14 +58,14 @@ func (s seatSet) providersFor(roster map[string]string) map[string]string {
 	return advpool.SeatedOnly(s.providers(), roster)
 }
 
-// seatProvidersJSON is the ledger row's SeatProviders text: the role ->
-// provider map as JSON, "" when there is none, so an entry whose seats
-// resolved no provider records nothing rather than "{}".
-func seatProvidersJSON(providers map[string]string) string {
-	if len(providers) == 0 {
+// roleMapJSON is a ledger row's role-keyed seat map (SeatProviders,
+// SeatedBy) as JSON text, "" when the map is empty, so an entry with nothing
+// to say about its seats records nothing rather than "{}".
+func roleMapJSON(byRole map[string]string) string {
+	if len(byRole) == 0 {
 		return ""
 	}
-	b, _ := json.Marshal(providers)
+	b, _ := json.Marshal(byRole)
 	return string(b)
 }
 

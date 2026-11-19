@@ -83,6 +83,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		writerPool:  "a comma-separated POOL of challenger WRITER models, drawn once per scan exactly as --shadow-pool is. Mutually exclusive with --shadow-writer-model. OFF unless named; NEVER gates the verdict",
 		seed:        shadowSeedReplayHelp,
 	})
+	modelsPool := registerModelsFlags(fs, "a comma-separated `POOL` of models you name; corral proposes which of them seats the goal-deriver (unless --goals is given), mutant-generator, test-writer and test-critic for the whole scan, ranked by the recorded evidence for the scan's language (across all languages when it spans several), prints that plan, and nothing runs until you accept it on a terminal (with no terminal it prints the equivalent seat flags and exits; --dry-run prints the plan and asks nothing). A pool is not a default: a seat you also name by its own flag is pinned, and a seat no member qualifies for is refused, never filled from outside the pool")
 	owner := fs.String("owner", "local", "owning account for the scan (tenant identifier)")
 	commit := fs.String("commit", "", "commit SHA the report is bound to")
 	swarmFlag := fs.Int("swarm", 0, "max concurrent audit workers (0 = auto-size to this host's cores); on --substrate workspace it also sizes the private trees that score one file's mutants at once (budget/4, min 1), so --swarm 4 is one tree")
@@ -196,68 +197,6 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "corral certify --repo: the local certify key cannot be used: %v — nothing was spent\n", kerr)
 			return 2
 		}
-	}
-
-	// The shadow draw happens HERE, before the registry resolves any seat, so
-	// the drawn member — as typed — is resolved exactly like a named one. A
-	// scan spans languages and draws ONCE for all of them, so it reads the
-	// scorecard's record across every language.
-	//
-	// --dry-run audits nothing, so it draws nothing: it VALIDATES the pools
-	// (a malformed one is refused here exactly as a real run refuses it) but
-	// prints no draw, opens no scorecard and — like every other seat on the
-	// free inventory — demands no member's credential.
-	shadowPrimary := map[string]string{advpool.RoleMutantGenerator: *mutantModelFlag, advpool.RoleTestWriter: *writerModelFlag}
-	var shadowSels []shadowpool.Selection
-	var drawErr error
-	if *dryRun {
-		drawErr = validateShadowPools("corral certify --repo", *repoDir, shadow, shadowPrimary, false, stderr)
-	} else {
-		bugCatchDBPath, pathErr := statedir.PathForWrite(statedir.BugCatchDB)
-		if pathErr != nil {
-			fmt.Fprintln(stderr, "corral certify --repo:", pathErr)
-			return 2
-		}
-		shadowSels, drawErr = drawShadowSeats("corral certify --repo", *repoDir, shadowpool.LangAny, shadow,
-			shadowPrimary, bugCatchDBPath, stderr)
-	}
-	if drawErr != nil {
-		fmt.Fprintf(stderr, "corral certify --repo: %v\n", drawErr)
-		return 2
-	}
-
-	// The model registry (docs/design/model-registry.md): a project declares
-	// its models once in .corral/models.json and names seats by alias.
-	// ADDITIVE — with no registry nothing here emits or changes anything, and
-	// a value that is not a declared alias is still the concrete model name
-	// this flag has always accepted.
-	//
-	// Resolved HERE, before any seat value is read by the preflight, the cache
-	// key, the ledger or the signed statement, so every one of them records
-	// the CONCRETE model. An alias is a label for humans and is never
-	// authoritative.
-	// --local-endpoint placements are parsed BEFORE the seats resolve: a
-	// placement is itself a declared source for a seat with a bare local name,
-	// and the preflight below (resolveAuditRoles) must see it folded in.
-	localEndpoints, lerr := parseLocalEndpoints(localEndpointFlag)
-	if lerr != nil {
-		fmt.Fprintf(stderr, "corral certify --repo: %v\n", lerr)
-		return 2
-	}
-	// context.Background(): no cancellable context exists here. The SIGINT
-	// handler (auditContext) is installed after the goal derivation, on
-	// purpose — an interrupt before any audit has nothing to record, and
-	// TestAnInterruptedRepoScanRecordsNothing_APISeat depends on it. The one
-	// network call, listing OLLAMA_URL's daemon, has its own 10s bound.
-	seats, regErr := resolveSeatsPlaced(context.Background(), "corral certify --repo", *repoDir,
-		certifySeats(deriveModel, mutantModelFlag, writerModelFlag, criticModelFlag, shadow.model, shadow.writerModel), localEndpoints, stderr)
-	if regErr != nil {
-		fmt.Fprintf(stderr, "corral certify --repo: %v\n", regErr)
-		return 2
-	}
-	if *scopeTestsFlag {
-		fmt.Fprintln(stderr, "corral certify --repo: --scope-tests was removed. Its paired-FILE scoping inverted verdicts (requests/adapters.py 1.00 -> 0.00). Selection is now by coverage evidence and on by default; pass --whole-suite to grade against the whole suite. See docs/design/test-selection.md")
-		return 2
 	}
 
 	// --transparency logs an attestation; there is none without --attest —
@@ -477,6 +416,114 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 		stdout = io.Discard
+	}
+
+	// --models proposes the scan's seats HERE: after every flag-only refusal
+	// and the walk, because the evidence is ranked for the scan's language
+	// (spec call C7) and the walk is what knows it, and before the shadow
+	// draw (which reads the primary writer and generator) and the seat
+	// resolution, so a proposed member is drawn against and resolved exactly
+	// as the same model typed into its flag would be. The language set is
+	// the one the evidence pass instruments (preflightLanguages over the
+	// enumerated sources): a superset of what the scan audits, so a scan
+	// ranked by one language never audits another. One language ranks by it;
+	// none or several rank across all of them.
+	//
+	// A dry run spends nothing and demands no credential for any seat, so
+	// there the pool is not credential-checked and the plan is shown without
+	// a question. Under --json the plan goes to stderr: not one byte of prose
+	// may precede the inventory.
+	scanLang := shadowpool.LangAny
+	if langs := preflightLanguages(enumeratedSourcePaths(cands, excl)); len(langs) == 1 {
+		for l := range langs {
+			scanLang = l
+		}
+	}
+	poolRoles := []poolRole{
+		{role: advpool.RoleMutantGenerator, val: mutantModelFlag},
+		{role: advpool.RoleTestWriter, val: writerModelFlag},
+		{role: advpool.RoleTestCritic, val: criticModelFlag},
+	}
+	if strings.TrimSpace(*goalsPath) == "" {
+		// The deriver is a seat only when no --goals map replaces it.
+		poolRoles = append([]poolRole{{role: roleGoalDeriver, val: deriveModel}}, poolRoles...)
+	}
+	planOut := stdout
+	if *jsonOut {
+		planOut = stderr
+	}
+	seatDeps := doorPoolDeps(planOut, stderr)
+	if *dryRun {
+		seatDeps.confirm, seatDeps.noCredentialCheck = acceptUnasked, true
+	}
+	seating, poolExit, poolDone := seatFromPool(context.Background(), "corral certify --repo", *repoDir, scanLang, modelsPool, poolRoles, seatDeps)
+	if poolDone {
+		return poolExit
+	}
+	if *dryRun && seating.proposed() {
+		fmt.Fprintln(planOut, "a dry run asks nothing and runs nothing: this is the lineup a real run would propose")
+	}
+
+	// The shadow draw happens HERE, before the registry resolves any seat, so
+	// the drawn member — as typed — is resolved exactly like a named one. A
+	// scan spans languages and draws ONCE for all of them, so it reads the
+	// scorecard's record across every language.
+	//
+	// --dry-run audits nothing, so it draws nothing: it VALIDATES the pools
+	// (a malformed one is refused here exactly as a real run refuses it) but
+	// prints no draw, opens no scorecard and — like every other seat on the
+	// free inventory — demands no member's credential.
+	shadowPrimary := map[string]string{advpool.RoleMutantGenerator: *mutantModelFlag, advpool.RoleTestWriter: *writerModelFlag}
+	var shadowSels []shadowpool.Selection
+	var drawErr error
+	if *dryRun {
+		drawErr = validateShadowPools("corral certify --repo", *repoDir, shadow, shadowPrimary, false, stderr)
+	} else {
+		bugCatchDBPath, pathErr := statedir.PathForWrite(statedir.BugCatchDB)
+		if pathErr != nil {
+			fmt.Fprintln(stderr, "corral certify --repo:", pathErr)
+			return 2
+		}
+		shadowSels, drawErr = drawShadowSeats("corral certify --repo", *repoDir, shadowpool.LangAny, shadow,
+			shadowPrimary, bugCatchDBPath, stderr)
+	}
+	if drawErr != nil {
+		fmt.Fprintf(stderr, "corral certify --repo: %v\n", drawErr)
+		return 2
+	}
+
+	// The model registry (docs/design/model-registry.md): a project declares
+	// its models once in .corral/models.json and names seats by alias.
+	// ADDITIVE — with no registry nothing here emits or changes anything, and
+	// a value that is not a declared alias is still the concrete model name
+	// this flag has always accepted.
+	//
+	// Resolved HERE, before any seat value is read by the preflight, the cache
+	// key, the ledger or the signed statement, so every one of them records
+	// the CONCRETE model. An alias is a label for humans and is never
+	// authoritative.
+	// --local-endpoint placements are parsed BEFORE the seats resolve: a
+	// placement is itself a declared source for a seat with a bare local name,
+	// and the preflight below (resolveAuditRoles) must see it folded in.
+	localEndpoints, lerr := parseLocalEndpoints(localEndpointFlag)
+	if lerr != nil {
+		fmt.Fprintf(stderr, "corral certify --repo: %v\n", lerr)
+		return 2
+	}
+	// context.Background(): no cancellable context exists here. The SIGINT
+	// handler (auditContext) is installed after the goal derivation, on
+	// purpose — an interrupt before any audit has nothing to record, and
+	// TestAnInterruptedRepoScanRecordsNothing_APISeat depends on it. The one
+	// network call, listing OLLAMA_URL's daemon, has its own 10s bound.
+	seats, regErr := resolveSeatsPlaced(context.Background(), "corral certify --repo", *repoDir,
+		certifySeats(deriveModel, mutantModelFlag, writerModelFlag, criticModelFlag, shadow.model, shadow.writerModel), localEndpoints, stderr)
+	if regErr != nil {
+		fmt.Fprintf(stderr, "corral certify --repo: %v\n", regErr)
+		return 2
+	}
+	if *scopeTestsFlag {
+		fmt.Fprintln(stderr, "corral certify --repo: --scope-tests was removed. Its paired-FILE scoping inverted verdicts (requests/adapters.py 1.00 -> 0.00). Selection is now by coverage evidence and on by default; pass --whole-suite to grade against the whole suite. See docs/design/test-selection.md")
+		return 2
 	}
 
 	fmt.Fprintf(stdout, "corral certify --repo %s\n", *repoDir)
@@ -917,6 +964,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			writer: *writerModelFlag, mutant: *mutantModelFlag,
 			critic: *criticModelFlag, shadow: *shadow.model,
 			shadowWriter: *shadow.writerModel, shadowSelection: shadowSels,
+			seating: seating,
 		}
 		// Jail preflight: a host that cannot sandbox grades nothing, and saying
 		// so now beats reporting every file as ungradable — after paying for a
@@ -1925,8 +1973,12 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		bundleMeta{
 			ModelsByRole:  string(rosterJSON),
 			SeatTools:     seatToolsJSON,
-			SeatProviders: seatProvidersJSON(seatProviders),
-			MinKillRate:   minKillRate, MaxProvenMissed: maxProvenMissed,
+			SeatProviders: roleMapJSON(seatProviders),
+			// How the roster's seats were chosen, narrowed to the roster as
+			// its providers are (the deriver is not on it).
+			SeatedBy:     roleMapJSON(advpool.SeatedOnly(seating.SeatedBy, models())),
+			SeatEvidence: seating.SeatEvidence,
+			MinKillRate:  minKillRate, MaxProvenMissed: maxProvenMissed,
 			Passed:    boolPtr(exitCode == 0),
 			PushedBy:  auditpush.PushedByCertify,
 			TreeDirty: auditedTreeDirty, RepoIdentity: repoIdentity(*repoDir),
@@ -5220,6 +5272,9 @@ type auditModels struct {
 	// challenger was named or off), carried into every file's RunSpec so each
 	// verdict says which member ran and why.
 	shadowSelection []shadowpool.Selection
+	// seating is how --models chose the scan's seats (zero without it),
+	// carried into every file's RunSpec beside the models it chose.
+	seating poolSeating
 }
 
 type localExecutor struct {
@@ -5723,6 +5778,7 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 		shadowModel:       l.models.shadow,
 		shadowWriterModel: l.models.shadowWriter,
 		shadowSelection:   l.models.shadowSelection,
+		seating:           l.models.seating,
 		writerMode:        l.writerMode,
 
 		// A nil entry is an ordinary generated run — see localExecutor.presetMutants.

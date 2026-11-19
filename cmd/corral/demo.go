@@ -46,11 +46,19 @@ func runDemo(args []string, stdout, stderr io.Writer) int {
 	writer := fs.String("writer-model", "", "model for the test-writer role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json), a hosted model as vendor/model (`anthropic/…`, `google/…`, `openai/…` — a bare cloud name is refused, corral never guesses a vendor), a local model the OLLAMA_URL daemon lists, or an agent seat (`codex`, `claude-code`, `antigravity`, or your own CORRALAI_AGENT_<NAME>)")
 	mutant := fs.String("mutant-model", "", "model for the mutant-generator role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json), a hosted model as vendor/model (`anthropic/…`, `google/…`, `openai/…` — a bare cloud name is refused, corral never guesses a vendor), a local model the OLLAMA_URL daemon lists, or an agent seat (`codex`, `claude-code`, `antigravity`, or your own CORRALAI_AGENT_<NAME>)")
 	critic := fs.String("critic-model", "", `model (or agent seat) for the test-critic role, which must differ from the writer's ("off" disables it)`)
+	// Registered here and handed to certify --local unchanged: the demo is
+	// the real command reached by its argv, so certify --local proposes the
+	// seats (ranked for the demo's language, Go) and records how they were
+	// chosen. Proposing here and passing plain seat flags on would record
+	// a lineup the evidence chose as one the operator named.
+	modelsPool := registerModelsFlags(fs, "a comma-separated `POOL` of models you name; certify --local proposes which of them seats the demo's mutant-generator, test-writer and test-critic, ranked by the recorded evidence for Go, prints that plan, and nothing runs until you accept it on a terminal. A pool is not a default: a seat you also name by its own flag is pinned, and a seat no member qualifies for is refused")
 	if err := fs.Parse(args); err != nil {
 		return flagParseExit(err)
 	}
 
-	if strings.TrimSpace(*writer) == "" || strings.TrimSpace(*mutant) == "" {
+	// The two required seats, unless a pool is given to propose them; with a
+	// pool, certify --local refuses whatever it cannot fill.
+	if modelsPool.pool == nil && (strings.TrimSpace(*writer) == "" || strings.TrimSpace(*mutant) == "") {
 		fmt.Fprint(stderr, demoUsage)
 		return 2
 	}
@@ -79,11 +87,18 @@ func runDemo(args []string, stdout, stderr io.Writer) int {
 		"--test", filepath.Join(root, "passwd_test.go"),
 		"--repo-dir", root,
 		"--goal", demoGoal,
-		"--writer-model", *writer,
-		"--mutant-model", *mutant,
 	}
-	if c := strings.TrimSpace(*critic); c != "" {
-		argv = append(argv, "--critic-model", c)
+	// Only the seats named: an empty flag passed on would be a pin of
+	// nothing, and with --models it would hide the seat from the proposal.
+	for _, f := range []struct{ flag, val string }{
+		{"--writer-model", *writer}, {"--mutant-model", *mutant}, {"--critic-model", *critic},
+	} {
+		if v := strings.TrimSpace(f.val); v != "" {
+			argv = append(argv, f.flag, v)
+		}
+	}
+	if modelsPool.pool != nil {
+		argv = append(argv, "--models", *modelsPool.pool)
 	}
 	argv = append(argv, "--", "go", "test", "./...")
 
@@ -133,9 +148,11 @@ need a Go toolchain (you have one — you installed corral with it) and one
 provider key. Nothing else: no venv, no database, no fixtures.
 
 Flags:
-  --writer-model   model for the test-writer role (required)
-  --mutant-model   model for the mutant-generator role (required)
+  --writer-model   model for the test-writer role (required unless --models)
+  --mutant-model   model for the mutant-generator role (required unless --models)
   --critic-model   model for the test-critic role ("off" disables it)
+  --models         a pool of models to propose the seats from; nothing runs
+                   until you accept the plan
   --dir            where to write the project (default: a temp dir, kept)
 `
 

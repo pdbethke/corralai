@@ -212,7 +212,10 @@ func localEntryBundle(in localAuditInput, v advpool.Verdict, t advpool.RunTeleme
 			ToolMutants: run.toolMutants,
 			// The verdict's own providers, as its roster is: the seats this
 			// run signed, never re-read from the invocation's flags.
-			SeatProviders: seatProvidersJSON(v.SeatProviders),
+			SeatProviders: roleMapJSON(v.SeatProviders),
+			// How each seat was chosen, from the verdict for the same
+			// reason: what the run signed, never re-read from --models.
+			SeatedBy: roleMapJSON(v.SeatedBy), SeatEvidence: v.SeatEvidence,
 		})
 	if run.recorder != nil {
 		run.recorder.stampHunks(b.Mutants)

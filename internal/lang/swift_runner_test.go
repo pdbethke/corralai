@@ -43,9 +43,9 @@ func swiftRan(t *testing.T, out string) int {
 // list` prints them, and nothing else.
 func TestSwiftParsesItsRealList(t *testing.T) {
 	want := []string{
-		"CalcXCTests.CalcXCTests/testAdds",
-		"CalcXCTests.CalcXCTests/testAddsTwice",
-		"CalcXCTests.CalcXCTests/testFails",
+		"CalcXCTests.AdderTests/testAdds",
+		"CalcXCTests.AdderTests/testAddsTwice",
+		"CalcXCTests.AdderTests/testFails",
 		"CalcTests.Arithmetic/adds()",
 		"CalcTests.Arithmetic/doubles(value:)",
 		"CalcTests.Arithmetic/fails()",
@@ -106,7 +106,12 @@ func TestSwiftSingleCmdRunsExactlyOneTest(t *testing.T) {
 		fixture, id, pattern, neighbour string
 	}{
 		{"swift-single-testing.txt", "CalcTests.parses()", `^CalcTests\.parses\(\)(?:/|$)`, "parsesTwice()"},
-		{"swift-single-xctest.txt", "CalcXCTests.CalcXCTests/testAdds", `^CalcXCTests\.CalcXCTests/testAdds(?:/|$)`, "testAddsTwice"},
+		{"swift-single-xctest.txt", "CalcXCTests.AdderTests/testAdds", `^CalcXCTests\.AdderTests/testAdds(?:/|$)`, "testAddsTwice"},
+		// The two other shapes `swift test list` prints: a test inside a
+		// suite (run under its display name) and a parameterised test, whose
+		// id carries a ":" and whose run is one test of three cases.
+		{"swift-single-suite.txt", "CalcTests.Arithmetic/adds()", `^CalcTests\.Arithmetic/adds\(\)(?:/|$)`, "doubles(value:)"},
+		{"swift-single-param.txt", "CalcTests.Arithmetic/doubles(value:)", `^CalcTests\.Arithmetic/doubles\(value:\)(?:/|$)`, "adds two numbers"},
 	} {
 		t.Run(c.fixture, func(t *testing.T) {
 			if got := swiftFilterFor(c.id); got != c.pattern {
@@ -167,7 +172,7 @@ func TestSwiftCoruns(t *testing.T) {
 	}{
 		{"CalcTests.Arithmetic", "CalcTests.Arithmetic/adds()", true},
 		{"CalcTests.parses()", "CalcTests.parsesTwice()", false},
-		{"CalcXCTests.CalcXCTests/testAdds", "CalcXCTests.CalcXCTests/testAddsTwice", false},
+		{"CalcXCTests.AdderTests/testAdds", "CalcXCTests.AdderTests/testAddsTwice", false},
 	} {
 		if got := r.Coruns(c.id, c.other); got != c.want {
 			t.Errorf("Coruns(%q, %q) = %v, want %v", c.id, c.other, got, c.want)
@@ -177,11 +182,13 @@ func TestSwiftCoruns(t *testing.T) {
 
 // FirstFailure names the first failing test as each framework prints it:
 // swift-testing by its function or display name alone (its failure line names
-// no suite or target), XCTest as Class.method. A build failure ran no test.
+// no suite or target), XCTest as Class.method (AdderTests, in target
+// CalcXCTests: the line names the class, not the target). A build failure ran
+// no test.
 func TestSwiftFirstFailure(t *testing.T) {
 	for _, c := range []struct{ fixture, want string }{
 		{"swift-fail-testing.txt", `"adds two numbers"`},
-		{"swift-fail-xctest.txt", "CalcXCTests.testFails"},
+		{"swift-fail-xctest.txt", "AdderTests.testFails"},
 		{"swift-build-fail.txt", ""},
 		{"swift-pass.txt", ""},
 	} {
@@ -263,5 +270,28 @@ func TestSwiftUnitForFile(t *testing.T) {
 		if got != c.want || ok != c.ok {
 			t.Errorf("UnitForFile(%q) = %q, %v, want %q, %v", c.file, got, ok, c.want, c.ok)
 		}
+	}
+}
+
+// Why swiftFilterFor does not end in `$` alone: swift-testing matches
+// --filter against the id followed by its source location, so the id
+// anchored at both ends built, selected no test in either framework, and
+// passed (swift-filter-dollar.txt). A pattern like that would be a run of
+// nothing graded as a pass.
+func TestSwiftDollarAnchoredFilterRunsNothingAndPasses(t *testing.T) {
+	_, ran, out := multiFixture(t, "swift-filter-dollar.txt")
+	if ran != `swift test --filter ^CalcTests\.parses\(\)$` {
+		t.Fatalf("the capture ran %s", ran)
+	}
+	for _, s := range []string{"Build complete!", "Executed 0 tests, with 0 failures", "✔ Test run with 0 tests", "\n# exit: 0\n"} {
+		if !strings.Contains(out, s) {
+			t.Errorf("the capture does not show %q:\n%s", s, out)
+		}
+	}
+	if n := swiftRan(t, out); n != 0 {
+		t.Errorf("the run executed %d tests, want 0", n)
+	}
+	if got := swiftFilterFor("CalcTests.parses()"); strings.HasSuffix(got, `\)$`) {
+		t.Errorf("swiftFilterFor ends in the pattern that selected nothing: %s", got)
 	}
 }

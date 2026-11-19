@@ -84,10 +84,13 @@ func swiftParseList(stdout string) []string {
 // id. Both frameworks match --filter as a regular expression against the
 // id, but swift-testing matches the id followed by "/<file>:<line>:<column>",
 // its source location, so a pattern anchored with `$` alone selects nothing
-// and the run passes having run no test (capture script:
-// swift-filter-dollar-runs-none). The pattern therefore ends at "/" or at the
-// end, which selects the one test in each framework (swift-single-*.txt),
-// and not the test whose name the id is a prefix of.
+// and the run passes having run no test (swift-filter-dollar.txt: build
+// complete, 0 tests, exit 0). The pattern therefore ends at "/" or at the
+// end. It ran exactly one test for each id shape `swift test list` printed
+// (swift-single-*.txt): an XCTest Target.Class/method, a top-level
+// swift-testing function, one in a suite with a display name, and a
+// parameterised one whose labels carry a ":"; in each case not the test whose
+// name the id is a prefix of.
 func swiftFilterFor(id string) string { return "^" + regexp.QuoteMeta(id) + "(?:/|$)" }
 
 // swiftSingleCmd runs exactly the one listed test id.
@@ -111,8 +114,10 @@ func swiftCoruns(id, other string) bool { return strings.HasPrefix(other, id+"/"
 // summaries are not matched.
 var swiftTestingFailed = regexp.MustCompile(`^✘ Test (".*"|\S+\))(?: with \d+ test cases?)? failed after `)
 
-// xctestFailed is XCTest's line for a test case that failed, Class.method,
-// as XCTest prints it on Linux: without the target the listed id carries.
+// xctestFailed is XCTest's line for a test case that failed, as XCTest
+// prints it on Linux: Class.method, without the target the listed id carries
+// (swift-fail-xctest.txt: class AdderTests in target CalcXCTests prints
+// `Test Case 'AdderTests.testFails' failed`).
 var xctestFailed = regexp.MustCompile(`^Test Case '([^']+)' failed \(`)
 
 // swiftFailures names the failing tests in a `swift test` run's output, in

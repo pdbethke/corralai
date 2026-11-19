@@ -195,7 +195,7 @@ var ParityExemptions = []Exemption{
 
 	{"rust", "failure-hook", "not built: corral reads the lines cargo test and cargo-nextest print. nextest writes a JUnit file when a profile in the project's .config/nextest.toml asks for one, and libtest's JSON output is an unstable option; a way to ask for either from the command line was not looked for"},
 
-	{"swift", "confirm-alone", "not built: the failure line swift-testing prints names a failing test by its function or display name alone (`✘ Test fails() failed after ...`), not its suite or target, and XCTest's names Class.method without the target (measured on Swift 6.3.2), so the killing test cannot be narrowed by name to exactly one test; kills are confirmed by repeating the grading run"},
+	{"swift", "confirm-alone", "not built: the failure line swift-testing prints names a failing test by its function or display name alone (`✘ Test fails() failed after ...`), not its suite or target, and XCTest's names the class and method (`Test Case 'AdderTests.testFails' failed`) but not the target the class is in (measured on Swift 6.3.2); XCTest's `error:` line before it carries the test file's path, `Tests/CalcXCTests/CalcXCTests.swift` in that run. So the killing test cannot be narrowed by name to exactly one test; kills are confirmed by repeating the grading run"},
 
 	{"swift", "fail-fast", "`swift test` has no option to stop at the first failure: the --help of Swift 6.3.2 lists none"},
 
@@ -203,7 +203,7 @@ var ParityExemptions = []Exemption{
 
 	{"swift", "failure-hook", "not built: corral reads the lines `swift test` prints. Its `--xunit-output <path>` (in the --help of Swift 6.3.2) writes a record of each test to a file and would be the hook; corral does not add it, and it has not been run for this"},
 
-	{"swift", "salvage", "not built: `swift test --skip` can leave tests out, but the failure lines name a swift-testing test without its suite or target and an XCTest test without its target (measured on Swift 6.3.2), so a skip built from them could leave out a passing test of the same name elsewhere and narrow the run"},
+	{"swift", "salvage", "not built: `swift test --help` (Swift 6.3.2) lists a `--skip` option, which was not run, and the failure lines name a swift-testing test without its suite or target and an XCTest test by class and method without its target (measured on Swift 6.3.2), so a skip built from them could leave out a passing test of the same name elsewhere and narrow the run"},
 
 	{"swift", "critic-list", "not built yet: corral does not read the tests a Swift test file declares"},
 

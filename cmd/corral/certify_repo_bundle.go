@@ -57,8 +57,13 @@ type bundleMeta struct {
 	// SeatTools is the roster's agent tools as JSON, beside ModelsByRole.
 	SeatTools string
 	// SeatProviders is the roster's providers as JSON, beside ModelsByRole
-	// (seatProvidersJSON); "" when no seat's provider was resolved.
-	SeatProviders   string
+	// (roleMapJSON); "" when no seat's provider was resolved.
+	SeatProviders string
+	// SeatedBy is how each roster seat was chosen, as JSON (roleMapJSON),
+	// and SeatEvidence what the ranking read; both "" when --models was not
+	// given, so such an entry is shaped as before.
+	SeatedBy        string
+	SeatEvidence    string
 	MinKillRate     *float64
 	MaxProvenMissed *int
 	Passed          *bool // nil when the outcome is not recoverable (scans push)
@@ -202,7 +207,8 @@ func buildAuditRows(files []scanstore.File, scanID int64, meta bundleMeta) []aud
 			ModelsByRole:   meta.ModelsByRole,
 			SeatTools:      meta.SeatTools,
 			SeatProviders:  meta.SeatProviders,
-			MinKillRate:    meta.MinKillRate, MaxProvenMissed: meta.MaxProvenMissed,
+			SeatedBy:       meta.SeatedBy, SeatEvidence: meta.SeatEvidence,
+			MinKillRate: meta.MinKillRate, MaxProvenMissed: meta.MaxProvenMissed,
 			Passed:    meta.Passed,
 			StartedAt: meta.StartedAt,
 			// WHICH measurement the rate is, and at which grain.

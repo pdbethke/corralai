@@ -28,6 +28,7 @@ import (
 	"github.com/pdbethke/corralai/internal/modelrank"
 	"github.com/pdbethke/corralai/internal/review"
 	"github.com/pdbethke/corralai/internal/sandbox"
+	"github.com/pdbethke/corralai/internal/shadowpool"
 )
 
 // runReview implements `corral review`: a cold reviewer seat over a scope,
@@ -106,6 +107,7 @@ type reviewFlags struct {
 	substrate                                                     string
 	repoDir, scope, model, verifier, ledger, attest, push, failOn string
 	noLedger, pushSource                                          bool
+	models                                                        *modelsFlags
 	timeout                                                       time.Duration
 	maxBytes                                                      int
 }
@@ -123,7 +125,8 @@ func reviewFlagSet(out io.Writer) (*flag.FlagSet, *reviewFlags) {
 	fs.StringVar(&f.repoDir, "repo", ".", "the checkout to review (a git repository at a commit)")
 	fs.StringVar(&f.scope, "scope", "", "the directory or file under --repo to review (required)")
 	fs.StringVar(&f.model, "reviewer-model", "", "the reviewer seat — an alias from the registry, a hosted model as vendor/model (`anthropic/…`, `google/…`, `openai/…`; a bare cloud name is refused), a local model the OLLAMA_URL daemon lists, or an AGENTIC seat: an agent NAME, pinned to a model as `<name>:<model>`. `claude-code`, `codex` and `antigravity` are defined; ANY agent is defined the same way as CORRALAI_AGENT_<NAME>=\"<command line>\" ({dir} the worktree, {out} a reply file, {model} / {model:FLAG} the pin; the brief on stdin, the reply on stdout). An agentic seat is a coding agent started in a disposable copy of the repository: it reads the whole scope itself (no --max-bytes cap) and hands back scripts, which corral runs — nothing it did itself is on the record. Required; corral has no default models")
-	fs.StringVar(&f.verifier, "verifier-model", "", "a VERIFIER seat, adversarial to the reviewer: a different model that tries to refute every finding, by the same rules — a REPRODUCED refutation (a sh script that exits 0 iff the refutation is demonstrated) that holds demotes the finding on the record; a CODE-READ refutation is carried as opinion; a search that finds nothing is never a refutation. Must not be the reviewer's model. Off unless named")
+	fs.StringVar(&f.verifier, "verifier-model", "", "a VERIFIER seat, adversarial to the reviewer: a different model that tries to refute every finding, by the same rules — a REPRODUCED refutation (a sh script that exits 0 iff the refutation is demonstrated) that holds demotes the finding on the record; a CODE-READ refutation is carried as opinion; a search that finds nothing is never a refutation. Must not be the reviewer's model. Off unless named: `off` names no verifier, the same word --critic-model off uses on certify. With --models a verifier is proposed unless you pin it with this flag or pin `off`")
+	f.models = registerModelsFlags(fs, "a comma-separated `POOL` of models you name; corral proposes which of them seats the reviewer and the verifier, ranked by the recorded review evidence (all languages: a review is not ranked by language), prints that plan, and nothing runs until you accept it on a terminal. With no terminal it prints the equivalent seat flags, reviews nothing and exits 0, so a pipeline must pass the seat flags itself. A pool is not a default: a seat you also name by its own flag is pinned (--verifier-model off pins no verifier), and a seat no member qualifies for is refused, never filled from outside the pool")
 	fs.StringVar(&f.ledger, "ledger", "", "the ledger directory the review entry is written to (default: <repo>/.corral/ledger, or $CORRAL_LEDGER). A copy of the entry also goes to this machine's own ledger (the state directory's ledger, see corral state paths; override CORRALAI_MACHINE_LEDGER); a machine ledger that resolves inside the checkout is skipped, with the reason printed")
 	fs.StringVar(&f.attest, "attest", "", "write an in-toto statement (predicate https://corralai.dev/review/v1) to this path, and its DSSE envelope beside it when a certify key is configured: the REPRODUCTIONS — every finding's declared and recorded tier, the hash of its script and output, its exit, the verifier's refutation on the same terms — signed; the opinion bound by its hash and not carried. The ledger entry then names the statement. corral verify --attest <path> --db <ledger dir> recomputes the reproductions' hash from the entry")
 	fs.StringVar(&f.push, "push", "", "also append the review's rows to a warehouse you own — a DuckDB path, or md:<db> — as corral_reviews and corral_findings, keyed by the entry's hash so a later review adjudicate --push joins to them. Scripts and outputs travel as hashes unless --push-source")
@@ -152,8 +155,12 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "corral review: unexpected argument %q\n", fs.Arg(0))
 		return 2
 	}
-	if strings.TrimSpace(*scope) == "" || strings.TrimSpace(*model) == "" {
-		fmt.Fprintln(stderr, "corral review: --scope and --reviewer-model are required")
+	// Every refusal that needs no seat comes before --models is asked about,
+	// so nobody is shown a plan and asked to accept a run that was always
+	// going to be refused. Only the missing reviewer, which --models can fill,
+	// is decided after it.
+	if strings.TrimSpace(*scope) == "" {
+		fmt.Fprintln(stderr, "corral review: --scope is required, and a reviewer: --reviewer-model, or --models to have one proposed")
 		return 2
 	}
 	// The entry is signed after the seats are paid; a signer that cannot be
@@ -173,6 +180,29 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 	if commit == "" {
 		fmt.Fprintln(stderr, "corral review: --repo is not a git checkout at a commit — a review names the revision it reviewed")
 		return 2
+	}
+	// --models proposes the reviewer and the verifier here, after every
+	// refusal that needs no seat and before the seats are resolved, so a
+	// proposed member is resolved exactly as the same model typed into its
+	// flag. A review is not ranked by language. `--verifier-model off` is a
+	// pin: the operator chose no verifier, and --models leaves that alone.
+	seating, poolExit, poolDone := seatFromPool(context.Background(), "corral review", root, shadowpool.LangAny, anyLangReview, f.models, []poolRole{
+		{role: modelrank.SeatReviewer, val: model},
+		{role: modelrank.SeatVerifier, val: verifier},
+	}, doorPoolDeps(stdout, stderr))
+	if poolDone {
+		return poolExit
+	}
+	if strings.TrimSpace(*model) == "" {
+		fmt.Fprintln(stderr, "corral review: --scope is required, and a reviewer: --reviewer-model, or --models to have one proposed")
+		return 2
+	}
+	// `off` names no verifier. From here on an operator who said off and one
+	// who said nothing are the same run, so the entry, the roster and the
+	// decorrelation check never see the word as a model.
+	if strings.EqualFold(strings.TrimSpace(*verifier), "off") {
+		*verifier = ""
+		delete(seating.SeatedBy, modelrank.SeatVerifier)
 	}
 	// context.Background(): no cancellable context exists yet — the SIGINT
 	// handler (auditContext) is installed after the substrate is chosen, so an
@@ -307,6 +337,7 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 		Substrate:             substrateOf(rep), StartedAt: time.Now().UTC(),
 		FilesShown: sc.Files, BytesShown: sc.Bytes, Truncated: sc.Truncated}
 	recordSeatProvider(&r, modelrank.SeatReviewer, seats["reviewer-model"])
+	recordSeatedBy(&r, modelrank.SeatReviewer, seating)
 	userTurn := review.Brief(repoName, commit, *scope, sc)
 	if reviewerIsAgent {
 		userTurn = review.AgentBrief(repoName, commit, *scope, allFiles)
@@ -376,6 +407,7 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 			r.VerifierTool = verifierTool
 			r.VerifierModelResolved = agentbackend.SeatNamesAModel(*verifier)
 			recordSeatProvider(&r, modelrank.SeatVerifier, seats["verifier-model"])
+			recordSeatedBy(&r, modelrank.SeatVerifier, seating)
 			review.Verify(ctx, rep, &r, *verifier, vopinion, refs)
 		}
 	}
@@ -505,6 +537,25 @@ func recordSeatProvider(r *review.Review, seat string, rs agentbackend.ResolvedS
 		r.SeatProviders = map[string]string{}
 	}
 	r.SeatProviders[seat] = p
+}
+
+// recordSeatedBy records how one seat was chosen, beside the seat's provider
+// and under the same rule: only a seat that is on the entry is recorded (a
+// verifier that failed is not), and a run without --models records nothing,
+// so its entry keeps the shape it always had. The ranking's evidence line is
+// recorded only while a seat on the entry was seated by evidence: it
+// explains those seats, and a pinned reviewer beside a verifier that never
+// made the entry has nothing for it to explain.
+func recordSeatedBy(r *review.Review, seat string, seating poolSeating) {
+	by, ok := seating.SeatedBy[seat]
+	if !ok {
+		return
+	}
+	if r.SeatedBy == nil {
+		r.SeatedBy = map[string]string{}
+	}
+	r.SeatedBy[seat] = by
+	r.SeatEvidence = seatEvidenceFor(r.SeatedBy, seating.SeatEvidence)
 }
 
 // reviewSeatTools are the tools an agent seat in review is granted: it reads

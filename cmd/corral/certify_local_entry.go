@@ -59,6 +59,10 @@ type localRunFacts struct {
 	repoIdentity string
 	// host is what hoststat observed over the run (Sampler.Stop).
 	host hoststat.Conditions
+	// planWait is the --models plan interval (poolSeating.PlanWait), left
+	// out of total_millis so the figure means what it means without
+	// --models; zero otherwise.
+	planWait time.Duration
 	// sandbox is the jail the audit ran in (localSandboxIdentity).
 	sandbox sandbox.Identity
 	// seedSkipped is what the jail's copy left out as not text, as the
@@ -166,7 +170,7 @@ func localEntryBundle(in localAuditInput, v advpool.Verdict, t advpool.RunTeleme
 		StartedAt: started, FinishedAt: finished,
 		Author: party.Author, Committer: party.Committer, CoAuthors: party.CoAuthors, GeneratedWith: party.GeneratedWith,
 		CorralVersion: version, Host: host, Cores: runtime.NumCPU(),
-		TotalMillis: finished.Sub(started).Milliseconds(),
+		TotalMillis: (finished.Sub(started) - run.planWait).Milliseconds(),
 		InputTokens: inTokens, OutputTokens: outTokens, ModelCalls: callCount,
 	}
 	// The test command and runner, and the settings --local has. It has no
@@ -212,7 +216,10 @@ func localEntryBundle(in localAuditInput, v advpool.Verdict, t advpool.RunTeleme
 			ToolMutants: run.toolMutants,
 			// The verdict's own providers, as its roster is: the seats this
 			// run signed, never re-read from the invocation's flags.
-			SeatProviders: seatProvidersJSON(v.SeatProviders),
+			SeatProviders: roleMapJSON(v.SeatProviders),
+			// How each seat was chosen, from the verdict for the same
+			// reason: what the run signed, never re-read from --models.
+			SeatedBy: roleMapJSON(v.SeatedBy), SeatEvidence: v.SeatEvidence,
 		})
 	if run.recorder != nil {
 		run.recorder.stampHunks(b.Mutants)

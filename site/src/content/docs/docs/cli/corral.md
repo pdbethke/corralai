@@ -87,10 +87,14 @@ Usage:
                                   adjudication; the goal-deriver is reported as not scored rather
                                   than given an invented number. A model below --min-runs (default 5)
                                   is printed with its real numbers, marked insufficient, and never
-                                  preferred. DISCLOSURE, NOT SELECTION: it writes no config, changes
-                                  no default and staffs no seat — corral has no default models.
-                                  flags: --db <dsn> (a pushed warehouse instead of the local
-                                  bug-catching ledger; unreachable REFUSES, never falls back)
+                                  preferred. DISCLOSURE; SELECTION ONLY THROUGH --models, AMONG MODELS
+                                  THE OPERATOR NAMED ON THAT RUN: this command writes no config,
+                                  changes no default and staffs no seat — corral has no default
+                                  models.
+                                  flags: --db <dsn> (a ledger directory or pushed warehouse
+                                  instead of this machine's ledger; unreachable REFUSES, never
+                                  falls back)  --source ledger|scorecard (without --db: this
+                                  machine's ledger, or the old local bug-catching store)
                                   --seat <role>  --lang <name>  --min-runs n  --json
   corral criticscore list         list execution-checked test-critic findings still awaiting human
                                   adjudication — the local store certify --local writes, or a
@@ -302,6 +306,8 @@ Usage of certify --local:
     	max mutant-generator seats fanned out across the file's functions (0 = 8). Bounds PARALLELISM only — every function is probed regardless; --n-mutants is the PER-SHARD budget
   -max-tokens int
     	cap on model TOKENS for the whole run, input + output, every seat (0 = no cap; an agent seat that reports no token usage is refused, since the cap could not see it). Checked before each call and charged after it, so one in-flight call can overshoot by its own size. Once reached: a generator seat that has not run makes its file ungradable (executor-error naming the cap), a writer or critic seat is skipped and the file flagged as it is for a provider failure — the dev kill rate already measured stands. The cost line says the cap was reached and after how many calls. Corral has bounded mutants, shards and wall clock and never money; this is the money bound
+  -models POOL
+    	a comma-separated POOL of models you name; corral proposes which of them seats the mutant-generator, test-writer and test-critic for this file, ranked by the recorded evidence for its language (--lang, or detected from --code), prints that plan, and nothing runs until you accept it on a terminal. With no terminal it prints the equivalent seat flags, audits nothing and exits 0, so a pipeline must pass the seat flags itself. A pool is not a default: a seat you also name by its own flag is pinned, and a seat no member qualifies for is refused, never filled from outside the pool
   -mutant-model anthropic/…
     	model for the mutant-generator role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json), a hosted model as vendor/model (anthropic/…, `google/…`, `openai/…` — a bare cloud name is refused, corral never guesses a vendor), a local model the OLLAMA_URL daemon lists, or an agent seat (`codex`, `claude-code`, `antigravity`, or your own CORRALAI_AGENT_<NAME>). "off" leaves the seat empty, and is allowed only with --mutants-from, whose tool mutants are then the whole exam
   -mutants string
@@ -413,6 +419,8 @@ Usage of demo:
     	model (or agent seat) for the test-critic role, which must differ from the writer's ("off" disables it)
   -dir string
     	where to write the demo project (default: a new temp dir, printed and kept)
+  -models POOL
+    	a comma-separated POOL of models you name; certify --local proposes which of them seats the demo's mutant-generator, test-writer and test-critic, ranked by the recorded evidence for Go, prints that plan, and nothing runs until you accept it on a terminal (with no terminal it audits nothing and exits 0). A pool is not a default: a seat you also name by its own flag is pinned, and a seat no member qualifies for is refused
   -mutant-model anthropic/…
     	model for the mutant-generator role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json), a hosted model as vendor/model (anthropic/…, `google/…`, `openai/…` — a bare cloud name is refused, corral never guesses a vendor), a local model the OLLAMA_URL daemon lists, or an agent seat (`codex`, `claude-code`, `antigravity`, or your own CORRALAI_AGENT_<NAME>)
   -writer-model anthropic/…
@@ -431,6 +439,8 @@ Usage of doctor:
     	the goal-derivation model a certify --repo run will name, if any. Naming it makes doctor SPEND ONE small real derive call through certify's own deriver, on a tiny built-in file with an obvious property, and fail the check when the seat errors or returns an empty reply; nothing is called unless this is named
   -jail string
     	sandbox backend (default: auto-detect). "container" needs CORRALAI_EXEC_IMAGE set to a toolchain image, e.g. CORRALAI_EXEC_IMAGE=python:3.12-bookworm
+  -models POOL
+    	a comma-separated POOL of models you name; doctor prints the lineup certify would propose from it for the goal-deriver, mutant-generator, test-writer and test-critic (ranked by the recorded evidence for --code's language, or across all languages without --code or when its language cannot be detected) and checks those seats. doctor asks nothing and spends nothing on a seat it proposes; a `--derive-model` you name is still probed with one real call. certify would run nothing until you accept the plan, and a pool is not a default: a seat you also name by its own flag is pinned, and a seat no member qualifies for is refused
   -mutant-model string
     	the mutant-generator model whose credential to check
   -repo string
@@ -872,9 +882,13 @@ usage: corral models rank [--source ledger|scorecard] [--db <dir or dsn>] [--sea
   evidence says about them — a different metric per seat, because the seats do
   different jobs.
 
-  This is DISCLOSURE, NOT SELECTION. It prints a table. It writes no config,
-  changes no default, and feeds no router: corral has no default models, and a
-  ranking that quietly staffed a seat would put one back.
+  This is DISCLOSURE; SELECTION ONLY THROUGH --models, AMONG MODELS THE
+  OPERATOR NAMED ON THAT RUN. This command prints a table and seats nothing. It
+  writes no config, changes no default, and feeds no router: corral has no
+  default models, and a ranking that quietly staffed a seat would put one back.
+  The same ranking is read when you pass --models to certify, doctor, demo or
+  review: there it proposes seats only from the pool you named on that run,
+  and prints the lineup before anything runs.
 ```
 
 ## `corral models rank` flags
@@ -896,9 +910,13 @@ usage: corral models rank [--source ledger|scorecard] [--db <dir or dsn>] [--sea
   evidence says about them — a different metric per seat, because the seats do
   different jobs.
 
-  This is DISCLOSURE, NOT SELECTION. It prints a table. It writes no config,
-  changes no default, and feeds no router: corral has no default models, and a
-  ranking that quietly staffed a seat would put one back.
+  This is DISCLOSURE; SELECTION ONLY THROUGH --models, AMONG MODELS THE
+  OPERATOR NAMED ON THAT RUN. This command prints a table and seats nothing. It
+  writes no config, changes no default, and feeds no router: corral has no
+  default models, and a ranking that quietly staffed a seat would put one back.
+  The same ranking is read when you pass --models to certify, doctor, demo or
+  review: there it proposes seats only from the pool you named on that run,
+  and prints the lineup before anything runs.
 
 flags:
   -db md:<db>
@@ -966,6 +984,8 @@ flags of `corral review`:
     	the ledger directory the review entry is written to (default: <repo>/.corral/ledger, or $CORRAL_LEDGER). A copy of the entry also goes to this machine's own ledger (the state directory's ledger, see corral state paths; override CORRALAI_MACHINE_LEDGER); a machine ledger that resolves inside the checkout is skipped, with the reason printed
   -max-bytes int
     	how many bytes of the scope the reviewer is shown; files past the cap are listed by name and the review records them as unshown (default 200000)
+  -models POOL
+    	a comma-separated POOL of models you name; corral proposes which of them seats the reviewer and the verifier, ranked by the recorded review evidence (all languages: a review is not ranked by language), prints that plan, and nothing runs until you accept it on a terminal. With no terminal it prints the equivalent seat flags, reviews nothing and exits 0, so a pipeline must pass the seat flags itself. A pool is not a default: a seat you also name by its own flag is pinned (--verifier-model off pins no verifier), and a seat no member qualifies for is refused, never filled from outside the pool
   -no-ledger
     	print the review and write no entry, in either ledger
   -push string
@@ -982,8 +1002,8 @@ flags of `corral review`:
     	where the reproduction scripts run: jail (default) — the offline sandbox certify grades in, over the tree at the commit with your dependency directories read-only; or `workspace` — a detached git worktree on the host, network on, model keys and your desktop session (DISPLAY, WAYLAND_DISPLAY, ...) removed from the environment, for where the caller is the isolation boundary (a CI runner, as with certify --repo --substrate workspace) (default "jail")
   -timeout duration
     	wall-clock bound on each reproduction script (default 1m0s)
-  -verifier-model string
-    	a VERIFIER seat, adversarial to the reviewer: a different model that tries to refute every finding, by the same rules — a REPRODUCED refutation (a sh script that exits 0 iff the refutation is demonstrated) that holds demotes the finding on the record; a CODE-READ refutation is carried as opinion; a search that finds nothing is never a refutation. Must not be the reviewer's model. Off unless named
+  -verifier-model off
+    	a VERIFIER seat, adversarial to the reviewer: a different model that tries to refute every finding, by the same rules — a REPRODUCED refutation (a sh script that exits 0 iff the refutation is demonstrated) that holds demotes the finding on the record; a CODE-READ refutation is carried as opinion; a search that finds nothing is never a refutation. Must not be the reviewer's model. Off unless named: off names no verifier, the same word --critic-model off uses on certify. With --models a verifier is proposed unless you pin it with this flag or pin `off`
 ```
 
 ## `corral review adjudicate` flags
@@ -1299,6 +1319,8 @@ Usage of certify --repo:
     	cap on model TOKENS for the whole SCAN, every file, input + output, every seat (0 = no cap; an agent seat that reports no token usage is refused, since the cap could not see it). Checked before each call and charged after it, so one in-flight call can overshoot by its own size. Once reached: a generator seat that has not run makes its file ungradable (executor-error naming the cap), a writer or critic seat is skipped and the file flagged as it is for a provider failure — the dev kill rate already measured stands. The cost line says the cap was reached and after how many calls. Corral has bounded mutants, shards and wall clock and never money; this is the money bound
   -min-kill-rate string
     	fail the scan (exit 1) if ANY audited file's kill rate is below this value (0.0-1.0 inclusive; a minimum, so a file exactly at the threshold passes). Opt-in: unset by default, so exit codes are unchanged unless this is given. Applies PER FILE, not to the aggregate — a well-tested file must not mask a weak one
+  -models POOL
+    	a comma-separated POOL of models you name; corral proposes which of them seats the goal-deriver (unless --goals is given), mutant-generator, test-writer and test-critic for the whole scan, ranked by the recorded evidence for the scan's language (across all languages when it has none or several), prints that plan, and nothing runs until you accept it on a terminal. With no terminal it prints the equivalent seat flags, audits nothing and exits 0, so a pipeline must pass the seat flags itself; --dry-run prints the plan and asks nothing. A pool is not a default: a seat you also name by its own flag is pinned, and a seat no member qualifies for is refused, never filled from outside the pool
   -mutant-model anthropic/…
     	model for the mutant-generator role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json), a hosted model as vendor/model (anthropic/…, `google/…`, `openai/…` — a bare cloud name is refused, corral never guesses a vendor), a local model the OLLAMA_URL daemon lists, or an agent seat (`codex`, `claude-code`, `antigravity`, or your own CORRALAI_AGENT_<NAME>). "off" leaves the seat empty, and is allowed only with --mutants-from, whose tool mutants are then the whole exam
   -mutants string

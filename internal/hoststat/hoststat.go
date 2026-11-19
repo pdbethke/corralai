@@ -31,7 +31,8 @@ const procRoot = "/proc"
 type Conditions struct {
 	// LoadStart, LoadEnd and LoadPeak are the 1-minute load average at Start,
 	// at Stop and the largest of every sample taken between (the two ends
-	// included), so the peak is never below either end.
+	// included; no sample is taken while paused), so the peak is never below
+	// either end.
 	LoadStart, LoadEnd, LoadPeak *float64
 	// MemAvailableStartBytes is /proc/meminfo's MemAvailable at Start.
 	MemAvailableStartBytes *int64
@@ -40,9 +41,11 @@ type Conditions struct {
 	// process-lifetime maximum, not a delta: the kernel offers no other.
 	PeakRSSBytes *int64
 	// CPUMillis is user plus system CPU time of this process and its waited
-	// children consumed between Start and Stop.
+	// children consumed between Start and Stop, less any consumed between a
+	// Pause and its Resume.
 	CPUMillis *int64
-	// WallMillis is Stop minus Start. It needs no platform support.
+	// WallMillis is Stop minus Start, less every paused interval. It needs
+	// no platform support.
 	WallMillis int64
 	// NotMeasured says, in a sentence, what could not be read and why; ""
 	// when everything was.
@@ -61,6 +64,15 @@ type Sampler struct {
 	start Conditions
 	peak  *float64
 	notes []string
+	// paused is set between Pause and Resume; pausedAt and cpuAtPause are
+	// the readings at Pause. excludedWall and excludedCPU accumulate every
+	// paused interval, which finish subtracts.
+	paused       bool
+	pausedAt     time.Time
+	cpuAtPause   int64
+	cpuPauseOK   bool
+	excludedWall time.Duration
+	excludedCPU  int64
 
 	quit chan struct{}
 	done chan struct{}
@@ -159,8 +171,57 @@ func firstOf(ctx context.Context, quit <-chan struct{}) <-chan struct{} {
 	return c
 }
 
-// sample reads the load once and raises the peak.
+// Pause stops sampling until Resume, and leaves the wall and CPU time spent
+// in between out of what Stop reports. It exists for an interval that is not
+// the run: a --models plan being read by the operator. Restarting the sampler
+// there would move LoadStart and MemAvailableStartBytes to the answer and drop
+// the CPU spent before the question, so the fields would mean something else
+// on a run with --models than on one without; a pause keeps every field's
+// meaning and removes only the interval. A no-op on a nil sampler and when
+// already paused.
+func (s *Sampler) Pause() {
+	if s == nil {
+		return
+	}
+	cpu, _, err := usage()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.paused {
+		return
+	}
+	s.paused, s.pausedAt = true, time.Now()
+	s.cpuAtPause, s.cpuPauseOK = cpu, err == nil
+}
+
+// Resume ends a Pause, adding its interval to what finish subtracts. The CPU
+// spent while paused is subtracted only when it was read at both ends; when
+// it could not be, nothing is subtracted and NotMeasured would already say
+// the CPU reading failed. A no-op on a nil sampler and when not paused.
+func (s *Sampler) Resume() {
+	if s == nil {
+		return
+	}
+	cpu, _, err := usage()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.paused {
+		return
+	}
+	s.paused = false
+	s.excludedWall += time.Since(s.pausedAt)
+	if s.cpuPauseOK && err == nil {
+		s.excludedCPU += cpu - s.cpuAtPause
+	}
+}
+
+// sample reads the load once and raises the peak, unless paused.
 func (s *Sampler) sample() {
+	s.mu.Lock()
+	paused := s.paused
+	s.mu.Unlock()
+	if paused {
+		return
+	}
 	v, err := readLoad(s.root)
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -187,7 +248,10 @@ func (s *Sampler) Stop() Conditions {
 }
 
 func (s *Sampler) finish() Conditions {
-	out := Conditions{WallMillis: time.Since(s.begin).Milliseconds()}
+	// A Stop while paused (a door returning from inside the paused
+	// interval) closes the interval first, so it is left out as well.
+	s.Resume()
+	out := Conditions{WallMillis: (time.Since(s.begin) - s.excludedWall).Milliseconds()}
 	if !supported {
 		out.NotMeasured = strings.Join(s.notes, "; ")
 		return out
@@ -209,7 +273,7 @@ func (s *Sampler) finish() Conditions {
 		s.note(err)
 	} else {
 		if s.cpuOK {
-			d := cpu - s.cpu0
+			d := cpu - s.cpu0 - s.excludedCPU
 			out.CPUMillis = &d
 		}
 		out.PeakRSSBytes = &rss

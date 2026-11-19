@@ -101,6 +101,8 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 // would file the demo's measurements under that project's origin and HEAD.
 func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Writer) int {
 	// The run's start, for the ledger entry's started_at and total_millis.
+	// A --models plan's interval is left out of total_millis and of the host
+	// figures (poolSeating.PlanWait), never by moving this start.
 	startedAt := time.Now()
 	// Host load and the run's own consumption, from here to the entry. The
 	// deferred Stop ends the sampler on every return; Stop is idempotent.
@@ -143,6 +145,7 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 		writerPool:  "a comma-separated POOL of challenger WRITER models, drawn per run exactly as --shadow-pool is. Mutually exclusive with --shadow-writer-model. OFF unless named; NEVER gates the verdict",
 		seed:        shadowSeedReplayHelp,
 	})
+	modelsPool := registerModelsFlags(fs, "a comma-separated `POOL` of models you name; corral proposes which of them seats the mutant-generator, test-writer and test-critic for this file, ranked by the recorded evidence for its language (--lang, or detected from --code), prints that plan, and nothing runs until you accept it on a terminal. With no terminal it prints the equivalent seat flags, audits nothing and exits 0, so a pipeline must pass the seat flags itself. A pool is not a default: a seat you also name by its own flag is pinned, and a seat no member qualifies for is refused, never filled from outside the pool")
 	writerModeFlag := fs.String("writer-mode", "", "how the test-writer attacks this file's survivors: `per-survivor` (the default) makes ONE call per survivor — each carrying the file once as a cacheable shared prefix plus that survivor's diff, each repaired on its own budget and each PROVEN ALONE against its own mutant — or `batched`, the original shape: one call carrying every survivor, one repair budget, one proof pass over all of them. Nothing measured changes between them (a survivor is proven iff an authored test kills it alone and passes on the original, either way); what changes is that one unbuildable test no longer spends the whole file's retries and takes every other survivor down with it. Each survivor's proof in per-survivor mode runs its OWN compliant baseline (a compliant pass plus a canary, per seat), so a file with N survivors pays N baselines where batched paid one: on a repo whose suite takes a minute, prefer --writer-mode batched or expect N baselines' worth of wall clock.")
 	matrixFlag := fs.Bool("matrix", false, "opt into the tests×mutants matrix: after the primary pass, re-score EVERY dev test ALONE against the run's mutants — a per-test adequacy readout + a delete-candidate list, instead of one dev-suite-wide number. COSTLY: T tests × M mutants extra jail runs (T×M, on top of the primary pass), so leave off by default on a big suite")
 	var localEndpointFlag stringSlice
@@ -201,8 +204,10 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 	// The shadow draw happens HERE, before the registry resolves any seat, so
 	// the drawn member — as typed — is resolved exactly like a named one.
 	pooled := strings.TrimSpace(*shadow.pool) != "" || strings.TrimSpace(*shadow.writerPool) != ""
+	// --models reads the evidence for the same language the draw reads.
+	modelsGiven := modelsPool.pool != nil
 	drawLang := strings.TrimSpace(*langFlag)
-	if drawLang != "" && pooled {
+	if drawLang != "" && (pooled || modelsGiven) {
 		// Refused HERE, before the draw reads the store: an unknown name
 		// would otherwise print a measured "0 row(s)" for a language corral
 		// does not have, and only then be refused below.
@@ -221,45 +226,23 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 		fmt.Fprintln(stderr, "corral certify --local: a shadow pool reads history for the audited file's language, and it cannot be detected — pass --lang (or --code)")
 		return 2
 	}
-	// The bug-catching scorecard store: a --local run's per-seat metrics
-	// (including the shadow head-to-head) persist next to the signed build
-	// ledger and feed the same `corral scorecard` surface the daemon's runs feed.
-	bugCatchDBPath, pathErr := statedir.PathForWrite(statedir.BugCatchDB)
-	if pathErr != nil {
-		fmt.Fprintln(stderr, "corral certify --local:", pathErr)
+	if drawLang == "" && modelsGiven {
+		fmt.Fprintln(stderr, "corral certify --local: --models ranks evidence for the audited file's language, and it cannot be detected — pass --lang (or --code)")
 		return 2
 	}
-	shadowSels, drawErr := drawShadowSeats("corral certify --local", *repoDirFlag, drawLang, shadow,
-		map[string]string{advpool.RoleMutantGenerator: *mutantModel, advpool.RoleTestWriter: *writerModel},
-		bugCatchDBPath, stderr)
-	if drawErr != nil {
-		fmt.Fprintf(stderr, "corral certify --local: %v\n", drawErr)
-		return 2
-	}
-
+	// Every refusal a flag alone decides comes BEFORE --models asks anything:
+	// an operator must never accept a lineup for a run that was always going
+	// to be refused. They also precede the shadow draw and seat resolution,
+	// which read stores and a daemon; checking the command line first is the
+	// cheaper order. certify --repo keeps the same rule, with its walk
+	// between its flag refusals and its question, because the walk is what
+	// tells it the scan's language.
+	//
 	// --local-endpoint placements are parsed BEFORE the seats resolve: a
 	// placement is itself a declared source for a seat with a bare local name.
 	localEndpoints, lerr := parseLocalEndpoints(localEndpointFlag)
 	if lerr != nil {
 		fmt.Fprintf(stderr, "corral certify --local: %v\n", lerr)
-		return 2
-	}
-	// Every seat resolves ONCE, here (docs/design/model-registry.md): a
-	// declared alias becomes its concrete model before anything else reads the
-	// value, and each seat's provider, wire and endpoint are decided in one
-	// stated order (resolveSeats) so no later door re-guesses them from the
-	// model's name. A registry entry places its local seat on its own daemon;
-	// an explicit --local-endpoint overrides it. With no registry, this
-	// changes only what a bare name that no source serves does: it refuses.
-	//
-	// context.Background(): no cancellable context exists yet — the SIGINT
-	// handler (auditContext) is installed after the preflight, so an
-	// interrupt before this point has nothing to unwind. The one network call
-	// (listing OLLAMA_URL's daemon) has its own 10s bound.
-	seats, regErr := resolveSeatsPlaced(context.Background(), "corral certify --local", *repoDirFlag,
-		certifySeats(nil, mutantModel, writerModel, criticModel, shadow.model, shadow.writerModel), localEndpoints, stderr)
-	if regErr != nil {
-		fmt.Fprintf(stderr, "corral certify --local: %v\n", regErr)
 		return 2
 	}
 	if strings.TrimSpace(*codePath) == "" {
@@ -311,6 +294,56 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 	// the checkout, which --local never makes.
 	if l := strings.TrimSpace(*ledgerFlag); l != "" && ledgerInsideCheckout(l, strings.TrimSpace(*repoDirFlag)) {
 		fmt.Fprintf(stderr, "corral certify --local: --ledger %s is inside --repo-dir %s — --local never writes into the checkout; name a directory outside it\n", l, *repoDirFlag)
+		return 2
+	}
+	// --models proposes the seats HERE: after every flag refusal and before
+	// the shadow draw (which reads the primary writer and generator) and the
+	// seat resolution, so a proposed member is drawn against and resolved
+	// exactly as the same model typed into its flag would be. The flags the
+	// operator did type are pins.
+	seatDeps := doorPoolDeps(stdout, stderr)
+	seatDeps.placed = localEndpoints
+	seatDeps.sampler = hostSampler
+	seating, poolExit, poolDone := seatFromPool(context.Background(), "corral certify --local", *repoDirFlag, drawLang, "", modelsPool, []poolRole{
+		{role: advpool.RoleMutantGenerator, val: mutantModel},
+		{role: advpool.RoleTestWriter, val: writerModel},
+		{role: advpool.RoleTestCritic, val: criticModel},
+	}, seatDeps)
+	if poolDone {
+		return poolExit
+	}
+	// The bug-catching scorecard store: a --local run's per-seat metrics
+	// (including the shadow head-to-head) persist next to the signed build
+	// ledger and feed the same `corral scorecard` surface the daemon's runs feed.
+	bugCatchDBPath, pathErr := statedir.PathForWrite(statedir.BugCatchDB)
+	if pathErr != nil {
+		fmt.Fprintln(stderr, "corral certify --local:", pathErr)
+		return 2
+	}
+	shadowSels, drawErr := drawShadowSeats("corral certify --local", *repoDirFlag, drawLang, shadow,
+		map[string]string{advpool.RoleMutantGenerator: *mutantModel, advpool.RoleTestWriter: *writerModel},
+		bugCatchDBPath, stderr)
+	if drawErr != nil {
+		fmt.Fprintf(stderr, "corral certify --local: %v\n", drawErr)
+		return 2
+	}
+
+	// Every seat resolves ONCE, here (docs/design/model-registry.md): a
+	// declared alias becomes its concrete model before anything else reads the
+	// value, and each seat's provider, wire and endpoint are decided in one
+	// stated order (resolveSeats) so no later door re-guesses them from the
+	// model's name. A registry entry places its local seat on its own daemon;
+	// an explicit --local-endpoint overrides it. With no registry, this
+	// changes only what a bare name that no source serves does: it refuses.
+	//
+	// context.Background(): no cancellable context exists yet — the SIGINT
+	// handler (auditContext) is installed after the preflight, so an
+	// interrupt before this point has nothing to unwind. The one network call
+	// (listing OLLAMA_URL's daemon) has its own 10s bound.
+	seats, regErr := resolveSeatsPlaced(context.Background(), "corral certify --local", *repoDirFlag,
+		certifySeats(nil, mutantModel, writerModel, criticModel, shadow.model, shadow.writerModel), localEndpoints, stderr)
+	if regErr != nil {
+		fmt.Fprintf(stderr, "corral certify --local: %v\n", regErr)
 		return 2
 	}
 
@@ -550,6 +583,7 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 		shadowWriterModel: *shadow.writerModel,
 		shadowSelection:   shadowSels,
 		seats:             seats,
+		seating:           seating,
 		writerMode:        writerMode,
 
 		jail: *jailFlag, checkArgv: checkArgv,
@@ -601,6 +635,7 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 		seedSkipped: seedSkippedJSON(seedSkipped),
 		toolMutants: toolMutantsJSON(toolCounts),
 		host:        hostSampler.Stop(),
+		planWait:    seating.PlanWait,
 	}); berr != nil {
 		fmt.Fprintf(stderr, "corral certify --local: no ledger entry written: %v\n", berr)
 	} else {
@@ -693,6 +728,12 @@ type localAuditInput struct {
 	// when every challenger was named or off), carried onto the RunSpec so the
 	// verdict and the signed record say which member ran and why.
 	shadowSelection []shadowpool.Selection
+
+	// seating is how --models chose each seat and what the ranking read
+	// (seatFromPool), carried onto the RunSpec so the verdict, and from it
+	// the ledger row, records it. Zero when --models was not given: every
+	// seat was named by flag, and nothing is recorded.
+	seating poolSeating
 
 	// seats is every seat of this invocation, resolved once (resolveSeats):
 	// the provider, wire, endpoint and key each model is served by. Provider
@@ -1982,6 +2023,8 @@ func newAuditRunSpec(in localAuditInput, roles auditRoles, subj runSubject) advp
 		ShadowSelection:   in.shadowSelection,
 		SeatTools:         roles.tools,
 		SeatProviders:     roles.providers,
+		SeatedBy:          in.seating.SeatedBy,
+		SeatEvidence:      in.seating.SeatEvidence,
 		// HOW the writer attacks. The CLI's default is per-survivor; an
 		// EMPTY value here means batched, which is what a caller outside the
 		// CLI (the brain, a test) gets — see RunSpec.WriterMode.

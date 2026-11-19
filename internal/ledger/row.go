@@ -51,7 +51,22 @@ type Row struct {
 	// existed and for a run that resolved no provider: not recorded, and a
 	// reader must never put a provider guessed from a model's name in its
 	// place.
-	SeatProviders   string `json:",omitempty"`
+	SeatProviders string `json:",omitempty"`
+	// SeatedBy is how each seat's model was chosen, as JSON keyed by role
+	// like ModelsByRole: "operator" (named by flag), "evidence" (the recorded
+	// ranking picked it) or "order" (first of the pool the operator named).
+	// "" on an entry written without --models and before the field existed,
+	// both of which mean every seat was named by flag. That is a statement
+	// about the row: a row served from the verdict cache embeds a verdict
+	// document (VerdictJSON) that keeps the seating it was measured under,
+	// which can come from another run, with or without --models, because
+	// the cache key does not name how a seat was chosen.
+	SeatedBy string `json:",omitempty"`
+	// SeatEvidence names what the ranking read to seat the "evidence" seats,
+	// with no host path (for example "the machine ledger (31 scan(s), 2
+	// review(s)); language go"); "" when no seat on the row was seated by
+	// evidence.
+	SeatEvidence    string `json:",omitempty"`
 	MinKillRate     *float64
 	MaxProvenMissed *int
 	Passed          *bool      // nil = not recorded; see ScanRow.Passed

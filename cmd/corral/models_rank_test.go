@@ -59,13 +59,14 @@ func runRank(t *testing.T, args []string, obs []modelrank.Observation) (int, str
 
 // The whole command's reason for existing, in one assertion: the ranking is
 // evidence a human reads, and it says so on its face.
-func TestRankSaysItIsDisclosureNotSelection(t *testing.T) {
+func TestRankSaysItIsDisclosureAndSelectsOnlyThroughModels(t *testing.T) {
 	rc, out, _ := runRank(t, nil, writerRuns("m", "", 6, 5, 10))
 	if rc != 0 {
 		t.Fatalf("rc=%d", rc)
 	}
-	if !strings.Contains(out, "DISCLOSURE, NOT SELECTION") {
-		t.Fatalf("the table must say it sets no default:\n%s", out)
+	if !strings.Contains(out, "DISCLOSURE; SELECTION ONLY THROUGH --models, AMONG MODELS THE OPERATOR NAMED ON THAT RUN") ||
+		!strings.Contains(out, "this command sets no default and staffs no seat") {
+		t.Fatalf("the table must say it sets no default and that only --models selects:\n%s", out)
 	}
 	if !strings.Contains(out, "min-runs: 5") {
 		t.Fatalf("the default evidence floor must be stated:\n%s", out)

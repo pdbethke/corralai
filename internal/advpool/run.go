@@ -165,7 +165,19 @@ type RunSpec struct {
 	// absent, never filled in: the brain's daemon path resolves none and
 	// leaves this nil. Carried to Verdict.SeatProviders by signedSeats on
 	// BOTH construction paths.
-	SeatProviders   map[string]string
+	SeatProviders map[string]string
+	// SeatedBy is how each seat's model was chosen, keyed by role:
+	// "operator" (named by flag), "evidence" (the recorded ranking picked
+	// it) or "order" (the first of the pool the operator named). Nil when
+	// every seat was named by flag, which is every run without --models.
+	// Carried to Verdict.SeatedBy by signedSeats on BOTH construction paths.
+	SeatedBy map[string]string
+	// SeatEvidence names what the ranking read to seat the "evidence"
+	// seats, with no host path, for example "the machine ledger (31
+	// scan(s), 2 review(s)); language go". "" when nothing was read.
+	// Carried to Verdict.SeatEvidence the same way, and dropped there when
+	// the roster keeps no evidence seat.
+	SeatEvidence    string
 	ShadowSelection []shadowpool.Selection
 
 	// WriterMode is HOW the writer seat attacks the survivors:

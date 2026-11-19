@@ -479,7 +479,17 @@ package reposcan
 // added to every file's selection instead (ramsey/uuid: 59 of 67 test files
 // reported before, 67 after). "46" was released in rc.34, so this gets its
 // own generation.
-const VerdictGeneration = "47"
+//
+// "48" (2026-11-19): the Verdict gained SeatedBy and SeatEvidence: how each
+// seat's model was chosen (operator flag, the recorded ranking, or the order
+// the operator named the pool) and what the ranking read, for the run's
+// --models proposal. A cached "47" document unmarshals both as absent, which
+// means "every seat was named by flag": true of every verdict that
+// generation could have produced, so it is not misread, but "47" is on main,
+// so this is a shape bump and not a ride-along. The verdict cache key does
+// not name how a seat was chosen, so a verdict served from cache carries the
+// seating basis it was measured under.
+const VerdictGeneration = "48"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.
@@ -501,4 +511,4 @@ const VerdictGeneration = "47"
 // Verdict's own FIELDS") and nothing wider. Nor can any fingerprint catch the
 // behaviour half: a scorer that computes a DIFFERENT number into the SAME
 // field is invisible here, and remains a review responsibility.
-const VerdictShapeSHA256 = "21a4e1eafa4589ddc215061ac93b0295fb169f384a26fbb48cf951c2234cbff0"
+const VerdictShapeSHA256 = "865ab8f5b25f36561eb7ce28d58891d6d5f39ae20a2f9cb768aa6f59bc4ed49e"

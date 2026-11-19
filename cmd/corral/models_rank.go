@@ -33,6 +33,12 @@ import (
 type rankEvidence struct {
 	Obs    []modelrank.Observation
 	Source string
+	// RecordSource names the same source with no host path, for a record:
+	// --models writes it into signed entries that may be published, where
+	// Source's directory would put a home directory and a user name. Set by
+	// the machine-ledger loader, the one source --models reads; "" from the
+	// others, which only `corral models rank` prints.
+	RecordSource string
 	// Generations is which grading rules (VerdictGeneration) the scans behind
 	// Obs were graded under. Zero when the store records none (the local
 	// bugcatch ledger) or has no scans.
@@ -157,9 +163,13 @@ const modelsUsage = `usage: corral models rank [--source ledger|scorecard] [--db
   evidence says about them — a different metric per seat, because the seats do
   different jobs.
 
-  This is DISCLOSURE, NOT SELECTION. It prints a table. It writes no config,
-  changes no default, and feeds no router: corral has no default models, and a
-  ranking that quietly staffed a seat would put one back.`
+  This is DISCLOSURE; SELECTION ONLY THROUGH --models, AMONG MODELS THE
+  OPERATOR NAMED ON THAT RUN. This command prints a table and seats nothing. It
+  writes no config, changes no default, and feeds no router: corral has no
+  default models, and a ranking that quietly staffed a seat would put one back.
+  The same ranking is read when you pass --models to certify, doctor, demo or
+  review: there it proposes seats only from the pool you named on that run,
+  and prints the lineup before anything runs.`
 
 func runModelsRank(args []string, repoRoot string, load rankLoader, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("models rank", flag.ContinueOnError)
@@ -307,7 +317,7 @@ func printRankReport(rep modelrank.Report, reg *models.Registry, gen generationR
 	if !rep.LangDimension {
 		fmt.Fprintln(w, "language: this evidence records none, so every row is across all languages.")
 	}
-	fmt.Fprintln(w, "DISCLOSURE, NOT SELECTION: this command sets no default and staffs no seat. corral has no default models.")
+	fmt.Fprintln(w, "DISCLOSURE; SELECTION ONLY THROUGH --models, AMONG MODELS THE OPERATOR NAMED ON THAT RUN: this command sets no default and staffs no seat. corral has no default models.")
 	if len(rep.Groups) == 0 {
 		fmt.Fprintln(w, "\nno recorded observations for any seat yet.")
 		return
@@ -770,11 +780,17 @@ func machineLedgerRankEvidence() (rankEvidence, error) {
 	}
 	if _, serr := os.Stat(dir); serr != nil {
 		if os.IsNotExist(serr) {
-			return rankEvidence{Source: "the machine ledger " + dir + " (not created yet: no run on this machine has written an entry)"}, nil
+			return rankEvidence{
+				Source:       "the machine ledger " + dir + " (not created yet: no run on this machine has written an entry)",
+				RecordSource: "the machine ledger (not created yet)",
+			}, nil
 		}
 		return rankEvidence{}, fmt.Errorf("cannot read the machine ledger %s: %w", dir, serr)
 	}
-	return rankFromView(dir, func() (*sql.DB, error) {
+	// The path-free name is built from the same counts as the printed one,
+	// never by cutting the directory out of the printed text.
+	var record string
+	ev, err := rankFromView(dir, func() (*sql.DB, error) {
 		db, lerr := auditpush.LoadDirForRank(dir)
 		if lerr != nil {
 			return nil, fmt.Errorf("the machine ledger %s: %w\n  run `corral verify --ledger %s` to see which entry fails; `--source scorecard` or `--db <another ledger>` reads a different source deliberately — nothing falls back to one automatically", dir, lerr, dir)
@@ -786,10 +802,17 @@ func machineLedgerRankEvidence() (rankEvidence, error) {
 			return "", fmt.Errorf("counting entries in the machine ledger %s: %w", dir, err)
 		}
 		if scans == 0 && reviews == 0 {
+			record = "the machine ledger (no entries yet)"
 			return "the machine ledger " + dir + " (no entries yet)", nil
 		}
+		record = fmt.Sprintf("the machine ledger (%d scan(s), %d review(s))", scans, reviews)
 		return fmt.Sprintf("the machine ledger %s (%d scan(s), %d review(s); a run is one SCAN)", dir, scans, reviews), nil
 	})
+	if err != nil {
+		return rankEvidence{}, err
+	}
+	ev.RecordSource = record
+	return ev, nil
 }
 
 // reviewRankEvidence grades the reviewer and verifier seats from the

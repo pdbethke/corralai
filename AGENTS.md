@@ -302,6 +302,53 @@ This is deliberate. corral claims to be model-agnostic, and a binary that names
 one vendor's models when the operator named none is making an exception to that
 claim. We run Claude; we do not make anyone else.
 
+**`--models a,b,c` lets the record propose seats, from models the operator
+named on that run. A pool is not a default.** `certify --local`, `certify
+--repo`, `doctor`, `demo` (which forwards it to `certify --local`) and `review`
+take it. Every member is resolved and credential-checked before anything is
+proposed (`certify --repo --dry-run` checks no member's credential, as it
+checks none for any seat); a seat named by its own flag is a pin and wins; the measured seats
+(mutant-generator, test-writer, reviewer, verifier) take the best-ranked pool
+member with at least `modelrank.DefaultMinRuns` (5) observations in that seat's
+own unit; the goal-deriver takes the first member in the order the operator
+typed, and the critic, unless it has such a row, the first member that is not
+the writer, preferring one from a different provider. Pins are resolved by the
+same resolver as the members (`resolvePins` in `models_pool.go`), so the hard
+rule (critic is not writer, verifier is not reviewer) and the provider
+preference compare resolved models, pins included; comparing the typed text let
+`anthropic/claude-sonnet-5-5` and `claude-code:claude-sonnet-5-5` sit in both
+seats. A seat nothing
+qualifies for is refused with the flag that would fill it, never filled from
+outside the pool and never by lowering the floor. The plan is printed and
+nothing runs until the operator answers `y` or `yes` with both stdin and stdout
+on a terminal (anything else declines, exit 0); otherwise it prints the
+equivalent seat flags and a last line saying nothing was run, and exits 0,
+so a pipeline must pass the seat flags itself. There is no `--yes`. `doctor` and
+`certify --repo --dry-run` print the plan and ask nothing. The evidence is
+the machine ledger only, with no fallback to another source. The proposer is
+`internal/autoseat` (a pure function) and it is the one door:
+`TestOnlyAutoseatDecidesASeatFromEvidence` fails any other file in `cmd/corral`
+that imports it, or that uses `modelrank.Rank` or an evidence reader
+(`defaultRankLoader`, `machineLedgerRankEvidence`, `scorecardRankEvidence`,
+`bugcatchRankEvidence`, `warehouseRankEvidence`) outside the files it lists, `TestEveryDoorWithSeatFlagsRegistersModelsFlags` fails a door
+that registers `--models` and never calls `seatFromPool` (or forwards it, for
+`demo`), and `models_pool.go` is the only caller. How each seat was
+chosen is recorded on the entry as `SeatedBy` (`operator`, `evidence` or
+`order`, keyed by role) beside `SeatEvidence` (what the ranking read, named
+without the ledger's directory: the entry is signed and may be published),
+both tier DECLARED; `SeatEvidence` is kept only while a seat the entry records
+was seated by evidence (`autoseat.EvidenceFor`). A seat filled by an accepted
+proposal is recorded as `evidence` or `order`, never as `operator`, because a
+person pressing `y` did not choose the model. `seatFromPool` measures the plan
+interval (evidence load to the answer) as `poolSeating.PlanWait` and pauses the
+door's host sampler across it; the doors subtract it from `total_millis` and
+keep `started_at` at the run's real start, so a `--models` entry's figures are
+comparable with any other entry's. The ranking reads no critic adjudications from the machine
+ledger, so the critic is always seated by order unless pinned.
+`corral models rank` itself still seats nothing. `--autoseat` (seat without
+asking) and exploration (seating below-floor members in the shadow seats) are
+NOT built; do not document them as features.
+
 **The shadow challenger is OFF unless named**, and it doubles the mutant count
 when on. It used to default to a Claude model and be on, which quietly kept an
 Anthropic seat alive through an otherwise all-Gemini run.

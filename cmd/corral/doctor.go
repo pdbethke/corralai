@@ -20,6 +20,7 @@ import (
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/sandbox"
+	"github.com/pdbethke/corralai/internal/shadowpool"
 )
 
 // `corral doctor` answers "will an audit work here?" BEFORE one is paid for.
@@ -95,8 +96,38 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	})
 	deriveModel := fs.String("derive-model", "", "the goal-derivation model a `certify --repo` run will name, if any. Naming it makes doctor SPEND ONE small real derive call through certify's own deriver, on a tiny built-in file with an obvious property, and fail the check when the seat errors or returns an empty reply; nothing is called unless this is named")
 	repoDir := fs.String("repo", ".", "the repository the run will audit — where its .corral/models.json registry is read from, exactly as certify reads it")
+	modelsPool := registerModelsFlags(fs, "a comma-separated `POOL` of models you name; doctor prints the lineup certify would propose from it for the goal-deriver, mutant-generator, test-writer and test-critic (ranked by the recorded evidence for --code's language, or across all languages without --code or when its language cannot be detected) and checks those seats. doctor asks nothing and spends nothing on a seat it proposes; a `--derive-model` you name is still probed with one real call. certify would run nothing until you accept the plan, and a pool is not a default: a seat you also name by its own flag is pinned, and a seat no member qualifies for is refused")
 	if err := fs.Parse(args); err != nil {
 		return flagParseExit(err)
+	}
+	// Whether the operator named the deriver, read before --models can fill
+	// the seat: doctor's one paid check (the derive probe) is spent only on
+	// a deriver the operator named, never on one a pool proposed.
+	deriveNamed := strings.TrimSpace(*deriveModel) != ""
+	// --models: the lineup certify would propose, written into the seat
+	// flags so every check below is about the seats that would run. doctor
+	// spends nothing on a seat the pool proposes, so it accepts the plan
+	// without asking and says so; its one paid check is the derive probe,
+	// and only on a deriver the operator named.
+	poolLang := shadowpool.LangAny
+	if c := strings.TrimSpace(*code); c != "" {
+		if p, ok := lang.Detect(c); ok {
+			poolLang = p.Name()
+		}
+	}
+	seatDeps := doorPoolDeps(stdout, stderr)
+	seatDeps.confirm = acceptUnasked
+	seating, poolExit, poolDone := seatFromPool(context.Background(), "corral doctor", *repoDir, poolLang, anyLangUnknown, modelsPool, []poolRole{
+		{role: roleGoalDeriver, val: deriveModel},
+		{role: advpool.RoleMutantGenerator, val: mutantModel},
+		{role: advpool.RoleTestWriter, val: writerModel},
+		{role: advpool.RoleTestCritic, val: criticModel},
+	}, seatDeps)
+	if poolDone {
+		return poolExit
+	}
+	if seating.proposed() {
+		fmt.Fprintln(stdout, "doctor asks nothing: this is the lineup `certify` would propose")
 	}
 	// Every member of every challenger pool, checked exactly as certify checks
 	// it before its draw — but never drawn: doctor answers "would this run
@@ -156,12 +187,13 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 			break
 		}
 	}
-	// The one check that spends, run only when the seat was named and its
+	// The one check that spends, run only when the operator named the seat
+	// (a deriver --models proposed is checked statically, never called) and its
 	// static checks passed (a missing CLI or key is reported as that, not as
 	// a failed call). It runs AFTER the other checks have printed and is
 	// announced before the call, so a fatal check above can never hide a
 	// call that was spent (review I1, ruling R25).
-	if rs := seats["derive-model"]; strings.TrimSpace(rs.Spec) != "" && checksPassed(derive) {
+	if rs := seats["derive-model"]; deriveNamed && strings.TrimSpace(rs.Spec) != "" && checksPassed(derive) {
 		fmt.Fprintf(stdout, "  spending one derive call on %s…\n", rs.Spec)
 		printCheck(stdout, probeDeriveSeat(rs), &failed)
 	}

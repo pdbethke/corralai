@@ -30,7 +30,7 @@ DIR="${1:-$(mktemp -d)}"
 [ "$KEEP" = 1 ] || trap 'rm -rf "$DIR"' EXIT
 RSPEC="${RSPEC:-rspec}"
 
-JEST=30.5.2 VITEST=5.1.0 MOCHA=12.0.3 PHPUNIT=11.5.57
+JEST=30.5.2 VITEST=5.1.0 MOCHA=12.0.3 PHPUNIT=11.5.57 PHPUNIT9=9.6.39 PHPUNIT10=10.5.67 PHPUNIT12=12.5.44
 
 mkdir -p "$DIR"
 cp -r "$OUT/src/." "$DIR/"
@@ -178,15 +178,34 @@ want rspec-no-profile-reads-no-word 2 "$(cd units/rspec && $RSPEC --no-profile s
 help rspec-help.txt $RSPEC --help
 
 # vendor/bin/phpunit -c units/phpunit/phpunit.xml --testsuite unit  /  ... --group slow
-PHPC="vendor/bin/phpunit -c units/phpunit/phpunit.xml"
-units phpunit-units.txt $PHPC --testsuite unit --list-test-files
-units phpunit-units-group.txt $PHPC --group slow --list-test-files
 phpran() { sed -n 's/^OK (\([0-9]*\) tests\{0,1\}.*/\1/p'; }
+PHPC="vendor/bin/phpunit -c units/phpunit/phpunit.xml"
+# PHPUnit's listing runs under the row's own setup (phpunitUnitsSetup, which
+# has PHP name each test class's file), so its script comes from the row and
+# is not copied here.
+PHPPRELUDE="$(cd "$REPO" && go run ./scripts/listunitscmd php vendor/bin/phpunit)"
+phpunits() { # phpunits <fixture> <cmd...>: units, under the PHPUnit row's listing script
+  local f="$1"; shift
+  sh -c "$PHPPRELUDE" corral-units "$@" 2>/dev/null | sed -e "s#$PDIR#/fixture#g" -e "s#$HOME#~#g" > "$OUT/$f" || true
+}
+phpunits phpunit-units.txt $PHPC --testsuite unit --list-tests
+phpunits phpunit-units-group.txt $PHPC --group slow --list-tests
+# The same listing on the other PHPUnit lines, each installed beside the
+# fixtures. 9 and 10 have no --list-test-files, which is why the row lists
+# tests and not files; under a group option both say they ignore it, and
+# the row reads that as no listing (phpunit9-units-group.txt).
+for line in "9 $PHPUNIT9" "10 $PHPUNIT10" "12 $PHPUNIT12"; do
+  set -- $line
+  [ -f "pv/$1/vendor/bin/phpunit" ] || { mkdir -p "pv/$1" && composer require -q --working-dir "pv/$1" --dev "phpunit/phpunit:$2"; }
+  phpunits "phpunit$1-units.txt" "pv/$1/vendor/bin/phpunit" -c units/phpunit/phpunit.xml --testsuite unit --list-tests
+  want "phpunit$1-unit" 2 "$("pv/$1/vendor/bin/phpunit" -c units/phpunit/phpunit.xml --testsuite unit units/phpunit/tests/ATest.php 2>&1 | phpran)"
+done
+phpunits phpunit9-units-group.txt pv/9/vendor/bin/phpunit -c units/phpunit/phpunit.xml --group slow --list-tests
 want phpunit-unit 2 "$($PHPC --testsuite unit units/phpunit/tests/ATest.php 2>&1 | phpran)"
 want phpunit-args-union 5 "$($PHPC units/phpunit/tests units/phpunit/tests/ATest.php 2>&1 | phpran)"
 want phpunit-file-replaces-testsuite 2 "$($PHPC --testsuite other units/phpunit/tests/ATest.php 2>&1 | phpran)"
 want phpunit-option-after-file 1 "$($PHPC units/phpunit/tests/ATest.php --group slow 2>&1 | phpran)"
-want phpunit-exclude-group-lists-no-empty-file 0 "$($PHPC --exclude-group slow --list-test-files units/phpunit/excl units/phpunit/tests 2>&1 | grep -c DTest || true)"
+want phpunit-exclude-group-lists-no-empty-file 0 "$($PHPC --exclude-group slow --list-tests units/phpunit/excl units/phpunit/tests 2>&1 | grep -c ' - DTest' || true)"
 want phpunit-colors-takes-no-next-word 'Test file "never" not found' "$($PHPC --colors never units/phpunit/tests/ATest.php 2>&1 | grep -o 'Test file "never" not found')"
 help phpunit-help.txt vendor/bin/phpunit --help
 

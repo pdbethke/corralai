@@ -125,8 +125,15 @@ type Runner struct {
 	// second listed unit can match); nil means a unit run is exact.
 	ListUnits  func(argv []string) ([]string, bool)
 	ParseUnits func(stdout string) []string
-	UnitCmd    func(argv []string, unit string) ([]string, bool)
-	UnitCoruns func(unit, other string) bool
+	// ListUnitsSetup is shell the listing runs before its command, for a
+	// runner whose listing needs something beside it (PHPUnit: a file PHP
+	// loads into the listing). It may write only under "$d", the listing's
+	// own temporary directory, removed when the listing ends, and export
+	// what the command reads. "" on every row whose listing is the command
+	// alone.
+	ListUnitsSetup string
+	UnitCmd        func(argv []string, unit string) ([]string, bool)
+	UnitCoruns     func(unit, other string) bool
 	// CollectionBase is argv with the operator's collection targets removed,
 	// so appending a chosen set NARROWS the run instead of joining a
 	// directory argv already names (pytest `tests/` plus a node id still
@@ -391,9 +398,9 @@ var runners = []Runner{
 		Name: "phpunit", ID: "phpunit", Languages: []string{"php"}, Default: true, Words: []string{"phpunit"},
 		FailFast: []string{"--stop-on-failure"}, FirstFailure: phpFirstFailure, FailedTests: phpFailures, DeselectCmd: phpunitDeselectCmd,
 		ListCmd: phpunitListCmd, ParseList: phpunitParseList, SingleCmd: phpunitSingleCmd, ResolveByList: true,
-		ListUnits: phpunitListUnits, ParseUnits: phpunitParseUnits, UnitCmd: oneUnit(phpunitUnitsCmd),
+		ListUnits: phpunitListUnits, ParseUnits: phpunitParseUnits, ListUnitsSetup: phpunitUnitsSetup, UnitCmd: oneUnit(phpunitUnitsCmd),
 		UnitsCmd: phpunitUnitsCmd, UnitForFile: fileUnitForFile, UnitNoun: "test files",
-		Note: "listing, one-test, one-file and several-file runs (`--list-test-files`) verified on PHPUnit 11.5; other versions were not run",
+		Note: "listing, one-test, one-file and several-file runs verified on PHPUnit 11.5; the test-file listing (`--list-tests`, with PHP naming each test class's file) also on 9.6, 10.5 and 12.5, where one-file runs were run as well; PHPUnit 9 and 10 ignore `--group` and `--exclude-group` when listing, so a command carrying one gets no test-file listing there",
 	},
 	{
 		// FirstFailure and Flaky read the grammar off the output, not the

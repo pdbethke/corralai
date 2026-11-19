@@ -656,25 +656,36 @@ func (phpPlugin) CoverageCmd(testCmd []string) (cmd []string, ok bool) {
 	if len(testCmd) == 0 || !phpIsRunner(testCmd) {
 		return nil, false
 	}
-	// `extension=pcov` is written even though the machine may already load it,
-	// and that redundancy is the fix for a real failure. Overriding
-	// PHP_INI_SCAN_DIR replaces the scan path, and although a LEADING COLON is
-	// documented to mean "the default directory, then this one" — and does
-	// exactly that locally — on a GitHub runner the default was not preserved:
-	// auto_prepend_file loaded from this file while pcov did not load at all,
-	// so \pcov\start was undefined inside the instrumented run even though a
-	// plain `php -r` reported the extension present. Naming the extension here
-	// makes the injected ini self-sufficient instead of dependent on which
-	// directories survived the override.
+	// `extension=pcov` is written only when, under this same scan path, PHP
+	// does not already have pcov; both halves of that are fixes for real
+	// failures.
 	//
-	// Loading it twice is safe: PHP warns "Module already loaded" and carries
-	// on, and an unresolvable name warns "Unable to load dynamic library" and
-	// carries on. Both land on stderr, where the suite's own output already
-	// goes, and both leave the prepend's function_exists guard to make the
-	// actual decision. Neither is fatal, which is the property that matters —
-	// see phpCoveragePrepend for why nothing here may kill the audited suite.
+	// Written when missing: overriding PHP_INI_SCAN_DIR changes the scan
+	// path, and although a LEADING COLON is documented to mean "the default
+	// directory, then this one" — and does exactly that locally — on a
+	// GitHub runner the default was not preserved: auto_prepend_file loaded
+	// from this file while pcov did not load at all, so \pcov\start was
+	// undefined inside the instrumented run even though a plain `php -r`
+	// reported the extension present. So the probe runs under the override,
+	// not plainly, and naming the extension when it reports none makes the
+	// injected ini self-sufficient.
+	//
+	// Not written when present: this used to name the extension always, on
+	// the reasoning that a second load only warns. The warning (`PHP
+	// Warning:  Module "pcov" is already loaded`) goes to stderr at every
+	// PHP start-up, and PHPUnit fails a test it runs in a separate process
+	// when that process writes to stderr. On ramsey/uuid (PHPUnit 9.6.39,
+	// PHP 8.5.4, 2026-11-18) eight test files failed under coverage and
+	// passed without it, so they gave no unit evidence.
+	//
+	// The probe runs before auto_prepend_file is written, so it never loads
+	// the prepend. A probe that cannot run at all (no `php` word on PATH: a
+	// suite started through an absolute path or a wrapper) names the
+	// extension, which is what every run did before.
 	setup := `mkdir -p "$d/cov" && cat > "$d/corral_prepend.php" <<'CORRAL_PHP_EOF'` + "\n" + phpCoveragePrepend + "CORRAL_PHP_EOF\n" +
-		`printf 'extension=pcov\npcov.enabled=1\nauto_prepend_file=%s\n' "$d/corral_prepend.php" > "$d/zz-corral.ini"` + "\n"
+		`printf 'pcov.enabled=1\n' > "$d/zz-corral.ini"` + "\n" +
+		`PHP_INI_SCAN_DIR=":$d" php -r 'exit(extension_loaded("pcov") ? 0 : 1);' >/dev/null 2>&1 || printf 'extension=pcov\n' >> "$d/zz-corral.ini"` + "\n" +
+		`printf 'auto_prepend_file=%s\n' "$d/corral_prepend.php" >> "$d/zz-corral.ini"` + "\n"
 	// The LEADING COLON keeps the default scan directory — without it pcov
 	// itself, and every other extension the suite relies on, stops loading.
 	env := `PHP_INI_SCAN_DIR=":$d" CORRAL_COV_DIR="$d/cov"`

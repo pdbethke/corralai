@@ -438,7 +438,9 @@ func printUnitGrading(w io.Writer, ex *localExecutor, langName string) {
 		}
 		fmt.Fprintln(w, line+")")
 	case !ev.Ran:
-		fmt.Fprintf(w, "  selection: grading by the WHOLE suite — %s\n", ex.unitsNotRunSaid(langName))
+		// The reason alone: the units line above printed what the pass
+		// said in full (printUnitPass), a failed listing's output included.
+		fmt.Fprintf(w, "  selection: grading by the WHOLE suite — %s\n", ex.unitsNotRunReason(langName))
 	case reposcan.NoRunnerRow(ex.unitMap) != "":
 		fmt.Fprintf(w, "  selection: grading by the WHOLE suite — %s\n", reposcan.NoRunnerRow(ex.unitMap))
 	default:

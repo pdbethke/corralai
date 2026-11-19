@@ -1,5 +1,8 @@
 corral-units-cwd /fixture
 PHPUnit 11.5.57 by Sebastian Bergmann and contributors.
 
-Available test files:
- - /fixture/units/phpunit/tests/ATest.php
+Available test:
+ - ATest::testTwo
+corral-unit-class ATest	/fixture/units/phpunit/tests/ATest.php
+corral-unit-class BTest	/fixture/units/phpunit/tests/BTest.php
+corral-unit-class CTest	/fixture/units/phpunit/other/CTest.php

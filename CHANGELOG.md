@@ -9,6 +9,15 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [Unreleased]
+
+### Fixed
+
+- **`corral mcp` starts in a second agent session.** The findings server opened the local findings store read-write and held it for as long as it ran. DuckDB allows one read-write process per file, so the first session's server locked the store: every later session's server failed at start-up with `Could not set lock on file`, and `certify --local` could not record findings while any agent session stayed open. The server now opens the store read-only for each tool call and closes it before answering, so an idle server holds no lock.
+  - *What still fails.* DuckDB does not let a reader share the file with a process that is writing it. A tool call made while `certify --local` or `corral criticscore confirm|refute` is writing fails, with an error that names the cause and says to retry.
+  - *No store yet.* The server no longer creates the state directory or an empty store at start-up. `list_audit_findings` answers `total: 0` and nothing is created.
+  - *A store written by an older corral* is read at its own schema, because a reader runs no migration; any `certify --local` brings it forward.
+
 ## [v1.0.0-rc.35] — 2026-11-18
 
 ### Fixed

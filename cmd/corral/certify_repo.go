@@ -456,7 +456,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	if *dryRun {
 		seatDeps.confirm, seatDeps.noCredentialCheck = acceptUnasked, true
 	}
-	seating, poolExit, poolDone := seatFromPool(context.Background(), "corral certify --repo", *repoDir, scanLang, modelsPool, poolRoles, seatDeps)
+	seating, poolExit, poolDone := seatFromPool(context.Background(), "corral certify --repo", *repoDir, scanLang, anyLangSeveral, modelsPool, poolRoles, seatDeps)
 	if poolDone {
 		return poolExit
 	}

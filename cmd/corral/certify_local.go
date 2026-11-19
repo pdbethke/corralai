@@ -297,7 +297,7 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 	// seat resolution, so a proposed member is drawn against and resolved
 	// exactly as the same model typed into its flag would be. The flags the
 	// operator did type are pins.
-	seating, poolExit, poolDone := seatFromPool(context.Background(), "corral certify --local", *repoDirFlag, drawLang, modelsPool, []poolRole{
+	seating, poolExit, poolDone := seatFromPool(context.Background(), "corral certify --local", *repoDirFlag, drawLang, "", modelsPool, []poolRole{
 		{role: advpool.RoleMutantGenerator, val: mutantModel},
 		{role: advpool.RoleTestWriter, val: writerModel},
 		{role: advpool.RoleTestCritic, val: criticModel},

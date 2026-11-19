@@ -129,7 +129,7 @@ func runPool(t *testing.T, root, lang, pool string, vals *certifyVals, load *fak
 	if pool != "" {
 		f = poolFlags(pool)
 	}
-	seating, exit, done := seatFromPool(context.Background(), "corral certify --local", root, lang, f, vals.roles(),
+	seating, exit, done := seatFromPool(context.Background(), "corral certify --local", root, lang, anyLangSeveral, f, vals.roles(),
 		poolDeps{load: load.fn, confirm: confirm.fn, stdout: &out, stderr: &errb})
 	return seating, exit, done, out.String(), errb.String()
 }
@@ -459,6 +459,35 @@ func TestSeatFromPoolLanguageLine(t *testing.T) {
 	_, exit, done, _, errs = runPool(t, root, "", samplePool, &certifyVals{}, &fakeLoad{ev: sampleEvidence()}, &fakeConfirm{})
 	if exit != 2 || !done || !strings.Contains(errs, "language") {
 		t.Errorf("empty language: exit=%d done=%v stderr=%q, want a refusal naming it", exit, done, errs)
+	}
+}
+
+// A scan with no single language says WHY on the evidence line, in the
+// door's own words, and a door that gives no reason is refused: the line is
+// the operator's record of what the ranking read, and one door's reason
+// printed by another is a false statement.
+func TestSeatFromPoolSaysWhyThereIsNoSingleLanguage(t *testing.T) {
+	root := poolEnv(t)
+	for _, c := range []struct {
+		why  anyLangReason
+		want string
+	}{
+		{anyLangSeveral, "all languages (this scan has more than one)"},
+		{anyLangReview, "all languages (a review is not ranked by language)"},
+		{anyLangUnknown, "all languages (no single language is known for this check)"},
+	} {
+		var out, errb bytes.Buffer
+		_, exit, done := seatFromPool(context.Background(), "corral x", root, shadowpool.LangAny, c.why, poolFlags(samplePool), (&certifyVals{}).roles(),
+			poolDeps{load: (&fakeLoad{ev: sampleEvidence()}).fn, confirm: (&fakeConfirm{accepted: true, interactive: true}).fn, stdout: &out, stderr: &errb})
+		if exit != 0 || done || !strings.Contains(out.String(), "; "+c.want+"\n") {
+			t.Errorf("%q: exit=%d done=%v stderr=%q\n%s", c.why, exit, done, errb.String(), out.String())
+		}
+	}
+	var out, errb bytes.Buffer
+	_, exit, done := seatFromPool(context.Background(), "corral x", root, shadowpool.LangAny, "", poolFlags(samplePool), (&certifyVals{}).roles(),
+		poolDeps{load: (&fakeLoad{ev: sampleEvidence()}).fn, confirm: (&fakeConfirm{accepted: true, interactive: true}).fn, stdout: &out, stderr: &errb})
+	if exit != 2 || !done || !strings.Contains(errb.String(), "reason") || out.Len() != 0 {
+		t.Errorf("no reason: exit=%d done=%v stderr=%q out=%q, want a refusal that shows no plan", exit, done, errb.String(), out.String())
 	}
 }
 

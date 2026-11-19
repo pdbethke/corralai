@@ -115,7 +115,7 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	}
 	seatDeps := doorPoolDeps(stdout, stderr)
 	seatDeps.confirm = acceptUnasked
-	seating, poolExit, poolDone := seatFromPool(context.Background(), "corral doctor", *repoDir, poolLang, modelsPool, []poolRole{
+	seating, poolExit, poolDone := seatFromPool(context.Background(), "corral doctor", *repoDir, poolLang, anyLangUnknown, modelsPool, []poolRole{
 		{role: roleGoalDeriver, val: deriveModel},
 		{role: advpool.RoleMutantGenerator, val: mutantModel},
 		{role: advpool.RoleTestWriter, val: writerModel},

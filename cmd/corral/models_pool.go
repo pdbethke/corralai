@@ -106,6 +106,24 @@ var doorPoolDeps = func(stdout, stderr io.Writer) poolDeps {
 // under the plan, that it asked nothing.
 func acceptUnasked(string) (accepted bool, interactive bool, err error) { return true, true, nil }
 
+// anyLangReason says why a door has no single language to rank by. It is
+// spelled out per door and has no default, because the evidence line is the
+// operator's record of what the ranking read, and "this scan has more than
+// one" printed for a review or a doctor run without --code would be a claim
+// about the scan that nobody made.
+type anyLangReason string
+
+const (
+	// anyLangSeveral: a scan that audits files in more than one language.
+	anyLangSeveral anyLangReason = "this scan has more than one"
+	// anyLangReview: a review's seats read prose about code, and the record
+	// does not rank a reviewer by the language of what it reviewed.
+	anyLangReview anyLangReason = "a review is not ranked by language"
+	// anyLangUnknown: doctor without --code, or with a file whose language
+	// cannot be detected.
+	anyLangUnknown anyLangReason = "no single language is known for this check"
+)
+
 // seatFromPool returns done=true with an exit code when the door must stop
 // (refusal: 2; declined or no terminal: 0). With --models unset it returns
 // a zero poolSeating and done=false, and changes nothing.
@@ -116,10 +134,11 @@ func acceptUnasked(string) (accepted bool, interactive bool, err error) { return
 // is the evidence read, ranked and proposed. Nothing is spent before the
 // operator accepts, and a lineup with an unfilled seat is never offered.
 //
-// lang is the scan's language, or shadowpool.LangAny for a scan of several
-// (the marker certify --repo already hands the shadow draw). It has no
-// default: "" is a door that forgot to say, and is refused.
-func seatFromPool(ctx context.Context, cmdName, repoRoot, lang string, f *modelsFlags, roles []poolRole, deps poolDeps) (seating poolSeating, exit int, done bool) {
+// lang is the scan's language, or shadowpool.LangAny when there is no single
+// one (the marker certify --repo already hands the shadow draw), in which
+// case anyWhy says why and is required. Neither has a default: "" is a door
+// that forgot to say, and is refused.
+func seatFromPool(ctx context.Context, cmdName, repoRoot, lang string, anyWhy anyLangReason, f *modelsFlags, roles []poolRole, deps poolDeps) (seating poolSeating, exit int, done bool) {
 	if f == nil || f.pool == nil {
 		return poolSeating{}, 0, false
 	}
@@ -129,6 +148,9 @@ func seatFromPool(ctx context.Context, cmdName, repoRoot, lang string, f *models
 	}
 	if strings.TrimSpace(lang) == "" {
 		return refuse("no language was given for this scan (pass the scan's language, or %q for a scan of several), so the evidence cannot be filtered", shadowpool.LangAny)
+	}
+	if lang == shadowpool.LangAny && strings.TrimSpace(string(anyWhy)) == "" {
+		return refuse("the door gave no reason for ranking across all languages, so the evidence line cannot say why")
 	}
 	poolText := strings.TrimSpace(*f.pool)
 	typed, err := parseModelsPool(poolText)
@@ -163,7 +185,7 @@ func seatFromPool(ctx context.Context, cmdName, repoRoot, lang string, f *models
 	if err != nil {
 		return refuse("cannot read the evidence: %v — nothing was proposed", err)
 	}
-	report, evidence := rankPool(ev, lang, pool)
+	report, evidence := rankPool(ev, lang, anyWhy, pool)
 	plan := autoseat.Propose(autoseat.Input{
 		Roles: roleNames, Pool: pool, Pins: pins, Report: report, Floor: modelrank.DefaultMinRuns,
 	})
@@ -290,7 +312,7 @@ func resolveModelsPool(ctx context.Context, cmdName, repoRoot string, typed []st
 // than one per language (the proposer reads a seat's first group only).
 // Evidence that records no language cannot be filtered to one, and says so
 // rather than ranking nothing.
-func rankPool(ev rankEvidence, lang string, pool []autoseat.Member) (modelrank.Report, string) {
+func rankPool(ev rankEvidence, lang string, anyWhy anyLangReason, pool []autoseat.Member) (modelrank.Report, string) {
 	declared := map[string]string{}
 	for _, m := range pool {
 		declared[m.Recorded] = m.Given
@@ -312,7 +334,7 @@ func rankPool(ev rankEvidence, lang string, pool []autoseat.Member) (modelrank.R
 		for i := range obs {
 			obs[i].Lang = ""
 		}
-		scope = "all languages (this scan has more than one)"
+		scope = "all languages (" + string(anyWhy) + ")"
 	case !recordsLang:
 		scope = "all languages (the evidence records none)"
 	default:

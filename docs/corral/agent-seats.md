@@ -366,10 +366,12 @@ entry's roster also names the goal-deriver whenever `--goals` is absent,
 including when every goal came from the goal cache, so its seating is
 attributed to a model. A file's verdict served from the verdict cache keeps
 the seating it was measured under, which can come from another run, because
-the cache key does not name how a seat was chosen. A run's `started_at`,
-`total_millis` and host-load figures begin when you accept the plan, so they
-do not count the time spent reading it. `corral models rank` itself still
-seats nothing.
+the cache key does not name how a seat was chosen. The time spent on the
+plan (reading the evidence and waiting for your answer) is excluded from the
+run's `total_millis` and its host-load figures, so they mean what they mean
+on a run without `--models`; `started_at` stays the run's real start, and on
+`certify --repo` the repository walk before the question is still counted.
+`corral models rank` itself still seats nothing.
 
 Not in this release: seating a proposal without asking (`--autoseat`), and
 seating members below the floor in the shadow seats to gather evidence on them.

@@ -194,21 +194,33 @@ func TestDeclinedOrUnaskedReviewDoesNothing(t *testing.T) {
 	}
 }
 
-// Scan time and host load are measured from the moment the operator
-// accepted, never from before the question (B1): a run's recorded duration
-// is what the run took, not how long someone read the plan.
-func TestAcceptedRunTimesFromTheAnswer(t *testing.T) {
-	slowAccept := func(t *testing.T) *time.Time {
+// A --models scan's recorded time means what it means on any other scan:
+// started_at is the run's real start, and total_millis is the run's wall
+// clock less exactly the interval spent on the plan (reading the evidence and
+// waiting for the operator's answer). Work the door does before the question
+// (on --repo, the walk) is still counted, or two entries for one repository
+// would stop being comparable (B1, corrected).
+func TestRecordedTimeExcludesOnlyThePlan(t *testing.T) {
+	const before = 400 * time.Millisecond
+	const wait = 1500 * time.Millisecond
+	// stub: the door's seam constructor runs after the door's own work before
+	// the question, so sleeping in it stands in for a slow walk; the confirm
+	// sleeps for the operator. It reports when the run reached the question
+	// and how long the plan interval took from the evidence load to the answer.
+	stub := func(t *testing.T) (reached *time.Time, planned *time.Duration) {
 		t.Helper()
-		at := new(time.Time)
+		reached, planned = new(time.Time), new(time.Duration)
 		orig := doorPoolDeps
 		t.Cleanup(func() { doorPoolDeps = orig })
 		doorPoolDeps = func(stdout, stderr io.Writer) poolDeps {
+			time.Sleep(before)
+			*reached = time.Now()
+			var loadedAt time.Time
 			return poolDeps{
-				load: func(rankSource) (rankEvidence, error) { return recordEvidence(), nil },
+				load: func(rankSource) (rankEvidence, error) { loadedAt = time.Now(); return recordEvidence(), nil },
 				confirm: func(string) (bool, bool, error) {
-					time.Sleep(1500 * time.Millisecond)
-					*at = time.Now()
+					time.Sleep(wait)
+					*planned = time.Since(loadedAt)
 					return true, true, nil
 				},
 				stdout: stdout, stderr: stderr,
@@ -217,41 +229,44 @@ func TestAcceptedRunTimesFromTheAnswer(t *testing.T) {
 		origRun := shadowMemberRunnable
 		t.Cleanup(func() { shadowMemberRunnable = origRun })
 		shadowMemberRunnable = func(agentbackend.ResolvedSeat) error { return nil }
-		return at
+		return reached, planned
 	}
-	check := func(t *testing.T, e auditpush.LedgerEntry, accepted time.Time, finished time.Time) {
+	check := func(t *testing.T, e auditpush.LedgerEntry, reached time.Time, planned time.Duration) {
 		t.Helper()
 		s := e.Bundle.Scan
-		if s.StartedAt == nil || s.StartedAt.Before(accepted.Truncate(time.Microsecond)) {
-			t.Errorf("started_at %v is before the operator accepted at %v", s.StartedAt, accepted)
+		if s.StartedAt == nil || s.FinishedAt == nil || s.TotalMillis == nil {
+			t.Fatalf("started_at %v finished_at %v total_millis %v", s.StartedAt, s.FinishedAt, s.TotalMillis)
 		}
-		if s.TotalMillis == nil {
-			t.Fatalf("no total_millis recorded")
+		if !s.StartedAt.Before(reached.Add(-before)) {
+			t.Errorf("started_at %v is not the run's real start (the door's work before the question began by %v)", s.StartedAt, reached.Add(-before))
 		}
-		if *s.TotalMillis > finished.Sub(accepted).Milliseconds() {
-			t.Errorf("total_millis %d includes the wait (the run after acceptance took at most %dms)", *s.TotalMillis, finished.Sub(accepted).Milliseconds())
+		excluded := s.FinishedAt.Sub(*s.StartedAt).Milliseconds() - *s.TotalMillis
+		if excluded < wait.Milliseconds() || excluded > planned.Milliseconds()+50 {
+			t.Errorf("total_millis leaves out %dms; want the plan interval (%dms, at least the %dms wait) and nothing else", excluded, planned.Milliseconds(), wait.Milliseconds())
+		}
+		if *s.TotalMillis < before.Milliseconds() {
+			t.Errorf("total_millis %d does not include the %v of work before the question", *s.TotalMillis, before)
 		}
 	}
 	t.Run("certify --local", func(t *testing.T) {
 		root, setPath, _ := localEntryFixture(t)
-		at := slowAccept(t)
+		reached, planned := stub(t)
 		ml := withMachineLedger(t)
 		var out, errb bytes.Buffer
 		code := runCertifyLocal([]string{
 			"--repo-dir", root, "--code", "pkg/a.go", "--goal", "A returns 1",
 			"--models", recordPool, "--mutants", setPath, "--quiet", "--", "go", "test", "./...",
 		}, &out, &errb)
-		finished := time.Now()
 		localRunFinished(t, code, out.String(), errb.String())
 		entries := scanEntriesIn(t, ml)
 		if len(entries) != 1 {
 			t.Fatalf("%d entries", len(entries))
 		}
-		check(t, entries[0], *at, finished)
+		check(t, entries[0], *reached, *planned)
 	})
 	t.Run("certify --repo", func(t *testing.T) {
 		root, setPath, goals := telemetryRepoFixture(t)
-		at := slowAccept(t)
+		reached, planned := stub(t)
 		machine := withMachineLedger(t)
 		noKeys(t)
 		t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
@@ -261,7 +276,6 @@ func TestAcceptedRunTimesFromTheAnswer(t *testing.T) {
 			"--repo", root, "--models", recordPool,
 			"--goals", goals, "--substrate", substrateWorkspace, "--all", "--mutants", setPath,
 		}, &out, &errb)
-		finished := time.Now()
 		if code != 0 {
 			t.Fatalf("exit=%d\n%s%s", code, out.String(), errb.String())
 		}
@@ -269,6 +283,6 @@ func TestAcceptedRunTimesFromTheAnswer(t *testing.T) {
 		if err != nil || len(entries) != 1 {
 			t.Fatalf("%d entries, %v", len(entries), err)
 		}
-		check(t, entries[0], *at, finished)
+		check(t, entries[0], *reached, *planned)
 	})
 }

@@ -338,9 +338,11 @@ without the ledger's directory: the entry is signed and may be published),
 both tier DECLARED; `SeatEvidence` is kept only while a seat the entry records
 was seated by evidence (`autoseat.EvidenceFor`). A seat filled by an accepted
 proposal is recorded as `evidence` or `order`, never as `operator`, because a
-person pressing `y` did not choose the model. A run's clock and host sampler
-restart when the operator accepts, so a recorded duration never includes the
-plan being read. The ranking reads no critic adjudications from the machine
+person pressing `y` did not choose the model. `seatFromPool` measures the plan
+interval (evidence load to the answer) as `poolSeating.PlanWait` and pauses the
+door's host sampler across it; the doors subtract it from `total_millis` and
+keep `started_at` at the run's real start, so a `--models` entry's figures are
+comparable with any other entry's. The ranking reads no critic adjudications from the machine
 ledger, so the critic is always seated by order unless pinned.
 `corral models rank` itself still seats nothing. `--autoseat` (seat without
 asking) and exploration (seating below-floor members in the shadow seats) are

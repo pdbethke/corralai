@@ -69,8 +69,12 @@ type ScanRow struct {
 	// push time, so re-pushing an old scan made its superseded verdict
 	// current. nil for rows written before this column existed.
 	StartedAt *time.Time
-	// TotalMillis is the scan's own wall clock. *int64 so a run that did not
-	// time itself is NULL rather than a scan that took no time.
+	// TotalMillis is the scan's own wall clock, less the time spent on a
+	// --models plan (reading its evidence and waiting for the operator's
+	// answer), so it measures the same thing with and without --models; on
+	// such a scan it is therefore shorter than FinishedAt minus StartedAt.
+	// *int64 so a run that did not time itself is NULL rather than a scan
+	// that took no time.
 	TotalMillis *int64
 	// SelectionMillis is the scan's ONE instrumented coverage run — the pass
 	// that decides which tests execute which file. It belongs at the SCAN
@@ -221,6 +225,8 @@ type ScanRow struct {
 	// MemAvailable at the start; PeakRSSBytes the children's largest resident
 	// set (getrusage RUSAGE_CHILDREN, a process-lifetime maximum); CPUMillis
 	// the user plus system CPU of the process and its children over the run.
+	// A --models plan's interval is left out of the samples and of CPUMillis
+	// (hoststat's Pause), as it is out of TotalMillis.
 	// A load average decides how much of the evidence bound a run can spend,
 	// so two runs at load 38 and load 13 are not the same run. nil, never 0,
 	// where a figure could not be read; HostNotMeasured says why. All absent

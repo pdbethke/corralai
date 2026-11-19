@@ -54,6 +54,13 @@ type poolSeating struct {
 	// host path (rankEvidence.RecordSource), then the language scope exactly
 	// as the plan printed it. "" when no seat was seated by evidence.
 	SeatEvidence string
+	// PlanWait is the interval seatFromPool spent on the plan: from reading
+	// the evidence to the operator's answer. A door subtracts it from the
+	// run's recorded duration, so total_millis means the same on a --models
+	// run as on any other; started_at stays the run's real start. Zero when
+	// no evidence was read (no --models, or every seat pinned). Not recorded:
+	// it is a correction to a recorded figure, not a measurement of the run.
+	PlanWait time.Duration
 }
 
 // seatEvidenceFor is the evidence line a record keeps beside seatedBy: the
@@ -94,6 +101,10 @@ type poolDeps struct {
 	confirm func(plan string) (accepted bool, interactive bool, err error)
 	stdout  io.Writer
 	stderr  io.Writer
+	// sampler is the door's host-load sampler, paused across the plan
+	// interval (PlanWait) so its figures leave out the same interval the
+	// duration does. nil where the door samples nothing (doctor, review).
+	sampler *hoststat.Sampler
 	// placed is the door's --local-endpoint placements (role -> daemon
 	// URL, as parseLocalEndpoints returns them), or nil where the door
 	// takes none. A pin is resolved with them, exactly as the door's own
@@ -216,6 +227,13 @@ func seatFromPool(ctx context.Context, cmdName, repoRoot, lang string, anyWhy an
 		return refuse("%v", err)
 	}
 
+	// The plan interval starts here: the evidence load, the plan and the
+	// question are not the run, so the duration a door records and its host
+	// sampler both leave them out. Measured once, here, so no door times it
+	// separately.
+	planStart := time.Now()
+	deps.sampler.Pause()
+	defer deps.sampler.Resume()
 	ev, err := deps.load(rankSource{Kind: rankSourceLedger})
 	if err != nil {
 		return refuse("cannot read the evidence: %v — nothing was proposed", err)
@@ -238,6 +256,7 @@ func seatFromPool(ctx context.Context, cmdName, repoRoot, lang string, anyWhy an
 	}
 
 	accepted, interactive, err := deps.confirm(text)
+	planWait := time.Since(planStart)
 	switch {
 	case err != nil:
 		return refuse("reading the answer: %v", err)
@@ -259,6 +278,7 @@ func seatFromPool(ctx context.Context, cmdName, repoRoot, lang string, anyWhy an
 		return poolSeating{}, 0, true
 	}
 
+	seating.PlanWait = planWait
 	seating.SeatedBy = map[string]string{}
 	for i, s := range plan.Seats {
 		seating.SeatedBy[s.Role] = s.By
@@ -274,16 +294,6 @@ func seatFromPool(ctx context.Context, cmdName, repoRoot, lang string, anyWhy an
 	// signed and may be published, and a home directory is not evidence.
 	seating.SeatEvidence = seatEvidenceFor(seating.SeatedBy, ev.RecordSource+"; "+scope)
 	return seating, 0, false
-}
-
-// restartRunClock stops the sampler a door started before its --models
-// question and starts the clock and a new sampler at the operator's answer.
-// A door calls it only when a plan was accepted (poolSeating.proposed), so a
-// run without --models, or with every seat pinned, is timed exactly as it
-// always was.
-func restartRunClock(old *hoststat.Sampler) (time.Time, *hoststat.Sampler) {
-	old.Stop()
-	return time.Now(), hoststat.Start(hostSampleInterval)
 }
 
 // noTerminalLine is the last line a --models run with no terminal prints. It

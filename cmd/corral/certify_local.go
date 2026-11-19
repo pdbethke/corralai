@@ -101,14 +101,13 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 // would file the demo's measurements under that project's origin and HEAD.
 func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Writer) int {
 	// The run's start, for the ledger entry's started_at and total_millis.
-	// Restarted when the operator accepts a --models plan (below), so the
-	// record never counts the time someone spent reading it.
+	// A --models plan's interval is left out of total_millis and of the host
+	// figures (poolSeating.PlanWait), never by moving this start.
 	startedAt := time.Now()
 	// Host load and the run's own consumption, from here to the entry. The
-	// deferred Stop ends the sampler on every return (the one running then,
-	// since a --models acceptance replaces it); Stop is idempotent.
+	// deferred Stop ends the sampler on every return; Stop is idempotent.
 	hostSampler := hoststat.Start(hostSampleInterval)
-	defer func() { hostSampler.Stop() }()
+	defer hostSampler.Stop()
 	flagArgs, checkArgv := splitCertifyArgs(args)
 
 	fs := flag.NewFlagSet("certify --local", flag.ContinueOnError)
@@ -304,6 +303,7 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 	// operator did type are pins.
 	seatDeps := doorPoolDeps(stdout, stderr)
 	seatDeps.placed = localEndpoints
+	seatDeps.sampler = hostSampler
 	seating, poolExit, poolDone := seatFromPool(context.Background(), "corral certify --local", *repoDirFlag, drawLang, "", modelsPool, []poolRole{
 		{role: advpool.RoleMutantGenerator, val: mutantModel},
 		{role: advpool.RoleTestWriter, val: writerModel},
@@ -311,13 +311,6 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 	}, seatDeps)
 	if poolDone {
 		return poolExit
-	}
-	if seating.proposed() {
-		// The run starts when the operator accepts: the scan time and the
-		// host-load samples must not include a person reading the plan, or
-		// the evidence read behind it. What came before (flag checks, the
-		// language detection) is milliseconds and is not the run either.
-		startedAt, hostSampler = restartRunClock(hostSampler)
 	}
 	// The bug-catching scorecard store: a --local run's per-seat metrics
 	// (including the shadow head-to-head) persist next to the signed build
@@ -642,6 +635,7 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 		seedSkipped: seedSkippedJSON(seedSkipped),
 		toolMutants: toolMutantsJSON(toolCounts),
 		host:        hostSampler.Stop(),
+		planWait:    seating.PlanWait,
 	}); berr != nil {
 		fmt.Fprintf(stderr, "corral certify --local: no ledger entry written: %v\n", berr)
 	} else {

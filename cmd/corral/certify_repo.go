@@ -382,16 +382,16 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 
 	// Captured here, before enumeration: this is the header row's
 	// provenance timestamp for the whole invocation, not just the audit
-	// portion of it, except that a --models run restarts it when the
-	// operator accepts the plan (below). Read only if --record is given (see
-	// the fail-open call site near the bottom of this function).
+	// portion of it. A --models plan's interval is left out of total_millis
+	// and of the host figures (poolSeating.PlanWait), never by moving this
+	// start. Read only if --record is given (see the fail-open call site
+	// near the bottom of this function).
 	startedAt := time.Now()
 	// The host's load and the run's own consumption, sampled until the scan
 	// header is built. The deferred Stop ends the sampler on every early
-	// return (the one running then, since a --models acceptance replaces
-	// it); Stop is idempotent, so the one before the header is the read.
+	// return; Stop is idempotent, so the one before the header is the read.
 	hostSampler := hoststat.Start(hostSampleInterval)
-	defer func() { hostSampler.Stop() }()
+	defer hostSampler.Stop()
 
 	var testMap *reposcan.TestMap
 	if *testsPath != "" {
@@ -477,21 +477,13 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	}
 	seatDeps := doorPoolDeps(planOut, stderr)
 	seatDeps.placed = localEndpoints
+	seatDeps.sampler = hostSampler
 	if *dryRun {
 		seatDeps.confirm, seatDeps.noCredentialCheck = acceptUnasked, true
 	}
 	seating, poolExit, poolDone := seatFromPool(context.Background(), "corral certify --repo", *repoDir, scanLang, anyWhy, modelsPool, poolRoles, seatDeps)
 	if poolDone {
 		return poolExit
-	}
-	if seating.proposed() && !*dryRun {
-		// The scan starts when the operator accepts: started_at,
-		// total_millis and the host-load samples must not include a person
-		// reading the plan, or the evidence read behind it. The walk above
-		// (which the plan needed for the scan's language) is excluded with
-		// them, and is the one part of the invocation a --models scan's
-		// total_millis does not cover.
-		startedAt, hostSampler = restartRunClock(hostSampler)
 	}
 	if *dryRun && seating.proposed() {
 		fmt.Fprintln(planOut, "a dry run asks nothing and runs nothing: this is the lineup a real run would propose")
@@ -1913,7 +1905,9 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			}
 			return 0
 		}(),
-		TotalMillis: finishedAt.Sub(startedAt).Milliseconds(),
+		// Less the --models plan interval, so a scan with --models and
+		// one without measure the same thing (the walk included).
+		TotalMillis: (finishedAt.Sub(startedAt) - seating.PlanWait).Milliseconds(),
 		// The instrumented coverage run, at the grain it HAPPENS at: once per
 		// scan. Every file's verdict carries the same duration too (so a
 		// per-file readout can name each phase of that file's audit), but

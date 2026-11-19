@@ -135,3 +135,58 @@ func TestOtherPlatformsSayNotMeasured(t *testing.T) {
 		t.Errorf("%+v", c)
 	}
 }
+
+// A paused sampler takes no load sample, and the CPU and wall time spent
+// while paused are left out of what Stop reports, so a run that paused for
+// someone to read a plan reports what a run without the pause reports.
+// LoadStart and MemAvailableStartBytes stay the readings at Start.
+func TestPausedIntervalIsNotSampledOrCounted(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the readers are Linux's")
+	}
+	root := t.TempDir()
+	write := func(name, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(root, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("loadavg", "1.00 1.00 1.00 1/1 1\n")
+	write("meminfo", "MemAvailable:   1024 kB\n")
+	s := startAt(context.Background(), root, 5*time.Millisecond)
+	s.Pause()
+	write("loadavg", "99.00 1.00 1.00 1/1 1\n")
+	spinCPU(t, 300*time.Millisecond)
+	time.Sleep(200 * time.Millisecond)
+	write("loadavg", "2.00 1.00 1.00 1/1 1\n")
+	s.Resume()
+	time.Sleep(30 * time.Millisecond)
+	c := s.Stop()
+	if c.LoadStart == nil || *c.LoadStart != 1 {
+		t.Errorf("LoadStart = %v, want the reading at Start (1)", c.LoadStart)
+	}
+	if c.LoadPeak == nil || *c.LoadPeak != 2 {
+		t.Errorf("LoadPeak = %v, want 2: the 99 written during the pause must not be sampled", c.LoadPeak)
+	}
+	if c.CPUMillis == nil || *c.CPUMillis >= 200 {
+		t.Errorf("CPUMillis = %v, want the 300ms spent while paused left out", c.CPUMillis)
+	}
+	if c.WallMillis >= 300 {
+		t.Errorf("WallMillis = %d, want the paused interval left out", c.WallMillis)
+	}
+}
+
+// Pause and Resume are safe on a nil sampler (a door with none) and are
+// no-ops when repeated.
+func TestPauseResumeAreSafe(t *testing.T) {
+	var none *Sampler
+	none.Pause()
+	none.Resume()
+	s := Start(5 * time.Millisecond)
+	s.Resume()
+	s.Pause()
+	s.Pause()
+	s.Resume()
+	s.Resume()
+	_ = s.Stop()
+}

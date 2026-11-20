@@ -1,0 +1,19 @@
+# Provenance of ../swift-report.txt. A real run; nothing hand-written.
+command:  swiftPlugin.CoverageCmd(["swift", "test"]) run in this directory, stdout only
+          (TestCapturedCoverageReportsMatchALiveRun, CORRALAI_RECAPTURE_COVERAGE=1), from a
+          CGO_ENABLED=0 `go test -c` binary of internal/lang run in a container of the
+          corral-swift-spike image (swift:6.3.2-noble with libmysqlclient-dev and pkg-config)
+          as the invoking user, with the network off. Its awk is mawk.
+swift:    Swift version 6.3.2 (swift-6.3.2-RELEASE)   Target: x86_64-unknown-linux-gnu
+captured: 2026-11-19
+trimmed:  nothing. The reducer prints working-directory-relative paths, so the report carries no machine path.
+fixture:  Sources/Calc/Calc.swift  add is tested, sub is not                  -> 0 < executed < executable
+          Sources/Calc/Dead.swift  compiled, never called                     -> executed 0
+          Sources/Calc/Shape.swift a protocol, no function body               -> absent (llvm-cov maps no line)
+          Unbuilt/Orphan.swift     in no target, never built                  -> absent
+          Tests/CalcTests/CalcTests.swift      the swift-testing test         -> executed
+          Tests/CalcXCTests/CalcXCTests.swift  the XCTest test                -> executed
+          .build/corral-coverage/...  the test runner and discovery sources SwiftPM generates -> absent (skipped)
+The raw export of the same fixture is ../../runners/swift-codecov.json
+(scripts/capture-runner-fixtures.sh --swift-coverage-only); TestSwiftCapturedReportIsTheCapturedExportReduced
+holds this report to its reduction.

@@ -21,8 +21,8 @@ This table is what the code can do. What has been executed, and on which reposit
 | Keep the passing part of an authored test | ✓ | ✓ | ✓ | ✓ | ✓ (rspec, minitest) | — (17) | — (18) | ✓ |
 | Run one test unit | ✓ | ✓ | ✓ | — (19) | ✓ (rspec) | ✓ | ✓ | ✓ |
 | Share a build cache between sandboxed runs | ✓ | — (20) | — (21) | — (22) | — (23) | — (24) | — (25) | — (26) |
-| Coverage pre-flight | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — (27) | ✓ |
-| Grade only the tests that run the file | ✓ | ✓ | ✓ | ✓ | ✓ (rspec) | ✓ | — (28) | ✓ |
+| Coverage pre-flight | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Grade only the tests that run the file | ✓ | ✓ | ✓ | ✓ | ✓ (rspec) | ✓ | ✓ | ✓ |
 
 1. no row narrows a run to the killing test by name yet; kills there are confirmed by repeating the grading run (kill-confirmation phase 1)
 2. not built: the failure line swift-testing prints names a failing test by its function or display name alone (`✘ Test fails() failed after ...`), not its suite or target, and XCTest's names the class and method (`Test Case 'AdderTests.testFails' failed`) but not the target the class is in (measured on Swift 6.3.2); XCTest's `error:` line before it carries the test file's path, `Tests/CalcXCTests/CalcXCTests.swift` in that run. So the killing test cannot be narrowed by name to exactly one test; kills are confirmed by repeating the grading run
@@ -50,8 +50,6 @@ This table is what the code can do. What has been executed, and on which reposit
 24. not built. measured 2026-11-18 on one 32-core machine, outside the sandbox, as the median of 3 to 5 runs: on indexmap-rs/indexmap at 41a8708 (224 tests) `cargo test` took 4.3 s from an empty target/ and 0.9 s with a warm target/ after one source file changed, so a shared target/ would be worth building for; a larger crate was not measured. Before one is shared we must settle how a cached test result is kept from standing in for a run and how a shared target/ keeps one mutant's build output from being read by another's
 25. not built. measured 2026-11-19 on taplin/Lariat at be0c5fd with Swift 6.3.2 (the swift:6.3.2-noble container) on one 32-core machine, in Docker, not in the sandbox: a cold `swift build --build-tests` took 142.5 s and a rebuild after one source file changed took 13.6 s. Before a build directory is shared we must settle how one mutant's build output is kept from being read by another's run
 26. not built. measured 2026-11-18 on one 32-core machine, outside the sandbox, as the median of 3 to 5 runs: vitest 4.1 on unjs/ufo at f06c800 (TypeScript, 489 tests) took 0.37 s with its cache directories removed and 0.35 s warm after one source file changed, no difference. jest with a TypeScript transform and the TypeScript compiler's own incremental cache were not measured (jest with Babel on a JavaScript project: 3.3 s cold, 1.7 s warm). Before one is shared each runner's flag for never serving a cached result must be verified
-27. not built yet: corral has no Swift coverage reader
-28. not built yet: it needs Swift coverage, which is not built
 
 ## By runner
 

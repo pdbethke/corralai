@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Elastic-2.0
 #
-# scripts/capture-runner-fixtures.sh [--swift-only] [--keep] [DIR] — runs the
+# scripts/capture-runner-fixtures.sh [--swift-only|--swift-coverage-only] [--keep] [DIR] — runs the
 # real jest, vitest, mocha, node --test, rspec, phpunit, go test, gotestsum,
 # cargo test, cargo nextest and swift test against the fixture suites in
 # internal/lang/testdata/runners/src, writes what each runner's LIST command
@@ -31,6 +31,7 @@
 #     -e CORRAL_FAIL_TESTING -e CORRAL_FAIL_XCTEST -v /tmp/rf:/tmp/rf \
 #     -w /tmp/rf/swift swift:6.3.2-noble swift" \
 #     scripts/capture-runner-fixtures.sh --swift-only /tmp/rf
+# --swift-coverage-only captures swift-codecov.json alone, the same way.
 # --swift-only captures the Swift fixtures alone, needs nothing but SWIFT, and
 # leaves PROVENANCE.txt as it is (a full run rewrites it, the Swift paragraph
 # included, from swift_provenance). Either run checks `$SWIFT --version` before
@@ -41,10 +42,11 @@ cd "$(dirname "$0")/.."
 REPO="$PWD"
 OUT="$REPO/internal/lang/testdata/runners"
 
-SWIFT_ONLY=0 KEEP=0
+SWIFT_ONLY=0 SWIFT_COVERAGE_ONLY=0 KEEP=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --swift-only) SWIFT_ONLY=1; shift ;;
+    --swift-coverage-only) SWIFT_COVERAGE_ONLY=1; shift ;;
     --keep) KEEP=1; shift ;;
     *) break ;;
   esac
@@ -184,6 +186,28 @@ capture_swift() (
   return "$fail"
 )
 
+# --- swift coverage (internal/lang/swift_coverage.go) -----------------------
+# The llvm-cov export SwiftPM writes for one coverage run of the coverage
+# fixture (internal/lang/testdata/coverage/swift: Calc.swift tested in part,
+# Dead.swift compiled and never called, Shape.swift with no executable line,
+# Unbuilt/Orphan.swift in no target), as swiftPlugin.CoverageCmd runs it:
+# --enable-code-coverage with the scratch path it uses. $SWIFT starts in
+# DIR/swift, so the package is named with --package-path and the scratch path
+# is absolute. The capture directory is written as /fixture in the JSON.
+capture_swift_coverage() (
+  local pkg pdir json
+  pkg="$DIR/swift-coverage"
+  rm -rf "$pkg" && cp -r "$REPO/internal/lang/testdata/coverage/swift" "$pkg"
+  pdir="$(cd "$pkg" && pwd -P)"
+  local rc=0
+  $SWIFT test --package-path "$pkg" --enable-code-coverage --scratch-path "$pkg/.build/corral-coverage" >/dev/null 2>&1 || rc=$?
+  want swift-coverage-run-exit 0 "$rc"
+  json="$($SWIFT test --package-path "$pkg" --enable-code-coverage --scratch-path "$pkg/.build/corral-coverage" --show-codecov-path 2>/dev/null)"
+  sed -e "s#$pdir/#/fixture/swift-coverage/#g" "$json" > "$OUT/swift-codecov.json"
+  want swift-coverage-files 4 "$(grep -o '"filename":"/fixture/swift-coverage/[ST][^"]*"' "$OUT/swift-codecov.json" | wc -l | tr -d ' ')"
+  return "$fail"
+)
+
 # swift_provenance is PROVENANCE.txt's Swift paragraph, from the version the
 # capture ran (toolchain-swift-version.txt). --swift-only leaves the file to
 # the operator; a full run writes this.
@@ -220,11 +244,20 @@ swift-build-target-*.txt and swift-authored-*.txt open with
 \`# argv:\` (the operator's command, \`-\` for corral's own compile check)
 and \`$ \` (the command corral builds) and end with \`# exit:\` (its exit status). swift-testing runs its tests in
 parallel, so the order of its lines differs between captures.
+swift-codecov.json is the llvm-cov export SwiftPM wrote for \`swift test
+--enable-code-coverage --scratch-path <package>/.build/corral-coverage\` on
+../coverage/swift (named with --package-path), the capture directory written
+as /fixture.
 PROV
 }
 
+if [ "$SWIFT_COVERAGE_ONLY" = 1 ]; then
+  capture_swift_coverage || fail=1
+  exit "$fail"
+fi
 if [ "$SWIFT_ONLY" = 1 ]; then
   capture_swift || fail=1
+  capture_swift_coverage || fail=1
   exit "$fail"
 fi
 # The runners come from scripts/npm-pins/runner-fixtures/package-lock.json via
@@ -544,6 +577,7 @@ want pnpm-test-single 1 "$(corepack "pnpm@$PNPM" test -- --testNamePattern '^top
 want composer-test-single 1 "$(composer test -- --filter '/(?:^|\\)CalcTest::testAdds(?: with data set .*)?$/' tests/CalcTest.php 2>&1 | sed -n 's/^OK (\([0-9]*\) test.*/\1/p')"
 
 capture_swift || fail=1
+capture_swift_coverage || fail=1
 
 {
   echo "Captured by scripts/capture-runner-fixtures.sh on $(date -u +%Y-%m-%d)."

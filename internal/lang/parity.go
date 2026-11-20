@@ -205,9 +205,5 @@ var ParityExemptions = []Exemption{
 
 	{"swift", "salvage", "not built: `swift test --help` (Swift 6.3.2) lists a `--skip` option, which was not run, and the failure lines name a swift-testing test without its suite or target and an XCTest test by class and method without its target (measured on Swift 6.3.2), so a skip built from them could leave out a passing test of the same name elsewhere and narrow the run"},
 
-	{"swift", "coverage", "not built yet: corral has no Swift coverage reader"},
-
-	{"swift", "selection", "not built yet: it needs Swift coverage, which is not built"},
-
 	{"swift", "run-cache", "not built. measured 2026-11-19 on taplin/Lariat at be0c5fd with Swift 6.3.2 (the swift:6.3.2-noble container) on one 32-core machine, in Docker, not in the sandbox: a cold `swift build --build-tests` took 142.5 s and a rebuild after one source file changed took 13.6 s. Before a build directory is shared we must settle how one mutant's build output is kept from being read by another's run"},
 }

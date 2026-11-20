@@ -181,10 +181,13 @@ func BeforeSuiteExit(stdout string) string {
 }
 
 // coverageUnavailableNotices are the lines a CoverageCmd prints, in place of
-// a report, when its instrument could not run at all — each followed by the
-// reason. Rust's is the only one today: its llvm-tools check runs before the
-// suite, so such a report has no suite-exit trailer either.
-var coverageUnavailableNotices = []string{rustCoverageUnavailable}
+// a report, when there is no report to read — each followed by the reason.
+// Rust prints one when its instrument cannot run at all (its llvm-tools check
+// runs before the suite, so such a report has no suite-exit trailer either)
+// and Swift when SwiftPM cannot say where its report goes (also before the
+// suite) or the run wrote none; both when the llvm-cov export is empty or cut
+// short.
+var coverageUnavailableNotices = []string{rustCoverageUnavailable, swiftCoverageUnavailable}
 
 // CoverageUnavailable is the reason a CoverageCmd's output gives for having
 // measured nothing because its instrument could not run (a missing

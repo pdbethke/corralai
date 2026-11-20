@@ -102,14 +102,15 @@ func (swiftPlugin) BuildDirs() []BuildDir {
 // targets it depends on, so the test target's build also compiles the source
 // under test, mutated or not.
 //
-// Both callers are covered. JailValidator.CompileTest hands the authored
+// Both callers hand a test. JailValidator.CompileTest hands the authored
 // test's path, so the authored test is compiled with its own target. The
-// mutant gate (JailScorer.gatedScoreOpts) hands the source itself whenever
-// the authored test is not in the workspace, which is every mutant: the
-// mutant is compiled in its own target. That gate does not see a mutant that
-// compiles in its target but breaks a test target's build (a changed
-// signature a test calls): the suite's own build then fails, and the run
-// counts it as a kill. "" is read as no test, the same way.
+// mutant gate hands the developer's own test
+// (JailScorer.mutantGateTestPath), so each mutant is compiled with the test
+// target that calls it, and a mutant that breaks only the tests' view of the
+// source (a changed signature a test calls) is invalid rather than a kill.
+// The source target is built alone only when no test is handed (single-file
+// mode, which Preflight refuses for Swift, or ""), and then such a mutant
+// would fail the suite's own build and count as a kill.
 //
 // Measured on Swift 6.3.2 (testdata/runners/swift-build-target-*.txt):
 // `swift build --target <TestTarget>` built the test target and its
@@ -225,12 +226,18 @@ func (swiftPlugin) PromptLang() string { return "Swift" }
 // file added to a test target: top-level names in a module are one
 // namespace, so an authored `@Test func parses()` beside the project's own
 // did not build ("invalid redeclaration", swift-authored-collision.txt),
-// while the same tests inside one corral-named type built and ran in both
-// frameworks (swift-authored-wrapped.txt).
+// while the same tests inside one type of their own built and ran in both
+// frameworks (swift-authored-wrapped.txt, whose type is CorralCalcTests).
+// The type is named after the authored file, which the writer is told
+// (advpool's RunSpec.writtenAuthoredPath, the path the scorer writes, renamed
+// past any file already in the jail's workspace), so on the jail substrate a
+// file the developer kept from an earlier audit, and the type in it, cannot
+// share the new one's name. The workspace substrate's map is empty, so there
+// nothing is renamed: the new file takes the kept file's path for the run.
 func (swiftPlugin) TestWriterSystem() string {
 	return `You are a TEST-WRITER. Given a security control GOAL, a target source file, and its signature surface, write executable Swift tests that verify the code SATISFIES the goal.
 - MATCH THE PROJECT'S CONVENTIONS, which the developer's own tests (shown to you) use, ahead of everything below: swift-testing or XCTest, the same imports (including ` + "`@testable import`" + ` of the module under test, if they use it), naming and assertion helpers.
-- Your file is added to a test target beside the project's own test files, and every top-level name in a target is shared. So put EVERYTHING you write — every test, helper, constant and fixture — inside ONE type whose name is ` + "`Corral`" + ` followed by the source file's base name and ` + "`Tests`" + ` (for Evaluator.swift, ` + "`CorralEvaluatorTests`" + `; leave out any character a Swift identifier cannot hold). With XCTest that type is ` + "`final class ... : XCTestCase`" + ` and each test a ` + "`func test...()`" + ` method; with swift-testing it is a ` + "`@Suite struct`" + ` and each test an ` + "`@Test func`" + `. Nothing but import lines goes at the top level.
+- Your file is added to a test target beside the project's own test files, and every top-level name in a target is shared. So put EVERYTHING you write — every test, helper, constant and fixture — inside ONE type named after the test file you are told to write: its file name without ` + "`.swift`" + ` (for Calc_corralTests.swift, ` + "`Calc_corralTests`" + `; leave out any character a Swift identifier cannot hold). corral names that file apart from every file already in the target, so the type's name is apart from theirs too. With XCTest that type is ` + "`final class ... : XCTestCase`" + ` and each test a ` + "`func test...()`" + ` method; with swift-testing it is a ` + "`@Suite struct`" + ` and each test an ` + "`@Test func`" + `. Nothing but import lines goes at the top level.
 - It MUST compile against the target and MUST FAIL if the goal is violated — test the goal's boundary (what a weakened implementation would pass that a compliant one must not).
 - Standard library and the test framework the project already uses only. Deterministic, no network.
 Return ONLY the raw Swift source — no prose, no markdown fences.`

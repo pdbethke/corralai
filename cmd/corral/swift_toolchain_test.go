@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: Elastic-2.0
 
-//go:build cgo
-
 package main
 
 import (
@@ -16,8 +14,7 @@ import (
 
 // swiftRepo is a SwiftPM package with one source and its test target, and a
 // stand-in swift alone on PATH: everything Preflight checks is in place, so
-// what refuses is the jail's half and nothing else. cgo-only because the
-// Rust half below reuses landingRepo, which is.
+// what refuses is the jail's half and nothing else.
 func swiftRepo(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
@@ -78,8 +75,9 @@ func TestDoctorRehearsesTheJailsSwiftRefusal(t *testing.T) {
 // TestADryRunIsNotRefusedByTheJailsPreflight: --dry-run builds no sandbox
 // (no executor, and so no jail preflight of any language), so a language
 // whose jail half refuses is still enumerated and paired. Rust on a host
-// whose jail cannot run its toolchain behaves the same way, which is what
-// Swift matches.
+// whose jail cannot run its toolchain behaves the same way
+// (TestARustDryRunIsNotRefusedByTheJailsPreflight, cgo-only beside the
+// landingRepo it uses), which is what Swift matches.
 func TestADryRunIsNotRefusedByTheJailsPreflight(t *testing.T) {
 	t.Run("swift", func(t *testing.T) {
 		root := swiftRepo(t)
@@ -93,22 +91,6 @@ func TestADryRunIsNotRefusedByTheJailsPreflight(t *testing.T) {
 		}
 		if !strings.Contains(out.String(), "Sources/Calc/Calc.swift") {
 			t.Errorf("the dry run does not list the Swift source:\n%s", out.String())
-		}
-	})
-	t.Run("rust", func(t *testing.T) {
-		root := landingRepo(t)
-		stockRustup(t)
-		withSystemToolchain(t, false)
-		rust, _ := lang.ByName("rust")
-		if lang.JailPreflight(rust, []string{"cargo", "test"}) == nil {
-			t.Fatal("precondition: the jail's half refuses this host's Rust toolchain")
-		}
-		var out, errb bytes.Buffer
-		if code := runCertifyRepo([]string{"--repo", root, "--dry-run"}, &out, &errb); code != 0 {
-			t.Fatalf("exit %d, stderr=%s", code, errb.String())
-		}
-		if !strings.Contains(out.String(), "src/foo.rs") {
-			t.Errorf("the dry run does not list the Rust source:\n%s", out.String())
 		}
 	})
 }

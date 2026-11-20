@@ -212,10 +212,14 @@ func renderTestWriterRepairing(rs RunSpec, sigs []repoindex.Signature, survivors
 	// code "using that exact file name" — were handed an instruction that no
 	// longer resolved from the new location.
 	//
-	// `base` is nil here: a collision-disambiguated name would differ in the
-	// FILENAME only, never the directory, so the relative hop below stays
-	// correct either way.
-	authored := authoredTestPath(rs.Landing, rs.CodePath, rs.DevTestPath, nil)
+	// The path is the one the scorer writes (rs.writtenAuthoredPath), renamed
+	// past any file already in its workspace, not the landing rule on an
+	// empty tree. The directory is the same either way, but the NAME is a
+	// fact the writer acts on: PHPUnit loads the class named after the file
+	// (below), and Swift's writer names its one type after the file, so a
+	// prompt naming a file the developer has already kept would have the
+	// writer redeclare that file's class or type.
+	authored := rs.writtenAuthoredPath()
 	authoredDir, codeDir := filepath.Dir(authored), filepath.Dir(rs.CodePath)
 	rel, rerr := filepath.Rel(authoredDir, rs.CodePath)
 	if rerr != nil {

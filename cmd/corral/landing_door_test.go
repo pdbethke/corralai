@@ -485,3 +485,24 @@ func TestBaselineFlakyIsOneValueFromTheRunnerToTheWarehouse(t *testing.T) {
 		t.Errorf("the warehouse reader dropped the flaky tests: %+v", readBack.Files)
 	}
 }
+
+// TestARustDryRunIsNotRefusedByTheJailsPreflight: a stock ~/.cargo rustup on
+// a host with no system-wide toolchain fails Rust's jail preflight, and a
+// --dry-run, which builds no sandbox, still lists the crate's source. The
+// Swift half of the same property is in swift_toolchain_test.go.
+func TestARustDryRunIsNotRefusedByTheJailsPreflight(t *testing.T) {
+	root := landingRepo(t)
+	stockRustup(t)
+	withSystemToolchain(t, false)
+	rust, _ := lang.ByName("rust")
+	if lang.JailPreflight(rust, []string{"cargo", "test"}) == nil {
+		t.Fatal("precondition: the jail's half refuses this host's Rust toolchain")
+	}
+	var out, errb bytes.Buffer
+	if code := runCertifyRepo([]string{"--repo", root, "--dry-run"}, &out, &errb); code != 0 {
+		t.Fatalf("exit %d, stderr=%s", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "src/foo.rs") {
+		t.Errorf("the dry run does not list the Rust source:\n%s", out.String())
+	}
+}

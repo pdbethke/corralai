@@ -507,19 +507,49 @@ func (s JailScorer) gatedScoreOpts(codePath string, base map[string]string) []ad
 		// into "every mutant invalid", which is a worse diagnosis.
 		return opts
 	}
-	testPath := authoredTestPath(s.Landing, codePath, s.DevTestPath, s.BaseFiles)
-	if _, ok := base[testPath]; !ok {
-		// A per-file checker (python, ruby, node) is handed BOTH paths and
-		// fails on one that is not in the workspace — which would mark EVERY
-		// mutant invalid and erase the exam entirely. The code file is always
-		// present, and gating the mutant is what this is for.
-		testPath = codePath
-	}
-	if cc := compileCheckFor(p, s.RepoDir, codePath, testPath); len(cc) > 0 {
+	if cc := compileCheckFor(p, s.RepoDir, codePath, s.mutantGateTestPath(codePath, base)); len(cc) > 0 {
 		opts = append(opts, adequacy.WithMutantCompileCheck(cc))
 	}
 	return opts
 }
+
+// mutantGateTestPath is the test file the mutant compile gate checks beside
+// the code. A mutant can break only the tests' view of the code (a changed
+// signature a test calls): the code itself still builds, the suite's build
+// fails, and without a test in the check that failure is scored as a KILL.
+// So the gate is handed a test the tree holds, in this order:
+//
+//  1. the authored test, when its path is already a file of the tree (a
+//     landing Into the project's own test file);
+//  2. the developer's own test, which every repo-mode run has: the jail's
+//     workspace map holds it (it is put there explicitly), and on the
+//     workspace substrate the map is deliberately EMPTY because the
+//     checkout it was read from IS the tree (see AuthoredLanding);
+//  3. the code alone, when neither is in the tree: single-file mode, where
+//     the dev test sits at the synthetic advPoolTestPath under whatever
+//     name the operator gave it, and a run with no dev test.
+//
+// Never a path the tree lacks: a per-file checker (python, ruby, node) is
+// handed BOTH paths and fails on a missing one, which would mark EVERY
+// mutant invalid and erase the exam entirely.
+//
+// What each plugin's check does with the dev test: Go and Rust ignore the
+// test path (their builds already compile the tests); TypeScript type-checks
+// the dev test against the mutant; Swift builds the dev test's target, which
+// compiles the source with it; Python, Ruby, JavaScript and PHP add the dev
+// test, which a mutant never changes, to their per-file syntax and lint
+// checks.
+func (s JailScorer) mutantGateTestPath(codePath string, base map[string]string) string {
+	if p := authoredTestPath(s.Landing, codePath, s.DevTestPath, s.BaseFiles); inMap(base, p) {
+		return p
+	}
+	if s.DevTestPath != "" && (inMap(base, s.DevTestPath) || (s.BaseFiles != nil && len(s.BaseFiles) == 0)) {
+		return s.DevTestPath
+	}
+	return codePath
+}
+
+func inMap(m map[string]string, k string) bool { _, ok := m[k]; return ok }
 
 func (s JailScorer) Score(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (float64, []adequacy.Mutant, error) {
 	scoreBase, cmd := s.scoreWorkspace(codePath, test, testCmd)

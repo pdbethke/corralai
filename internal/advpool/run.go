@@ -296,3 +296,15 @@ type RoleAssignment map[string]string
 func (rs RunSpec) inv() lang.Invocation {
 	return rs.Invocation.WithArgv(adequacy.ShellSplit(rs.TestCmd))
 }
+
+// writtenAuthoredPath is where the authored test is written: the scorer's
+// resolved path (AuthoredTestPath) when the run carries it, which every
+// certify run does, else the landing rule on an empty tree (single-file
+// mode and the brain, where the scorer has no workspace files to rename
+// past, so the rule IS its answer).
+func (rs RunSpec) writtenAuthoredPath() string {
+	if rs.AuthoredTestPath != "" {
+		return rs.AuthoredTestPath
+	}
+	return authoredTestPath(rs.Landing, rs.CodePath, rs.DevTestPath, nil)
+}

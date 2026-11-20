@@ -317,8 +317,9 @@ func TestSwiftImportIsTheSourceTargetsModule(t *testing.T) {
 
 // The writer is told to match the project's own tests first (framework,
 // imports, @testable), and to put every test and helper inside one type
-// whose name is corral's, so nothing it declares at top level can collide
-// with the project's: both frameworks run such a type
+// named after the authored file (which corral names apart from every file in
+// the target), so nothing it declares at top level can collide with the
+// project's: both frameworks run such a type
 // (testdata/runners/swift-authored-wrapped.txt), and a top-level test named
 // like one of the project's does not build (swift-authored-collision.txt).
 func TestSwiftTestWriterRanksTheProjectAndWrapsInOneType(t *testing.T) {
@@ -327,7 +328,7 @@ func TestSwiftTestWriterRanksTheProjectAndWrapsInOneType(t *testing.T) {
 	if conv < 0 {
 		t.Fatalf("no precedence rule for the project's conventions:\n%s", sys)
 	}
-	for _, want := range []string{"swift-testing", "XCTest", "@testable", "XCTestCase", "@Suite", "Corral"} {
+	for _, want := range []string{"swift-testing", "XCTest", "@testable", "XCTestCase", "@Suite", "named after the test file", "`Calc_corralTests`"} {
 		if !strings.Contains(sys, want) {
 			t.Errorf("writer prompt lacks %q:\n%s", want, sys)
 		}

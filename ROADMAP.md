@@ -286,8 +286,17 @@ of these has happened, with the evidence linked here:
   `docs/corral/language-support.md`; what has been executed on real
   repositories is the record's Languages page. Rust audits only a source whose
   tests live in a separate file, and `certify --repo --path <dir>` (rc.20)
-  scopes a scan to one crate or package. Swift is next, after the shipped
-  languages are re-proven on the restarted record.
+  scopes a scan to one crate or package. Swift has a plugin and a `swift test`
+  row (swift-testing and XCTest) and is **not yet proven**: corral's sandbox
+  does not run it, so it is audited only by `certify --repo --substrate
+  workspace`, and no audit with models has been run on a Swift repository.
+  What has run is the runner fixtures (Swift 6.3.2, in a container) and the
+  free dry run and unit evidence pass on taplin/Lariat at `be0c5fd`, which the
+  foreign sweep pins. Still ahead for Swift: running in the sandbox, whose copy
+  of the repository leaves out the dependency checkouts SwiftPM resolved; adding
+  a file to the audit by evidence; and, for Rust and Swift alike, a warm build
+  shared between workspace trees, which first needs one mutant's build output
+  kept from another's run.
 - **The bug-catching scorecard + eval harness** — which model actually *catches* bugs,
   execution-proven (recall from `ProvenMissed`, never a self-report), DuckDB-native;
   the eval harness runs the pool over a versioned known-adequacy corpus to give the
@@ -647,9 +656,12 @@ in August 2026 reversed an assumption this roadmap previously carried.
   to observe which tests actually execute which files, SHIPPED: it is the
   `evidence-paired` count on the report's candidacy line, and it widens
   candidacy past filename pairing on a real run. Since rc.29 the pass runs on
-  every real run with no flag, in all seven languages, and `--dry-run
+  every real run with no flag, in all seven shipped languages (and for Swift
+  on the workspace substrate), and `--dry-run
   --evidence` shows its result for free. What is left: a Rust file whose tests
-  are inline has nowhere to land a written test and is never audited, and a
+  are inline has nowhere to land a written test and is never audited, a Swift
+  file no name pairs is not added by evidence (which file of a test target an
+  authored test would go in is not built), and a
   suite the jail cannot run needs `--substrate workspace` for the pass to see
   anything (`docs/corral/evidence-pairing.md` records both on real repositories).
 - **Make the substrate that works go faster.** An audit costs `O(mutants × the

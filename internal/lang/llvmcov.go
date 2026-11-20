@@ -29,6 +29,12 @@ import (
 // directory and the files p declares as dependencies or build output left
 // out (llvmCovSkipped).
 //
+// The working directory's two paths and the skip pattern reach awk through
+// its environment (ENVIRON), not -v: awk processes escape sequences in a -v
+// value, and gawk turned the pattern's `\.` into `.` (with a warning), so a
+// project directory like Xbuild/ was skipped as .build/ under gawk and not
+// under mawk. An environment value is used as it is by both.
+//
 // The JSON is reduced into "$d/reduced" before the header is printed, so a
 // JSON that is empty or cut short prints no header at all: the reducer
 // refuses it (see llvmCovExportReduce) and the script's own `unavailable`
@@ -36,7 +42,7 @@ import (
 // partial file list read from a truncated export would look like a
 // measurement of the files before the cut, and say nothing of the rest.
 func llvmCovReduceShell(p Plugin, header, json string) string {
-	return `awk -v a="$(pwd -P)/" -v b="$PWD/" -v skip=` + shellQuote(llvmCovSkipped(p).String()) + ` ` + shellQuote(llvmCovExportReduce) + ` ` + json +
+	return `CORRAL_LLVMCOV_A="$(pwd -P)/" CORRAL_LLVMCOV_B="$PWD/" CORRAL_LLVMCOV_SKIP=` + shellQuote(llvmCovSkipped(p).String()) + ` awk ` + shellQuote(llvmCovExportReduce) + ` ` + json +
 		` > "$d/reduced" || unavailable "the llvm-cov export is empty or cut short: it does not end the way a complete export ends"` + "\n" +
 		`printf '%s\n' ` + shellQuote(header) + "\n" +
 		`cat "$d/reduced"` + "\n"
@@ -71,7 +77,9 @@ func llvmCovSkipped(p Plugin) *regexp.Regexp {
 
 // llvmCovExportReduce reads an `llvm-cov export -format=text` JSON and prints
 // one `<executed> <executable> <path>` line per file of the working directory
-// (a and b: its physical and logical paths, each with a trailing slash). An
+// (a and b, from CORRAL_LLVMCOV_A and CORRAL_LLVMCOV_B: its physical and
+// logical paths, each with a trailing slash), leaving out the paths that
+// match skip (CORRAL_LLVMCOV_SKIP). An
 // executable line is what llvm-cov's line summary counts: a line some coverage
 // region of compiled code starts on or spans.
 //
@@ -93,7 +101,8 @@ func llvmCovSkipped(p Plugin) *regexp.Regexp {
 // is not a count: each is disclosed as uncounted rather than guessed at. A
 // file llvm-cov maps no line of (declarations only) is left out, as every
 // reducer does: nothing in it could have run.
-const llvmCovExportReduce = `{ buf = buf $0 "\n" }
+const llvmCovExportReduce = `BEGIN { a = ENVIRON["CORRAL_LLVMCOV_A"]; b = ENVIRON["CORRAL_LLVMCOV_B"]; skip = ENVIRON["CORRAL_LLVMCOV_SKIP"] }
+{ buf = buf $0 "\n" }
 END {
   if (buf !~ /"type":"llvm\.coverage\.json\.export","version":"[^"]*"\}[ \t\r\n]*$/) {
     print "the llvm-cov export is empty or cut short" > "/dev/stderr"

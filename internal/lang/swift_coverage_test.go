@@ -199,8 +199,9 @@ func TestLLVMCovReducerRefusesAnIncompleteExport(t *testing.T) {
 				if err := os.WriteFile(f, []byte(json), 0o600); err != nil {
 					t.Fatal(err)
 				}
-				c := exec.Command(bin, "-v", "a="+swiftCodecovPrefix, "-v", "b="+swiftCodecovPrefix, // #nosec G204 -- the reducer under test
-					"-v", "skip="+llvmCovSkipped(swiftPlugin{}).String(), llvmCovExportReduce, f)
+				c := exec.Command(bin, llvmCovExportReduce, f) // #nosec G204 -- the reducer under test
+				c.Env = []string{"CORRAL_LLVMCOV_A=" + swiftCodecovPrefix, "CORRAL_LLVMCOV_B=" + swiftCodecovPrefix,
+					"CORRAL_LLVMCOV_SKIP=" + llvmCovSkipped(swiftPlugin{}).String()}
 				out, err := c.Output()
 				return string(out), err
 			}
@@ -404,5 +405,51 @@ func TestSwiftCoverageRunsTheNativeBuildSystem(t *testing.T) {
 		if bs := swiftBuildSystems(strings.Fields(l)); !slices.Equal(bs, []string{"native"}) {
 			t.Errorf("swift %s: build systems %q, want native exactly once", l, bs)
 		}
+	}
+}
+
+// THE SKIPPED DIRECTORIES ARE MATCHED LITERALLY UNDER EVERY awk. awk -v
+// processes escape sequences in the value it assigns, and gawk (the awk of
+// GitHub's ubuntu-latest runner) turns the `\.` of `^(\.build|\.swiftpm)/`
+// into `.`, warning "escape sequence `\.' treated as plain `.'", so a
+// project directory such as Xbuild/ read as .build/ and was left out of the
+// report; mawk kept the backslash. Run through the whole script, with awk on
+// PATH being each variant this machine has.
+func TestLLVMCovSkipIsLiteralUnderEveryAwk(t *testing.T) {
+	raw := strings.ReplaceAll(readFixture(t, "swift-codecov.json"), swiftCodecovPrefix+"Sources/Calc/Dead.swift", swiftCodecovPrefix+"Xbuild/Dead.swift")
+	ran := 0
+	for _, awk := range []string{"awk", "mawk", "gawk"} {
+		p, err := exec.LookPath(awk)
+		if err != nil {
+			continue
+		}
+		ran++
+		t.Run(awk, func(t *testing.T) {
+			bin := fakeSwift(t, raw, 0, 0)
+			link := filepath.Join(bin, "awk")
+			if err := os.Remove(link); err != nil && !os.IsNotExist(err) {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(p, link); err != nil {
+				t.Fatal(err)
+			}
+			stdout, stderr := runSwiftCoverage(t, []string{"swift", "test"}, physicalTempDir(t), bin)
+			got, err := swiftPlugin{}.CoverageCounts(stdout, "")
+			if err != nil {
+				t.Fatalf("CoverageCounts: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+			}
+			if want := (LineCounts{Executed: 0, Executable: 4}); got["Xbuild/Dead.swift"] != want {
+				t.Errorf("Xbuild/Dead.swift = %+v, want %+v: a project directory was skipped as if it were .build\nstdout:\n%s", got["Xbuild/Dead.swift"], want, stdout)
+			}
+			if strings.Contains(stdout, ".build/") {
+				t.Errorf("the build directory was not skipped:\n%s", stdout)
+			}
+			if strings.Contains(stderr, "escape sequence") {
+				t.Errorf("awk rewrote an escape in the reducer's input:\n%s", stderr)
+			}
+		})
+	}
+	if ran == 0 {
+		t.Skip("no awk on PATH")
 	}
 }

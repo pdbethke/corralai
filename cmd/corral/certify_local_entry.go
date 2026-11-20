@@ -103,6 +103,9 @@ func localFileResult(in localAuditInput, v advpool.Verdict, t advpool.RunTelemet
 	if in.runCache != nil {
 		res.RunCache = fileRunCache(reposcan.FileResult{Gradable: res.Gradable, RunCache: *in.runCache})
 	}
+	if in.capFloor != nil {
+		res.CapFloor = fileCapFloor(reposcan.FileResult{Gradable: res.Gradable, CapFloor: *in.capFloor})
+	}
 	switch {
 	case v.SuiteIgnoresFile:
 		res.Reason = reposcan.ReasonSuiteIgnoresFile

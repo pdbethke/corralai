@@ -3,7 +3,6 @@
 package lang
 
 import (
-	"slices"
 	"strings"
 	"testing"
 )
@@ -61,23 +60,5 @@ func TestRebuildProbeKeepsAByteOrderMarkFirst(t *testing.T) {
 	}
 	if !strings.HasPrefix(got, bom+"// ") || !strings.HasSuffix(got, "\nlet a = 1\n") || strings.Count(got, bom) != 1 {
 		t.Fatalf("probe = %q, want the mark, then the comment line, then the source", got)
-	}
-}
-
-// Which languages measure a rebuild run, pinned: only those whose mutant pays
-// a build step the unmutated baseline does not. Every other language's
-// per-mutant cap is exactly what it was, so adding a language here is a
-// decision with a measurement behind it (see PerRunBuilder's doc for why Rust
-// is not one), never an accident of a shared embed.
-func TestOnlySwiftMeasuresARebuildRun(t *testing.T) {
-	var got []string
-	for _, name := range Names() {
-		p, _ := ByName(name)
-		if _, ok := p.(PerRunBuilder); ok {
-			got = append(got, name)
-		}
-	}
-	if !slices.Equal(got, []string{"swift"}) {
-		t.Fatalf("languages implementing PerRunBuilder = %v, want [swift]", got)
 	}
 }

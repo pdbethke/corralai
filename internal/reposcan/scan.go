@@ -81,6 +81,13 @@ type FileResult struct {
 	// verdict cache's generation) and not cached: a reused verdict was graded
 	// by the run that produced it, and that run's entry holds the answer.
 	RunCache string
+	// CapFloor is where THIS run's per-mutant time cap took its floor from:
+	// "run-cache warming run, <duration>" (a warmed shared build cache),
+	// "rebuild run, <duration>" (a measured rebuild run, workspace
+	// substrate), "none: <why>" (a rebuild run was due and gave no floor), or
+	// "" when no floor source applies or nothing was graded. What this run
+	// did, not part of the verdict, for the reasons RunCache gives.
+	CapFloor string
 }
 
 // Executor runs one job to a verdict. The CLI supplies an adapter over the

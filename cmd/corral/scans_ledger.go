@@ -240,7 +240,7 @@ func fileFromRow(r auditpush.Row) scanstore.File {
 		Gradable:       r.Disposition == "audited",
 		PreflightState: r.PreflightState, Evidence: r.Evidence, Detail: r.Detail,
 		TimedOut: r.TimedOut, TestWriterFailed: r.TestWriterFailed, PoolTestUnsound: r.PoolTestUnsound,
-		ProvenMissed: r.ProvenMissed, ProvenMutantIDs: r.ProvenMutantIDs, AuthoredTest: r.AuthoredTest, AuthoredLanding: r.AuthoredLanding, BaselineFlaky: r.BaselineFlaky, RunCache: r.RunCache,
+		ProvenMissed: r.ProvenMissed, ProvenMutantIDs: r.ProvenMutantIDs, AuthoredTest: r.AuthoredTest, AuthoredLanding: r.AuthoredLanding, BaselineFlaky: r.BaselineFlaky, RunCache: r.RunCache, CapFloor: r.CapFloor,
 		TestSelection: r.TestSelection, SelectedTests: r.SelectedTests, SuiteTests: r.SuiteTests,
 		SelectionFallback: r.SelectionFallback, SelectionUnreported: r.SelectionUnreported, SelectionExcluded: r.SelectionExcluded, SelectionExcludedRed: r.SelectionExcludedRed, AuthoredFallback: r.AuthoredFallback, WriterMode: r.WriterMode, Uncovered: r.Uncovered,
 		ImportOnly: r.ImportOnly, CoveringTests: r.CoveringTests, CoveringUnits: r.CoveringUnits, MutantsFrom: r.MutantsFrom,

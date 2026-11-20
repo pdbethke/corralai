@@ -252,17 +252,10 @@ type TreeEnver interface {
 // (a message carrying #line, say) can fail on the probe: that run then sets
 // no floor, and says so.
 //
-// Swift is the one implementation. Rust is not one, on a measurement: cargo
-// decides staleness by timestamp and rustc always relinks what it rebuilds,
-// so the baseline's own rewrite of the file already pays a mutant's rebuild.
-// On regex-syntax 0.8.5 (cargo 1.90, `cargo test --lib --no-run` after each
-// change to src/hir/translate.rs, as cargo's "Finished" line timed it, the
-// same machine): rewritten with its own bytes 0.44 to 0.51 s over three runs,
-// a one-line mutant 0.47 to 0.57 s over three, a comment line put first
-// 0.61 s once. A rebuild run would cost Rust one more suite run per file to
-// measure what its baseline already measures. Go, Python, Ruby, JavaScript,
-// TypeScript and PHP do not implement it either, and their caps are what
-// they were.
+// Which languages implement it, and why each other one does not (Rust on a
+// measurement, the rest not measured), is the parity table's
+// "rebuild-floor" capability (parity.go), which the parity test enforces.
+// A language that does not implement it keeps the cap it had.
 type PerRunBuilder interface {
 	RebuildProbe(codePath, src string) (probed string, ok bool)
 }

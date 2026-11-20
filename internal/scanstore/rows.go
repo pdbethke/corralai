@@ -284,6 +284,11 @@ type File struct {
 	// holds no result. "" when the file's runner has no run cache or the file
 	// was not graded here; then omitted.
 	RunCache string `json:",omitempty"`
+	// CapFloor is reposcan.FileResult.CapFloor: where the file's per-mutant
+	// time cap took its floor from, and the duration of the run that set it,
+	// or "none: <why>" for a rebuild run that gave none. "" when no floor
+	// source applies or the file was not graded here; then omitted.
+	CapFloor string `json:",omitempty"`
 	// TestSelection, SelectedTests and SuiteTests say WHICH MEASUREMENT this
 	// row's kill rate is: the tests coverage evidence showed execute this
 	// file ("coverage-context", SelectedTests of SuiteTests), rather than the

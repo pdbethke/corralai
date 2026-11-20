@@ -158,6 +158,10 @@ func buildFieldTiers() map[[2]string]FieldTier {
 	// DECLARED, as the operator's own choice of seating policy is.
 	add("Row", TierDeclared, noteSeatedBy, "SeatedBy SeatEvidence")
 	add("Row", TierMeta, noteRunAccount, "ConcurrencyNote Detail Reason RunCache")
+	// CapFloor names the run corral itself executed and timed to floor the
+	// per-mutant cap, with that run's duration, or why the run gave no
+	// floor: an observation of corral's own run, as PoolMillis is.
+	add("Row", TierMeasured, "the run corral executed and timed to floor the per-mutant time cap, and its duration; \"none: <why>\" when that run gave no floor", "CapFloor")
 	add("Row", TierMeta, "carries the run's full verdict document, critic opinion included: signed, but not verified as true", "VerdictJSON")
 	add("Row", TierMeta, noteModelOpinion, "VacuousFindings")
 	add("TestsPerMutantSpread", TierMeasured, "", "Min Median Max")

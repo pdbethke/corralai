@@ -111,6 +111,15 @@ var Capabilities = []Capability{
 	// Judged on the same row test RunCacheFor reads, so the page cannot claim
 	// a cache the code does not hand the sandbox.
 	rowCapability("run-cache", "Share a build cache between sandboxed runs", runRowCache),
+	// The language measures one run that pays a mutant's rebuild, on the
+	// workspace substrate, and floors each mutant's time cap at three times
+	// it (PerRunBuilder; adequacy.WorkspacePool.MeasureRebuild). Judged on
+	// the interface the wiring asserts, so the page cannot claim a run the
+	// code does not make. Go's floor in the sandbox comes from the run
+	// cache's warming run, a different capability (run-cache); its
+	// exemption here says so, because this table has one answer per
+	// language and not one per substrate.
+	{Key: "rebuild-floor", Title: "Floor each mutant's time limit at three times a measured rebuild run (workspace substrate)", Has: func(p Plugin) bool { _, ok := p.(PerRunBuilder); return ok }},
 	{Key: "coverage", Title: "Coverage pre-flight", Has: func(p Plugin) bool { _, ok := p.(CoverageReporter); return ok }},
 	// Row and Stock as a row capability's, so the support page names the
 	// runners that select when the stock command's does not (Ruby's stock
@@ -206,4 +215,11 @@ var ParityExemptions = []Exemption{
 	{"swift", "salvage", "not built: `swift test --help` (Swift 6.3.2) lists a `--skip` option, which was not run, and the failure lines name a swift-testing test without its suite or target and an XCTest test by class and method without its target (measured on Swift 6.3.2), so a skip built from them could leave out a passing test of the same name elsewhere and narrow the run"},
 
 	{"swift", "run-cache", "not built. measured 2026-11-19 on taplin/Lariat at be0c5fd with Swift 6.3.2 (the swift:6.3.2-noble container) on one 32-core machine, in Docker, not in the sandbox: a cold `swift build --build-tests` took 142.5 s and a rebuild after one source file changed took 13.6 s. Before a build directory is shared we must settle how one mutant's build output is kept from being read by another's run"},
+	{"go", "rebuild-floor", "not built, and not measured: on the workspace substrate no rebuild run is made, and whether a Go mutant there pays build work that the unmutated baseline does not has not been timed. In the sandbox, when the build cache is shared (\"Share a build cache between sandboxed runs\"), each mutant's time limit is floored at three times the run that warmed the cache, the same rule"},
+	{"rust", "rebuild-floor", "not built, because on the one crate measured the baseline already pays the mutant's rebuild: every run on the workspace substrate writes the audited file back, and cargo rebuilds a file whose timestamp changed. On regex-syntax 0.8.5 (cargo 1.90, one 32-core machine, outside the sandbox, three runs each, as cargo's Finished line timed them), `cargo test --lib --no-run` took 0.44 to 0.51 s after src/hir/translate.rs was rewritten with its own bytes and 0.47 to 0.57 s after a one-line change to it; with a comment line put first, 0.61 s in one run. In the sandbox the copy each run gets leaves the checkout's target/ out, the baseline's and a mutant's alike. Other crates were not measured"},
+	{"python", "rebuild-floor", "not measured: the time a mutant's run spends on work the unmutated baseline's does not was not compared. On the workspace substrate each run is given a fresh, empty bytecode cache directory, the baseline's included"},
+	{"ruby", "rebuild-floor", "not measured: the time a mutant's run spends on work the unmutated baseline's does not was not compared"},
+	{"javascript", "rebuild-floor", "not measured: the time a mutant's run spends on work the unmutated baseline's does not (a transform cache, for one) was not compared"},
+	{"typescript", "rebuild-floor", "not measured: the time a mutant's run spends on work the unmutated baseline's does not (transpiling, a transform cache) was not compared"},
+	{"php", "rebuild-floor", "not measured: the time a mutant's run spends on work the unmutated baseline's does not was not compared"},
 }

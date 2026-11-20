@@ -1,0 +1,161 @@
+// SPDX-License-Identifier: Elastic-2.0
+
+package main
+
+import (
+	"context"
+	"io"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/pdbethke/corralai/internal/adequacy"
+	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/auditpush"
+	"github.com/pdbethke/corralai/internal/reposcan"
+	"github.com/pdbethke/corralai/internal/sandbox"
+)
+
+// The four things a file row can say about where its per-mutant cap's floor
+// came from: a warmed run cache (Go in the jail), a measured rebuild run
+// (Swift on the workspace substrate), a rebuild run that gave no floor, and
+// nothing (no floor source applies).
+const (
+	floorWarm    = "run-cache warming run, 12.345s"
+	floorRebuild = "rebuild run, 17.004s"
+	floorNone    = "none: adequacy: the suite did not pass on the rebuild run of Sources/C/C.swift"
+)
+
+// The file's account of its cap floor survives every boundary, the same walk
+// RunCache takes (AGENTS.md: a field-by-field converter fails open on the
+// field nobody remembered): FileResult -> scanstore.File -> buildAuditRows ->
+// entry on disk -> ReadLedgerDir -> fileFromRow, and -> LoadDir ->
+// corral_audits.cap_floor -> ReadBundle, NULL for a file with nothing to say.
+func TestCapFloorSurvivesTheLedgerAndTheWarehouse(t *testing.T) {
+	results := []reposcan.FileResult{
+		{Job: reposcan.Job{Path: "a.go", Lang: "go"}, Gradable: true, RunCache: "shared", CapFloor: floorWarm},
+		{Job: reposcan.Job{Path: "Sources/B/B.swift", Lang: "swift"}, Gradable: true, CapFloor: floorRebuild},
+		{Job: reposcan.Job{Path: "Sources/C/C.swift", Lang: "swift"}, Gradable: true, CapFloor: floorNone},
+		{Job: reposcan.Job{Path: "d.py", Lang: "python"}, Gradable: true},
+	}
+	want := map[string]string{"a.go": floorWarm, "Sources/B/B.swift": floorRebuild, "Sources/C/C.swift": floorNone, "d.py": ""}
+
+	files := buildScanFileRows(results, nil, reposcan.CoverageMap{}, "", t.TempDir(), io.Discard, false)
+	for _, f := range files {
+		if f.CapFloor != want[f.Path] {
+			t.Errorf("buildScanFileRows: %s CapFloor = %q, want %q", f.Path, f.CapFloor, want[f.Path])
+		}
+		if f.Path == "a.go" && f.RunCache != "shared" {
+			t.Errorf("a.go RunCache = %q: the floor must not change what RunCache records", f.RunCache)
+		}
+	}
+
+	rows := buildAuditRows(files, 1, bundleMeta{Repo: "o/r", Commit: "deadbeef"})
+	dir := t.TempDir()
+	b := auditpush.Bundle{Scan: auditpush.ScanRow{Repo: "o/r", Commit: "deadbeef", ScanID: 1, CorralVersion: "vtest"}, Files: rows}
+	if _, err := auditpush.PushBundle(dir, b); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := auditpush.ReadLedgerDir(dir)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("ReadLedgerDir: %d entries, err %v", len(entries), err)
+	}
+	for _, r := range entries[0].Bundle.Files {
+		if got := fileFromRow(r).CapFloor; got != want[r.Path] {
+			t.Errorf("fileFromRow: %s CapFloor = %q, want %q", r.Path, got, want[r.Path])
+		}
+	}
+
+	db, err := auditpush.LoadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var col string
+	if err := db.QueryRow(`SELECT cap_floor FROM corral_audits WHERE path = 'Sources/B/B.swift'`).Scan(&col); err != nil || col != floorRebuild {
+		t.Errorf("warehouse cap_floor = %q, err %v, want %q", col, err, floorRebuild)
+	}
+	var nulls int
+	if err := db.QueryRow(`SELECT count(*) FROM corral_audits WHERE path = 'd.py' AND cap_floor IS NULL`).Scan(&nulls); err != nil || nulls != 1 {
+		t.Errorf("a file with no floor source must write NULL (got %d NULL rows, err %v)", nulls, err)
+	}
+	read, err := auditpush.ReadBundle(db, "o/r", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range read.Files {
+		if r.CapFloor != want[r.Path] {
+			t.Errorf("read.go's reader: %s CapFloor = %q, want %q", r.Path, r.CapFloor, want[r.Path])
+		}
+	}
+}
+
+// Execute copies what the wiring recorded onto the file's result, on the
+// --repo path; localFileResult does on the --local path. A file that was not
+// graded records nothing, by the same rule RunCache follows.
+func TestTheCapFloorReachesTheFileResult(t *testing.T) {
+	for _, tc := range []struct {
+		verdict advpool.Verdict
+		want    string
+	}{{advpool.Verdict{}, floorRebuild}, {advpool.Verdict{BaselineFailed: true}, ""}} {
+		ex := localExecutor{
+			baselineRuns: 2,
+			newBaseline: func(_ context.Context, in localAuditInput) (reposcan.BaselineRunner, func(), error) {
+				*in.capFloor = floorRebuild // what buildJailWiring records, through the pointer
+				return flakyBaseline{}, func() {}, nil
+			},
+			audit: func(_ context.Context, in localAuditInput) (advpool.Verdict, error) {
+				return tc.verdict, nil
+			},
+		}
+		res, err := ex.Execute(context.Background(), reposcan.Job{Path: "Sources/B/B.swift", Lang: "swift", Goal: reposcan.Goal{Text: "g"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.CapFloor != tc.want {
+			t.Errorf("--repo, baseline failed %v: CapFloor = %q, want %q", tc.verdict.BaselineFailed, res.CapFloor, tc.want)
+		}
+		floor := floorRebuild
+		local := localFileResult(localAuditInput{codePath: "B.swift", capFloor: &floor}, tc.verdict, advpool.RunTelemetry{}, time.Now())
+		if local.CapFloor != tc.want {
+			t.Errorf("--local, baseline failed %v: CapFloor = %q, want %q", tc.verdict.BaselineFailed, local.CapFloor, tc.want)
+		}
+	}
+}
+
+// warmedJail is a RunCacheJail whose cache was warmed by a run of warm.
+type warmedJail struct{ warm time.Duration }
+
+func (warmedJail) RunTest(context.Context, map[string]string, []string) (bool, error) {
+	return true, nil
+}
+func (warmedJail) WarmRun(context.Context, map[string]string, []string) (bool, []byte, error) {
+	return true, nil, nil
+}
+func (warmedJail) RunCache() sandbox.SharedCache { return sandbox.SharedCache{Target: "/cache"} }
+func (j warmedJail) Warmed() bool                { return j.warm > 0 }
+func (j warmedJail) WarmDuration() time.Duration { return j.warm }
+func (warmedJail) Close() error                  { return nil }
+
+var _ adequacy.RunCacheJail = warmedJail{}
+
+// capFloorOf reads the floor from the jail the file was graded on, the one
+// source Score reads it from, and names which kind of run set it.
+func TestCapFloorOfNamesTheRunThatSetTheFloor(t *testing.T) {
+	if got := capFloorOf(warmedJail{warm: 12345 * time.Millisecond}); got != floorWarm {
+		t.Errorf("warmed run cache: %q, want %q", got, floorWarm)
+	}
+	if got := capFloorOf(warmedJail{}); got != "" {
+		t.Errorf("a run cache never warmed sets no floor; got %q", got)
+	}
+	pool, _, codeKey, cmd := rebuildFixture(t, "OK\n")
+	if got := capFloorOf(pool); got != "" {
+		t.Errorf("a pool with no rebuild run: %q, want empty", got)
+	}
+	if _, err := pool.MeasureRebuild(context.Background(), nil, codeKey, "// probe\nOK\n", cmd); err != nil {
+		t.Fatal(err)
+	}
+	if got := capFloorOf(pool); !strings.HasPrefix(got, "rebuild run, ") {
+		t.Errorf("a pool with a rebuild run: %q, want it named", got)
+	}
+}

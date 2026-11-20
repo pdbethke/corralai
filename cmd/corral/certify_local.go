@@ -502,6 +502,9 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 	// runCache is what the jail wiring decided about a shared tool cache
 	// (localAuditInput.runCache), for the file row of the ledger entry.
 	runCache := new(string)
+	// capFloor is where the file's per-mutant cap took its floor from
+	// (localAuditInput.capFloor), for the same row.
+	capFloor := new(string)
 	// toolCounts is the file's account of --mutants-from's report, handed
 	// back by the audit (localAuditInput.toolSink) for the scan row.
 	var toolCounts []ledger.ToolMutantCounts
@@ -597,6 +600,7 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 		toolSources: toolSources,
 		seedSink:    func(s []seedSkip) { seedSkipped = s },
 		runCache:    runCache,
+		capFloor:    capFloor,
 		toolSink:    func(c ledger.ToolMutantCounts) { toolCounts = append(toolCounts, c) },
 		prior:       loadedPrior,
 
@@ -849,6 +853,11 @@ type localAuditInput struct {
 	// copy. It is NOT part of the verdict (the Verdict's shape is pinned to the
 	// verdict cache's generation); it rides on the file's own result.
 	runCache *string
+	// capFloor, when non-nil, is where the jail wiring RECORDS where this
+	// file's per-mutant time cap took its floor from (reposcan.FileResult.
+	// CapFloor). A pointer sink for runCache's reason, and like it on the
+	// file's own result, never the verdict.
+	capFloor *string
 
 	// selectionDuration is how long the SCAN's single instrumented coverage
 	// run took (cmd/corral's collectSelection), handed down so this file's
@@ -1394,7 +1403,7 @@ func prepareAuditJail(ctx context.Context, in localAuditInput, plug lang.Plugin,
 		bindDirFlag: in.bindDirs, noBindDepsFlag: in.noBindDeps, seedLimit: in.seedLimit, stdout: stdout,
 		seed: in.seed, seedSink: in.seedSink, substrate: in.substrate, mutantConcurrency: in.mutantConcurrency,
 		concurrency: in.concurrency, pool: in.pool, noFailFast: in.noFailFast,
-		runCache: in.runCache,
+		runCache: in.runCache, capFloor: in.capFloor,
 	})
 	if err != nil {
 		return p, auditUsageErr("%v", err)
@@ -1967,33 +1976,36 @@ var measureRebuild = (*adequacy.WorkspacePool).MeasureRebuild
 // --test-timeout (testTimeout), a cap no floor reaches.
 //
 // took is the run's wall clock (0 when none ran), for the pool phase of the
-// file's timing. A run that did not give a floor is said on stdout, naming
+// file's timing. record is the file row's CapFloor: the run that set the
+// floor (capFloorOf), "none: <why>" when a run was due and gave no floor, ""
+// when none was due. A run that gave no floor is also said on stdout, naming
 // the file and why, and the audit goes on with the cap it would have had. An
 // error is returned, and the file is not graded, only when the floor is over
 // the ceiling or the checkout was not put back.
-func rebuildFloor(ctx context.Context, pool *adequacy.WorkspacePool, plug lang.Plugin, codeKey string, code []byte, cmd []string, testTimeout time.Duration, stdout io.Writer) (took time.Duration, err error) {
+func rebuildFloor(ctx context.Context, pool *adequacy.WorkspacePool, plug lang.Plugin, codeKey string, code []byte, cmd []string, testTimeout time.Duration, stdout io.Writer) (took time.Duration, record string, err error) {
 	pb, ok := plug.(lang.PerRunBuilder)
 	if !ok || testTimeout > 0 || len(cmd) == 0 {
-		return 0, nil
+		return 0, "", nil
 	}
-	const noFloor = "  rebuild floor: none for %s: %s; each mutant gets the cap its baseline alone gives\n"
+	none := func(why string) string {
+		fmt.Fprintf(stdout, "  rebuild floor: none for %s: %s; each mutant gets the cap its baseline alone gives\n", codeKey, why)
+		return "none: " + why
+	}
 	probed, ok := pb.RebuildProbe(codeKey, string(code))
 	if !ok {
-		fmt.Fprintf(stdout, noFloor, codeKey, "its first line must stay first (a shebang), so no rebuild run was made")
-		return 0, nil
+		return 0, none("its first line must stay first (a shebang), so no rebuild run was made"), nil
 	}
 	took, err = measureRebuild(pool, ctx, map[string]string{}, codeKey, probed, cmd)
 	var re *adequacy.RestoreError
 	switch {
 	case err == nil:
-		return took, nil
+		return took, capFloorOf(pool), nil
 	case errors.As(err, &re):
-		return took, fmt.Errorf("the rebuild run of %s could not put the checkout back: %w", codeKey, err)
+		return took, "", fmt.Errorf("the rebuild run of %s could not put the checkout back: %w", codeKey, err)
 	case errors.Is(err, adequacy.ErrRebuildOverCeiling):
-		return took, fmt.Errorf("%s cannot be graded: %w", codeKey, err)
+		return took, "", fmt.Errorf("%s cannot be graded: %w", codeKey, err)
 	default:
-		fmt.Fprintf(stdout, noFloor, codeKey, err.Error())
-		return took, nil
+		return took, none(err.Error()), nil
 	}
 }
 
@@ -2587,6 +2599,9 @@ type jailWiringInput struct {
 	// runCache is localAuditInput.runCache, threaded through: where the
 	// wiring records what it decided about the run cache. nil records nothing.
 	runCache *string
+	// capFloor is localAuditInput.capFloor, threaded through. nil records
+	// nothing.
+	capFloor *string
 }
 
 // Substrate names for jailWiringInput.substrate / localAuditInput.substrate,
@@ -2880,8 +2895,11 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 			// where the pool is built, so the baseline-stability runs and the
 			// audit read the same floor.
 			if plug, ok := lang.ByName(in.langName); ok {
-				took, ferr := rebuildFloor(ctx, built, plug, w.codeKey, in.code, in.checkArgv, in.testTimeout, in.stdout)
+				took, record, ferr := rebuildFloor(ctx, built, plug, w.codeKey, in.code, in.checkArgv, in.testTimeout, in.stdout)
 				disc.RebuildDuration = took
+				if in.capFloor != nil {
+					*in.capFloor = record
+				}
 				if ferr != nil {
 					built.Close()
 					return w, ferr
@@ -2961,7 +2979,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 			w.devTestKey: string(in.devTest),
 		})
 		jail, gc := newGradingJail(in.iso, in.timeout, depBinds, gradingPlugin(in.langName), in.inv.WithArgv(in.checkArgv), in.checkArgv)
-		w.closeWithCleanup(jail, in.runCache, gc)
+		w.closeWithCleanup(jail, in.runCache, in.capFloor, gc)
 		// enumerator backs the tests×mutants matrix's test-listing step
 		// (--matrix). Wired unconditionally off the SAME backend/timeout/binds
 		// as jail (bwrapJail satisfies both interfaces) — a nil
@@ -2988,7 +3006,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		plug := gradingPlugin(in.langName)
 		warm := gradingBase(plug, "", in.checkArgv)
 		jail, gc := newGradingJail(in.iso, in.timeout, nil, plug, in.inv.WithArgv(warm), warm)
-		w.closeWithCleanup(jail, in.runCache, gc)
+		w.closeWithCleanup(jail, in.runCache, in.capFloor, gc)
 		enumerator := newRunEnumerator(in.iso, in.timeout, nil)
 		rewrite := gradingRewrite(plug, in.inv, warm, gc.Rewrite)
 		w.scorer = advpool.JailScorer{Jail: jail, MutantTimeout: in.testTimeout, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, KillerCmd: killerCmd, FailFast: failFast, CommandRewrite: rewrite, WarmCheck: warmCheckFor(plug, in.inv, gc)}
@@ -3025,7 +3043,7 @@ func gradingPlugin(langName string) lang.Plugin {
 // cleanup covers a wiring that fails after this point, and the caller defers
 // w.cleanup on every other path, so the directory is removed on success,
 // COULD-NOT-GRADE, timeout, cancel and panic alike.
-func (w *jailWiring) closeWithCleanup(jail adequacy.Jail, sink *string, gc gradingRunCache) {
+func (w *jailWiring) closeWithCleanup(jail adequacy.Jail, sink, floorSink *string, gc gradingRunCache) {
 	w.runCache = gc.Record
 	if sink != nil {
 		*sink = gc.Record
@@ -3037,6 +3055,9 @@ func (w *jailWiring) closeWithCleanup(jail adequacy.Jail, sink *string, gc gradi
 		// then) close it, which removes the cache the answer comes from.
 		if sink != nil {
 			*sink = gc.final(jail)
+		}
+		if floorSink != nil {
+			*floorSink = capFloorOf(jail)
 		}
 		closeGradingJail(jail)
 	}

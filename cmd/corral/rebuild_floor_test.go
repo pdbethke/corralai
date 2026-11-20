@@ -69,9 +69,12 @@ func TestRebuildFloorIsMeasuredForAPerRunBuilder(t *testing.T) {
 	pool, root, codeKey, cmd := rebuildFixture(t, "let ok = \"OK\"\n")
 	runs := countRebuildRuns(t, nil)
 	var out bytes.Buffer
-	took, err := rebuildFloor(context.Background(), pool, mustPlugin(t, "swift"), codeKey, []byte("let ok = \"OK\"\n"), cmd, 0, &out)
+	took, record, err := rebuildFloor(context.Background(), pool, mustPlugin(t, "swift"), codeKey, []byte("let ok = \"OK\"\n"), cmd, 0, &out)
 	if err != nil {
 		t.Fatalf("rebuildFloor: %v", err)
+	}
+	if record != capFloorOf(pool) || !strings.HasPrefix(record, "rebuild run, ") {
+		t.Errorf("record = %q, want the measured rebuild run named, as capFloorOf(pool) = %q", record, capFloorOf(pool))
 	}
 	if *runs != 1 || took <= 0 || pool.WarmDuration() != took {
 		t.Fatalf("runs = %d, took = %v, WarmDuration = %v: want one run whose duration is the floor", *runs, took, pool.WarmDuration())
@@ -93,9 +96,9 @@ func TestRebuildFloorRunsNothingItDoesNotNeed(t *testing.T) {
 		lang    string
 		timeout time.Duration
 	}{{"go", 0}, {"python", 0}, {"rust", 0}, {"swift", time.Minute}} {
-		took, err := rebuildFloor(context.Background(), pool, mustPlugin(t, c.lang), codeKey, []byte("OK\n"), cmd, c.timeout, &bytes.Buffer{})
-		if err != nil || took != 0 {
-			t.Errorf("%s (test-timeout %v): took %v, err %v; want nothing run", c.lang, c.timeout, took, err)
+		took, record, err := rebuildFloor(context.Background(), pool, mustPlugin(t, c.lang), codeKey, []byte("OK\n"), cmd, c.timeout, &bytes.Buffer{})
+		if err != nil || took != 0 || record != "" {
+			t.Errorf("%s (test-timeout %v): took %v, record %q, err %v; want nothing run and nothing recorded", c.lang, c.timeout, took, record, err)
 		}
 	}
 	if *runs != 0 || pool.WarmDuration() != 0 {
@@ -109,9 +112,12 @@ func TestRebuildFloorRunsNothingItDoesNotNeed(t *testing.T) {
 func TestAFailedRebuildRunIsDisclosedAndYieldsNoFloor(t *testing.T) {
 	pool, root, codeKey, _ := rebuildFixture(t, "OK\n")
 	var out bytes.Buffer
-	took, err := rebuildFloor(context.Background(), pool, mustPlugin(t, "swift"), codeKey, []byte("OK\n"), []string{"false"}, 0, &out)
+	took, record, err := rebuildFloor(context.Background(), pool, mustPlugin(t, "swift"), codeKey, []byte("OK\n"), []string{"false"}, 0, &out)
 	if err != nil {
 		t.Fatalf("a failed rebuild run must not fail the audit: %v", err)
+	}
+	if !strings.HasPrefix(record, "none: ") || !strings.Contains(record, "did not pass") {
+		t.Errorf("record = %q, want \"none: <why>\"", record)
 	}
 	if took <= 0 {
 		t.Errorf("took = %v: the run's time must still be accounted", took)
@@ -134,8 +140,12 @@ func TestAnUnprobeableFileIsDisclosedAndNotRun(t *testing.T) {
 	pool, _, codeKey, cmd := rebuildFixture(t, "#!/usr/bin/swift\nOK\n")
 	runs := countRebuildRuns(t, nil)
 	var out bytes.Buffer
-	if _, err := rebuildFloor(context.Background(), pool, mustPlugin(t, "swift"), codeKey, []byte("#!/usr/bin/swift\nOK\n"), cmd, 0, &out); err != nil {
+	_, record, err := rebuildFloor(context.Background(), pool, mustPlugin(t, "swift"), codeKey, []byte("#!/usr/bin/swift\nOK\n"), cmd, 0, &out)
+	if err != nil {
 		t.Fatalf("rebuildFloor: %v", err)
+	}
+	if !strings.HasPrefix(record, "none: ") {
+		t.Errorf("record = %q, want \"none: <why>\"", record)
 	}
 	if *runs != 0 {
 		t.Fatalf("ran %d rebuild run(s) for a file the probe refused", *runs)
@@ -153,7 +163,7 @@ func TestRebuildFloorStopsTheFileOnTheCeilingOrAFailedRestore(t *testing.T) {
 	restore := errors.Join(errors.New("ran"), &adequacy.RestoreError{Err: errors.New("adequacy: restoring A.swift: is a directory")})
 	for _, want := range []error{over, restore} {
 		countRebuildRuns(t, func() (time.Duration, error) { return 2 * time.Minute, want })
-		_, err := rebuildFloor(context.Background(), pool, mustPlugin(t, "swift"), codeKey, []byte("OK\n"), cmd, 0, &bytes.Buffer{})
+		_, _, err := rebuildFloor(context.Background(), pool, mustPlugin(t, "swift"), codeKey, []byte("OK\n"), cmd, 0, &bytes.Buffer{})
 		if err == nil {
 			t.Fatalf("no error for %v; the file must not be graded", want)
 		}

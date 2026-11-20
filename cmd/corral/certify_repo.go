@@ -5923,6 +5923,8 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 	// by buildJailWiring through the pointer (the input travels by value),
 	// read back below onto this job's result only.
 	in.runCache = new(string)
+	// And where its per-mutant cap took its floor from, the same way.
+	in.capFloor = new(string)
 	// The job owns its private trees for as long as the job lasts — through
 	// the baseline-stability check AND the audit, which is the whole point of
 	// hanging them here rather than on the wiring's own cleanup (that one is
@@ -6174,6 +6176,7 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 	// adapter is honest on its own, for any caller.)
 	res := reposcan.FileResult{Verdict: v, Gradable: !v.BaselineFailed && !v.SuiteIgnoresFile, Telemetry: measured}
 	res.RunCache = fileRunCache(reposcan.FileResult{Gradable: res.Gradable, RunCache: *in.runCache})
+	res.CapFloor = fileCapFloor(reposcan.FileResult{Gradable: res.Gradable, CapFloor: *in.capFloor})
 	// Checked BEFORE BaselineFailed so the more specific diagnosis wins: a
 	// suite that passes on invalid source is not broken, it is pointed at
 	// something other than this file, and an operator told "baseline failed"

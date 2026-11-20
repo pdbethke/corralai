@@ -289,6 +289,7 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `CacheHit` | measured |  |
 | `CacheKey` | key |  |
 | `Candidates` | measured |  |
+| `CapFloor` | measured | the run corral executed and timed to floor the per-mutant time cap, and its duration; "none: <why>" when that run gave no floor |
 | `ChallengerJaccard` | measured |  |
 | `ChallengerKappa` | measured |  |
 | `ChallengerMutants` | measured |  |

@@ -229,6 +229,9 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 				// runs: the file's own result, not the verdict (a reused
 				// verdict was graded by an earlier run and says nothing here).
 				RunCache: fileRunCache(r),
+				// Where its per-mutant cap took its floor from: also the
+				// file's own result, by the same rule.
+				CapFloor: fileCapFloor(r),
 				// ModelsByRole is canonicalized the same way the scan-wide
 				// model_set is (reposcan.CanonicalKV), so a per-file role
 				// assignment is byte-comparable with it rather than a second,

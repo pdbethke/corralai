@@ -269,6 +269,12 @@ type Row struct {
 	// ungraded file, every row written before it), so those rows hash as they
 	// did.
 	RunCache string `json:",omitempty"`
+	// CapFloor is scanstore.File's: where this file's per-mutant time cap
+	// took its floor from ("run-cache warming run, <duration>", "rebuild
+	// run, <duration>"), or "none: <why>" when a rebuild run was due and gave
+	// none. Omitted when empty (no floor source applied, an ungraded file,
+	// every row written before it), so those rows hash as they did.
+	CapFloor string `json:",omitempty"`
 	// PromptShape mirrors scanstore.File.PromptShape / advpool.Verdict.PromptShape:
 	// "chunk" when every mutant-generator shard on this file's run saw only
 	// its own symbols' bodies plus the file's preamble, "file" when even one

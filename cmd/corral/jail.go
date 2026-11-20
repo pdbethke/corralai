@@ -158,6 +158,39 @@ func fileRunCache(r reposcan.FileResult) string {
 	return r.RunCache
 }
 
+// fileCapFloor is the CapFloor a file's row records, by fileRunCache's rule:
+// only for a file that was graded here.
+func fileCapFloor(r reposcan.FileResult) string {
+	if !r.Gradable {
+		return ""
+	}
+	return r.CapFloor
+}
+
+// The two kinds of run that floor a per-mutant cap, as a file row names them.
+const (
+	capFloorWarmRun    = "run-cache warming run"
+	capFloorRebuildRun = "rebuild run"
+)
+
+// capFloorOf is the CapFloor record of the jail a file was graded on: which
+// run floored its per-mutant cap and how long that run took, read from the
+// one place Score reads the floor (adequacy.WarmDurationJail). "" when the
+// jail has no floor: no run cache, a cache never warmed, no rebuild run.
+// A rebuild run that was due and gave none is recorded by rebuildFloor, which
+// knows why.
+func capFloorOf(j adequacy.Jail) string {
+	wj, ok := j.(adequacy.WarmDurationJail)
+	if !ok || wj.WarmDuration() <= 0 {
+		return ""
+	}
+	kind := capFloorRebuildRun
+	if _, ok := j.(adequacy.RunCacheJail); ok {
+		kind = capFloorWarmRun
+	}
+	return kind + ", " + wj.WarmDuration().Round(time.Millisecond).String()
+}
+
 // runCacheUnsharedLine is the line a file's own output carries when its
 // grading shares no cache, "" when it does, or has none to share.
 func runCacheUnsharedLine(path, record string) string {

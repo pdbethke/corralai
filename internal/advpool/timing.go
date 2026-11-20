@@ -55,10 +55,11 @@ type Timing struct {
 	// to the moment their results were parsed into the exam. Zero on a
 	// --mutants replay, which dispatches no generator at all.
 	Generation time.Duration
-	// Pool is the workspace substrate's copy of the checkout plus its
-	// concurrency probe (adequacy.Disclosure.CopyDuration + ProbeDuration).
-	// Zero on the jail substrate and on a pool of one, both of which copy
-	// nothing and probe nothing.
+	// Pool is the workspace substrate's copy of the checkout, its
+	// concurrency probe and its rebuild run (adequacy.Disclosure.CopyDuration
+	// + ProbeDuration + RebuildDuration). Zero on the jail substrate, and on
+	// a pool of one for a language that measures no rebuild run, which copy,
+	// probe and rebuild nothing.
 	Pool time.Duration
 	// DevPass is the dev suite scored against every mutant — on real repos
 	// the overwhelming majority of an audit, and the number this whole type

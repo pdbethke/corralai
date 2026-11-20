@@ -274,9 +274,10 @@ type RunSpec struct {
 	// records it once, which is the copy a cost query sums.
 	//
 	// PoolDuration, by contrast, is per FILE: the workspace substrate's copy of the
-	// checkout and its concurrency probe (adequacy.Disclosure.CopyDuration +
-	// ProbeDuration), which happen while the jail wiring is being built —
-	// again before the driver exists.
+	// checkout, its concurrency probe and its rebuild run
+	// (adequacy.Disclosure.CopyDuration + ProbeDuration + RebuildDuration),
+	// which happen while the jail wiring is being built — again before the
+	// driver exists.
 	//
 	// They ride the spec rather than being re-derived downstream so there is
 	// ONE measurement of each, taken where the work actually happened. Zero

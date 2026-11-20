@@ -4,6 +4,7 @@ package adequacy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -15,6 +16,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pdbethke/corralai/internal/sandbox"
@@ -58,6 +60,11 @@ type Disclosure struct {
 	// trees could not be used.
 	CopyDuration  time.Duration
 	ProbeDuration time.Duration
+	// RebuildDuration is how long MeasureRebuild's one run took, set by the
+	// caller that ran it (it runs after Probe, on the pool Probe returned).
+	// Zero for a language that measures no rebuild run. Like the two above
+	// it is time spent before a single mutant is scored, passed or failed.
+	RebuildDuration time.Duration
 }
 
 // maxUniverseBytes bounds the checkout a pool is willing to copy N times.
@@ -128,7 +135,16 @@ type WorkspacePool struct {
 	// shared for as long as these trees do, and a caller that records only
 	// the probe's answer must not lose that half of the disclosure.
 	shared []string
+
+	// warmDur is the rebuild run MeasureRebuild timed, in nanoseconds; zero
+	// until one passed. Written once before scoring and read by every
+	// concurrent cap Score derives, hence atomic.
+	warmDur atomic.Int64
 }
+
+// The pool reports a warm duration, so Score reads a measured rebuild run
+// through the same door it reads a warmed run cache's (WarmDurationJail).
+var _ WarmDurationJail = (*WorkspacePool)(nil)
 
 // The pool must be substitutable for a WorkspaceRunner everywhere one is used
 // today, so every interface a caller may assert is asserted here at COMPILE
@@ -660,6 +676,73 @@ func (p *WorkspacePool) EnumerateDetailed(ctx context.Context, files map[string]
 	defer release()
 	return r.EnumerateDetailed(ctx, files, cmd)
 }
+
+// ErrRebuildOverCeiling is a rebuild run whose floor puts the per-mutant cap
+// above maxMutantTimeout: the ceiling would cut every mutant's run short of
+// the margin any other cap gives, and one mutant that ran past it fails the
+// file's grading partway through. The file is not graded (rebuildFloorRefusal).
+var ErrRebuildOverCeiling = errors.New("the rebuild run is too slow for corral's per-mutant ceiling")
+
+// rebuildFloorRefusal is ErrRebuildOverCeiling, with both durations, when a
+// rebuild run of took floors the cap above the ceiling; nil otherwise. The
+// floor is mutantTimeoutCap's own term for it (mutantTimeoutMultiple x took),
+// so the refusal and the cap cannot disagree about where the ceiling bites.
+func rebuildFloorRefusal(took time.Duration) error {
+	if floor := took * mutantTimeoutMultiple; floor > maxMutantTimeout {
+		return fmt.Errorf("%w: it took %s, so each mutant would need %s (%d times that run), over the %s ceiling", ErrRebuildOverCeiling, took.Round(time.Millisecond), floor.Round(time.Millisecond), mutantTimeoutMultiple, maxMutantTimeout)
+	}
+	return nil
+}
+
+// MeasureRebuild runs testCmd once with codePath holding probed, a copy of the
+// file changed so its module must recompile and relink and its tests behave
+// as before (lang.PerRunBuilder), and keeps how long that run took as the
+// pool's WarmDuration: the floor Score puts under every per-mutant cap, so a
+// mutant is given the time its own rebuild takes.
+//
+// It is an ordinary run of the pool (RunTest): a borrowed tree, the probe
+// applied through the runner's journaled overlay, and the original bytes put
+// back by that overlay's deferred restore whether the command passes, fails,
+// times out or panics. There is no second restore path.
+//
+// Only a run that passed sets a floor, and only once: a failed run says
+// nothing about how long a passing one takes. Every error leaves WarmDuration
+// as it was, and is one of three kinds the caller must tell apart:
+//
+//   - a *RestoreError (errors.As): the checkout was not put back. Stop.
+//   - ErrRebuildOverCeiling (errors.Is): the run passed and is too slow to
+//     grade under the ceiling. The file cannot be graded.
+//   - anything else (the suite failed, the run timed out, the command could
+//     not start): no floor. Disclose it; the audit goes on with the cap it
+//     would have had without this run.
+//
+// took is the run's wall clock whatever the outcome, so the time it cost is
+// accounted even when it yields no floor.
+func (p *WorkspacePool) MeasureRebuild(ctx context.Context, base map[string]string, codePath, probed string, testCmd []string) (took time.Duration, err error) {
+	files := make(map[string]string, len(base)+1)
+	for k, v := range base {
+		files[k] = v
+	}
+	files[codePath] = probed
+	start := time.Now()
+	pass, err := p.RunTest(ctx, files, testCmd)
+	took = time.Since(start)
+	if err != nil {
+		return took, fmt.Errorf("adequacy: the rebuild run of %s did not finish: %w", codePath, err)
+	}
+	if !pass {
+		return took, fmt.Errorf("adequacy: the suite did not pass on the rebuild run of %s", codePath)
+	}
+	if rerr := rebuildFloorRefusal(took); rerr != nil {
+		return took, rerr
+	}
+	p.warmDur.Store(int64(took))
+	return took, nil
+}
+
+// WarmDuration is WarmDurationJail.WarmDuration: the rebuild run
+// MeasureRebuild timed, zero until one passed.
+func (p *WorkspacePool) WarmDuration() time.Duration { return time.Duration(p.warmDur.Load()) }
 
 // Verify pre-flights every tree, so a copy that failed to materialise is
 // caught before the first job wastes time discovering it.

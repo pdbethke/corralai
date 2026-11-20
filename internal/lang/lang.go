@@ -227,6 +227,70 @@ type TreeEnver interface {
 	TreeEnv(tree string, cores int) []string
 }
 
+// PerRunBuilder is an OPTIONAL plugin capability: the language's mutant pays
+// build work that the unmutated baseline does not, so the per-mutant time cap
+// must be floored by a run that pays it too. RebuildProbe returns src changed
+// so the file's module must recompile AND relink, and its tests run as
+// before; ok is false for a file it cannot change that way, which then gets
+// no floor. The workspace substrate runs the file's command once on the
+// probe (adequacy.WorkspacePool.MeasureRebuild) and the cap is floored at the
+// same multiple of that run (adequacy.mutantTimeoutCap).
+//
+// Every implementation returns leadingCommentProbe: one line comment, in the
+// language's own marker, before the file's first line. Before and not after,
+// because what a mutant pays and a baseline does not is the RELINK, and only
+// a change that moves code changes the compiled object. Measured on
+// taplin/Lariat at be0c5fd (Swift 6.3.2, one 32-core machine, in Docker),
+// `swift build --build-tests` after each change to Sources/LassoParser/
+// Evaluator.swift, as SwiftPM's own "Build complete!" line timed it:
+// rewritten with its own bytes (what every run on the workspace substrate
+// does to the file, the baseline included) 6.3 and 6.4 s, compiling the file
+// and linking nothing; a comment line appended at the end 6.3 s, the same; a
+// comment line put first 15.5 s, relinking six products; a one-line mutant
+// 15.4 s, relinking the same six. The line moves every
+// line after it by one, so a test that asserts a line number of this file
+// (a message carrying #line, say) can fail on the probe: that run then sets
+// no floor, and says so.
+//
+// Swift is the one implementation. Rust is not one, on a measurement: cargo
+// decides staleness by timestamp and rustc always relinks what it rebuilds,
+// so the baseline's own rewrite of the file already pays a mutant's rebuild.
+// On regex-syntax 0.8.5 (cargo 1.90, `cargo test --lib --no-run` after each
+// change to src/hir/translate.rs, as cargo's "Finished" line timed it, the
+// same machine): rewritten with its own bytes 0.44 to 0.51 s over three runs,
+// a one-line mutant 0.47 to 0.57 s over three, a comment line put first
+// 0.61 s once. A rebuild run would cost Rust one more suite run per file to
+// measure what its baseline already measures. Go, Python, Ruby, JavaScript,
+// TypeScript and PHP do not implement it either, and their caps are what
+// they were.
+type PerRunBuilder interface {
+	RebuildProbe(codePath, src string) (probed string, ok bool)
+}
+
+// rebuildProbeText is the comment leadingCommentProbe writes: what the line
+// is, for anyone who finds it in a tree a killed process left behind.
+const rebuildProbeText = "corral rebuild probe: corral removes this line when the run ends"
+
+// utf8BOM is the UTF-8 byte-order mark, which must stay a file's first bytes.
+const utf8BOM = "\xef\xbb\xbf"
+
+// leadingCommentProbe is the one RebuildProbe rule (see PerRunBuilder): a
+// line comment in marker put before src's first line, after a byte-order
+// mark if src has one. A file that starts with a shebang (`#!`, not Rust's
+// `#![` inner attribute) is refused, because a shebang only works as the
+// first line, and a probe that does not build would measure a failed build.
+func leadingCommentProbe(marker, src string) (string, bool) {
+	body, bom := strings.CutPrefix(src, utf8BOM)
+	if strings.HasPrefix(body, "#!") && !strings.HasPrefix(body, "#![") {
+		return "", false
+	}
+	probed := marker + " " + rebuildProbeText + "\n" + body
+	if bom {
+		probed = utf8BOM + probed
+	}
+	return probed, true
+}
+
 // HarnessConfigurer is the OPTIONAL interface a plugin implements to name
 // the files its test runner reads before any test runs — pytest's
 // conftest.py and its ini files, jest's config and setup files, RSpec's

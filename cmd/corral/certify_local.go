@@ -1938,19 +1938,63 @@ func mutantRoundCost(d *adequacy.Disclosure) time.Duration {
 }
 
 // poolDuration is what the workspace substrate spent before it could score
-// anything: copying the checkout into N private trees, then probing them with
-// the baseline and the canary. Both halves come from the ONE Disclosure the
-// probe wrote (adequacy.WorkspacePool.Probe), so the number on the verdict is
-// the number the pool actually measured, not a second derivation.
+// anything: copying the checkout into N private trees, probing them with the
+// baseline and the canary, and the rebuild run that floors the per-mutant cap
+// (rebuildFloor). All three come from the ONE Disclosure the job's pool
+// wrote, so the number on the verdict is the number the pool actually
+// measured, not a second derivation.
 //
 // nil is the jail substrate, which builds no trees and has nothing to
-// disclose; a pool of one copies and probes nothing and reports zero. Either
-// way the phase did not happen and the ledger stores NULL.
+// disclose; a pool of one copies and probes nothing, and a language with no
+// rebuild run runs none, each reporting zero. A phase that did not happen is
+// stored as NULL.
 func poolDuration(d *adequacy.Disclosure) time.Duration {
 	if d == nil {
 		return 0
 	}
-	return d.CopyDuration + d.ProbeDuration
+	return d.CopyDuration + d.ProbeDuration + d.RebuildDuration
+}
+
+// measureRebuild is the rebuild run's seam, a variable for the reason
+// newWorkspacePool is one: a test counts the runs and stands in the outcomes
+// a real run cannot cheaply produce.
+var measureRebuild = (*adequacy.WorkspacePool).MeasureRebuild
+
+// rebuildFloor gives the file's grading runs a measured rebuild run to floor
+// the per-mutant cap on (adequacy.WorkspacePool.MeasureRebuild), when the
+// language's mutant pays a relink its baseline does not (lang.PerRunBuilder).
+// It runs nothing for any other language, and nothing when the operator named
+// --test-timeout (testTimeout), a cap no floor reaches.
+//
+// took is the run's wall clock (0 when none ran), for the pool phase of the
+// file's timing. A run that did not give a floor is said on stdout, naming
+// the file and why, and the audit goes on with the cap it would have had. An
+// error is returned, and the file is not graded, only when the floor is over
+// the ceiling or the checkout was not put back.
+func rebuildFloor(ctx context.Context, pool *adequacy.WorkspacePool, plug lang.Plugin, codeKey string, code []byte, cmd []string, testTimeout time.Duration, stdout io.Writer) (took time.Duration, err error) {
+	pb, ok := plug.(lang.PerRunBuilder)
+	if !ok || testTimeout > 0 || len(cmd) == 0 {
+		return 0, nil
+	}
+	const noFloor = "  rebuild floor: none for %s: %s; each mutant gets the cap its baseline alone gives\n"
+	probed, ok := pb.RebuildProbe(codeKey, string(code))
+	if !ok {
+		fmt.Fprintf(stdout, noFloor, codeKey, "its first line must stay first (a shebang), so no rebuild run was made")
+		return 0, nil
+	}
+	took, err = measureRebuild(pool, ctx, map[string]string{}, codeKey, probed, cmd)
+	var re *adequacy.RestoreError
+	switch {
+	case err == nil:
+		return took, nil
+	case errors.As(err, &re):
+		return took, fmt.Errorf("the rebuild run of %s could not put the checkout back: %w", codeKey, err)
+	case errors.Is(err, adequacy.ErrRebuildOverCeiling):
+		return took, fmt.Errorf("%s cannot be graded: %w", codeKey, err)
+	default:
+		fmt.Fprintf(stdout, noFloor, codeKey, err.Error())
+		return took, nil
+	}
 }
 
 func newAuditRunSpec(in localAuditInput, roles auditRoles, subj runSubject) advpool.RunSpec {
@@ -2818,6 +2862,19 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 			// support. A pool of one skips it entirely (Probe returns
 			// immediately), so nothing that runs serially today pays for it.
 			built, disc = probeWorkspacePool(ctx, built, base, w.codeKey, string(in.code), in.checkArgv)
+			// THE REBUILD RUN, on the pool the probe settled on and before a
+			// mutant is scored: the floor every cap of this file's grading
+			// is derived over (see rebuildFloor). Once per file-job, here
+			// where the pool is built, so the baseline-stability runs and the
+			// audit read the same floor.
+			if plug, ok := lang.ByName(in.langName); ok {
+				took, ferr := rebuildFloor(ctx, built, plug, w.codeKey, in.code, in.checkArgv, in.testTimeout, in.stdout)
+				disc.RebuildDuration = took
+				if ferr != nil {
+					built.Close()
+					return w, ferr
+				}
+			}
 			if in.concurrency != nil {
 				*in.concurrency = disc
 			}

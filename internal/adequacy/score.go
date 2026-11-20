@@ -75,13 +75,25 @@ const (
 // rebuild and a credited kill. In the authored-test pass that kill becomes a
 // proven gap from a test that never ran.
 //
-// So warmDur, the duration of the jail's warming run (RunCacheJail.
-// WarmDuration: the one run that paid for a full build), floors the cap at
-// the same multiple: max(multiple x baseDur, multiple x warmDur, floor),
-// under the ceiling. Zero (no run cache, or never warmed) changes nothing,
-// and a cap can only grow from it. This is the ONE place a cap is derived
-// from a baseline; every budget in Score comes from it or from a cap it
-// returned.
+// The workspace substrate breaks the same assumption another way. Every run
+// there writes the file into the real checkout, the unmutated baseline
+// included, so a toolchain that rebuilds by timestamp recompiles the file on
+// every run alike. But SwiftPM then skips the relink when the object it
+// compiled is unchanged, and a mutant's is not: on taplin/Lariat (Swift
+// 6.3.2, one 32-core machine, in Docker, container start included) `swift
+// test` took 7.8 s with the file rewritten unchanged, as a baseline is, and
+// 17.1 s on a one-line mutant, which relinked six products.
+//
+// So warmDur floors the cap at the same multiple: max(multiple x baseDur,
+// multiple x warmDur, floor), under the ceiling. It comes from the jail
+// (WarmDurationJail), and from one of two runs: the jail's warming run
+// (RunCacheJail.WarmDuration: the one run that paid for a full build), or,
+// on the workspace substrate, the run WorkspacePool.MeasureRebuild timed
+// with the file changed so it must recompile and relink
+// (lang.PerRunBuilder). Zero (no run cache, never warmed, no rebuild run)
+// changes nothing, and a cap can only grow from it. This is the ONE place a
+// cap is derived from a baseline; every budget in Score comes from it or
+// from a cap it returned.
 func mutantTimeoutCap(baseDur, warmDur, floor time.Duration) time.Duration {
 	d := max(baseDur, warmDur) * mutantTimeoutMultiple
 	return min(max(d, floor), maxMutantTimeout)
@@ -882,8 +894,8 @@ func (r Report) KillRate() float64 {
 // common on iterator/loop-heavy code) can make the candidate suite hang
 // forever. Score protects against that by timing the compliant baseline and
 // deriving a short per-MUTANT timeout from it (mutantTimeoutMultiple x the
-// baseline's own wall-clock, floored at the same multiple of a warmed run
-// cache's warming run, clamped — see mutantTimeoutCap), or by using
+// baseline's own wall-clock, floored at the same multiple of the jail's
+// warm duration when it has one, clamped — see mutantTimeoutCap), or by using
 // the caller's explicit WithMutantTimeout override. A mutant run that times
 // out (Jail.RunTest returning an error matching ErrTestTimeout) is scored as
 // KILLED: non-termination is a detected divergence from the baseline's own
@@ -1047,18 +1059,19 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 	}
 
 	// clamp is every cap below: mutantTimeoutCap over a command's own
-	// baseline, floored by the jail's warming run when its cache was warmed.
+	// baseline, floored by the jail's warm duration when it has one (a
+	// warmed run cache, or a measured rebuild run; see WarmDurationJail).
 	// The warm duration is read from the jail at each cap, so a cap computed
 	// after the jail was warmed sees it.
 	floor := minMutantTimeout
 	if cfg.capFloor > 0 {
 		floor = cfg.capFloor
 	}
-	rcj, _ := j.(RunCacheJail)
+	wj, _ := j.(WarmDurationJail)
 	clamp := func(d time.Duration) time.Duration {
 		var warm time.Duration
-		if rcj != nil {
-			warm = rcj.WarmDuration()
+		if wj != nil {
+			warm = wj.WarmDuration()
 		}
 		return mutantTimeoutCap(d, warm, floor)
 	}

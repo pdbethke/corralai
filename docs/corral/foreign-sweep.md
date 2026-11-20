@@ -3,8 +3,8 @@
 `scripts/foreign-sweep.sh` runs
 `certify --repo --dry-run` — enumeration, language detection, test pairing,
 ambiguity demotion, ranking, and selection, but **no audit and no suite
-execution** — against eight SHA-pinned real-world repos nobody on this
-project wrote (nine rows: `expressjs/express` is scanned twice, with and
+execution** — against nine SHA-pinned real-world repos nobody on this
+project wrote (ten rows: `expressjs/express` is scanned twice, with and
 without a `--tests` map), and diffs the walked/candidate/ambiguous file counts against
 the checked-in golden file `testdata/foreign-sweep-expected.tsv`. It exists
 because pointing corral at foreign repos surfaces defects the in-repo suite
@@ -13,6 +13,13 @@ script's own header comment for the incident that motivated it. It runs in
 `.github/workflows/foreign-sweep.yml` on every pull request and every push
 to `main` — not just after merge — and needs only network access and the Go
 toolchain (no model key, no jail, no language toolchain beyond Go).
+
+The Swift row is `taplin/Lariat` at `be0c5fd`, a SwiftPM package. Its
+measured counts are 173 files walked, 9 candidates and 0 ambiguous-test
+demotions: 68 Swift sources, of which 9 pair by name with a file under
+`Tests/<Module>Tests/` and 59 have no paired test, plus 16 test files. Like
+every repository in the sweep it is cloned at run time; none of its files are
+kept in this repository.
 
 If a change legitimately moves one of these counts (a pairing improvement
 that finds candidates it used to miss, a new demotion rule, etc.), regenerate

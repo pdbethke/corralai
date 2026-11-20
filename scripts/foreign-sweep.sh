@@ -47,7 +47,7 @@ if ! printf 'x' | grep -oP 'x' >/dev/null 2>&1; then
 fi
 
 # Fail fast on a missing golden file (see the full explanation further down,
-# by the write) BEFORE paying for a build and 7 clones — a missing file that
+# by the write) BEFORE paying for a build and 9 clones — a missing file that
 # is going to be a hard failure either way shouldn't cost network+CPU to
 # discover.
 if [ ! -f "$GOLDEN" ] && [ "${FOREIGN_SWEEP_BOOTSTRAP:-}" != "1" ]; then
@@ -78,6 +78,11 @@ fi
 #                      --repo-dir`. Its own sibling tests/ tree pairs
 #                      src/Assert.php -> tests/AssertTest.php by the same
 #                      Test-suffix convention the php plugin's TestRules declare.
+#   taplin/Lariat      Swift -- a SwiftPM package with Sources/<Module>/ and
+#                      Tests/<Module>Tests/ trees, the layout the swift
+#                      plugin's TestRules pair by. Cloned at run time only, like
+#                      every repo here: none of its files are in this
+#                      repository.
 #
 # A repo with a map at testdata/foreign-sweep-tests/<name>.json is scanned a
 # SECOND time with --tests, recorded as a separate `<name>+tests` row against
@@ -98,6 +103,7 @@ REPOS=(
   "rubocop/rubocop   c4607810f6291eeed9a5155feecd03501ac1feb2"
   "expressjs/express a3714473feb3d2908add734d340e7755fd85e0a3"
   "webmozart/assert  2ccb7c2e821038c03a3e6e1700c570c158c55f70"
+  "taplin/Lariat     be0c5fdc9e046b529bff2b588bf4cc2c32a2ff8a"
 )
 
 WORK="$(mktemp -d)"
@@ -156,7 +162,7 @@ for entry in "${REPOS[@]}"; do
   git init -q "$dir"
   git -C "$dir" remote add origin "https://github.com/$repo.git"
 
-  # Seven network round-trips run on every PR; a single transient GitHub
+  # Nine network round-trips run on every PR; a single transient GitHub
   # blip must not red a PR that has nothing wrong with it (the same
   # flaky-gate-gets-disabled argument this script's own header makes about
   # pinning SHAs applies here too). Three attempts, short backoff.

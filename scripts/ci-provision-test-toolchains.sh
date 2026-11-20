@@ -115,6 +115,96 @@ NEXTEST_SHA256=223ba936714cc861a9cdedad5a8eb664dfdd69d6fbdf6cea6aa8184f523290dc
 RUSTUP_HOME=/usr/local/rustup /usr/local/cargo/bin/cargo --version || echo "system-wide cargo not available — rust-in-jail test will SKIP"
 /usr/local/cargo/bin/cargo-nextest nextest --version || echo "cargo-nextest not available — rust-in-jail test will SKIP"
 
+echo "== Swift (internal/lang swift plugin; real-toolchain tests) =="
+# corral's jail does not run Swift (a Swift file is audited on the workspace
+# substrate only), so this install is for the tests that call the real
+# `swift` / `swiftc`: the coverage capture, the suite-exit check, the stock
+# command's preflight and the canary syntax check. It still goes under
+# /usr/local like every toolchain here, so the JAIL-VISIBILITY RULE holds if
+# that ever changes. The release tarball is self-contained and relocatable; it
+# is unpacked whole into its own directory (not over /usr, where its clang,
+# lld and lldb would replace the runner's) and only `swift` and `swiftc` are
+# linked onto /usr/local/bin. The driver finds swift-build, swift-test and
+# llvm-cov beside the file the link resolves to.
+#
+# WHAT IS VERIFIED: swift.org publishes no checksum for its tarballs, only a
+# detached PGP signature beside each one (the install page,
+# https://www.swift.org/install/linux/tarball/, checked 2026-11-19). The
+# tarball is checked against that signature, in a throwaway GNUPGHOME, and
+# accepted only if gpg reports GOODSIG (so not an expired or revoked key) and
+# a VALIDSIG whose primary-key fingerprint is SWIFT_SIGNING_FPR below. Nothing
+# is unpacked before that check passes, and any failure leaves Swift absent.
+#
+# WHAT IS TRUSTED: the keyring is fetched from
+# https://www.swift.org/keys/all-keys.asc over HTTPS at run time, so it is
+# trusted only as far as the fingerprint pin: a key swift.org's server swapped
+# in would not carry that fingerprint. The pin itself is the "Swift 6.x
+# Release Signing Key" fingerprint as swift.org's install page lists it,
+# copied by hand on 2026-11-19 and matched against the key that signed both
+# 6.3.2 Ubuntu 24.04 tarballs (x86_64 and aarch64). It is trusted on swift.org's
+# word at that date, not cross-checked against a second source. Revocation is
+# seen only if swift.org's key file carries the revocation; no keyserver is
+# asked, because a keyserver outage would otherwise skip the language.
+#
+# The tarball is about 1.07 GB (download.swift.org's Content-Length for the
+# x86_64 6.3.2 tarball, 2026-11-19) and nothing caches it between runs.
+# Only Ubuntu 24.04 on x86_64 or aarch64 is provisioned: swift.org builds a
+# tarball per Ubuntu release, and on any other release or architecture this
+# says so and installs nothing rather than guess a neighbouring build.
+# Bumping SWIFT_VERSION means checking which key signed the new release; a
+# new major version is signed by a new key, so the pin moves with it.
+SWIFT_VERSION=6.3.2
+SWIFT_SIGNING_FPR=52BB7E3DE28A71BE22EC05FFEF80A866B47A981F
+(
+	set -e
+	# shellcheck source=/dev/null
+	. /etc/os-release
+	if [ "${ID:-}" != ubuntu ] || [ "${VERSION_ID:-}" != 24.04 ]; then
+		echo "swift: this script provisions Swift on Ubuntu 24.04 only; this host is ${ID:-unknown} ${VERSION_ID:-unknown}" >&2
+		exit 1
+	fi
+	case "$(uname -m)" in
+	x86_64) platdir=ubuntu2404 suffix= ;;
+	aarch64) platdir=ubuntu2404-aarch64 suffix=-aarch64 ;;
+	*)
+		echo "swift: no Swift $SWIFT_VERSION tarball is provisioned for $(uname -m)" >&2
+		exit 1
+		;;
+	esac
+	# The runtime dependencies swift.org lists for Ubuntu 24.04.
+	sudo apt-get install -y binutils git gnupg2 libc6-dev libcurl4-openssl-dev \
+		libedit2 libgcc-13-dev libncurses-dev libpython3-dev libsqlite3-0 \
+		libstdc++-13-dev libxml2-dev libz3-dev pkg-config tzdata zip unzip zlib1g-dev
+	tmp=$(mktemp -d)
+	trap 'rm -rf "$tmp"' EXIT
+	name="swift-$SWIFT_VERSION-RELEASE-ubuntu24.04$suffix"
+	url="https://download.swift.org/swift-$SWIFT_VERSION-release/$platdir/swift-$SWIFT_VERSION-RELEASE/$name.tar.gz"
+	curl -fsSL "$url" -o "$tmp/swift.tar.gz"
+	curl -fsSL "$url.sig" -o "$tmp/swift.tar.gz.sig"
+	# --compressed: the server sends this file gzip-encoded whether asked or not.
+	curl -fsSL --compressed https://www.swift.org/keys/all-keys.asc -o "$tmp/keys.asc"
+	export GNUPGHOME="$tmp/gnupg"
+	install -d -m 700 "$GNUPGHOME"
+	gpg --batch --quiet --import "$tmp/keys.asc"
+	gpg --batch --status-fd 1 --verify "$tmp/swift.tar.gz.sig" "$tmp/swift.tar.gz" >"$tmp/status"
+	grep -q '^\[GNUPG:\] GOODSIG ' "$tmp/status" || {
+		echo "swift: gpg reported no good signature (an expired or revoked key gives none)" >&2
+		exit 1
+	}
+	grep -Eq "^\[GNUPG:\] VALIDSIG .* $SWIFT_SIGNING_FPR\$" "$tmp/status" || {
+		echo "swift: the signature is not by the pinned Swift release key $SWIFT_SIGNING_FPR" >&2
+		exit 1
+	}
+	dest="/usr/local/swift-$SWIFT_VERSION"
+	sudo rm -rf "$dest"
+	sudo install -d "$dest"
+	sudo tar -xzf "$tmp/swift.tar.gz" -C "$dest" --strip-components=1
+	sudo chmod -R a+rX "$dest"
+	sudo ln -sf "$dest/usr/bin/swift" /usr/local/bin/swift
+	sudo ln -sf "$dest/usr/bin/swiftc" /usr/local/bin/swiftc
+) || echo "swift toolchain install failed — real-toolchain swift tests will SKIP"
+swift --version || echo "swift not available — real-toolchain swift tests will SKIP"
+
 echo "== bubblewrap (jail tests) =="
 sudo apt-get install -y bubblewrap || true
 # Ubuntu 24.04 blocks unprivileged user namespaces, which is what bwrap needs.

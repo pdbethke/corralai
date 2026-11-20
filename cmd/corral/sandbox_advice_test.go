@@ -288,3 +288,46 @@ func TestDoctorAllPassedListKeepsItsOrder(t *testing.T) {
 		t.Errorf("the workspace note must follow the not-checked list and its COULD-NOT-GRADE line:\n%s", got)
 	}
 }
+
+// Round-2 review: a Swift package whose only test is named for behaviour, so
+// no file pairs by name and there is no candidate. The evidence pass still
+// runs, over every enumerated source, in Swift: the advice must come from
+// that language too, not fall back to the bwrap block.
+func TestCertifyRepoSandboxRefusalCountsTheEvidencePassLanguage(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "Package.swift"), "// swift-tools-version:5.9\nimport PackageDescription\nlet package = Package(name: \"A\")\n")
+	mustWrite(t, filepath.Join(root, "Sources", "A", "B.swift"), "public func b() -> Int { 1 }\n")
+	mustWrite(t, filepath.Join(root, "Tests", "ATests", "BehaviourTests.swift"), "import XCTest\n@testable import A\nfinal class BehaviourTests: XCTestCase { func testB() { XCTAssertEqual(b(), 1) } }\n")
+	failSandbox(t)
+
+	var out, errb bytes.Buffer
+	if code := runCertifyRepo([]string{"--repo", root, "--dry-run", "--evidence", "--no-selection-cache", "--", "swift", "test"}, &out, &errb); code != 1 {
+		t.Fatalf("exit %d, want 1; stdout=%s stderr=%s", code, out.String(), errb.String())
+	}
+	got := errb.String()
+	if !strings.Contains(got, swiftRefusal(t)) {
+		t.Errorf("stderr lacks Swift's refusal:\n%s", got)
+	}
+	for _, never := range []string{"--jail container", "apparmor_parser"} {
+		if strings.Contains(got, never) {
+			t.Errorf("the bwrap block came back for a Swift-only evidence run (%q):\n%s", never, got)
+		}
+	}
+}
+
+// The empty case, a stated choice: a run with no candidate and no language
+// for an evidence pass has no language to speak for, so the door gives its
+// sandbox advice unchanged — the only thing that can be said about a
+// sandbox that will not start.
+func TestCertifyRepoSandboxRefusalWithNoLanguageKeepsTheAdvice(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "README.md"), "nothing to audit\n")
+	failSandbox(t)
+
+	var out, errb bytes.Buffer
+	code := runCertifyRepo([]string{"--repo", root, "--dry-run", "--evidence", "--no-selection-cache"}, &out, &errb)
+	want := "corral certify --repo: " + bwrapUnavailableError(errors.New(`bwrap backend unavailable: bwrap not found on PATH`), true).Error() + "\n"
+	if code != 1 || errb.String() != want {
+		t.Errorf("exit %d, stderr:\n%q\nwant exit 1 and the advice unchanged:\n%q", code, errb.String(), want)
+	}
+}

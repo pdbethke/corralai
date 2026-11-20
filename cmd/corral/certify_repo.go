@@ -932,7 +932,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	if *dryRun && ex != nil {
 		// The jail preflight, as a real run asks it: a host that cannot
 		// sandbox would otherwise report every evidence pass as a note.
-		if err := ex.preflight(candidateLangs(cands)); err != nil {
+		if err := ex.preflight(ex.sandboxLangs(cands, enumeratedSourcePaths(cands, excl))); err != nil {
 			fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
 			return 1
 		}
@@ -983,7 +983,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// Jail preflight: a host that cannot sandbox grades nothing, and saying
 		// so now beats reporting every file as ungradable — after paying for a
 		// goal for each of them.
-		if err := ex.preflight(candidateLangs(cands)); err != nil {
+		if err := ex.preflight(ex.sandboxLangs(cands, enumeratedSourcePaths(cands, excl))); err != nil {
 			fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
 			return 1
 		}
@@ -5688,12 +5688,35 @@ func newLocalExecutorWithJail(repoDir string, checkArgv []string, substrate, jai
 // like the provider-key preflight: discovering it per file would report every
 // file as ungradable for a reason the first job could have stated instantly.
 //
-// langs are the languages of the files the run would grade (candidateLangs,
-// or a test map's one language): they decide the advice (sandboxFailureFor),
+// langs are the languages the run would execute in the sandbox
+// (sandboxLangs, or a test map's one language): they decide the advice (sandboxFailureFor),
 // so a run whose language corral's sandbox never runs is told that, not how
 // to fix a sandbox that would only refuse it.
 func (l *localExecutor) preflight(langs []string) error {
 	return sandboxFailureFor(l.jailErr, langs)
+}
+
+// sandboxLangs is every language a certify --repo run would execute in the
+// sandbox: the audit candidates' (candidateLangs) and the language its
+// evidence pass runs, resolved by resolveSelectionPlugin over the enumerated
+// sources exactly as the evidence pass resolves it. The evidence pass runs
+// over every enumerated source, a file with no paired test included, so a
+// Swift package whose tests are named for behaviour has no candidate and
+// still runs Swift in the sandbox. A file of another language with no test
+// (a release script) is neither, and is left out. Where the run will skip
+// the evidence pass (a --diff-base with nothing in scope), its language is
+// still counted: the advice may then name a language the run would not
+// reach, never leave out one it would. Empty when there is neither, and
+// the door then gives its sandbox advice unchanged.
+func (l *localExecutor) sandboxLangs(cands []reposcan.Candidate, sources []string) []string {
+	set := map[string]bool{}
+	for _, n := range candidateLangs(cands) {
+		set[n] = true
+	}
+	if p, _, _, _ := l.resolveSelectionPlugin(sources); p != nil {
+		set[p.Name()] = true
+	}
+	return sortedLangs(set)
 }
 
 // seedSkipped is what every seed the scan built left out as not text, as

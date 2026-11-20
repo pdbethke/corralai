@@ -382,9 +382,11 @@ func (e *sandboxStartError) Error() string {
 func (e *sandboxStartError) Unwrap() error { return e.cause }
 
 // sandboxAdviceFor is the ONE answer every door gives after a sandbox that
-// would not start, for the languages whose files the run would grade
-// (langs: the audit candidates' languages, the one language a test map is
-// built for, or doctor's --code file's). A language refuses outright when it
+// would not start, for the languages the run would execute in the sandbox
+// (langs: certify --repo's sandboxLangs, the candidates' languages and the
+// evidence pass's; the one language a test map is built for; doctor's
+// --code file's). With no language, advice is returned unchanged: nothing
+// is known that it could be wrong for. A language refuses outright when it
 // declares that corral's sandbox never runs it (lang.RefusesEverySandbox,
 // read from the plugin, so no sandbox probe runs); its refusal is printed as
 // the plugin wrote it, so the remedy it names (for Swift, `certify --repo
@@ -445,9 +447,8 @@ func sandboxFailureFor(err error, langs []string) error {
 }
 
 // candidateLangs is the languages of the files a scan would audit, sorted:
-// what sandboxAdviceFor speaks for. A file with no paired test is no
-// candidate and does not count, since this run could not grade it whatever
-// the sandbox did.
+// half of what sandboxAdviceFor speaks for on certify --repo (sandboxLangs
+// adds the evidence pass's language).
 func candidateLangs(cands []reposcan.Candidate) []string {
 	set := map[string]bool{}
 	for _, c := range cands {

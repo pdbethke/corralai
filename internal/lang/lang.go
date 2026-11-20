@@ -816,6 +816,12 @@ func RefusesEverySandbox(p Plugin) error {
 // runs that code for every registered language and fails when a
 // declaration says otherwise. The support page's row and the run's count
 // line read it through PromotesByEvidence.
+//
+// That test checks the declaration against SAMPLE repositories, one per
+// language. The promotion a run performs does not read this declaration at
+// all (it promotes wherever UnitTestFile lands), so nothing catches a drift
+// that shows only on a real tree: there the count line or a recorded
+// evidence-pairing-not-built reason could disagree with what was promoted.
 type EvidencePromoter interface {
 	EvidencePromotes()
 }

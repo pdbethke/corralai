@@ -446,6 +446,10 @@ func pyPreflightStockDefault() error {
 
 func (pyPlugin) PromptLang() string { return "Python" }
 
+// EvidencePromotes declares that evidence can add a file with no paired test
+// to the audit (EvidencePromoter): its per-test evidence names the test file that executed a source, which is where the authored test lands.
+func (pyPlugin) EvidencePromotes() {}
+
 func (pyPlugin) TestWriterSystem() string {
 	return `You are a TEST-WRITER. Given a security control GOAL, a target source file, and its signature surface, write ONE executable pytest test that verifies the code SATISFIES the goal.
 - Import the module under test (white-box), using EXACTLY the import given in the task instruction below — never guess a different one.

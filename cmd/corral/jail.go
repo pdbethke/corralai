@@ -382,61 +382,80 @@ func (e *sandboxStartError) Error() string {
 func (e *sandboxStartError) Unwrap() error { return e.cause }
 
 // sandboxAdviceFor is the ONE answer every door gives after a sandbox that
-// would not start, for the languages in play: advice (the door's own words
-// about fixing the sandbox) when no language refuses the sandbox outright;
-// in its place, each refusing language's own refusal when every language
-// does, since then no fix to the sandbox can run anything; and both when only
-// some do. A refusal is a language's JailPreflight answer when that is
-// lang.ErrSandboxUnsupported (lang.RefusesEverySandbox), printed as the
-// plugin wrote it, so the remedy it names (for Swift, `certify --repo
+// would not start, for the languages whose files the run would grade
+// (langs: the audit candidates' languages, the one language a test map is
+// built for, or doctor's --code file's). A language refuses outright when it
+// declares that corral's sandbox never runs it (lang.RefusesEverySandbox,
+// read from the plugin, so no sandbox probe runs); its refusal is printed as
+// the plugin wrote it, so the remedy it names (for Swift, `certify --repo
 // --substrate workspace` on a scratch clone) is worded once, in the plugin.
-// A language whose JailPreflight refuses only on some hosts keeps the advice
-// unchanged. testCmd is the operator's command; a language it is not for is
-// asked with its own stock command.
-func sandboxAdviceFor(advice string, langs []string, testCmd []string) string {
+//
+//   - No language refuses: advice, the door's own words about fixing the
+//     sandbox, unchanged. A language whose JailPreflight refuses only on
+//     some hosts (Rust, PHP) is in this case.
+//   - Every language refuses: the refusals in place of the advice, since no
+//     fix to the sandbox can run anything the run would grade.
+//   - Some do: both, each saying which files it is for, the advice first
+//     because it is what the operator can act on for the files that can run.
+func sandboxAdviceFor(advice string, langs []string) string {
 	var refusals []string
+	var refusing, running []string
 	for _, n := range langs {
 		p, ok := lang.ByName(n)
 		if !ok {
 			continue
 		}
-		cmd := testCmd
-		if len(cmd) == 0 {
-			cmd = p.TestCmd()
-		}
-		if err := lang.RefusesEverySandbox(p, cmd); err != nil {
+		if err := lang.RefusesEverySandbox(p); err != nil {
 			refusals = append(refusals, err.Error())
+			refusing = append(refusing, p.PromptLang())
+		} else {
+			running = append(running, p.PromptLang())
 		}
 	}
 	if len(refusals) == 0 {
 		return advice
 	}
-	if len(refusals) == len(langs) {
+	if len(running) == 0 {
 		return "A working sandbox would not help here:\n" + strings.Join(refusals, "\n")
 	}
-	note := "A working sandbox would still not run every file here:\n" + strings.Join(refusals, "\n")
+	note := "corral's sandbox never runs this run's " + strings.Join(refusing, ", ") + " files, on any host:\n" + strings.Join(refusals, "\n")
 	if advice == "" {
 		return note
 	}
-	return advice + "\n\n" + note
+	return advice + "\n\nThat advice is for the " + strings.Join(running, ", ") + " files this run would audit. " +
+		"corral's sandbox never runs its " + strings.Join(refusing, ", ") + " files, on any host:\n" + strings.Join(refusals, "\n")
 }
 
 // sandboxFailureFor is err, a sandbox that would not start, with its advice
-// replaced by sandboxAdviceFor's answer for the languages in play. An error
-// that carries no separable advice (another backend's own message) is kept
-// whole, and any refusal is added after it.
-func sandboxFailureFor(err error, langs []string, testCmd []string) error {
+// replaced by sandboxAdviceFor's answer for langs. An error that carries no
+// separable advice (another backend's own message) is kept whole, and any
+// refusal is added after it.
+func sandboxFailureFor(err error, langs []string) error {
 	if err == nil {
 		return nil
 	}
 	var se *sandboxStartError
 	if errors.As(err, &se) {
-		return &sandboxStartError{cause: se.cause, advice: sandboxAdviceFor(se.advice, langs, testCmd)}
+		return &sandboxStartError{cause: se.cause, advice: sandboxAdviceFor(se.advice, langs)}
 	}
-	if note := sandboxAdviceFor("", langs, testCmd); note != "" {
+	if note := sandboxAdviceFor("", langs); note != "" {
 		return fmt.Errorf("%w\n\n%s", err, note)
 	}
 	return err
+}
+
+// candidateLangs is the languages of the files a scan would audit, sorted:
+// what sandboxAdviceFor speaks for. A file with no paired test is no
+// candidate and does not count, since this run could not grade it whatever
+// the sandbox did.
+func candidateLangs(cands []reposcan.Candidate) []string {
+	set := map[string]bool{}
+	for _, c := range cands {
+		if c.Lang != "" {
+			set[c.Lang] = true
+		}
+	}
+	return sortedLangs(set)
 }
 
 // sortedLangs is a language set as the sorted list sandboxAdviceFor reads,

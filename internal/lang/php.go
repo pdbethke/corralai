@@ -329,6 +329,10 @@ func phpSuggestedInterpreter() string {
 
 func (phpPlugin) PromptLang() string { return "PHP" }
 
+// EvidencePromotes declares that evidence can add a file with no paired test
+// to the audit (EvidencePromoter): a unit is a test file, and is where the authored test lands.
+func (phpPlugin) EvidencePromotes() {}
+
 func (phpPlugin) TestWriterSystem() string {
 	return `You are a TEST-WRITER. Given a security control GOAL, a target source file, and its signature surface, write ONE executable PHPUnit test that verifies the code SATISFIES the goal.
 - Start with ` + "`<?php`" + ` and ` + "`require_once __DIR__ . '/vendor/autoload.php';`" + ` (or the project's own autoload path convention), then define a class extending ` + "`PHPUnit\\Framework\\TestCase`" + ` with one or more ` + "`public function test...()`" + ` methods.

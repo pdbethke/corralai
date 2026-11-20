@@ -125,36 +125,16 @@ var Capabilities = []Capability{
 	// adequacy.WithLockfile). Judged on the interface the wiring asserts.
 	{Key: "lockfile", Title: "Keep workspace trees on the checkout's locked dependency versions (one tree when they would not hold the lockfile)", Has: func(p Plugin) bool { _, ok := p.(Lockfiler); return ok }},
 	// The language's evidence adds a source with no paired test to the
-	// audit when a test executes it. Judged by reposcan.PromotesByEvidence,
-	// which runs the landing code promotion uses; reposcan imports this
-	// package, so it hands the judge in (SetEvidencePromotionJudge).
-	{Key: "evidence-promotion", Title: "Add a file with no paired test to the audit when the evidence shows a test executes it", Has: func(p Plugin) bool { return judgeEvidencePromotion(p) }},
+	// audit when a test executes it (EvidencePromoter). A declaration,
+	// checked against reposcan's landing code by reposcan's
+	// TestEvidencePromotionDeclarationMatchesTheLandingCode.
+	{Key: "evidence-promotion", Title: "Add a file with no paired test to the audit when the evidence shows a test executes it", Has: PromotesByEvidence},
 	{Key: "coverage", Title: "Coverage pre-flight", Has: func(p Plugin) bool { _, ok := p.(CoverageReporter); return ok }},
 	// Row and Stock as a row capability's, so the support page names the
 	// runners that select when the stock command's does not (Ruby's stock
 	// command is shell-wrapped; rspec selects, minitest has no UnitsCmd).
 	{Key: "selection", Title: "Grade only the tests that run the file", Row: runsASet, Stock: stockHas(runsASet),
 		Has: func(p Plugin) bool { return selectionCapable(p, runners) }},
-}
-
-// evidencePromotionJudge is reposcan.PromotesByEvidence, set from reposcan's
-// init: the code that decides promotion lives there, and reposcan imports
-// lang. A reader of Capabilities that links no reposcan has no judge, and
-// asking it panics, naming the import, rather than answering false for every
-// language: a support page rendered without the judge would claim a gap the
-// code does not have. scripts/langsupport and this package's tests
-// (parity_judge_test.go) import reposcan for it.
-var evidencePromotionJudge func(Plugin) bool
-
-// SetEvidencePromotionJudge installs the evidence-promotion judge. Called
-// once, from reposcan's init.
-func SetEvidencePromotionJudge(f func(Plugin) bool) { evidencePromotionJudge = f }
-
-func judgeEvidencePromotion(p Plugin) bool {
-	if evidencePromotionJudge == nil {
-		panic("lang: the evidence-promotion capability is judged by internal/reposcan; import it (blank import is enough) wherever Capabilities is read")
-	}
-	return evidencePromotionJudge(p)
 }
 
 // selectionCapable is the selection capability judged on what grades by
@@ -244,8 +224,8 @@ var ParityExemptions = []Exemption{
 	{"swift", "salvage", "not built: `swift test --help` (Swift 6.3.2) lists a `--skip` option, which was not run, and the failure lines name a swift-testing test without its suite or target and an XCTest test by class and method without its target (measured on Swift 6.3.2), so a skip built from them could leave out a passing test of the same name elsewhere and narrow the run"},
 
 	{"swift", "run-cache", "not built. measured 2026-11-19 on taplin/Lariat at be0c5fd with Swift 6.3.2 (the swift:6.3.2-noble container) on one 32-core machine, in Docker, not in the sandbox: a cold `swift build --build-tests` took 142.5 s and a rebuild after one source file changed took 13.6 s. Before a build directory is shared we must settle how one mutant's build output is kept from being read by another's run"},
-	{"rust", "evidence-promotion", "not built: a Rust source with no separate test file would have its authored test written into the source itself, which corral does not do yet, so the scan excludes it before pairing and the evidence never reaches it; a source with a separate test file is already paired by name. On indexmap-rs/indexmap at 41a8708 (workspace substrate) a unit executed src/inner/extract.rs in full and nothing was added. The line that counts evidence-paired files says this after the unit pass"},
-	{"swift", "evidence-promotion", "not built: a Swift test unit is a test target, and which of its files an authored test for a source would go in is not built, so a file with no paired test stays out of the audit even when a target's run executes it. On taplin/Lariat at be0c5fd (workspace substrate) the unit pass executed 40 files under Sources/LassoParser, one of them paired by name, and added none. The line that counts evidence-paired files says this after the unit pass"},
+	{"rust", "evidence-promotion", "not built: a Rust source with no separate test file would have its authored test written into the source itself, which corral does not do yet, so the scan excludes it before pairing and the evidence never reaches it; a source with a separate test file is already paired by name. On indexmap-rs/indexmap at 41a8708 (workspace substrate) a unit executed src/inner/extract.rs in full and nothing was added. The line that counts evidence-paired files says this after the unit pass, and such a source is recorded as test-landing-not-built"},
+	{"swift", "evidence-promotion", "not built: a Swift test unit is a test target, and which of its files an authored test for a source would go in is not built, so a file with no paired test stays out of the audit even when a target's run executes it. On taplin/Lariat at be0c5fd (workspace substrate) the unit pass executed 40 files under Sources/LassoParser, one of them paired by name, and added none. The line that counts evidence-paired files says this after the unit pass, and a file a test target executed is recorded as evidence-pairing-not-built rather than no-paired-test"},
 	{"go", "lockfile", "not built, and not measured: Go keeps the modules it downloads outside the checkout, in a module cache every tree reads, and a build uses the versions go.mod names, so no tree has a lockfile of its own to lack; whether trees can still differ was not measured"},
 	{"rust", "lockfile", "not built: cargo builds each tree's own target/, and a tree without the checkout's Cargo.lock resolves the dependencies afresh, so Rust needs this. But a cargo workspace keeps Cargo.lock at the workspace root, not beside a member crate's Cargo.toml, and finding that root is not built yet"},
 	{"python", "lockfile", "not built: dependencies in .venv, venv or site-packages are linked into every tree, so the trees share one installed set and resolve none of it. A suite run through tox builds its own .tox in each tree; whether those resolve the same versions was not measured"},

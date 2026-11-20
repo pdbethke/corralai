@@ -96,10 +96,34 @@ func TestCertifyRepoSandboxRefusalKeepsItsAdviceForALanguageTheSandboxRuns(t *te
 	}
 }
 
-// A repository with a language the sandbox runs AND one it never runs keeps
-// the advice, which helps the first, and says the second would be refused
-// even so.
-func TestCertifyRepoSandboxRefusalForAMixedRepositoryKeepsTheAdviceAndAddsTheRefusal(t *testing.T) {
+// The reviewer's probe: a Swift package plus one script with no test. The
+// script is no file this run can grade (`swift test` never runs it, and it
+// is no candidate), so it must not bring the sandbox advice back.
+func TestCertifyRepoSandboxRefusalIgnoresAnUnpairedFileOfAnotherLanguage(t *testing.T) {
+	root := t.TempDir()
+	writeSwiftPackage(t, root)
+	mustWrite(t, filepath.Join(root, "scripts", "release.py"), "print('release')\n")
+	failSandbox(t)
+
+	var out, errb bytes.Buffer
+	if code := runCertifyRepo([]string{"--repo", root, "--dry-run", "--evidence", "--no-selection-cache", "--", "swift", "test"}, &out, &errb); code != 1 {
+		t.Fatalf("exit %d, want 1; stderr=%s", code, errb.String())
+	}
+	got := errb.String()
+	if !strings.Contains(got, swiftRefusal(t)) {
+		t.Errorf("stderr lacks Swift's refusal:\n%s", got)
+	}
+	for _, never := range []string{"--jail container", "apparmor_parser", "would still not run"} {
+		if strings.Contains(got, never) {
+			t.Errorf("an unpaired .py brought back sandbox advice (%q):\n%s", never, got)
+		}
+	}
+}
+
+// A run that would audit files in a language the sandbox runs AND in one it
+// never runs states both plainly: the advice, saying which files it is for,
+// and the refusal, saying which files it is for.
+func TestCertifyRepoSandboxRefusalForAMixedRepositoryStatesBoth(t *testing.T) {
 	root := t.TempDir()
 	writeSwiftPackage(t, root)
 	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n")
@@ -111,10 +135,13 @@ func TestCertifyRepoSandboxRefusalForAMixedRepositoryKeepsTheAdviceAndAddsTheRef
 		t.Fatalf("exit %d, want 1; stderr=%s", code, errb.String())
 	}
 	got := errb.String()
-	for _, want := range []string{"--jail container", swiftRefusal(t)} {
-		if !strings.Contains(got, want) {
-			t.Errorf("stderr lacks %q:\n%s", want, got)
-		}
+	want := "--jail container" // the advice, kept for the Go files
+	note := "That advice is for the Go files this run would audit. corral's sandbox never runs its Swift files, on any host:\n" + swiftRefusal(t)
+	if !strings.Contains(got, want) || !strings.Contains(got, note) {
+		t.Errorf("stderr does not state both plainly; want %q and %q in:\n%s", want, note, got)
+	}
+	if strings.Index(got, want) > strings.Index(got, note) {
+		t.Errorf("the note must follow the advice it qualifies:\n%s", got)
 	}
 }
 
@@ -147,7 +174,7 @@ func TestDoctorSandboxCheckForALanguageTheSandboxNeverRuns(t *testing.T) {
 		t.Fatalf("exit %d, want 1; stdout=%s stderr=%s", code, out.String(), errb.String())
 	}
 	got := out.String()
-	for _, want := range []string{"[FAIL] sandbox starts", "no-such-backend", swiftRefusal(t), doctorWorkspaceNote} {
+	for _, want := range []string{"[FAIL] sandbox starts", "no-such-backend", swiftRefusal(t), flattenDetail(doctorWorkspaceNote)} {
 		if !strings.Contains(got, flattenDetail(want)) {
 			t.Errorf("doctor output lacks %q:\n%s", want, got)
 		}
@@ -200,5 +227,64 @@ func TestDoctorToolchainCheckForALanguageTheSandboxNeverRunsSaysWhatItCannotChec
 	}
 	if !strings.Contains(r.detail, swiftRefusal(t)) || !strings.Contains(r.detail, doctorWorkspaceNote) {
 		t.Errorf("detail = %q, want Swift's refusal and doctorWorkspaceNote", r.detail)
+	}
+}
+
+// The exact case a review found: doctor --code X.swift, a sandbox that
+// starts, models named, and no test command. The toolchain check used to
+// return "skipped" before asking anything, so doctor printed "All checks
+// passed" for a file the default jailed certify then refuses. It now fails
+// that check with Swift's refusal (doctor's state for a check that did not
+// pass; it has no "could not check" state that blocks the all-passed line),
+// says what it could not check and exits 1. Asking the declaration runs no
+// sandbox, so this needs none.
+func TestDoctorDoesNotPassASwiftFileWithoutATestCommand(t *testing.T) {
+	root := t.TempDir()
+	writeSwiftPackage(t, root)
+	orig := doctorResolveSandbox
+	doctorResolveSandbox = func(string) (sandbox.Isolator, error) { return namedJail("bwrap"), nil }
+	t.Cleanup(func() { doctorResolveSandbox = orig })
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+
+	var out, errb bytes.Buffer
+	code := runDoctor([]string{"--repo", root, "--code", filepath.Join(root, "Sources", "A", "B.swift"),
+		"--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off"}, &out, &errb)
+	got := out.String()
+	if code != 1 {
+		t.Errorf("exit %d, want 1:\n%s%s", code, got, errb.String())
+	}
+	if strings.Contains(got, "All checks passed") {
+		t.Errorf("doctor passed a Swift file it cannot check:\n%s", got)
+	}
+	for _, want := range []string{"[ok  ] sandbox starts", "[FAIL] toolchain reachable inside the sandbox", swiftRefusal(t), flattenDetail(doctorWorkspaceNote)} {
+		if !strings.Contains(got, want) {
+			t.Errorf("doctor output lacks %q:\n%s", want, got)
+		}
+	}
+}
+
+// On a full pass doctor lists what it does not check, and the workspace
+// note comes after that list, so "reports the first" still names the list's
+// first item.
+func TestDoctorAllPassedListKeepsItsOrder(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "a.go"), "package a\n")
+	mustWrite(t, filepath.Join(root, "a_test.go"), "package a\n")
+	orig := doctorResolveSandbox
+	doctorResolveSandbox = func(string) (sandbox.Isolator, error) { return namedJail("bwrap"), nil }
+	t.Cleanup(func() { doctorResolveSandbox = orig })
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+
+	var out, errb bytes.Buffer
+	code := runDoctor([]string{"--repo", root, "--code", filepath.Join(root, "a.go"),
+		"--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off"}, &out, &errb)
+	got := out.String()
+	if code != 0 {
+		t.Fatalf("exit %d, want 0:\n%s%s", code, got, errb.String())
+	}
+	first := strings.Index(got, "reports the first as COULD-NOT-GRADE")
+	note := strings.Index(got, flattenDetail(doctorWorkspaceNote))
+	if first < 0 || note < 0 || note < first {
+		t.Errorf("the workspace note must follow the not-checked list and its COULD-NOT-GRADE line:\n%s", got)
 	}
 }

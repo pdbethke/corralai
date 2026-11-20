@@ -155,6 +155,10 @@ func (jsPlugin) Preflight(repoRoot string, testCmd []string) error {
 
 func (jsPlugin) PromptLang() string { return "JavaScript" }
 
+// EvidencePromotes declares that evidence can add a file with no paired test
+// to the audit (EvidencePromoter): a unit is a test file, and is where the authored test lands.
+func (jsPlugin) EvidencePromotes() {}
+
 func (jsPlugin) TestWriterSystem() string {
 	return `You are a TEST-WRITER. Given a security control GOAL, a target source file, and its signature surface, write ONE executable Node.js test using the builtin node:test runner that verifies the code SATISFIES the goal.
 - Start with ` + "`const { test } = require('node:test');`" + ` and ` + "`const assert = require('node:assert');`" + `, and ` + "`require`" + ` the target module by its file's relative path (e.g. ` + "`require('./pricing.js')`" + `).

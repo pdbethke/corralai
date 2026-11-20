@@ -132,6 +132,10 @@ func (rubyPlugin) Preflight(repoRoot string, testCmd []string) error {
 
 func (rubyPlugin) PromptLang() string { return "Ruby" }
 
+// EvidencePromotes declares that evidence can add a file with no paired test
+// to the audit (EvidencePromoter): a unit is a test file, and is where the authored test lands.
+func (rubyPlugin) EvidencePromotes() {}
+
 func (rubyPlugin) TestWriterSystem() string {
 	return `You are a TEST-WRITER. Given a security control GOAL, a target source file, and its signature surface, write ONE executable Ruby test that verifies the code SATISFIES the goal.
 - MATCH THE PROJECT'S HARNESS, which the developer's own test (shown to you) uses: if it is RSpec (` + "`RSpec.describe`" + `, a ` + "`_spec.rb`" + ` file), write an RSpec spec that ` + "`require`" + `s the project's spec helper the same way; otherwise write minitest — start with ` + "`require 'minitest/autorun'`" + `, ` + "`require_relative`" + ` the target module by its file's base name (e.g. ` + "`require_relative 'pricing'`" + ` for pricing.rb), and define a Minitest::Test subclass.

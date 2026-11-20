@@ -9,7 +9,6 @@
 package lang
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -780,32 +779,51 @@ func JailPreflight(p Plugin, testCmd []string) error {
 	return nil
 }
 
-// ErrSandboxUnsupported is the JailPreflight refusal that no host can fix:
-// corral's sandbox does not run the language at all, so installing,
-// repairing or swapping the sandbox would only reach the same refusal. A
-// refusal that the host CAN fix (Rust's user-home toolchain, PHP's
-// interpreter behind a symlink the sandbox cannot follow) is not this kind.
-// A plugin marks its refusal with sandboxUnsupported, which keeps the
-// refusal's own text, so every door that prints it prints one wording.
-var ErrSandboxUnsupported = errors.New("corral's sandbox does not run this language")
+// SandboxRefuser is the OPTIONAL plugin extension a language implements
+// when corral's sandbox never runs it, whatever the host holds: installing,
+// repairing or swapping the sandbox would only reach the same refusal.
+// SandboxRefusal is that refusal, and the plugin's JailPreflight returns it,
+// so a door that prints it prints the one wording the plugin wrote,
+// remedy included. A refusal a host CAN fix (Rust's user-home toolchain,
+// PHP's interpreter behind a symlink the sandbox cannot follow) is not
+// declared here: it stays a JailPreflight answer.
+//
+// It is a declaration, not a probe, so a door can ask it before any sandbox
+// exists and without running a language's JailPreflight (PHP's starts a
+// sandbox run).
+type SandboxRefuser interface {
+	SandboxRefusal() error
+}
 
-// sandboxUnsupported is a JailPreflight refusal that is ErrSandboxUnsupported
-// and reads as msg.
-type sandboxUnsupported struct{ msg string }
-
-func (e sandboxUnsupported) Error() string        { return e.msg }
-func (e sandboxUnsupported) Is(target error) bool { return target == ErrSandboxUnsupported }
-
-// RefusesEverySandbox is p's JailPreflight refusal when it is the kind no
-// host can fix (ErrSandboxUnsupported), and nil otherwise, a conditional
-// refusal included. It is how a door whose sandbox would not start decides
-// whether its advice about the sandbox can help this language at all; it is
-// keyed on the plugin's own answer, never on a language name.
-func RefusesEverySandbox(p Plugin, testCmd []string) error {
-	if err := JailPreflight(p, testCmd); errors.Is(err, ErrSandboxUnsupported) {
-		return err
+// RefusesEverySandbox is p's declared outright refusal (SandboxRefuser), or
+// nil for a language corral's sandbox can run on some host. It is how a door
+// decides whether its advice about the sandbox can help this language at
+// all; it reads the plugin's declaration, never a language name.
+func RefusesEverySandbox(p Plugin) error {
+	if r, ok := p.(SandboxRefuser); ok {
+		return r.SandboxRefusal()
 	}
 	return nil
+}
+
+// EvidencePromoter is the OPTIONAL plugin extension declaring that the
+// language's evidence can add a source no filename pairs to the audit
+// (reposcan.WidenCandidacyByEvidence): its evidence names, for such a file,
+// the test file an authored test would go in. It is a declaration because
+// the code that decides it lives in internal/reposcan (UnitTestFile, and the
+// source's own landing check, lang.CheckTestLanding), which imports this
+// package; reposcan's TestEvidencePromotionDeclarationMatchesTheLandingCode
+// runs that code for every registered language and fails when a
+// declaration says otherwise. The support page's row and the run's count
+// line read it through PromotesByEvidence.
+type EvidencePromoter interface {
+	EvidencePromotes()
+}
+
+// PromotesByEvidence reports p's EvidencePromoter declaration.
+func PromotesByEvidence(p Plugin) bool {
+	_, ok := p.(EvidencePromoter)
+	return ok
 }
 
 // SelectionDiagnoser is an OPTIONAL TestEvidence extension: a plugin that

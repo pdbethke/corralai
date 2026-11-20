@@ -235,17 +235,19 @@ func swiftPreflight(goos, repoRoot string, testCmd []string) error {
 	return nil
 }
 
-// JailPreflight refuses every jailed run, before any spend: corral's sandbox
-// does not run Swift. Its copy of the repository leaves out .build (see
+// SandboxRefusal declares that corral's sandbox does not run Swift
+// (lang.SandboxRefuser): its copy of the repository leaves out .build (see
 // BuildDirs), and .build is also where SwiftPM keeps the dependency
-// checkouts it resolved, which the offline sandbox cannot fetch again. The
-// workspace substrate runs the operator's own toolchain in the checkout,
-// .build included, and never asks this (see JailPreflighter). No host can
-// change that, so the refusal is ErrSandboxUnsupported: a door whose sandbox
-// would not start prints it in place of advice about the sandbox.
-func (swiftPlugin) JailPreflight([]string) error {
-	return sandboxUnsupported{"lang: corral's sandbox does not run Swift yet: its copy of the repository leaves out .build, where SwiftPM keeps the dependency checkouts it resolved, and the sandbox has no network to resolve them again. Run `corral certify --repo --substrate workspace` on a scratch clone of the repository instead: it runs your own Swift toolchain in that clone, writing each mutant into the clone's files and restoring them"}
+// checkouts it resolved, which the offline sandbox cannot fetch again. No
+// host can change that. The workspace substrate runs the operator's own
+// toolchain in the checkout, .build included, and never asks this.
+func (swiftPlugin) SandboxRefusal() error {
+	return errors.New("lang: corral's sandbox does not run Swift yet: its copy of the repository leaves out .build, where SwiftPM keeps the dependency checkouts it resolved, and the sandbox has no network to resolve them again. Run `corral certify --repo --substrate workspace` on a scratch clone of the repository instead: it runs your own Swift toolchain in that clone, writing each mutant into the clone's files and restoring them")
 }
+
+// JailPreflight refuses every jailed run, before any spend, with
+// SandboxRefusal (see JailPreflighter).
+func (p swiftPlugin) JailPreflight([]string) error { return p.SandboxRefusal() }
 
 func (swiftPlugin) PromptLang() string { return "Swift" }
 

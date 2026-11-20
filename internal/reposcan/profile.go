@@ -100,7 +100,7 @@ func BuildLanguageProfile(cands []Candidate, excl []Exclusion) []LanguageStat {
 			continue // genuinely not code corral audits
 		}
 		switch e.Reason {
-		case ReasonNoPairedTest:
+		case ReasonNoPairedTest, ReasonEvidencePairingNotBuilt:
 			s.NoPairedTest++
 		case ReasonAmbiguousTest:
 			s.Ambiguous++

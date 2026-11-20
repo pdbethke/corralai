@@ -932,7 +932,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	if *dryRun && ex != nil {
 		// The jail preflight, as a real run asks it: a host that cannot
 		// sandbox would otherwise report every evidence pass as a note.
-		if err := ex.preflight(enumeratedSourcePaths(cands, excl)); err != nil {
+		if err := ex.preflight(candidateLangs(cands)); err != nil {
 			fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
 			return 1
 		}
@@ -983,7 +983,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// Jail preflight: a host that cannot sandbox grades nothing, and saying
 		// so now beats reporting every file as ungradable — after paying for a
 		// goal for each of them.
-		if err := ex.preflight(enumeratedSourcePaths(cands, excl)); err != nil {
+		if err := ex.preflight(candidateLangs(cands)); err != nil {
 			fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
 			return 1
 		}
@@ -3675,7 +3675,7 @@ func enumeratedSourcePaths(cands []reposcan.Candidate, enumOnlyExcl []reposcan.E
 		add(c.Path)
 	}
 	for _, e := range enumOnlyExcl {
-		if e.Reason != reposcan.ReasonNoPairedTest && e.Reason != reposcan.ReasonAmbiguousTest &&
+		if !reposcan.IsNoPairedTest(e.Reason) && e.Reason != reposcan.ReasonAmbiguousTest &&
 			!reposcan.IsUncovered(e.Reason) && e.Reason != reposcan.ReasonImportOnly {
 			continue
 		}
@@ -3814,7 +3814,7 @@ func sourcesOrphanedByDeletedTests(repoDir string, changed []string, excl []repo
 	}
 	var out []string
 	for _, e := range excl {
-		if e.Reason != reposcan.ReasonNoPairedTest && e.Reason != reposcan.ReasonMappedTestMissing && !reposcan.IsLandingRefusal(e.Reason) {
+		if !reposcan.IsNoPairedTest(e.Reason) && e.Reason != reposcan.ReasonMappedTestMissing && !reposcan.IsLandingRefusal(e.Reason) {
 			continue
 		}
 		p, ok := lang.Detect(e.Path)
@@ -4177,14 +4177,14 @@ func candidacySummaryLine(cands []reposcan.Candidate, excl []reposcan.Exclusion,
 }
 
 // evidencePromotionNote is what the count line adds after evidence that was
-// measured for p: nothing when p's evidence can promote a file
-// (reposcan.PromotesByEvidence, the judge the language-support page's row
-// reads), and otherwise that promotion is not built for p, so a reader does
+// measured for p: nothing when p declares that its evidence can promote a
+// file (lang.PromotesByEvidence, which the language-support page's row reads
+// and reposcan's tests check against the landing code), and otherwise that promotion is not built for p, so a reader does
 // not take "evidence-paired 0" as the evidence having found nothing more to
 // audit. One sentence for every language that lacks it; the reason is the
 // language's exemption on the support page.
 func evidencePromotionNote(p lang.Plugin) string {
-	if reposcan.PromotesByEvidence(p) {
+	if lang.PromotesByEvidence(p) {
 		return ""
 	}
 	return fmt.Sprintf(" — %s: adding a file with no paired test by evidence is not built, so a file a test executes but no name pairs is not audited (see the language-support page)", p.PromptLang())
@@ -4878,6 +4878,8 @@ func reasonGloss(reason string) string {
 		return " — the --max-tokens cap was reached before goals were derived for this file; it was not audited"
 	case reposcan.ReasonDeclarationsUnreadable:
 		return " — corral cannot audit this file in this build: it cannot read the file's test-module declarations (built without cgo, which the grammar needs), so where a test for it would go is unknown"
+	case reposcan.ReasonEvidencePairingNotBuilt:
+		return " — no test is paired with this file by name; a test unit executed it, but adding a file to the audit by that evidence is not built for its language"
 	case reposcan.ReasonTestLandingNotBuilt:
 		return " — corral cannot audit this file yet: its tests live in the file itself (or it declares no separate test module), and the landing that composes a test into its own source is not built, so a test for it would be written over the file itself"
 	}
@@ -5686,12 +5688,12 @@ func newLocalExecutorWithJail(repoDir string, checkArgv []string, substrate, jai
 // like the provider-key preflight: discovering it per file would report every
 // file as ungradable for a reason the first job could have stated instantly.
 //
-// sources are the scan's enumerated sources: the languages they are in decide
-// the advice (sandboxFailureFor), so a repository whose language corral's
-// sandbox never runs is told that, not how to fix a sandbox that would only
-// refuse it.
-func (l *localExecutor) preflight(sources []string) error {
-	return sandboxFailureFor(l.jailErr, sortedLangs(preflightLanguages(sources)), l.checkArgv)
+// langs are the languages of the files the run would grade (candidateLangs,
+// or a test map's one language): they decide the advice (sandboxFailureFor),
+// so a run whose language corral's sandbox never runs is told that, not how
+// to fix a sandbox that would only refuse it.
+func (l *localExecutor) preflight(langs []string) error {
+	return sandboxFailureFor(l.jailErr, langs)
 }
 
 // seedSkipped is what every seed the scan built left out as not text, as

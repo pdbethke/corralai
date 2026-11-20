@@ -6251,6 +6251,12 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 	res := reposcan.FileResult{Verdict: v, Gradable: !v.BaselineFailed && !v.SuiteIgnoresFile, Telemetry: measured}
 	res.RunCache = fileRunCache(reposcan.FileResult{Gradable: res.Gradable, RunCache: *in.runCache})
 	res.CapFloor = fileCapFloor(reposcan.FileResult{Gradable: res.Gradable, CapFloor: *in.capFloor})
+	// Said here, from the row's value, because this file's own output is
+	// discarded (auditInputFor): the one place a floor that was due and gave
+	// none reaches the operator, whichever source it was.
+	if line := capFloorNoneLine(j.Path, res.CapFloor); line != "" {
+		l.note("%s\n", line)
+	}
 	// Checked BEFORE BaselineFailed so the more specific diagnosis wins: a
 	// suite that passes on invalid source is not broken, it is pointed at
 	// something other than this file, and an operator told "baseline failed"

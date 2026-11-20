@@ -1978,23 +1978,21 @@ var measureRebuild = (*adequacy.WorkspacePool).MeasureRebuild
 // took is the run's wall clock (0 when none ran), for the pool phase of the
 // file's timing. record is the file row's CapFloor: the run that set the
 // floor (capFloorOf), "none: <why>" when a run was due and gave no floor, ""
-// when none was due. A run that gave no floor is also said on stdout, naming
-// the file and why, and the audit goes on with the cap it would have had. An
-// error is returned, and the file is not graded, only when the floor is over
-// the ceiling (a run cut off at its timeout included: it is slower than any
-// that finished) or the checkout was not put back.
-func rebuildFloor(ctx context.Context, pool *adequacy.WorkspacePool, plug lang.Plugin, codeKey string, code []byte, cmd []string, testTimeout time.Duration, stdout io.Writer) (took time.Duration, record string, err error) {
+// when none was due. A run that gave no floor is said by the scan, from that
+// record (capFloorNoneLine, in localExecutor.Execute: only certify --repo
+// builds a workspace pool, and a file's own stdout is discarded there), and
+// the audit goes on with the cap it would have had. An error is returned, and
+// the file is not graded, only when the floor is over the ceiling (a run cut
+// off at its timeout included: it is slower than any that finished) or the
+// checkout was not put back.
+func rebuildFloor(ctx context.Context, pool *adequacy.WorkspacePool, plug lang.Plugin, codeKey string, code []byte, cmd []string, testTimeout time.Duration) (took time.Duration, record string, err error) {
 	pb, ok := plug.(lang.PerRunBuilder)
 	if !ok || !adequacy.CapFloorApplies(testTimeout) || len(cmd) == 0 {
 		return 0, "", nil
 	}
-	none := func(why string) string {
-		fmt.Fprintf(stdout, "  rebuild floor: none for %s: %s; each mutant gets the cap its baseline alone gives\n", codeKey, why)
-		return "none: " + why
-	}
 	probed, ok := pb.RebuildProbe(codeKey, string(code))
 	if !ok {
-		return 0, none("its first line must stay first (a shebang), so no rebuild run was made"), nil
+		return 0, "none: its first line must stay first (a shebang), so no rebuild run was made", nil
 	}
 	took, err = measureRebuild(pool, ctx, map[string]string{}, codeKey, probed, cmd)
 	var re *adequacy.RestoreError
@@ -2006,7 +2004,7 @@ func rebuildFloor(ctx context.Context, pool *adequacy.WorkspacePool, plug lang.P
 	case errors.Is(err, adequacy.ErrRebuildOverCeiling):
 		return took, "", fmt.Errorf("%s cannot be graded: %w", codeKey, err)
 	default:
-		return took, none(err.Error()), nil
+		return took, "none: " + err.Error(), nil
 	}
 }
 
@@ -2680,7 +2678,7 @@ func jobRebuildFloor(ctx context.Context, in jailWiringInput, pool *adequacy.Wor
 	if !ok {
 		return nil
 	}
-	took, record, err := rebuildFloor(ctx, pool, plug, codeKey, in.code, in.checkArgv, in.testTimeout, in.stdout)
+	took, record, err := rebuildFloor(ctx, pool, plug, codeKey, in.code, in.checkArgv, in.testTimeout)
 	if in.concurrency != nil {
 		in.concurrency.RebuildDuration = took
 	}

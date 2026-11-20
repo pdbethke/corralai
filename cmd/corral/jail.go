@@ -231,6 +231,19 @@ func runCacheUnsharedLine(path, record string) string {
 	return "build cache: not shared for " + path + ": " + reason
 }
 
+// capFloorNoneLine is the line the scan prints for a file whose floor source
+// was due and gave none (a CapFloor of "none: <why>": a rebuild run that gave
+// no floor, a shared run cache never warmed), naming the file and why; ""
+// for a measured floor or none due. Its caller passes the row's CapFloor
+// (fileCapFloor), so a file that was not graded says nothing.
+func capFloorNoneLine(path, record string) string {
+	why, ok := strings.CutPrefix(record, "none: ")
+	if !ok {
+		return ""
+	}
+	return "time cap floor: none for " + path + ": " + why + "; each mutant gets the cap its baseline alone gives"
+}
+
 // closeGradingJail removes a grading jail's cache directory, if it has one.
 // A directory that could not be removed is said on stderr, once, naming it
 // (the error carries the path): it changes no exit code, since the audit's

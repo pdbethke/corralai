@@ -3,7 +3,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -68,12 +67,11 @@ func countRebuildRuns(t *testing.T, stub func() (time.Duration, error)) *int {
 
 // A language whose mutant pays a relink its baseline does not gets one timed
 // run on the probe, its duration becomes the pool's floor, the file is put
-// back, and nothing is printed: a floor that was measured needs no excuse.
+// back, and the scan says nothing: a floor that was measured needs no excuse.
 func TestRebuildFloorIsMeasuredForAPerRunBuilder(t *testing.T) {
 	pool, root, codeKey, cmd := rebuildFixture(t, "let ok = \"OK\"\n")
 	runs := countRebuildRuns(t, nil)
-	var out bytes.Buffer
-	took, record, err := rebuildFloor(context.Background(), pool, mustPlugin(t, "swift"), codeKey, []byte("let ok = \"OK\"\n"), cmd, 0, &out)
+	took, record, err := rebuildFloor(context.Background(), pool, mustPlugin(t, "swift"), codeKey, []byte("let ok = \"OK\"\n"), cmd, 0)
 	if err != nil {
 		t.Fatalf("rebuildFloor: %v", err)
 	}
@@ -86,8 +84,8 @@ func TestRebuildFloorIsMeasuredForAPerRunBuilder(t *testing.T) {
 	if b, _ := os.ReadFile(filepath.Join(root, codeKey)); string(b) != "let ok = \"OK\"\n" {
 		t.Fatalf("%s left as %q", codeKey, b)
 	}
-	if out.Len() != 0 {
-		t.Errorf("printed %q for a floor that was measured", out.String())
+	if line := capFloorNoneLine(codeKey, record); line != "" {
+		t.Errorf("the scan would print %q for a floor that was measured", line)
 	}
 }
 
@@ -100,7 +98,7 @@ func TestRebuildFloorRunsNothingItDoesNotNeed(t *testing.T) {
 		lang    string
 		timeout time.Duration
 	}{{"go", 0}, {"python", 0}, {"rust", 0}, {"swift", time.Minute}} {
-		took, record, err := rebuildFloor(context.Background(), pool, mustPlugin(t, c.lang), codeKey, []byte("OK\n"), cmd, c.timeout, &bytes.Buffer{})
+		took, record, err := rebuildFloor(context.Background(), pool, mustPlugin(t, c.lang), codeKey, []byte("OK\n"), cmd, c.timeout)
 		if err != nil || took != 0 || record != "" {
 			t.Errorf("%s (test-timeout %v): took %v, record %q, err %v; want nothing run and nothing recorded", c.lang, c.timeout, took, record, err)
 		}
@@ -111,12 +109,11 @@ func TestRebuildFloorRunsNothingItDoesNotNeed(t *testing.T) {
 }
 
 // A rebuild run that fails costs the file its floor and nothing else: the
-// audit goes on, and the line says which file and why, with no number that
-// could read as a measured floor.
+// audit goes on, and the scan's line says which file and why, with no number
+// that could read as a measured floor.
 func TestAFailedRebuildRunIsDisclosedAndYieldsNoFloor(t *testing.T) {
 	pool, root, codeKey, _ := rebuildFixture(t, "OK\n")
-	var out bytes.Buffer
-	took, record, err := rebuildFloor(context.Background(), pool, mustPlugin(t, "swift"), codeKey, []byte("OK\n"), []string{"false"}, 0, &out)
+	took, record, err := rebuildFloor(context.Background(), pool, mustPlugin(t, "swift"), codeKey, []byte("OK\n"), []string{"false"}, 0)
 	if err != nil {
 		t.Fatalf("a failed rebuild run must not fail the audit: %v", err)
 	}
@@ -129,7 +126,7 @@ func TestAFailedRebuildRunIsDisclosedAndYieldsNoFloor(t *testing.T) {
 	if pool.WarmDuration() != 0 {
 		t.Errorf("WarmDuration = %v, want 0", pool.WarmDuration())
 	}
-	line := out.String()
+	line := capFloorNoneLine(codeKey, record)
 	if !strings.Contains(line, codeKey) || !strings.Contains(line, "did not pass") {
 		t.Errorf("disclosure = %q, want the file and the reason", line)
 	}
@@ -143,8 +140,7 @@ func TestAFailedRebuildRunIsDisclosedAndYieldsNoFloor(t *testing.T) {
 func TestAnUnprobeableFileIsDisclosedAndNotRun(t *testing.T) {
 	pool, _, codeKey, cmd := rebuildFixture(t, "#!/usr/bin/swift\nOK\n")
 	runs := countRebuildRuns(t, nil)
-	var out bytes.Buffer
-	_, record, err := rebuildFloor(context.Background(), pool, mustPlugin(t, "swift"), codeKey, []byte("#!/usr/bin/swift\nOK\n"), cmd, 0, &out)
+	_, record, err := rebuildFloor(context.Background(), pool, mustPlugin(t, "swift"), codeKey, []byte("#!/usr/bin/swift\nOK\n"), cmd, 0)
 	if err != nil {
 		t.Fatalf("rebuildFloor: %v", err)
 	}
@@ -154,8 +150,8 @@ func TestAnUnprobeableFileIsDisclosedAndNotRun(t *testing.T) {
 	if *runs != 0 {
 		t.Fatalf("ran %d rebuild run(s) for a file the probe refused", *runs)
 	}
-	if !strings.Contains(out.String(), codeKey) {
-		t.Errorf("disclosure = %q, want the file named", out.String())
+	if line := capFloorNoneLine(codeKey, record); !strings.Contains(line, codeKey) || !strings.Contains(line, "shebang") {
+		t.Errorf("disclosure = %q, want the file and the reason", line)
 	}
 }
 
@@ -167,7 +163,7 @@ func TestRebuildFloorStopsTheFileOnTheCeilingOrAFailedRestore(t *testing.T) {
 	restore := errors.Join(errors.New("ran"), &adequacy.RestoreError{Err: errors.New("adequacy: restoring A.swift: is a directory")})
 	for _, want := range []error{over, restore} {
 		countRebuildRuns(t, func() (time.Duration, error) { return 2 * time.Minute, want })
-		_, _, err := rebuildFloor(context.Background(), pool, mustPlugin(t, "swift"), codeKey, []byte("OK\n"), cmd, 0, &bytes.Buffer{})
+		_, _, err := rebuildFloor(context.Background(), pool, mustPlugin(t, "swift"), codeKey, []byte("OK\n"), cmd, 0)
 		if err == nil {
 			t.Fatalf("no error for %v; the file must not be graded", want)
 		}
@@ -198,10 +194,9 @@ func TestATimedOutRebuildRunStopsTheFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var out bytes.Buffer
-	_, record, err := rebuildFloor(context.Background(), pool, mustPlugin(t, "swift"), codeKey, []byte("OK\n"), []string{"sleep", "30"}, 0, &out)
+	_, record, err := rebuildFloor(context.Background(), pool, mustPlugin(t, "swift"), codeKey, []byte("OK\n"), []string{"sleep", "30"}, 0)
 	if err == nil {
-		t.Fatalf("a timed-out rebuild run graded the file: record %q, stdout %q", record, out.String())
+		t.Fatalf("a timed-out rebuild run graded the file: record %q", record)
 	}
 	if !errors.Is(err, adequacy.ErrRebuildOverCeiling) || !strings.Contains(err.Error(), codeKey) || !strings.Contains(err.Error(), "cannot be graded") {
 		t.Errorf("err = %v, want the file named as not gradable, over the ceiling", err)

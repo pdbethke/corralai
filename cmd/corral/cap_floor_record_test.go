@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"strings"
@@ -208,5 +209,51 @@ func TestAnUnwarmedSharedCacheRecordsNoneWithRunCachesReason(t *testing.T) {
 	w.cleanup()
 	if *floor != "" {
 		t.Errorf("no run cache: CapFloor = %q, want empty", *floor)
+	}
+}
+
+// THE SCAN SAYS IT. On certify --repo a file's own output is discarded
+// (auditInputFor), so a floor source that was due and gave none is said
+// through the executor's notes, naming the file and the reason, whatever the
+// source: a rebuild run that gave none, a shared run cache never warmed. A
+// measured floor, no floor source, and a file that was not graded (which
+// records nothing) say nothing.
+func TestTheScanSaysWhenAFileGotNoCapFloor(t *testing.T) {
+	const neverWarmed = "none: never warmed (no dev pass ran)"
+	for _, tc := range []struct {
+		path    string
+		record  string
+		verdict advpool.Verdict
+		wantSay string
+	}{
+		{"Sources/C/C.swift", floorNone, advpool.Verdict{}, "  time cap floor: none for Sources/C/C.swift: adequacy: the suite did not pass on the rebuild run of Sources/C/C.swift; each mutant gets the cap its baseline alone gives\n"},
+		{"src/p.go", neverWarmed, advpool.Verdict{}, "  time cap floor: none for src/p.go: never warmed (no dev pass ran); each mutant gets the cap its baseline alone gives\n"},
+		{"Sources/B/B.swift", floorRebuild, advpool.Verdict{}, ""},
+		{"src/w.go", floorWarm, advpool.Verdict{}, ""},
+		{"d.py", "", advpool.Verdict{}, ""},
+		{"Sources/C/C.swift", floorNone, advpool.Verdict{BaselineFailed: true}, ""},
+	} {
+		var buf bytes.Buffer
+		ex := localExecutor{
+			baselineRuns: 2,
+			progress:     &buf,
+			newBaseline: func(_ context.Context, in localAuditInput) (reposcan.BaselineRunner, func(), error) {
+				return flakyBaseline{}, func() {}, nil
+			},
+			audit: func(_ context.Context, in localAuditInput) (advpool.Verdict, error) {
+				*in.capFloor = tc.record // what the audit's wiring records, through the pointer
+				return tc.verdict, nil
+			},
+		}
+		if _, err := ex.Execute(context.Background(), reposcan.Job{Path: tc.path, Goal: reposcan.Goal{Text: "g"}}); err != nil {
+			t.Fatal(err)
+		}
+		got := buf.String()
+		if tc.wantSay == "" && strings.Contains(got, "cap floor") {
+			t.Errorf("%s, record %q, baseline failed %v: said something about the floor:\n%s", tc.path, tc.record, tc.verdict.BaselineFailed, got)
+		}
+		if tc.wantSay != "" && strings.Count(got, tc.wantSay) != 1 {
+			t.Errorf("%s, record %q: want %q once in:\n%s", tc.path, tc.record, tc.wantSay, got)
+		}
 	}
 }

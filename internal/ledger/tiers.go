@@ -158,10 +158,11 @@ func buildFieldTiers() map[[2]string]FieldTier {
 	// DECLARED, as the operator's own choice of seating policy is.
 	add("Row", TierDeclared, noteSeatedBy, "SeatedBy SeatEvidence")
 	add("Row", TierMeta, noteRunAccount, "ConcurrencyNote Detail Reason RunCache")
-	// CapFloor names the run corral itself executed and timed to floor the
-	// per-mutant cap, with that run's duration, or why the run gave no
-	// floor: an observation of corral's own run, as PoolMillis is.
-	add("Row", TierMeasured, "the run corral executed and timed to floor the per-mutant time cap, and its duration; \"none: <why>\" when that run gave no floor", "CapFloor")
+	// CapFloor is what corral itself executed or observed about the floor
+	// of its per-mutant cap, as PoolMillis is: the run it timed, or why the
+	// floor source it expected gave none (including a file it saw the probe
+	// could not change, so no run was made), or that no floor applied.
+	add("Row", TierMeasured, "where the per-mutant time cap took its floor from: the run corral executed and timed to set it, with that run's duration; \"none: <why>\" when a floor source was due and gave none (a run that failed or timed out, a shared cache never warmed, or a file the probe could not change, so no run was made); empty when no floor applied (no floor source for the language and substrate, or --test-timeout set the cap)", "CapFloor")
 	add("Row", TierMeta, "carries the run's full verdict document, critic opinion included: signed, but not verified as true", "VerdictJSON")
 	add("Row", TierMeta, noteModelOpinion, "VacuousFindings")
 	add("TestsPerMutantSpread", TierMeasured, "", "Min Median Max")

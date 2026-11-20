@@ -84,8 +84,10 @@ type FileResult struct {
 	// CapFloor is where THIS run's per-mutant time cap took its floor from:
 	// "run-cache warming run, <duration>" (a warmed shared build cache),
 	// "rebuild run, <duration>" (a measured rebuild run, workspace
-	// substrate), "none: <why>" (a rebuild run was due and gave no floor), or
-	// "" when no floor source applies or nothing was graded. What this run
+	// substrate), "none: <why>" (a floor source was due and gave none: a run
+	// that failed, a shared cache never warmed, a file the probe could not
+	// change), or "" when no floor applied (no floor source, or the
+	// operator's --test-timeout set the cap) or nothing was graded. What this run
 	// did, not part of the verdict, for the reasons RunCache gives.
 	CapFloor string
 }

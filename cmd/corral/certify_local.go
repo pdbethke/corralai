@@ -1984,7 +1984,7 @@ var measureRebuild = (*adequacy.WorkspacePool).MeasureRebuild
 // the ceiling or the checkout was not put back.
 func rebuildFloor(ctx context.Context, pool *adequacy.WorkspacePool, plug lang.Plugin, codeKey string, code []byte, cmd []string, testTimeout time.Duration, stdout io.Writer) (took time.Duration, record string, err error) {
 	pb, ok := plug.(lang.PerRunBuilder)
-	if !ok || testTimeout > 0 || len(cmd) == 0 {
+	if !ok || !adequacy.CapFloorApplies(testTimeout) || len(cmd) == 0 {
 		return 0, "", nil
 	}
 	none := func(why string) string {
@@ -2979,7 +2979,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 			w.devTestKey: string(in.devTest),
 		})
 		jail, gc := newGradingJail(in.iso, in.timeout, depBinds, gradingPlugin(in.langName), in.inv.WithArgv(in.checkArgv), in.checkArgv)
-		w.closeWithCleanup(jail, in.runCache, in.capFloor, gc)
+		w.closeWithCleanup(jail, in.runCache, in.capFloor, gc, in.testTimeout)
 		// enumerator backs the tests×mutants matrix's test-listing step
 		// (--matrix). Wired unconditionally off the SAME backend/timeout/binds
 		// as jail (bwrapJail satisfies both interfaces) — a nil
@@ -3006,7 +3006,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		plug := gradingPlugin(in.langName)
 		warm := gradingBase(plug, "", in.checkArgv)
 		jail, gc := newGradingJail(in.iso, in.timeout, nil, plug, in.inv.WithArgv(warm), warm)
-		w.closeWithCleanup(jail, in.runCache, in.capFloor, gc)
+		w.closeWithCleanup(jail, in.runCache, in.capFloor, gc, in.testTimeout)
 		enumerator := newRunEnumerator(in.iso, in.timeout, nil)
 		rewrite := gradingRewrite(plug, in.inv, warm, gc.Rewrite)
 		w.scorer = advpool.JailScorer{Jail: jail, MutantTimeout: in.testTimeout, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, KillerCmd: killerCmd, FailFast: failFast, CommandRewrite: rewrite, WarmCheck: warmCheckFor(plug, in.inv, gc)}
@@ -3043,7 +3043,7 @@ func gradingPlugin(langName string) lang.Plugin {
 // cleanup covers a wiring that fails after this point, and the caller defers
 // w.cleanup on every other path, so the directory is removed on success,
 // COULD-NOT-GRADE, timeout, cancel and panic alike.
-func (w *jailWiring) closeWithCleanup(jail adequacy.Jail, sink, floorSink *string, gc gradingRunCache) {
+func (w *jailWiring) closeWithCleanup(jail adequacy.Jail, sink, floorSink *string, gc gradingRunCache, testTimeout time.Duration) {
 	w.runCache = gc.Record
 	if sink != nil {
 		*sink = gc.Record
@@ -3057,7 +3057,7 @@ func (w *jailWiring) closeWithCleanup(jail adequacy.Jail, sink, floorSink *strin
 			*sink = gc.final(jail)
 		}
 		if floorSink != nil {
-			*floorSink = capFloorOf(jail)
+			*floorSink = jailCapFloor(jail, gc, testTimeout)
 		}
 		closeGradingJail(jail)
 	}

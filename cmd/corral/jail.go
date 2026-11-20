@@ -71,14 +71,28 @@ func (gc gradingRunCache) final(j adequacy.Jail) string {
 	if gc.Record != runCacheShared {
 		return gc.Record
 	}
+	if why, unwarmed := gc.unwarmed(j); unwarmed {
+		return "unshared: " + why
+	}
+	return runCacheShared
+}
+
+// unwarmed reports a cache decided shared whose warming run never happened,
+// and why, as "never warmed (<why>)": the one wording RunCache ("unshared:
+// …") and CapFloor ("none: …") both record. false for a cache that was not
+// decided shared, or that was warmed.
+func (gc gradingRunCache) unwarmed(j adequacy.Jail) (why string, unwarmed bool) {
+	if gc.Record != runCacheShared {
+		return "", false
+	}
 	if rj, ok := j.(adequacy.RunCacheJail); ok && rj.Warmed() {
-		return runCacheShared
+		return "", false
 	}
-	why := "no dev pass ran"
+	reason := "no dev pass ran"
 	if gc.warmRejected != nil && gc.warmRejected.Load() {
-		why = "the dev suite's command could not be given the flag that forbids a cached result"
+		reason = "the dev suite's command could not be given the flag that forbids a cached result"
 	}
-	return "unshared: never warmed (" + why + ")"
+	return "never warmed (" + reason + ")", true
 }
 
 // newGradingJail is the ONE place that decides whether a file's grading shares
@@ -173,12 +187,27 @@ const (
 	capFloorRebuildRun = "rebuild run"
 )
 
-// capFloorOf is the CapFloor record of the jail a file was graded on: which
-// run floored its per-mutant cap and how long that run took, read from the
-// one place Score reads the floor (adequacy.WarmDurationJail). "" when the
-// jail has no floor: no run cache, a cache never warmed, no rebuild run.
-// A rebuild run that was due and gave none is recorded by rebuildFloor, which
-// knows why.
+// jailCapFloor is the CapFloor of a file graded in the jail, read when its run
+// ends: "" when no floor applied (the operator's --test-timeout set the cap,
+// adequacy.CapFloorApplies, however the cache was warmed); the warming run
+// that set it; "none: never warmed (<why>)" for a cache decided shared that
+// was never warmed; "" for a runner with no run cache.
+func jailCapFloor(j adequacy.Jail, gc gradingRunCache, testTimeout time.Duration) string {
+	if !adequacy.CapFloorApplies(testTimeout) {
+		return ""
+	}
+	if why, unwarmed := gc.unwarmed(j); unwarmed {
+		return "none: " + why
+	}
+	return capFloorOf(j)
+}
+
+// capFloorOf names the run that set the floor of the jail a file was graded
+// on, and how long it took, read from the one place Score reads the floor
+// (adequacy.WarmDurationJail). "" when the jail has none. It does not decide
+// whether the floor applied: its callers ask adequacy.CapFloorApplies first
+// (jailCapFloor, rebuildFloor), and a floor source that was due and gave none
+// is recorded by them, which know why.
 func capFloorOf(j adequacy.Jail) string {
 	wj, ok := j.(adequacy.WarmDurationJail)
 	if !ok || wj.WarmDuration() <= 0 {

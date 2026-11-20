@@ -289,7 +289,7 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `CacheHit` | measured |  |
 | `CacheKey` | key |  |
 | `Candidates` | measured |  |
-| `CapFloor` | measured | the run corral executed and timed to floor the per-mutant time cap, and its duration; "none: <why>" when that run gave no floor |
+| `CapFloor` | measured | where the per-mutant time cap took its floor from: the run corral executed and timed to set it, with that run's duration; "none: <why>" when a floor source was due and gave none (a run that failed or timed out, a shared cache never warmed, or a file the probe could not change, so no run was made); empty when no floor applied (no floor source for the language and substrate, or --test-timeout set the cap) |
 | `ChallengerJaccard` | measured |  |
 | `ChallengerKappa` | measured |  |
 | `ChallengerMutants` | measured |  |

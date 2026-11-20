@@ -113,3 +113,21 @@ func TestScoreWithoutARebuildRunKeepsTheCapItHad(t *testing.T) {
 		t.Fatalf("Killed = %v (%q), want m killed by timeout and re-probe, as before", rep.Killed, rep.PerMutant["m"].KillConfirmation)
 	}
 }
+
+// CapFloorApplies is the one answer to "does a floor reach this cap": not when
+// the caller set the per-mutant timeout. Score's own budget follows it, so a
+// record built from it cannot disagree with what was graded.
+func TestCapFloorAppliesOnlyWithoutAnExplicitTimeout(t *testing.T) {
+	if !CapFloorApplies(0) || CapFloorApplies(time.Minute) {
+		t.Fatal("CapFloorApplies(0) must be true and CapFloorApplies(1m) false")
+	}
+	j := &rebuildFloorJail{warm: 20 * time.Second, mutantTakes: 40 * time.Second, mutantPasses: true}
+	if _, err := Score(context.Background(), j, nil, "a.py", warmCapCode,
+		[]Mutant{{ID: "m", Search: "x = 0\n", Replace: warmCapMutantCode}}, []string{"pytest", "-q"},
+		WithMutantTimeout(45*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if b := j.mutantBudgets(); len(b) == 0 || !near(b[0], 45*time.Second) {
+		t.Fatalf("budgets = %v, want the explicit 45s, not the 60s floor", b)
+	}
+}

@@ -159,3 +159,54 @@ func TestCapFloorOfNamesTheRunThatSetTheFloor(t *testing.T) {
 		t.Errorf("a pool with a rebuild run: %q, want it named", got)
 	}
 }
+
+// THE RECORD FOLLOWS SCORE'S DECISION. With --test-timeout the operator's
+// value is every mutant's cap and no floor is applied
+// (adequacy.CapFloorApplies), even though the dev pass still warms a shared
+// run cache. The row must then record no floor: naming the warming run would
+// put a floor that did not apply into a measured field. Driven through the
+// jail branch's real cleanup, where the record is written.
+func TestTheJailRecordsNoFloorWhenTheOperatorSetTheCap(t *testing.T) {
+	warm := warmedJail{warm: 12345 * time.Millisecond}
+	for _, tc := range []struct {
+		testTimeout time.Duration
+		want        string
+	}{{0, floorWarm}, {60 * time.Second, ""}} {
+		w := &jailWiring{cleanup: func() {}}
+		runCache, floor := new(string), new(string)
+		w.closeWithCleanup(warm, runCache, floor, gradingRunCache{Record: runCacheShared}, tc.testTimeout)
+		w.cleanup()
+		if *floor != tc.want {
+			t.Errorf("test-timeout %v: CapFloor = %q, want %q", tc.testTimeout, *floor, tc.want)
+		}
+		if *runCache != runCacheShared {
+			t.Errorf("test-timeout %v: RunCache = %q, want %q unchanged", tc.testTimeout, *runCache, runCacheShared)
+		}
+	}
+}
+
+// A run cache that was shared and never warmed was an expected floor source
+// that gave none: "none: <why>", with the why RunCache already carries, the
+// rule a rebuild run that gave no floor follows. A runner with no run cache
+// at all records nothing.
+func TestAnUnwarmedSharedCacheRecordsNoneWithRunCachesReason(t *testing.T) {
+	w := &jailWiring{cleanup: func() {}}
+	runCache, floor := new(string), new(string)
+	w.closeWithCleanup(warmedJail{}, runCache, floor, gradingRunCache{Record: runCacheShared}, 0)
+	w.cleanup()
+	why, ok := strings.CutPrefix(*runCache, "unshared: ")
+	if !ok || !strings.HasPrefix(why, "never warmed (") {
+		t.Fatalf("RunCache = %q, want the never-warmed record", *runCache)
+	}
+	if *floor != "none: "+why {
+		t.Errorf("CapFloor = %q, want %q", *floor, "none: "+why)
+	}
+
+	w = &jailWiring{cleanup: func() {}}
+	runCache, floor = new(string), new(string)
+	w.closeWithCleanup(warmedJail{}, runCache, floor, gradingRunCache{}, 0)
+	w.cleanup()
+	if *floor != "" {
+		t.Errorf("no run cache: CapFloor = %q, want empty", *floor)
+	}
+}

@@ -94,6 +94,13 @@ const (
 // changes nothing, and a cap can only grow from it. This is the ONE place a
 // cap is derived from a baseline; every budget in Score comes from it or
 // from a cap it returned.
+// CapFloorApplies reports whether a per-mutant cap is derived at all, and so
+// whether any floor (a warm duration) reaches it: not when the caller set the
+// cap itself (WithMutantTimeout, the operator's --test-timeout), which every
+// mutant then gets as given. Score's budgets follow it, and a record of which
+// floor applied must ask it too, so the two cannot disagree.
+func CapFloorApplies(mutantTimeout time.Duration) bool { return mutantTimeout <= 0 }
+
 func mutantTimeoutCap(baseDur, warmDur, floor time.Duration) time.Duration {
 	d := max(baseDur, warmDur) * mutantTimeoutMultiple
 	return min(max(d, floor), maxMutantTimeout)
@@ -1076,7 +1083,7 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 		return mutantTimeoutCap(d, warm, floor)
 	}
 	perMutant := cfg.mutantTimeout
-	if perMutant <= 0 {
+	if CapFloorApplies(cfg.mutantTimeout) {
 		perMutant = clamp(baseDur)
 	}
 	// capFor is the per-COMMAND cap: a narrowed command's own compliant
@@ -1091,7 +1098,7 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 	// hit and the per-command cap silently never applied (b3307bbbb5e6#R2).
 	commandBaseline := map[string]time.Duration{}
 	capFor := func(rawCmd []string) time.Duration {
-		if cfg.mutantTimeout > 0 {
+		if !CapFloorApplies(cfg.mutantTimeout) {
 			return cfg.mutantTimeout
 		}
 		if d, ok := commandBaseline[strings.Join(rawCmd, "\x00")]; ok {

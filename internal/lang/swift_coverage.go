@@ -34,6 +34,14 @@ const swiftCoverageScratch = ".build/corral-coverage"
 // directory somewhere other than the working directory and its .build.
 var swiftCoverageMovedBuild = []string{"--package-path", "--scratch-path", "--build-path"}
 
+// swiftCodecovPathOptions are `swift test`'s option that prints where SwiftPM
+// writes its coverage, and runs no test, under each of its names: `swift test
+// --help` lists the last two as aliases of the first on Swift 6.3.2 and
+// 6.4.2, and each printed the same path and ran no test (2026-11-20, on the
+// coverage fixture). CoverageCmd asks with the first, and refuses a command
+// carrying any of them: run with one, the suite would not run at all.
+var swiftCodecovPathOptions = []string{"--show-codecov-path", "--show-code-coverage-path", "--show-coverage-path"}
+
 // CoverageCmd wraps a `swift test` run in LLVM's source-based coverage:
 // SwiftPM's --enable-code-coverage builds the tests with the toolchain's
 // profiling instrumentation, and each test process writes a raw profile into
@@ -132,14 +140,15 @@ var swiftCoverageMovedBuild = []string{"--package-path", "--scratch-path", "--bu
 // (swiftTestAt: no shell around it, no subcommand, no "--"), and for one
 // carrying --package-path, --scratch-path or --build-path (the export's paths
 // and the build directory would not be where the reducer places and skips
-// them), --disable-code-coverage, or --show-codecov-path.
+// them), --disable-code-coverage, or --show-codecov-path under any of its
+// names (swiftCodecovPathOptions).
 func (swiftPlugin) CoverageCmd(testCmd []string) (cmd []string, ok bool) {
 	if _, ok := swiftTestAt(testCmd); !ok {
 		return nil, false
 	}
 	for _, a := range testCmd {
 		name, _, _ := strings.Cut(a, "=")
-		if slices.Contains(swiftCoverageMovedBuild, name) || a == "--disable-code-coverage" || a == "--show-codecov-path" {
+		if slices.Contains(swiftCoverageMovedBuild, name) || a == "--disable-code-coverage" || slices.Contains(swiftCodecovPathOptions, name) {
 			return nil, false
 		}
 	}
@@ -154,9 +163,9 @@ func (swiftPlugin) CoverageCmd(testCmd []string) (cmd []string, ok bool) {
 		`t=$(command -v "$1") && t=$(readlink -f "$t") || unavailable "$1, the swift the command runs, could not be found and its links followed"` + "\n" +
 		`pd="${t%/*}/llvm-profdata" cov="${t%/*}/llvm-cov" od="${t%/*}/llvm-objdump"` + "\n" +
 		`for x in "$pd" "$cov" "$od"; do [ -x "$x" ] || unavailable "$x is missing: Swift coverage reads the run's profiles with the LLVM tools of the toolchain whose swift runs it ($t)"; done` + "\n" +
-		`p=$("$@" --show-codecov-path 2>"$d/where") || unavailable "swift test --show-codecov-path, which names where SwiftPM writes the run's coverage, failed (exit $?): $(tail -n 1 "$d/where")"` + "\n" +
+		`p=$("$@" ` + swiftCodecovPathOptions[0] + ` 2>"$d/where") || unavailable "swift test ` + swiftCodecovPathOptions[0] + `, which names where SwiftPM writes the run's coverage, failed (exit $?): $(tail -n 1 "$d/where")"` + "\n" +
 		`p=$(printf '%s\n' "$p" | tail -n 1)` + "\n" +
-		`[ -n "$p" ] || unavailable "swift test --show-codecov-path named no file"` + "\n" +
+		`[ -n "$p" ] || unavailable "swift test ` + swiftCodecovPathOptions[0] + ` named no file"` + "\n" +
 		`c=${p%/*}` + "\n" +
 		`rm -f "$c"/*.profraw || exit 1` + "\n"
 	reduce := "\n" +

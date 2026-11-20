@@ -497,7 +497,14 @@ func TestSwiftCoverageCmdShapes(t *testing.T) {
 		{"swift", "test", "--scratch-path=/tmp/b"},
 		{"swift", "test", "--build-path", "b"},
 		{"swift", "test", "--build-path=b"},
+		// --show-codecov-path and both its aliases (swift test --help, Swift
+		// 6.3.2 and 6.4.2): each prints the path and runs no test.
 		{"swift", "test", "--show-codecov-path"},
+		{"swift", "test", "--show-code-coverage-path"},
+		{"swift", "test", "--show-coverage-path"},
+	}
+	for _, o := range swiftCodecovPathOptions {
+		refused = append(refused, []string{"swift", "test", o})
 	}
 	for _, c := range refused {
 		if cmd, ok := r.CoverageCmd(c); ok {

@@ -319,6 +319,12 @@ func TestSwiftCoverageCmdShapes(t *testing.T) {
 		{"swift", "test", "--build-path", "b"},
 		{"swift", "test", "--build-path=b"},
 		{"swift", "test", "--show-codecov-path"},
+		// Any build system but native: its export is not the whole suite's
+		// (see CoverageCmd), and the operator's choice is not overridden.
+		{"swift", "test", "--build-system", "swiftbuild"},
+		{"swift", "test", "--build-system=swiftbuild"},
+		{"swift", "test", "--build-system", "xcode"},
+		{"swift", "test", "--build-system"},
 	}
 	for _, c := range refused {
 		if cmd, ok := r.CoverageCmd(c); ok {
@@ -331,6 +337,8 @@ func TestSwiftCoverageCmdShapes(t *testing.T) {
 		{"swift", "test", "--filter", `^(?:CalcXCTests)\.`},
 		{"swift", "test", "--enable-code-coverage"},
 		{"swift", "test", "--parallel"},
+		{"swift", "test", "--build-system", "native"},
+		{"swift", "test", "--build-system=native"},
 	} {
 		cmd, ok := r.CoverageCmd(c)
 		if !ok {
@@ -348,8 +356,53 @@ func TestSwiftCoverageCmdShapes(t *testing.T) {
 		if extra := args[len(c):]; !slices.Contains(extra, "--scratch-path") || (!slices.Contains(c, "--enable-code-coverage") && !slices.Contains(extra, "--enable-code-coverage")) {
 			t.Errorf("CoverageCmd(%q) added %q, want --enable-code-coverage and its scratch path", c, extra)
 		}
+		if bs := swiftBuildSystems(args); !slices.Equal(bs, []string{"native"}) {
+			t.Errorf("CoverageCmd(%q) runs with build systems %q, want native exactly once", c, bs)
+		}
 		if !slices.Contains(InterpretersIn(cmd), c[0]) {
 			t.Errorf("InterpretersIn(%q) = %q, want the operator's swift among them", cmd, InterpretersIn(cmd))
+		}
+	}
+}
+
+// swiftBuildSystems is every --build-system value args names, in order.
+func swiftBuildSystems(args []string) []string {
+	var out []string
+	for i, a := range args {
+		if v, ok := strings.CutPrefix(a, "--build-system="); ok {
+			out = append(out, v)
+		} else if a == "--build-system" && i+1 < len(args) {
+			out = append(out, args[i+1])
+		}
+	}
+	return out
+}
+
+// THE COVERAGE RUN USES THE NATIVE BUILD SYSTEM, both when it asks where the
+// export goes and when it runs, because only that build system's export holds
+// every test target's files. Measured 2026-11-20 on the coverage fixture plus
+// a library target only the XCTest target depends on: under swiftbuild (the
+// default from Swift 6.4, opt-in on 6.3.2) the export SwiftPM wrote held the
+// files of one test product (6.4.2) or none of the project's at all (6.3.2),
+// so files that product does not link were absent and read as never run;
+// under native, on 6.3.2 and 6.4.2 alike, every file was there.
+func TestSwiftCoverageRunsTheNativeBuildSystem(t *testing.T) {
+	bin := fakeSwift(t, readFixture(t, "swift-codecov.json"), 0, 0)
+	stdout, _ := runSwiftCoverage(t, []string{"swift", "test"}, physicalTempDir(t), bin)
+	if _, err := (swiftPlugin{}).CoverageCounts(stdout, ""); err != nil {
+		t.Fatalf("CoverageCounts: %v\n%s", err, stdout)
+	}
+	calls, err := os.ReadFile(filepath.Join(bin, "calls")) // #nosec G304 -- the stand-in's own log
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(calls)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("want the --show-codecov-path call and the run, got:\n%s", calls)
+	}
+	for _, l := range lines {
+		if bs := swiftBuildSystems(strings.Fields(l)); !slices.Equal(bs, []string{"native"}) {
+			t.Errorf("swift %s: build systems %q, want native exactly once", l, bs)
 		}
 	}
 }

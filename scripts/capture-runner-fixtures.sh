@@ -191,7 +191,9 @@ capture_swift() (
 # fixture (internal/lang/testdata/coverage/swift: Calc.swift tested in part,
 # Dead.swift compiled and never called, Shape.swift with no executable line,
 # Unbuilt/Orphan.swift in no target), as swiftPlugin.CoverageCmd runs it:
-# --enable-code-coverage with the scratch path it uses. $SWIFT starts in
+# --enable-code-coverage, the native build system (the only one whose export
+# holds every test target's files: see CoverageCmd) and the scratch path it
+# uses. $SWIFT starts in
 # DIR/swift, so the package is named with --package-path and the scratch path
 # is absolute. The capture directory is written as /fixture in the JSON.
 capture_swift_coverage() (
@@ -200,9 +202,9 @@ capture_swift_coverage() (
   rm -rf "$pkg" && cp -r "$REPO/internal/lang/testdata/coverage/swift" "$pkg"
   pdir="$(cd "$pkg" && pwd -P)"
   local rc=0
-  $SWIFT test --package-path "$pkg" --enable-code-coverage --scratch-path "$pkg/.build/corral-coverage" >/dev/null 2>&1 || rc=$?
+  $SWIFT test --package-path "$pkg" --enable-code-coverage --build-system native --scratch-path "$pkg/.build/corral-coverage" >/dev/null 2>&1 || rc=$?
   want swift-coverage-run-exit 0 "$rc"
-  json="$($SWIFT test --package-path "$pkg" --enable-code-coverage --scratch-path "$pkg/.build/corral-coverage" --show-codecov-path 2>/dev/null)"
+  json="$($SWIFT test --package-path "$pkg" --enable-code-coverage --build-system native --scratch-path "$pkg/.build/corral-coverage" --show-codecov-path 2>/dev/null)"
   sed -e "s#$pdir/#/fixture/swift-coverage/#g" "$json" > "$OUT/swift-codecov.json"
   want swift-coverage-files 4 "$(grep -o '"filename":"/fixture/swift-coverage/[ST][^"]*"' "$OUT/swift-codecov.json" | wc -l | tr -d ' ')"
   return "$fail"

@@ -29,6 +29,11 @@ const (
 // reducer skips .build, llvmCovSkipped) and is gone with it.
 const swiftCoverageScratch = ".build/corral-coverage"
 
+// swiftCoverageBuildSystem is the one build system the coverage run uses: the
+// only one whose export was measured to hold every test target's files (see
+// CoverageCmd, THE COVERAGE BUILD USES THE NATIVE BUILD SYSTEM).
+const swiftCoverageBuildSystem = "native"
+
 // swiftCoverageMovedBuild are the options that put the package or its build
 // directory somewhere other than the working directory and its .build.
 var swiftCoverageMovedBuild = []string{"--package-path", "--scratch-path", "--build-path"}
@@ -61,7 +66,10 @@ var swiftCoverageMovedBuild = []string{"--package-path", "--scratch-path", "--bu
 // A RUN THAT FAILS WRITES NO REPORT. Measured on Swift 6.3.2 with the
 // coverage fixture (testdata/coverage/swift): a run with a failing test
 // exited 1 and wrote no export, as did a build that failed (exit 1); a run
-// whose --filter selected no test exited 0 and wrote one. So where the other
+// whose --filter selected no test exited 0 and wrote one. On Swift 6.4.2 with
+// the native build system (below), measured 2026-11-20 on a copy of the
+// fixture, a failing XCTest test and a build that failed each exited 1 and
+// wrote no export either. So where the other
 // reducers read a failing suite's coverage, Swift has none to read, and the
 // script says so with the exit status, as unavailable, rather than print an
 // empty report.
@@ -81,24 +89,61 @@ var swiftCoverageMovedBuild = []string{"--package-path", "--scratch-path", "--bu
 // cache in the home directory ("Fetching ... from cache"), with the network
 // off; on a machine whose cache does not hold them it needs the network.
 //
+// THE COVERAGE BUILD USES THE NATIVE BUILD SYSTEM (--build-system native,
+// added unless the operator's command already names it), because SwiftPM's
+// export under the other one leaves files out. Measured 2026-11-20 in Docker
+// on the coverage fixture, and on a copy of it with a library target that only
+// the XCTest target depends on and tests: Swift 6.4 made swiftbuild the
+// default build system (6.3.2's default was native), and under it each test
+// target is its own test product and the export SwiftPM writes covered one of
+// them. On 6.4.2 the export held the swift-testing target's files and not the
+// XCTest target's, nor the library only that target links, though its tests
+// ran; on 6.3.2 with --build-system swiftbuild it held none of the project's
+// files at all. A file missing from the report reads as never run. With
+// --build-system native, on 6.3.2 and on 6.4.2 alike, the export held every
+// file, with the same counts. Swift 6.4.2 prints a warning that native is
+// deprecated and will be removed; when a toolchain no longer has it,
+// --show-codecov-path fails and the report is disclosed as unavailable with
+// that reason, never read from the other build system. The tests themselves
+// (the row's runs, the mutants) build with whatever the operator's command
+// names; only this run, in its own scratch path, is pinned.
+//
 // ok=false for anything but a `swift test` run the row also runs
 // (swiftTestAt: no shell around it, no subcommand, no "--"), and for one
 // carrying --package-path, --scratch-path or --build-path (the export's paths
 // and the build directory would not be where the reducer places and skips
-// them), --disable-code-coverage or --show-codecov-path.
+// them), --disable-code-coverage, --show-codecov-path, or a --build-system
+// other than native (the operator chose a build system whose export is not
+// whole, and corral does not override the choice).
 func (swiftPlugin) CoverageCmd(testCmd []string) (cmd []string, ok bool) {
 	if _, ok := swiftTestAt(testCmd); !ok {
 		return nil, false
 	}
-	for _, a := range testCmd {
-		name, _, _ := strings.Cut(a, "=")
+	namesBuildSystem := false
+	for i, a := range testCmd {
+		name, value, hasValue := strings.Cut(a, "=")
 		if slices.Contains(swiftCoverageMovedBuild, name) || a == "--disable-code-coverage" || a == "--show-codecov-path" {
 			return nil, false
+		}
+		if name == "--build-system" {
+			if !hasValue {
+				if i+1 >= len(testCmd) {
+					return nil, false
+				}
+				value = testCmd[i+1]
+			}
+			if value != swiftCoverageBuildSystem {
+				return nil, false
+			}
+			namesBuildSystem = true
 		}
 	}
 	run := slices.Clone(testCmd)
 	if !slices.Contains(run, "--enable-code-coverage") {
 		run = append(run, "--enable-code-coverage")
+	}
+	if !namesBuildSystem {
+		run = append(run, "--build-system", swiftCoverageBuildSystem)
 	}
 	run = append(run, "--scratch-path", swiftCoverageScratch)
 
@@ -109,7 +154,7 @@ func (swiftPlugin) CoverageCmd(testCmd []string) (cmd []string, ok bool) {
 		`[ -n "$p" ] || unavailable "swift test --show-codecov-path named no file"` + "\n" +
 		`rm -f "$p" || exit 1` + "\n"
 	reduce := "\n" +
-		`[ -f "$p" ] || unavailable "swift test exited $rc and wrote no coverage report at $p; on Swift 6.3.2 a run with a failing test or a build that failed writes none"` + "\n" +
+		`[ -f "$p" ] || unavailable "swift test exited $rc and wrote no coverage report at $p; on Swift 6.3.2 and 6.4.2 a run with a failing test or a build that failed writes none"` + "\n" +
 		llvmCovReduceShell(swiftPlugin{}, swiftCoverageHeaderV2, `"$p"`)
 	return coverageRunAndReduce(setup, "", run, reduce), true
 }

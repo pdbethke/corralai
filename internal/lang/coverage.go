@@ -93,7 +93,7 @@ var _ CoverageReporter = rustPlugin{}
 // swiftPlugin implements CoverageReporter with SwiftPM's own
 // --enable-code-coverage, whose llvm-cov export it reduces with the reducer
 // Rust's uses (llvmCovReduceShell). A run that wrote no report, which on
-// Swift 6.3.2 is every run with a failing test, is disclosed as unavailable,
+// Swift 6.3.2 and 6.4.2 is every run with a failing test, is disclosed as unavailable,
 // never read as an empty one.
 var _ CoverageReporter = swiftPlugin{}
 

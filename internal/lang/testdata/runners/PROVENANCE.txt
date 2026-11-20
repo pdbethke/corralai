@@ -65,7 +65,23 @@ directory written as $DIR. swift-fail-testing.txt and swift-fail-xctest.txt
 are `swift test` with CORRAL_FAIL_TESTING or CORRAL_FAIL_XCTEST set, which
 the fixture reads to plant its failures; swift-build-fail.txt is `swift test`
 after a line that does not compile was appended to Sources/Calc/Calc.swift.
-swift-single-*.txt, swift-filter-dollar.txt and swift-units-*.txt open with
-`# argv:` (the operator's command) and `$ ` (the command the row builds)
-and end with `# exit:` (its exit status). swift-testing runs its tests in
+swift-build-target-*.txt are the compile check's `swift build --target`:
+of a test target, of the source target, of a test target while a sibling
+test target did not compile (with a scratch path of its own), and of a test
+target after a line that does not compile was appended to the source.
+swift-authored-wrapped.txt runs the two files under
+src/swift-authored/wrapped, copied into the test targets, and
+swift-authored-collision.txt builds CalcTests with
+src/swift-authored/collision's file copied into it. swift-shapes-list.txt is
+the stdout of `swift test list` with src/swift-authored/shapes's file copied
+into CalcTests.
+swift-single-*.txt, swift-filter-dollar.txt, swift-units-*.txt,
+swift-build-target-*.txt and swift-authored-*.txt open with
+`# argv:` (the operator's command, `-` for corral's own compile check)
+and `$ ` (the command corral builds) and end with `# exit:` (its exit status). swift-testing runs its tests in
 parallel, so the order of its lines differs between captures.
+The swift-build-target-*.txt, swift-authored-*.txt and
+swift-shapes-list.txt files come from a later --swift-only run of the same
+script on the same toolchain (2026-11-19); that run's other Swift captures
+were not kept, because swift-testing's parallel order differs between runs
+and the committed ones are what the tests were written against.

@@ -205,8 +205,6 @@ var ParityExemptions = []Exemption{
 
 	{"swift", "salvage", "not built: `swift test --help` (Swift 6.3.2) lists a `--skip` option, which was not run, and the failure lines name a swift-testing test without its suite or target and an XCTest test by class and method without its target (measured on Swift 6.3.2), so a skip built from them could leave out a passing test of the same name elsewhere and narrow the run"},
 
-	{"swift", "critic-list", "not built yet: corral does not read the tests a Swift test file declares"},
-
 	{"swift", "coverage", "not built yet: corral has no Swift coverage reader"},
 
 	{"swift", "selection", "not built yet: it needs Swift coverage, which is not built"},

@@ -1,0 +1,24 @@
+# argv: -
+$ swift build --target CalcTests
+[0/1] Planning build
+Building for debugging...
+[0/2] Write sources
+[1/2] Write swift-version-24593BA9C3E375BF.txt
+[3/4] Compiling CalcTests Calc_corralTests.swift
+$DIR/swift/Tests/CalcTests/Calc_corralTests.swift:7:12: error: invalid redeclaration of 'parses()'
+ 5 | // already declares (CalcTests.swift's parses()). Copied into Tests/CalcTests
+ 6 | // by the capture script, whose build of the target then fails.
+ 7 | @Test func parses() {
+   |            `- error: invalid redeclaration of 'parses()'
+ 8 |     #expect(parse("12") == 12)
+ 9 | }
+error: emit-module command failed with exit code 1 (use -v to see invocation)
+[4/4] Emitting module CalcTests
+$DIR/swift/Tests/CalcTests/CalcTests.swift:12:12: error: invalid redeclaration of 'parses()'
+10 | // Two top-level tests whose names share a prefix: running parses() alone must
+11 | // not run parsesTwice().
+12 | @Test func parses() {
+   |            `- error: invalid redeclaration of 'parses()'
+13 |     #expect(parse("7") == 7)
+14 | }
+# exit: 1

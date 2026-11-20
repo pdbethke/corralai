@@ -424,7 +424,10 @@ var runners = []Runner{
 	},
 	{
 		Name: "swift test", ID: "swift-test", Languages: []string{"swift"}, Default: true, Words: []string{"swift"},
-		ListCmd: swiftListCmd, ParseList: swiftParseList, SingleCmd: swiftSingleCmd, Coruns: swiftCoruns,
+		// ResolveByList: `swift test list` lists the whole package, not the
+		// test file, and a critic's name (TestNamesInSource's, already in
+		// the listing's form) is checked against it before it is run.
+		ListCmd: swiftListCmd, ParseList: swiftParseList, SingleCmd: swiftSingleCmd, ResolveByList: true, Coruns: swiftCoruns,
 		FirstFailure: swiftFirstFailure,
 		ListUnits:    swiftListUnits, ParseUnits: swiftParseUnits, UnitCmd: oneUnit(swiftUnitsCmd),
 		UnitsCmd: swiftUnitsCmd, UnitForFile: swiftUnitForFile, UnitNoun: "test targets",

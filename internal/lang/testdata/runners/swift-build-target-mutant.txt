@@ -1,0 +1,15 @@
+# argv: -
+$ swift build --target CalcXCTests
+[0/1] Planning build
+Building for debugging...
+[0/1] Write swift-version-24593BA9C3E375BF.txt
+[1/2] Write sources
+[3/4] Emitting module Calc
+[4/4] Compiling Calc Calc.swift
+$DIR/swift/Sources/Calc/Calc.swift:6:31: error: cannot convert return expression of type 'String' to return type 'Int'
+4 | 
+5 | public func parse(_ s: String) -> Int? { Int(s) }
+6 | public func broken() -> Int { "not an Int" }
+  |                               `- error: cannot convert return expression of type 'String' to return type 'Int'
+7 | 
+# exit: 1

@@ -146,6 +146,40 @@ capture_swift() (
   want swift-unit-one 3 "$(sed '1,2d' "$OUT/swift-units-one.txt" | swiftran)"
   swiftcmd swift-units-multi.txt "swift test" swift test --filter '^(?:CalcTests|CalcXCTests)\.'
   want swift-units-multi 8 "$(sed '1,2d' "$OUT/swift-units-multi.txt" | swiftran)"
+  # The compile check (swiftPlugin.CompileCheck) builds one target. `# argv:`
+  # is "-": the check is corral's own command, not built from the operator's.
+  swiftcmd swift-build-target-test.txt - swift build --target CalcXCTests
+  swiftcmd swift-build-target-source.txt - swift build --target Calc
+  # A sibling test target that does not compile is not built with this one;
+  # a scratch path of its own, so nothing built above stands in for a build.
+  cp Tests/CalcTests/CalcTests.swift "$DIR/CalcTests.swift.orig"
+  printf 'let broken: Int = "not an Int"\n' >> Tests/CalcTests/CalcTests.swift
+  swiftcmd swift-build-target-scoped.txt - swift build --target CalcXCTests --scratch-path .build-scoped
+  cp "$DIR/CalcTests.swift.orig" Tests/CalcTests/CalcTests.swift
+  rm -rf .build-scoped
+  # A mutant that does not compile fails the test target's build.
+  printf 'public func broken() -> Int { "not an Int" }\n' >> Sources/Calc/Calc.swift
+  swiftcmd swift-build-target-mutant.txt - swift build --target CalcXCTests
+  cp "$DIR/Calc.swift.orig" Sources/Calc/Calc.swift
+  want swift-build-target-exits "0 0 0 1" "$(for f in test source scoped mutant; do sed -n 's/^# exit: //p' "$OUT/swift-build-target-$f.txt"; done | tr '\n' ' ' | sed 's/ $//')"
+  # The writer's one-type rule (swiftPlugin.TestWriterSystem): a corral-named
+  # type in each framework builds and runs beside the target's own tests; a
+  # top-level test named like one of the target's does not build.
+  cp "$DIR/swift-authored/wrapped/CalcTests/Calc_corralTests.swift" Tests/CalcTests/
+  cp "$DIR/swift-authored/wrapped/CalcXCTests/Calc_corralTests.swift" Tests/CalcXCTests/
+  swiftcmd swift-authored-wrapped.txt "swift test" swift test --filter '^(?:CalcTests|CalcXCTests)\.CorralCalcTests/'
+  want swift-authored-wrapped 3 "$(sed '1,2d' "$OUT/swift-authored-wrapped.txt" | swiftran)"
+  rm Tests/CalcTests/Calc_corralTests.swift Tests/CalcXCTests/Calc_corralTests.swift
+  cp "$DIR/swift-authored/collision/CalcTests/Calc_corralTests.swift" Tests/CalcTests/
+  swiftcmd swift-authored-collision.txt - swift build --target CalcTests
+  want swift-authored-collision-exit 1 "$(sed -n 's/^# exit: //p' "$OUT/swift-authored-collision.txt")"
+  rm Tests/CalcTests/Calc_corralTests.swift
+  # Declaration shapes the static test list reads (swift_names.go) that the
+  # fixture's own tests do not show, listed as `swift test list` prints them.
+  cp "$DIR/swift-authored/shapes/CalcTests/Shapes.swift" Tests/CalcTests/
+  $SWIFT test list 2>/dev/null > "$OUT/swift-shapes-list.txt"
+  want swift-shapes-listed 12 "$(wc -l < "$OUT/swift-shapes-list.txt" | tr -d ' ')"
+  rm Tests/CalcTests/Shapes.swift
   # This body is a subshell (for its cd), so a failed want is its exit status.
   return "$fail"
 )
@@ -171,9 +205,20 @@ directory written as \$DIR. swift-fail-testing.txt and swift-fail-xctest.txt
 are \`swift test\` with CORRAL_FAIL_TESTING or CORRAL_FAIL_XCTEST set, which
 the fixture reads to plant its failures; swift-build-fail.txt is \`swift test\`
 after a line that does not compile was appended to Sources/Calc/Calc.swift.
-swift-single-*.txt, swift-filter-dollar.txt and swift-units-*.txt open with
-\`# argv:\` (the operator's command) and \`$ \` (the command the row builds)
-and end with \`# exit:\` (its exit status). swift-testing runs its tests in
+swift-build-target-*.txt are the compile check's \`swift build --target\`:
+of a test target, of the source target, of a test target while a sibling
+test target did not compile (with a scratch path of its own), and of a test
+target after a line that does not compile was appended to the source.
+swift-authored-wrapped.txt runs the two files under
+src/swift-authored/wrapped, copied into the test targets, and
+swift-authored-collision.txt builds CalcTests with
+src/swift-authored/collision's file copied into it. swift-shapes-list.txt is
+the stdout of \`swift test list\` with src/swift-authored/shapes's file copied
+into CalcTests.
+swift-single-*.txt, swift-filter-dollar.txt, swift-units-*.txt,
+swift-build-target-*.txt and swift-authored-*.txt open with
+\`# argv:\` (the operator's command, \`-\` for corral's own compile check)
+and \`$ \` (the command corral builds) and end with \`# exit:\` (its exit status). swift-testing runs its tests in
 parallel, so the order of its lines differs between captures.
 PROV
 }

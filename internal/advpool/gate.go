@@ -210,14 +210,23 @@ func authoredTestPath(l AuthoredLanding, codePath, devTestPath string, base map[
 		if marked, ok := markStem(devBase, stem, marker); ok {
 			pick = filepath.Join(dir, marked)
 		} else {
-			// Hand the plugin a synthetic SOURCE path (code stem + marker,
-			// sited in the dev test's directory) and take its primary test
-			// name for it (pairing.Primary).
+			// Ask the plugin what a test for the marked stem is CALLED
+			// (pairing.Primary on a synthetic source) and keep only that
+			// name, in the dev test's directory. Only the name: the
+			// directory is the dev test's, which its runner collects, and a
+			// rule that maps a source's directory to a test directory would
+			// map this one a second time. SwiftPM's (Sources/<T>/ to
+			// Tests/<T>Tests/) turned Tests/CalcTests/ into
+			// Tests/CalcTestsTests/, a directory SwiftPM never compiles.
+			// Every other path language's primary rule is a sibling, whose
+			// directory is the synthetic source's own, so for them this is
+			// the path it always was (Rust lands Into a file, returned
+			// above).
 			c, ok := pairing.Primary(p.TestRules(), filepath.Join(dir, stem+marker+ext))
 			if !ok {
 				return fallback
 			}
-			pick = c.Path
+			pick = filepath.Join(dir, filepath.Base(c.Path))
 		}
 		if got := filepath.ToSlash(pick); !taken(got) {
 			return got

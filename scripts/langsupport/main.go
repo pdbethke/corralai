@@ -14,6 +14,9 @@ import (
 	"strings"
 
 	"github.com/pdbethke/corralai/internal/lang"
+	// The evidence-promotion row is judged by reposcan, which installs its
+	// judge into lang from its init (lang.SetEvidencePromotionJudge).
+	_ "github.com/pdbethke/corralai/internal/reposcan"
 )
 
 func main() {

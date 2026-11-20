@@ -23,6 +23,7 @@ This table is what the code can do. What has been executed, and on which reposit
 | Share a build cache between sandboxed runs | ✓ | — (20) | — (21) | — (22) | — (23) | — (24) | — (25) | — (26) |
 | Floor each mutant's time limit at three times a measured rebuild run (workspace substrate) | — (27) | — (28) | — (29) | — (30) | — (29) | — (31) | ✓ | — (32) |
 | Keep workspace trees on the checkout's locked dependency versions (one tree when they would not hold the lockfile) | — (33) | — (34) | — (35) | — (36) | — (37) | — (38) | ✓ | — (34) |
+| Add a file with no paired test to the audit when the evidence shows a test executes it | ✓ | ✓ | ✓ | ✓ | ✓ | — (39) | — (40) | ✓ |
 | Coverage pre-flight | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Grade only the tests that run the file | ✓ | ✓ | ✓ | ✓ | ✓ (rspec) | ✓ | ✓ | ✓ |
 
@@ -64,6 +65,8 @@ This table is what the code can do. What has been executed, and on which reposit
 36. not built: dependencies in .venv, venv or site-packages are linked into every tree, so the trees share one installed set and resolve none of it. A suite run through tox builds its own .tox in each tree; whether those resolve the same versions was not measured
 37. not measured: a tree without the checkout's Gemfile.lock lets bundler resolve the Gemfile again, and whether trees then build on different versions was not measured
 38. not built: cargo builds each tree's own target/, and a tree without the checkout's Cargo.lock resolves the dependencies afresh, so Rust needs this. But a cargo workspace keeps Cargo.lock at the workspace root, not beside a member crate's Cargo.toml, and finding that root is not built yet
+39. not built: a Rust source with no separate test file would have its authored test written into the source itself, which corral does not do yet, so the scan excludes it before pairing and the evidence never reaches it; a source with a separate test file is already paired by name. On indexmap-rs/indexmap at 41a8708 (workspace substrate) a unit executed src/inner/extract.rs in full and nothing was added. The line that counts evidence-paired files says this after the unit pass
+40. not built: a Swift test unit is a test target, and which of its files an authored test for a source would go in is not built, so a file with no paired test stays out of the audit even when a target's run executes it. On taplin/Lariat at be0c5fd (workspace substrate) the unit pass executed 40 files under Sources/LassoParser, one of them paired by name, and added none. The line that counts evidence-paired files says this after the unit pass
 
 ## By runner
 

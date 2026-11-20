@@ -2,7 +2,7 @@
 
 Evidence pairing lists the test units the operator's command collects (a test
 file for JavaScript, TypeScript, Ruby and PHP; a package for Go; a Cargo target
-for Rust), runs each unit alone under coverage, and makes a candidate of any
+for Rust; a test target for Swift), runs each unit alone under coverage, and makes a candidate of any
 source file a green unit executed and can land a test beside. This page records
 what that pass did on real third-party repositories. Every number below is what
 the run printed. Nothing here is an estimate.
@@ -41,6 +41,7 @@ the scratch clone, where the clone was the isolation boundary.
 | PHP | webmozart/assert | jail | 2 / 0 | 1 | 1 | 1.53 s |
 | Rust | indexmap-rs/indexmap | workspace | 5 / 0 | 0 | 2 | 12.88 s |
 | Rust | indexmap-rs/indexmap (re-run) | jail | 5 / 5 (coverage unavailable) | 0 | 2 | 9.50 s |
+| Swift | taplin/Lariat | workspace | 5 / 0 | 0 | 9 | 14.3 s |
 
 ## Go: gin-gonic/gin
 
@@ -410,6 +411,38 @@ evidence is not built. `certify --local --repo-dir . --code src/inner/extract.rs
 refuses the file before any spend, because the authored test's landing is
 derived from the source and lands on the source itself. A promoted file would
 therefore be listed by the scan and then refused by the audit.
+
+## Swift: taplin/Lariat
+
+- Commit `be0c5fdc9e046b529bff2b588bf4cc2c32a2ff8a`. This run is not from the
+  binary and workstation named at the top of this page: corral was built from
+  branch `feat/swift-lang` at `e6d7cfe0` and run in a Docker container
+  (Ubuntu 24.04, Swift 6.3.2) with the network off, on one 32-core machine.
+- Command: `corral certify --repo . --dry-run --evidence --substrate workspace -- swift test`
+- **Jail run:** not possible. corral's sandbox does not run Swift, and the
+  container has no bwrap, so the run stops at the sandbox and prints Swift's
+  own refusal, which names `--substrate workspace`.
+- **Workspace run:** 5 units, the package's 5 test targets, 0 failed: 1 m 17.8 s
+  for the first coverage build, 14.3 s on a re-run with `--no-selection-cache`.
+
+```
+  units: running 5 of 5 listed test unit(s) alone under coverage, 1 at a time, within 15m0s for the whole pass…
+  units: 5 run, 0 failed (1 at a time)
+  selection: grading each swift file by the test units its evidence says execute it (5 of 5 unit(s) reported)
+  173 file(s) walked; 9 candidate(s); 9 job(s); 164 file(s) excluded from the audit
+  evidence-paired 0 · name-paired 9 · uncovered 0 · import-only 0
+```
+
+No file was promoted. `corral tests map` over the same evidence shows the
+units executing 40 files under `Sources/LassoParser`, one of them paired by
+name. A Swift unit is a test target, and which of its files an authored test
+for a source would go in is not built, so none of them was added. That line
+printed a bare 0. corral now says why on it (the same command re-run with
+that change, 12.2 s with `--no-selection-cache`):
+
+```
+  evidence-paired 0 · name-paired 9 · uncovered 0 · import-only 0 — Swift: adding a file with no paired test by evidence is not built, so a file a test executes but no name pairs is not audited (see the language-support page)
+```
 
 ## Real audit
 

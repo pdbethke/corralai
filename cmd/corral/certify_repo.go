@@ -1188,6 +1188,10 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// some of its units contributed nothing.
 	var evidenceIdx reposcan.EvidenceIndex
 	unitsPartial := false
+	// evidencePlug is the language whose evidence decided candidacy, set
+	// when that evidence was measured: the count line says when that
+	// language's evidence can promote nothing (evidencePromotionNote).
+	var evidencePlug lang.Plugin
 	// noSourcesNote is why neither evidence pass ran when the scan left them
 	// no source to run for (noEvidenceSourcesNote); "" otherwise.
 	noSourcesNote := ""
@@ -1307,6 +1311,9 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			return refuse()
 		}
 		evidenceIdx = idx
+		if idxOK {
+			evidencePlug = plug
+		}
 		var promoted int
 		cands, excl, promoted = reposcan.WidenCandidacyByEvidence(cands, excl, idx, idxOK)
 		evidenceCandidacyOK = idxOK
@@ -1598,6 +1605,9 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	summary := candidacySummaryLine(cands, excl, evidenceCandidacyOK, *dryRun && !*evidenceFlag, selectionNote)
 	if unitsPartial {
 		summary += fmt.Sprintf(" — unit evidence is partial: %d of %d unit(s) contributed none", unitPassFailed(ex.units), len(ex.units.Units))
+	}
+	if evidenceCandidacyOK && evidencePlug != nil {
+		summary += evidencePromotionNote(evidencePlug)
 	}
 	fmt.Fprintln(stdout, summary)
 	// Said once, right after the walk summary the counts belong to, and only
@@ -4164,6 +4174,20 @@ func candidacySummaryLine(cands []reposcan.Candidate, excl []reposcan.Exclusion,
 		}
 	}
 	return line
+}
+
+// evidencePromotionNote is what the count line adds after evidence that was
+// measured for p: nothing when p's evidence can promote a file
+// (reposcan.PromotesByEvidence, the judge the language-support page's row
+// reads), and otherwise that promotion is not built for p, so a reader does
+// not take "evidence-paired 0" as the evidence having found nothing more to
+// audit. One sentence for every language that lacks it; the reason is the
+// language's exemption on the support page.
+func evidencePromotionNote(p lang.Plugin) string {
+	if reposcan.PromotesByEvidence(p) {
+		return ""
+	}
+	return fmt.Sprintf(" — %s: adding a file with no paired test by evidence is not built, so a file a test executes but no name pairs is not audited (see the language-support page)", p.PromptLang())
 }
 
 // printEvidencePairings discloses every candidate that has NO filename

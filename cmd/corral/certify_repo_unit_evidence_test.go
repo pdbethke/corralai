@@ -774,3 +774,48 @@ func TestUnitPassLineCountsUnitsGreenAsWritten(t *testing.T) {
 		t.Errorf("a pass with none says it had some:\n%s", b.String())
 	}
 }
+
+// S2: a Swift unit pass that measures a file with no paired test used to
+// end on a bare "evidence-paired 0", which reads as "the evidence found
+// nothing more to audit". Promotion by evidence is not built for Swift, so
+// the count line now says that, from the same judge the language-support
+// page reads (reposcan.PromotesByEvidence).
+func TestUnitEvidenceSaysPromotionIsNotBuiltForSwift(t *testing.T) {
+	root := t.TempDir()
+	writeSwiftPackage(t, root)
+	mustWrite(t, filepath.Join(root, "Sources", "A", "C.swift"), "func c() -> Int { 2 }\n")
+	fake := &fakeUnitPass{ev: reposcan.UnitEvidence{Ran: true, Units: []reposcan.UnitResult{
+		unitRun("ATests", map[string]lang.LineCounts{
+			"Sources/A/B.swift": {Executed: 1, Executable: 1},
+			"Sources/A/C.swift": {Executed: 1, Executable: 1},
+		}),
+	}}}
+	fake.install(t)
+
+	s := runUnitEvidenceScan(t, root, "--dry-run", "--evidence", "--", "swift", "test")
+	if len(fake.called()) != 1 {
+		t.Fatalf("the unit pass did not run:\n%s", s)
+	}
+	want := "evidence-paired 0 · name-paired 1 · uncovered 0 · import-only 0" + evidencePromotionNote(mustPlugin(t, "swift"))
+	if !strings.Contains(s, want+"\n") {
+		t.Errorf("the count line does not say promotion is not built for Swift; want %q in:\n%s", want, s)
+	}
+	if !strings.Contains(s, "Swift") || !strings.Contains(evidencePromotionNote(mustPlugin(t, "swift")), "not built") {
+		t.Errorf("the note must name the language and say promotion is not built: %q", evidencePromotionNote(mustPlugin(t, "swift")))
+	}
+}
+
+// A language that promotes says nothing more on the count line: the
+// TypeScript promotion above prints its count bare.
+func TestEvidencePromotionNoteIsEmptyForALanguageThatPromotes(t *testing.T) {
+	for _, n := range []string{"go", "python", "javascript", "typescript", "ruby", "php"} {
+		if got := evidencePromotionNote(mustPlugin(t, n)); got != "" {
+			t.Errorf("%s: evidencePromotionNote = %q, want empty", n, got)
+		}
+	}
+	for _, n := range []string{"rust", "swift"} {
+		if got := evidencePromotionNote(mustPlugin(t, n)); got == "" {
+			t.Errorf("%s: evidencePromotionNote is empty, but promotion is not built for it", n)
+		}
+	}
+}

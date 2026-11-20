@@ -108,6 +108,34 @@ jobs:
         # suite as the code UNDER AUDIT — the two must provision identically or
         # the audit grades a different suite than CI validates.
         run: bash scripts/ci-provision-test-toolchains.sh
+      - name: Swift is the version pinned for this runner's release
+        if: steps.filter.outputs.code == 'true'
+        # FAILS rather than lets the real-toolchain Swift tests skip or run on
+        # the runner's own Swift: ubuntu-26.04 ships one, and the first run on
+        # it (2026-11-20) ran those tests on a version nothing here pinned
+        # because the provisioning had refused the release. The provisioning
+        # script exports the version it pins (CORRALAI_CI_SWIFT_VERSION) and
+        # puts that toolchain first on PATH (GITHUB_PATH).
+        run: |
+          want="${CORRALAI_CI_SWIFT_VERSION:-}"
+          if [ -z "$want" ]; then
+            echo "::error::scripts/ci-provision-test-toolchains.sh pins no Swift for this runner's release; the real-toolchain Swift tests would skip or run on an unpinned swift." >&2
+            exit 1
+          fi
+          at=$(readlink -f "$(command -v swift)" || true)
+          got=$(swift --version 2>/dev/null | head -n 1 || true)
+          echo "swift on PATH: ${at:-none}; $got"
+          case "$at" in
+          "/usr/local/swift-$want/"*) ;;
+          *)
+            echo "::error::swift on PATH is ${at:-absent}, not the pinned /usr/local/swift-$want toolchain." >&2
+            exit 1
+            ;;
+          esac
+          if [ "$got" != "Swift version $want (swift-$want-RELEASE)" ]; then
+            echo "::error::swift --version says '$got', want Swift $want." >&2
+            exit 1
+          fi
       # THE CONTAINER JAIL IS EXERCISED HERE, and it never was before.
       #
       # `--jail container` is what README offers macOS and Windows operators,

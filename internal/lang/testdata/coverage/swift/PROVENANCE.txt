@@ -6,6 +6,10 @@ command:  swiftPlugin.CoverageCmd(["swift", "test"]) run in this directory, stdo
           as the invoking user, with the network off. Its awk is mawk.
 swift:    Swift version 6.3.2 (swift-6.3.2-RELEASE)   Target: x86_64-unknown-linux-gnu
 captured: 2026-11-19
+reproduced: 2026-11-20, unchanged, by the same test's live run on Swift 6.4.2 (swift-6.4.2-RELEASE) in a
+          container of swift:6.4.2-resolute (Ubuntu 26.04) with Go added, network off, once with its
+          mawk and once with gawk as awk, and again on 6.3.2; CoverageCmd passes --build-system native
+          since that date (6.3.2's default, not 6.4.2's).
 trimmed:  nothing. The reducer prints working-directory-relative paths, so the report carries no machine path.
 fixture:  Sources/Calc/Calc.swift  add is tested, sub is not                  -> 0 < executed < executable
           Sources/Calc/Dead.swift  compiled, never called                     -> executed 0

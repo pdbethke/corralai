@@ -490,6 +490,20 @@ only the authored one.
   ordinary build, and back again.** Coverage therefore builds in
   `.build/corral-coverage`. A suite with a failing test writes no coverage
   export at all.
+- **Coverage runs on the native build system, and CI pins the toolchain per
+  Ubuntu release.** Swift 6.4 made `swiftbuild` the default build system;
+  under it each test target is its own product and the codecov export covered
+  one of them, so on 6.4.2 the XCTest target's files were missing from the
+  report (CI's first run on `ubuntu-latest`, Ubuntu 26.04, which ships Swift
+  6.4.2, failed `TestCapturedCoverageReportsMatchALiveRun/swift` on it). The
+  coverage run passes `--build-system native` (`swiftCoverageBuildSystem`).
+  swift.org publishes no 6.3.x for Ubuntu 26.04, so the provisioning script
+  pins 6.3.2 on 24.04 and 6.4.2 on 26.04, puts the pinned toolchain first on
+  PATH, and `deploy.yml` fails the job when `swift` is anything else. Swift
+  6.4.2 also changes what `swift test` prints (one XCTest and one
+  swift-testing summary per test product, a `--filter` matching nothing
+  prints only `warning: No matching test cases were run`, colour codes in
+  build errors when not a TTY); the committed runner captures are 6.3.2's.
 - **`( set -e; … ) || echo …` makes `set -e` inert inside the subshell**: bash
   ignores errexit in a command whose status is tested by `||`. In the CI
   provisioning script that shape would have linked a partly unpacked Swift

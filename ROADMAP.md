@@ -293,7 +293,9 @@ of these has happened, with the evidence linked here:
   no Swift mutant has been graded. What has run is the runner fixtures (Swift
   6.3.2, in a container), the free dry run and unit evidence pass on
   taplin/Lariat at `be0c5fd`, which the foreign sweep pins, and the CI
-  provisioning block in clean `ubuntu:24.04` containers (not yet in CI). Still
+  provisioning block in clean `ubuntu:24.04` (Swift 6.3.2) and `ubuntu:26.04`
+  (Swift 6.4.2) containers (not yet in CI), and the three real-toolchain tests
+  on Swift 6.4.2 in a container. Still
   ahead for Swift: running in the sandbox, whose copy of the repository leaves
   out the dependency checkouts SwiftPM resolved; adding a file to the audit by
   evidence; reading a Swift file's functions and branches, so its mutant

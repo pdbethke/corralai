@@ -92,6 +92,14 @@ and the committed ones are what the tests were written against.
 swift-codecov.json comes from a --swift-coverage-only run of the same
 script on the same toolchain (2026-11-19), in a container with the network
 off.
+That run passed no --build-system; native was 6.3.2's default. The script
+has passed --build-system native since 2026-11-20 (see
+swiftPlugin.CoverageCmd), and --swift-coverage-only runs with it on that
+date, in scratch directories and not committed, on Swift 6.3.2
+(corral-swift-spike) and Swift 6.4.2 (swift:6.4.2-resolute, Ubuntu 26.04)
+wrote exports with this file's file list and per-file line, function and
+region counts; they differ from it only in execution counts inside the test
+runner SwiftPM generates under .build, which the reducer skips.
 
 HAND MEASUREMENTS, 2026-11-19 (not captures)
 These are not fixtures. They are the commands behind figures that tracked

@@ -11,7 +11,10 @@
 #
 # Every install is best-effort (`|| true`) and followed by a version probe: a
 # missing tool must degrade to a SKIPPED language test, never a hard failure of
-# the whole run for an unrelated language.
+# the whole run for an unrelated language. Swift is the one exception, and the
+# exception is not here: this script stays advisory for Swift too, and
+# deploy.yml's step after it fails the job unless the Swift this script pins
+# for the runner's release is first on PATH (see the Swift block for why).
 #
 # A multi-step install runs in a `( set -e; ... )` subshell whose status is
 # read on the NEXT line (`rc=$?`), never as `( ... ) || echo`. Bash ignores
@@ -140,6 +143,26 @@ echo "== Swift (internal/lang swift plugin; real-toolchain tests) =="
 # linked onto /usr/local/bin. The driver finds swift-build, swift-test and
 # llvm-cov beside the file the link resolves to.
 #
+# ONE PINNED VERSION PER UBUNTU RELEASE, because swift.org builds a tarball per
+# release and does not build every version for every release: its release
+# index (https://www.swift.org/api/v1/install/releases.json, read 2026-11-20)
+# lists Ubuntu 26.04 from 6.4.0 on and no 6.3.x for it, and
+# download.swift.org answered the 6.3.2 Ubuntu 26.04 tarball's URL with a
+# redirect to its 404 page. Ubuntu 24.04 keeps 6.3.2, the version this
+# branch's Swift work was measured on; Ubuntu 26.04 (GitHub's ubuntu-latest
+# from November 2026) gets 6.4.2. On any other release or architecture this
+# says so and installs nothing rather than guess a neighbouring build.
+#
+# THE RUNNER'S OWN SWIFT MUST NOT STAND IN. GitHub's ubuntu-26.04 image ships a
+# Swift of its own (6.4.2 on image 20261116.202.1), so a failed install here
+# used to leave the tests running on a toolchain nobody pinned. So: the pinned
+# toolchain's bin directory is put FIRST on PATH for the job's later steps
+# (GITHUB_PATH), and the version this release pins is exported as
+# CORRALAI_CI_SWIFT_VERSION (GITHUB_ENV) whether or not the install succeeds.
+# deploy.yml's next step fails the job unless `swift` on PATH resolves into
+# the pinned directory and reports that version; this script stays advisory,
+# like every probe here.
+#
 # WHAT IS VERIFIED: swift.org publishes no checksum for its tarballs, only a
 # detached PGP signature beside each one (the install page,
 # https://www.swift.org/install/linux/tarball/, checked 2026-11-19). The
@@ -162,45 +185,65 @@ echo "== Swift (internal/lang swift plugin; real-toolchain tests) =="
 # in would not carry that fingerprint. The pin itself is the "Swift 6.x
 # Release Signing Key" fingerprint as swift.org's install page lists it,
 # copied by hand on 2026-11-19 and matched against the key that signed both
-# 6.3.2 Ubuntu 24.04 tarballs (x86_64 and aarch64). It is trusted on swift.org's
-# word at that date, not cross-checked against a second source. Revocation is
-# seen only if swift.org's key file carries the revocation; no keyserver is
+# 6.3.2 Ubuntu 24.04 tarballs (x86_64 and aarch64) and, on 2026-11-20, the
+# 6.4.2 Ubuntu 26.04 x86_64 tarball. It is trusted on swift.org's word at
+# that date, not cross-checked against a second source. Revocation is seen
+# only if swift.org's key file carries the revocation; no keyserver is
 # asked, because a keyserver outage would otherwise skip the language.
 #
-# The tarball is about 1.07 GB (download.swift.org's Content-Length for the
-# x86_64 6.3.2 tarball, 2026-11-19) and nothing caches it between runs.
-# Only Ubuntu 24.04 on x86_64 or aarch64 is provisioned: swift.org builds a
-# tarball per Ubuntu release, and on any other release or architecture this
-# says so and installs nothing rather than guess a neighbouring build.
-# Bumping SWIFT_VERSION means checking which key signed the new release; a
-# new major version is signed by a new key, so the pin moves with it.
-SWIFT_VERSION=6.3.2
+# Each tarball is about 1.1 GB (download.swift.org's Content-Length: 6.3.2
+# Ubuntu 24.04 x86_64 1.07 GB on 2026-11-19, 6.4.2 Ubuntu 26.04 x86_64
+# 1,121,753,798 bytes on 2026-11-20) and nothing caches it between runs.
+# Bumping a pinned version means checking which key signed the new release;
+# a new major version is signed by a new key, so the pin moves with it.
 SWIFT_SIGNING_FPR=52BB7E3DE28A71BE22EC05FFEF80A866B47A981F
+# shellcheck source=/dev/null
+swift_release=$(. /etc/os-release && echo "${ID:-unknown} ${VERSION_ID:-unknown}")
+# The runtime dependencies swift.org's tarball install page lists for each
+# release (checked 2026-11-20).
+case "$swift_release" in
+"ubuntu 24.04")
+	SWIFT_VERSION=6.3.2
+	swift_deps="binutils git gnupg2 libc6-dev libcurl4-openssl-dev libedit2 libgcc-13-dev libncurses-dev libpython3-dev libsqlite3-0 libstdc++-13-dev libxml2-dev libz3-dev pkg-config tzdata zip unzip zlib1g-dev"
+	;;
+"ubuntu 26.04")
+	SWIFT_VERSION=6.4.2
+	swift_deps="binutils binutils-gold git gnupg2 libc6-dev libcurl4-openssl-dev libedit2 libgcc-15-dev libpython3-dev libsqlite3-0 libstdc++-15-dev libxml2-dev libncurses-dev libz3-dev pkg-config tzdata unzip zip zlib1g-dev"
+	;;
+*)
+	SWIFT_VERSION=
+	swift_deps=
+	;;
+esac
+swift_dest="/usr/local/swift-$SWIFT_VERSION"
+if [ -n "$SWIFT_VERSION" ]; then
+	# Written before the install, so a failed install still leaves the gate
+	# in deploy.yml knowing what it must find.
+	[ -z "${GITHUB_ENV:-}" ] || echo "CORRALAI_CI_SWIFT_VERSION=$SWIFT_VERSION" >>"$GITHUB_ENV"
+	[ -z "${GITHUB_PATH:-}" ] || echo "$swift_dest/usr/bin" >>"$GITHUB_PATH"
+fi
 (
 	set -e
-	# shellcheck source=/dev/null
-	. /etc/os-release
-	if [ "${ID:-}" != ubuntu ] || [ "${VERSION_ID:-}" != 24.04 ]; then
-		echo "swift: this script provisions Swift on Ubuntu 24.04 only; this host is ${ID:-unknown} ${VERSION_ID:-unknown}" >&2
+	if [ -z "$SWIFT_VERSION" ]; then
+		echo "swift: this script pins Swift for Ubuntu 24.04 and 26.04 only; this host is $swift_release" >&2
 		exit 1
 	fi
+	rel=${swift_release#ubuntu }
 	case "$(uname -m)" in
-	x86_64) platdir=ubuntu2404 suffix= ;;
-	aarch64) platdir=ubuntu2404-aarch64 suffix=-aarch64 ;;
+	x86_64) platdir="ubuntu${rel//./}" suffix= ;;
+	aarch64) platdir="ubuntu${rel//./}-aarch64" suffix=-aarch64 ;;
 	*)
 		echo "swift: no Swift $SWIFT_VERSION tarball is provisioned for $(uname -m)" >&2
 		exit 1
 		;;
 	esac
-	# The runtime dependencies swift.org lists for Ubuntu 24.04.
-	sudo apt-get install -y binutils git gnupg2 libc6-dev libcurl4-openssl-dev \
-		libedit2 libgcc-13-dev libncurses-dev libpython3-dev libsqlite3-0 \
-		libstdc++-13-dev libxml2-dev libz3-dev pkg-config tzdata zip unzip zlib1g-dev
-	dest="/usr/local/swift-$SWIFT_VERSION"
+	# shellcheck disable=SC2086 # the list is words on purpose
+	sudo apt-get install -y $swift_deps
+	dest="$swift_dest"
 	stage="$dest.partial"
 	tmp=$(mktemp -d)
 	trap 'rm -rf "$tmp"; sudo rm -rf "$stage"' EXIT
-	name="swift-$SWIFT_VERSION-RELEASE-ubuntu24.04$suffix"
+	name="swift-$SWIFT_VERSION-RELEASE-ubuntu$rel$suffix"
 	url="https://download.swift.org/swift-$SWIFT_VERSION-release/$platdir/swift-$SWIFT_VERSION-RELEASE/$name.tar.gz"
 	curl -fsSL "$url" -o "$tmp/swift.tar.gz"
 	curl -fsSL "$url.sig" -o "$tmp/swift.tar.gz.sig"
@@ -236,8 +279,11 @@ SWIFT_SIGNING_FPR=52BB7E3DE28A71BE22EC05FFEF80A866B47A981F
 	}
 )
 rc=$?
-[ "$rc" -eq 0 ] || echo "swift toolchain install failed (exit $rc) — real-toolchain swift tests will SKIP"
-swift --version || echo "swift not available — real-toolchain swift tests will SKIP"
+[ "$rc" -eq 0 ] || echo "swift toolchain install failed (exit $rc) — the pinned-Swift check in deploy.yml fails the job unless the Swift pinned for this release${SWIFT_VERSION:+ ($SWIFT_VERSION)} is first on PATH"
+# What the job's later steps will run: the pinned directory first, as
+# GITHUB_PATH puts it. A different version here is the runner's own.
+PATH="$swift_dest/usr/bin:$PATH" command -v swift || echo "swift not available"
+PATH="$swift_dest/usr/bin:$PATH" swift --version || echo "swift --version failed"
 
 echo "== bubblewrap (jail tests) =="
 sudo apt-get install -y bubblewrap || true

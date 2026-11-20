@@ -247,7 +247,8 @@ swift-build-target-*.txt and swift-authored-*.txt open with
 and \`$ \` (the command corral builds) and end with \`# exit:\` (its exit status). swift-testing runs its tests in
 parallel, so the order of its lines differs between captures.
 swift-codecov.json is the llvm-cov export SwiftPM wrote for \`swift test
---enable-code-coverage --scratch-path <package>/.build/corral-coverage\` on
+--enable-code-coverage --build-system native --scratch-path
+<package>/.build/corral-coverage\` on
 ../coverage/swift (named with --package-path), the capture directory written
 as /fixture.
 PROV

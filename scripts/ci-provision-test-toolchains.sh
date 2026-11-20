@@ -13,6 +13,15 @@
 # missing tool must degrade to a SKIPPED language test, never a hard failure of
 # the whole run for an unrelated language.
 #
+# A multi-step install runs in a `( set -e; ... )` subshell whose status is
+# read on the NEXT line (`rc=$?`), never as `( ... ) || echo`. Bash ignores
+# `set -e` inside any command whose status is tested by `||`, `&&`, `if` or
+# `!`, so the `||` form runs every remaining step after one fails: a checksum
+# that does not match is followed by executing the file it rejected. That is
+# how the Rust block below was written until 2026-11-19. A block that tests a
+# step's status itself (`step || { ...; exit 1; }`) still stops: the explicit
+# exit does not depend on `set -e`.
+#
 # JAIL-VISIBILITY RULE (load-bearing, applies to every language here): the bwrap
 # grading jail binds /usr read-only and does NOT bind the user's home. A tool
 # installed with --user / --user-install / a project-local npm install is
@@ -111,15 +120,19 @@ NEXTEST_SHA256=223ba936714cc861a9cdedad5a8eb664dfdd69d6fbdf6cea6aa8184f523290dc
 	echo "$NEXTEST_SHA256  $tmp/nextest.tgz" | sha256sum -c -
 	sudo tar -xzf "$tmp/nextest.tgz" -C /usr/local/cargo/bin
 	sudo chmod -R a+rX /usr/local/rustup /usr/local/cargo
-) || echo "rust toolchain install failed — rust-in-jail test will SKIP"
+)
+rc=$?
+[ "$rc" -eq 0 ] || echo "rust toolchain install failed (exit $rc) — rust-in-jail test will SKIP"
 RUSTUP_HOME=/usr/local/rustup /usr/local/cargo/bin/cargo --version || echo "system-wide cargo not available — rust-in-jail test will SKIP"
 /usr/local/cargo/bin/cargo-nextest nextest --version || echo "cargo-nextest not available — rust-in-jail test will SKIP"
 
 echo "== Swift (internal/lang swift plugin; real-toolchain tests) =="
 # corral's jail does not run Swift (a Swift file is audited on the workspace
 # substrate only), so this install is for the tests that call the real
-# `swift` / `swiftc`: the coverage capture, the suite-exit check, the stock
-# command's preflight and the canary syntax check. It still goes under
+# `swift` / `swiftc`: the coverage capture checked against a live run, the
+# suite-exit check and the canary syntax check. (The stock command's
+# preflight check skips for Swift whether or not it is installed: Swift's
+# preflight needs a repository.) It still goes under
 # /usr/local like every toolchain here, so the JAIL-VISIBILITY RULE holds if
 # that ever changes. The release tarball is self-contained and relocatable; it
 # is unpacked whole into its own directory (not over /usr, where its clang,
@@ -133,7 +146,15 @@ echo "== Swift (internal/lang swift plugin; real-toolchain tests) =="
 # tarball is checked against that signature, in a throwaway GNUPGHOME, and
 # accepted only if gpg reports GOODSIG (so not an expired or revoked key) and
 # a VALIDSIG whose primary-key fingerprint is SWIFT_SIGNING_FPR below. Nothing
-# is unpacked before that check passes, and any failure leaves Swift absent.
+# is unpacked before that check passes.
+#
+# A failed step stops the block (see the subshell rule at the top) and links
+# nothing. The tarball is unpacked into "$dest.partial", which the block's
+# exit trap removes, and is moved to "$dest" only after the unpack and the
+# permission fix succeed and both binaries are present; the links are made
+# last, and if either fails both are removed. So a run that fails leaves no
+# swift or swiftc of its own on PATH. A toolchain an earlier successful run
+# installed is replaced only at the move.
 #
 # WHAT IS TRUSTED: the keyring is fetched from
 # https://www.swift.org/keys/all-keys.asc over HTTPS at run time, so it is
@@ -175,8 +196,10 @@ SWIFT_SIGNING_FPR=52BB7E3DE28A71BE22EC05FFEF80A866B47A981F
 	sudo apt-get install -y binutils git gnupg2 libc6-dev libcurl4-openssl-dev \
 		libedit2 libgcc-13-dev libncurses-dev libpython3-dev libsqlite3-0 \
 		libstdc++-13-dev libxml2-dev libz3-dev pkg-config tzdata zip unzip zlib1g-dev
+	dest="/usr/local/swift-$SWIFT_VERSION"
+	stage="$dest.partial"
 	tmp=$(mktemp -d)
-	trap 'rm -rf "$tmp"' EXIT
+	trap 'rm -rf "$tmp"; sudo rm -rf "$stage"' EXIT
 	name="swift-$SWIFT_VERSION-RELEASE-ubuntu24.04$suffix"
 	url="https://download.swift.org/swift-$SWIFT_VERSION-release/$platdir/swift-$SWIFT_VERSION-RELEASE/$name.tar.gz"
 	curl -fsSL "$url" -o "$tmp/swift.tar.gz"
@@ -195,14 +218,25 @@ SWIFT_SIGNING_FPR=52BB7E3DE28A71BE22EC05FFEF80A866B47A981F
 		echo "swift: the signature is not by the pinned Swift release key $SWIFT_SIGNING_FPR" >&2
 		exit 1
 	}
-	dest="/usr/local/swift-$SWIFT_VERSION"
+	sudo rm -rf "$stage"
+	sudo install -d "$stage"
+	sudo tar -xzf "$tmp/swift.tar.gz" -C "$stage" --strip-components=1
+	sudo chmod -R a+rX "$stage"
+	test -x "$stage/usr/bin/swift" && test -x "$stage/usr/bin/swiftc" || {
+		echo "swift: the unpacked tarball has no usr/bin/swift and usr/bin/swiftc" >&2
+		exit 1
+	}
 	sudo rm -rf "$dest"
-	sudo install -d "$dest"
-	sudo tar -xzf "$tmp/swift.tar.gz" -C "$dest" --strip-components=1
-	sudo chmod -R a+rX "$dest"
-	sudo ln -sf "$dest/usr/bin/swift" /usr/local/bin/swift
-	sudo ln -sf "$dest/usr/bin/swiftc" /usr/local/bin/swiftc
-) || echo "swift toolchain install failed — real-toolchain swift tests will SKIP"
+	sudo mv "$stage" "$dest"
+	{ sudo ln -sf "$dest/usr/bin/swift" /usr/local/bin/swift &&
+		sudo ln -sf "$dest/usr/bin/swiftc" /usr/local/bin/swiftc; } || {
+		sudo rm -f /usr/local/bin/swift /usr/local/bin/swiftc
+		echo "swift: linking swift and swiftc onto /usr/local/bin failed" >&2
+		exit 1
+	}
+)
+rc=$?
+[ "$rc" -eq 0 ] || echo "swift toolchain install failed (exit $rc) — real-toolchain swift tests will SKIP"
 swift --version || echo "swift not available — real-toolchain swift tests will SKIP"
 
 echo "== bubblewrap (jail tests) =="

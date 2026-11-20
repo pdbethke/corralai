@@ -80,26 +80,29 @@ swift-build-target-*.txt and swift-authored-*.txt open with
 `# argv:` (the operator's command, `-` for corral's own compile check)
 and `$ ` (the command corral builds) and end with `# exit:` (its exit status). swift-testing runs its tests in
 parallel, so the order of its lines differs between captures.
-swift-codecov.json is the llvm-cov export SwiftPM wrote for `swift test
---enable-code-coverage --scratch-path <package>/.build/corral-coverage` on
-../coverage/swift (named with --package-path), the capture directory written
-as /fixture.
+swift-codecov.json is the `llvm-cov export -format=text -summary-only`,
+by the toolchain's own llvm-cov, of the profiles one `swift test
+--enable-code-coverage --scratch-path <package>/.build/corral-coverage` run
+of ../coverage/swift (named with --package-path) wrote, over every product
+carrying a coverage map, as swiftPlugin.CoverageCmd makes it; the capture
+directory written as /fixture.
 The swift-build-target-*.txt, swift-authored-*.txt and
 swift-shapes-list.txt files come from a later --swift-only run of the same
 script on the same toolchain (2026-11-19); that run's other Swift captures
 were not kept, because swift-testing's parallel order differs between runs
 and the committed ones are what the tests were written against.
 swift-codecov.json comes from a --swift-coverage-only run of the same
-script on the same toolchain (2026-11-19), in a container with the network
-off.
-That run passed no --build-system; native was 6.3.2's default. The script
-has passed --build-system native since 2026-11-20 (see
-swiftPlugin.CoverageCmd), and --swift-coverage-only runs with it on that
-date, in scratch directories and not committed, on Swift 6.3.2
-(corral-swift-spike) and Swift 6.4.2 (swift:6.4.2-resolute, Ubuntu 26.04)
-wrote exports with this file's file list and per-file line, function and
-region counts; they differ from it only in execution counts inside the test
-runner SwiftPM generates under .build, which the reducer skips.
+script on 2026-11-20, through a container of swift:6.3.2-noble (Swift 6.3.2,
+whose default build system is native) run as the invoking user with the
+network off. It replaced the export SwiftPM itself wrote, captured
+2026-11-19, when swiftPlugin.CoverageCmd stopped reading that export (under
+swiftbuild it covered one test product) and began merging the profiles and
+exporting them over every product itself. The same run through
+swift:6.4.2-resolute (Swift 6.4.2, swiftbuild by default), in a scratch copy
+of the repository and not committed, wrote an export with this file's four
+project files and the same per-file line counts; its other entries are the
+test runner sources SwiftPM generates under .build, which the reducer skips,
+and they differ between the two build systems.
 
 HAND MEASUREMENTS, 2026-11-19 (not captures)
 These are not fixtures. They are the commands behind figures that tracked

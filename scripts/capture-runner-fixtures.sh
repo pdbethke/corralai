@@ -187,25 +187,48 @@ capture_swift() (
 )
 
 # --- swift coverage (internal/lang/swift_coverage.go) -----------------------
-# The llvm-cov export SwiftPM writes for one coverage run of the coverage
-# fixture (internal/lang/testdata/coverage/swift: Calc.swift tested in part,
-# Dead.swift compiled and never called, Shape.swift with no executable line,
-# Unbuilt/Orphan.swift in no target), as swiftPlugin.CoverageCmd runs it:
-# --enable-code-coverage, the native build system (the only one whose export
-# holds every test target's files: see CoverageCmd) and the scratch path it
-# uses. $SWIFT starts in
+# The llvm-cov export of one coverage run of the coverage fixture
+# (internal/lang/testdata/coverage/swift: Calc.swift tested in part, Dead.swift
+# compiled and never called, Shape.swift with no executable line,
+# Unbuilt/Orphan.swift in no target), made as swiftPlugin.CoverageCmd makes
+# it: `swift test --enable-code-coverage` in the scratch path it uses, with
+# no build system named; the profiles the run wrote into the directory of the
+# file --show-codecov-path names (an earlier run's removed first); as objects,
+# every file of that directory's parent that carries a coverage map; then
+# the merge and the -summary-only export llvmCovMergeExportShell runs, with
+# the llvm-profdata, llvm-cov and llvm-objdump beside the swift $SWIFT runs,
+# its links followed. Keep these steps equal to the plugin's. $SWIFT starts in
 # DIR/swift, so the package is named with --package-path and the scratch path
-# is absolute. The capture directory is written as /fixture in the JSON.
+# is absolute; the LLVM tools run where $SWIFT runs (in its container, if it
+# is one: every word of $SWIFT but the last, then sh). The capture directory
+# is written as /fixture in the JSON.
+# shellcheck disable=SC2016 # a script for sh -c: it expands where it runs
+swift_llvm_export='t=$(readlink -f "$(command -v "$0")") || exit 1
+b=${t%/*} c=$1
+d=$(mktemp -d) || exit 1
+trap '"'"'rm -rf "$d"'"'"' EXIT
+for o in "${c%/*}"/*; do [ -f "$o" ] && "$b/llvm-objdump" --section-headers "$o" 2>/dev/null | grep -q __llvm_covmap && printf "%s\n" "$o"; done > "$d/objs"
+set --; while IFS= read -r o; do set -- "$@" -object "$o"; done < "$d/objs"
+[ $# -gt 0 ] || { echo "no product carries a coverage map" >&2; exit 1; }
+"$b/llvm-profdata" merge -sparse -o "$d/merged.profdata" "$c"/*.profraw >&2 || exit 1
+"$b/llvm-cov" export -format=text -summary-only -instr-profile="$d/merged.profdata" "$@"'
 capture_swift_coverage() (
-  local pkg pdir json
+  local pkg pdir json codecov
   pkg="$DIR/swift-coverage"
   rm -rf "$pkg" && cp -r "$REPO/internal/lang/testdata/coverage/swift" "$pkg"
   pdir="$(cd "$pkg" && pwd -P)"
+  json="$($SWIFT test --package-path "$pkg" --enable-code-coverage --scratch-path "$pkg/.build/corral-coverage" --show-codecov-path 2>/dev/null | tail -n 1)"
+  codecov="${json%/*}"
+  rm -f "$codecov"/*.profraw
   local rc=0
-  $SWIFT test --package-path "$pkg" --enable-code-coverage --build-system native --scratch-path "$pkg/.build/corral-coverage" >/dev/null 2>&1 || rc=$?
+  $SWIFT test --package-path "$pkg" --enable-code-coverage --scratch-path "$pkg/.build/corral-coverage" >/dev/null 2>&1 || rc=$?
   want swift-coverage-run-exit 0 "$rc"
-  json="$($SWIFT test --package-path "$pkg" --enable-code-coverage --build-system native --scratch-path "$pkg/.build/corral-coverage" --show-codecov-path 2>/dev/null)"
-  sed -e "s#$pdir/#/fixture/swift-coverage/#g" "$json" > "$OUT/swift-codecov.json"
+  local words
+  read -ra words <<<"$SWIFT"
+  rc=0
+  "${words[@]:0:${#words[@]}-1}" sh -c "$swift_llvm_export" "${words[${#words[@]}-1]}" "$codecov" > "$DIR/swift-export.json" || rc=$?
+  want swift-coverage-export-exit 0 "$rc"
+  sed -e "s#$pdir/#/fixture/swift-coverage/#g" "$DIR/swift-export.json" > "$OUT/swift-codecov.json"
   want swift-coverage-files 4 "$(grep -o '"filename":"/fixture/swift-coverage/[ST][^"]*"' "$OUT/swift-codecov.json" | wc -l | tr -d ' ')"
   return "$fail"
 )
@@ -246,11 +269,12 @@ swift-build-target-*.txt and swift-authored-*.txt open with
 \`# argv:\` (the operator's command, \`-\` for corral's own compile check)
 and \`$ \` (the command corral builds) and end with \`# exit:\` (its exit status). swift-testing runs its tests in
 parallel, so the order of its lines differs between captures.
-swift-codecov.json is the llvm-cov export SwiftPM wrote for \`swift test
---enable-code-coverage --build-system native --scratch-path
-<package>/.build/corral-coverage\` on
-../coverage/swift (named with --package-path), the capture directory written
-as /fixture.
+swift-codecov.json is the \`llvm-cov export -format=text -summary-only\`,
+by the toolchain's own llvm-cov, of the profiles one \`swift test
+--enable-code-coverage --scratch-path <package>/.build/corral-coverage\` run
+of ../coverage/swift (named with --package-path) wrote, over every product
+carrying a coverage map, as swiftPlugin.CoverageCmd makes it; the capture
+directory written as /fixture.
 PROV
 }
 

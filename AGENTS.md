@@ -488,22 +488,31 @@ only the authored one.
   every dependent target, far past what a body mutant costs.
 - **`--enable-code-coverage` in the default build directory evicts the
   ordinary build, and back again.** Coverage therefore builds in
-  `.build/corral-coverage`. A suite with a failing test writes no coverage
-  export at all.
-- **Coverage runs on the native build system, and CI pins the toolchain per
+  `.build/corral-coverage`.
+- **SwiftPM's own coverage export is not whole under `swiftbuild`, so corral
+  merges and exports the profiles itself, and CI pins the toolchain per
   Ubuntu release.** Swift 6.4 made `swiftbuild` the default build system;
-  under it each test target is its own product and the codecov export covered
+  under it each test target is its own product and SwiftPM's export covered
   one of them, so on 6.4.2 the XCTest target's files were missing from the
   report (CI's first run on `ubuntu-latest`, Ubuntu 26.04, which ships Swift
-  6.4.2, failed `TestCapturedCoverageReportsMatchALiveRun/swift` on it). The
-  coverage run passes `--build-system native` (`swiftCoverageBuildSystem`).
+  6.4.2, failed `TestCapturedCoverageReportsMatchALiveRun/swift` on it).
+  Pinning `--build-system native` fixed that, and 6.4.2 warns native is
+  deprecated. Swift's `CoverageCmd` now runs the merge-and-export Rust's
+  coverage shares (`llvmCovMergeExportShell`) over the products beside
+  SwiftPM's codecov directory that carry a coverage map, with the toolchain's
+  own LLVM tools, under whatever build system the operator's command uses
+  (measured 2026-11-20 on 6.3.2 and 6.4.2, native and swiftbuild, all four
+  giving the committed report). A run that does not pass is not read: a
+  test that traps leaves no profile for its process, and the exit status
+  does not tell that from a failing test.
   swift.org publishes no 6.3.x for Ubuntu 26.04, so the provisioning script
   pins 6.3.2 on 24.04 and 6.4.2 on 26.04, puts links to the pinned toolchain's
   `swift` and `swiftc` first on PATH, and `deploy.yml` fails the job when
   `swift` is anything else. (Its whole `usr/bin` first on PATH put Swift's
   `llvm-profdata` ahead of the one Rust's coverage finds there, and the three
   real-toolchain Rust coverage tests failed in CI on a raw profile format
-  mismatch.) Swift
+  mismatch; Swift's coverage finds its tools beside `swift` through those
+  links, never on PATH.) Swift
   6.4.2 also changes what `swift test` prints (one XCTest and one
   swift-testing summary per test product, a `--filter` matching nothing
   prints only `warning: No matching test cases were run`, colour codes in

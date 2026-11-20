@@ -14,9 +14,10 @@ import (
 // suiteExitProject is a smallest project per reporter whose one test passes
 // or fails on the substitution of OUTCOME, and the exit status its runner
 // gives a failing suite (cargo test exits 101, the others 1). failNoReport
-// says the runner writes no coverage report for a failing suite, so the
-// failing run must disclose that as unavailable instead (SwiftPM, measured on
-// Swift 6.3.2: see swiftPlugin.CoverageCmd).
+// says a failing suite's coverage is not read, so the failing run must
+// disclose that as unavailable instead (Swift: a test process that crashes
+// writes no profile, and the exit status does not tell a crash from a
+// failing test; see swiftPlugin.CoverageCmd).
 var suiteExitProject = map[string]struct {
 	tool         string
 	probe        []string
@@ -122,7 +123,7 @@ func TestEveryCoverageCmdReportsTheSuiteExit(t *testing.T) {
 					t.Fatalf("outcome %s: SuiteExit = (%d, %v), want (%d, true)\nstdout:\n%s\nstderr:\n%s", tc.outcome, rc, ok, tc.want, out, stderr.String())
 				}
 				if tc.want != 0 && fx.failNoReport {
-					if reason, ok := CoverageUnavailable(string(out)); !ok || !strings.Contains(reason, "wrote no coverage report") {
+					if reason, ok := CoverageUnavailable(string(out)); !ok || !strings.Contains(reason, "so its coverage is not read") {
 						t.Errorf("outcome %s: want the missing report disclosed as unavailable, got %q, %v\nstdout:\n%s", tc.outcome, reason, ok, out)
 					}
 					continue

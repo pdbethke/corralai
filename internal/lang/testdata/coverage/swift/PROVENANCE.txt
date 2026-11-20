@@ -8,8 +8,10 @@ swift:    Swift version 6.3.2 (swift-6.3.2-RELEASE)   Target: x86_64-unknown-lin
 captured: 2026-11-19
 reproduced: 2026-11-20, unchanged, by the same test's live run on Swift 6.4.2 (swift-6.4.2-RELEASE) in a
           container of swift:6.4.2-resolute (Ubuntu 26.04) with Go added, network off, once with its
-          mawk and once with gawk as awk, and again on 6.3.2; CoverageCmd passes --build-system native
-          since that date (6.3.2's default, not 6.4.2's).
+          mawk and once with gawk as awk, and again on 6.3.2. Reproduced again on 2026-11-20, unchanged,
+          after CoverageCmd began merging the run's profiles and exporting them itself over every test
+          product (llvmCovMergeExportShell) under the toolchain's default build system: on Swift 6.3.2
+          (corral-swift-t9, native) and on Swift 6.4.2 (swiftbuild) with mawk and with gawk as awk.
 trimmed:  nothing. The reducer prints working-directory-relative paths, so the report carries no machine path.
 fixture:  Sources/Calc/Calc.swift  add is tested, sub is not                  -> 0 < executed < executable
           Sources/Calc/Dead.swift  compiled, never called                     -> executed 0

@@ -85,15 +85,20 @@ capture_swift() (
     local f="$1"; shift
     "$@" 2>&1 | sed -e "s#$pdir#\$DIR/swift#g" > "$OUT/$f" || true
   }
-  # swiftran: the tests a run executed, from its own summaries: swift-testing's
-  # "Test run with N tests" plus XCTest's last "Executed N tests" (its suites
-  # repeat the total).
+  # swiftran: the tests a run executed, from its own summaries: every
+  # swift-testing "Test run with N tests" plus every XCTest run's total, the
+  # "Executed N tests" that closes its outermost suite (the suites nested in
+  # it repeat their part). Swift 6.4.2 under swiftbuild runs each test product
+  # on its own and prints one summary of each framework per product, so they
+  # are summed; reading the last of each counted 5 where 8 ran. The same
+  # count as swiftRan in internal/lang/swift_runner_test.go.
   swiftran() {
-    local out testing xctest
-    out="$(cat)"
-    testing="$(printf '%s\n' "$out" | sed -n 's/.*Test run with \([0-9]*\) tests\{0,1\} .*/\1/p' | tail -1)"
-    xctest="$(printf '%s\n' "$out" | sed -n 's/^[[:space:]]*Executed \([0-9]*\) tests\{0,1\}, with.*/\1/p' | tail -1)"
-    echo $(( ${testing:-0} + ${xctest:-0} ))
+    awk '
+      /^Test Suite .* started at / { depth++; next }
+      /^Test Suite .* (passed|failed) at / { depth--; outer = (depth == 0); next }
+      /^[ \t]*Executed [0-9]+ tests?, with/ { if (outer) n += $2; outer = 0; next }
+      /Test run with [0-9]+ tests? / { s = $0; sub(/.*Test run with /, "", s); sub(/ .*/, "", s); n += s }
+      END { print n + 0 }'
   }
   # swiftcmd <fixture> <argv> <cmd...>: `# argv:` the operator's command, `$ `
   # the row's command (cmd, whose first word is swift), the run of cmd under

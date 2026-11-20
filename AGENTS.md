@@ -517,6 +517,11 @@ only the authored one.
   swift-testing summary per test product, a `--filter` matching nothing
   prints only `warning: No matching test cases were run`, colour codes in
   build errors when not a TTY); the committed runner captures are 6.3.2's.
+  A count of the tests a run executed must therefore sum every summary, not
+  read the last: the capture script's `swiftran` and the test helper
+  `swiftRan` add every swift-testing `Test run with N tests` and the
+  `Executed N tests` that closes each outermost XCTest suite (reading the
+  last of each counted 5 where 8 ran on 6.4.2).
 - **`( set -e; … ) || echo …` makes `set -e` inert inside the subshell**: bash
   ignores errexit in a command whose status is tested by `||`. In the CI
   provisioning script that shape would have linked a partly unpacked Swift

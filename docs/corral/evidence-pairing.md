@@ -418,10 +418,15 @@ therefore be listed by the scan and then refused by the audit.
   binary and workstation named at the top of this page: corral was built from
   branch `feat/swift-lang` at `e6d7cfe0` and run in a Docker container
   (Ubuntu 24.04, Swift 6.3.2) with the network off, on one 32-core machine.
+  It passed neither `--no-ledger` nor `--cache-db` (a dry run writes no
+  entry; HOME and every state path pointed into the scratch directory), and
+  was timed with bash's `time`.
 - Command: `corral certify --repo . --dry-run --evidence --substrate workspace -- swift test`
-- **Jail run:** not possible. corral's sandbox does not run Swift, and the
-  container has no bwrap, so the run stops at the sandbox and prints Swift's
-  own refusal, which names `--substrate workspace`.
+- **Jail run:** not possible: corral's sandbox does not run Swift, and the
+  container has no bwrap. The `e6d7cfe0` binary stopped at the sandbox with
+  advice to install bubblewrap or use `--jail container`, neither of which
+  runs Swift. With the change that followed (`62cdcb60`) the same run prints
+  Swift's own refusal instead, which names `--substrate workspace`.
 - **Workspace run:** 5 units, the package's 5 test targets, 0 failed: 1 m 17.8 s
   for the first coverage build, 14.3 s on a re-run with `--no-selection-cache`.
 
@@ -443,6 +448,11 @@ that change, 12.2 s with `--no-selection-cache`):
 ```
   evidence-paired 0 · name-paired 9 · uncovered 0 · import-only 0 — Swift: adding a file with no paired test by evidence is not built, so a file a test executes but no name pairs is not audited (see the language-support page)
 ```
+
+The files themselves are now recorded as `evidence-pairing-not-built` rather
+than `no-paired-test`: the same command with `--json`, on a binary with that
+change (`143f4b98`'s code), lists 55 files under that reason and 4 under
+`no-paired-test`.
 
 ## Real audit
 

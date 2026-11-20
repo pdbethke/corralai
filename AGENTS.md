@@ -259,8 +259,8 @@ the sandbox withholds it (`dropsHostVar`), for every caller. Because a frozen ru
 unchanged code is then a full cache hit while a mutant rebuilds what it changed,
 every per-mutant time cap is floored at three times the warming run
 (`adequacy.mutantTimeoutCap`, which reads the floor through `adequacy.WarmDurationJail`;
-`RunCacheJail` embeds it, and so does the workspace pool's measured rebuild run, see
-the Swift traps below). An authored test that names
+`RunCacheJail` embeds it, and `WorkspacePool` implements it with its measured rebuild
+run, see the Swift traps below). An authored test that names
 `/corral-work` is refused at every writer door (`advpool.checkAuthoredTest`): it would
 pass in every jailed run and fail on the developer's machine. A shared cache costs one build cache's worth
 of temporary disk space per file being audited at once, removed when that file's run
@@ -452,19 +452,23 @@ only the authored one.
 **Swift: the traps adding it hit.** Each cost a run or a wrong conclusion.
 
 - **Swift does not run in corral's sandbox.** `swiftPlugin.JailPreflight`
-  refuses every jailed run (marked `lang.ErrSandboxUnsupported`): the seed
-  leaves `.build` out, which holds SwiftPM's resolved dependency checkouts,
-  and the jail is offline. A Swift audit exists only on `certify --repo
-  --substrate workspace`, so every rule above about that substrate applies to
-  every Swift run: a scratch clone, never someone's working checkout. A dry
-  run builds no sandbox and is not refused. `corral doctor` checks a jailed
-  run only and has no `--substrate` flag, so it cannot check a Swift run (it
-  says so); run the suite by hand in the clone instead.
-- **A warm `.build` is tied to its path.** A warm tree copied to another path
-  and built again failed rather than rebuilt, which is why the workspace pool
-  never copies or links a build directory into a tree (a `.build` git does not
-  ignore makes the pool one tree) and why sharing a warm build between trees is
-  not built.
+  refuses every jailed run (declared by `lang.SandboxRefuser`, whose refusal
+  its `JailPreflight` returns): the seed leaves `.build` out, which holds
+  SwiftPM's resolved dependency checkouts, and the jail is offline. A Swift
+  audit exists only on `certify --repo --substrate workspace`, so every rule
+  above about that substrate applies to every Swift run: a scratch clone,
+  never someone's working checkout. A dry run builds no sandbox and is not
+  refused. `corral doctor`'s sandbox and toolchain checks rehearse a jailed
+  run and it has no `--substrate` flag, so for a Swift `--code` file it fails
+  the toolchain check (or the sandbox check) with Swift's refusal and says
+  what it cannot check; run the suite by hand in the clone instead.
+- **A warm `.build` copied to another path did not build.** A warm tree
+  copied to another path and built again failed (`error: cancelled`, once, on
+  taplin/Lariat with Swift 6.3.2; the cause was not diagnosed) rather than
+  rebuilt. That one run is why the workspace pool never copies or links a
+  build directory into a tree, so each tree builds its own from scratch (a
+  `.build` git does not ignore makes the pool one tree), and why sharing a
+  warm build between trees is not built.
 - **swift-testing matches `--filter` against the test id followed by its
   source location** (`/<file>:<line>:<column>`). A `$`-anchored id selected
   nothing, and the run exited 0 with `Test run with 0 tests`
@@ -475,9 +479,10 @@ only the authored one.
 - **A trailing comment measures nothing; a leading one measures a mutant.**
   On the workspace substrate every run rewrites the audited file, the baseline
   included, so SwiftPM recompiles it every time, and what a mutant pays beyond
-  that is the relink. A comment added at the end leaves the compiled object
-  unchanged and nothing relinks; a comment put first moves every line, changes
-  the debug line table and relinks what a mutant relinks. That is the rebuild
+  that is the relink. A comment added at the end relinked nothing; a comment
+  put first moves every later line, which changes the compiled object, and
+  relinked the same six products a mutant relinked (measured on
+  taplin/Lariat). That is the rebuild
   probe (`leadingCommentProbe`, `lang.PerRunBuilder`). An unused `private func`
   was tried too and rejected: it changes the module's interface and rebuilds
   every dependent target, far past what a body mutant costs.

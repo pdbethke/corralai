@@ -115,7 +115,7 @@ jobs:
         # it (2026-11-20) ran those tests on a version nothing here pinned
         # because the provisioning had refused the release. The provisioning
         # script exports the version it pins (CORRALAI_CI_SWIFT_VERSION) and
-        # puts that toolchain first on PATH (GITHUB_PATH).
+        # puts links to that toolchain's swift and swiftc first on PATH (GITHUB_PATH).
         run: |
           want="${CORRALAI_CI_SWIFT_VERSION:-}"
           if [ -z "$want" ]; then

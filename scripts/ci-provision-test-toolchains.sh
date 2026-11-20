@@ -155,13 +155,22 @@ echo "== Swift (internal/lang swift plugin; real-toolchain tests) =="
 #
 # THE RUNNER'S OWN SWIFT MUST NOT STAND IN. GitHub's ubuntu-26.04 image ships a
 # Swift of its own (6.4.2 on image 20261116.202.1), so a failed install here
-# used to leave the tests running on a toolchain nobody pinned. So: the pinned
-# toolchain's bin directory is put FIRST on PATH for the job's later steps
+# used to leave the tests running on a toolchain nobody pinned. So: a directory
+# inside the pinned toolchain holding links to its `swift` and `swiftc` and
+# nothing else (corral-links) is put FIRST on PATH for the job's later steps
 # (GITHUB_PATH), and the version this release pins is exported as
 # CORRALAI_CI_SWIFT_VERSION (GITHUB_ENV) whether or not the install succeeds.
 # deploy.yml's next step fails the job unless `swift` on PATH resolves into
 # the pinned directory and reports that version; this script stays advisory,
 # like every probe here.
+#
+# NOT THE TOOLCHAIN'S WHOLE bin DIRECTORY: it also holds an llvm-profdata and
+# an llvm-cov, and first on PATH they stood in for the ones Rust's coverage
+# finds there. CI's run of 2026-11-20 put usr/bin itself on PATH and all three
+# real-toolchain Rust coverage tests failed: Swift 6.4.2's llvm-profdata reads
+# raw profile format 10 and the rustc pinned above wrote format 11 ("no profile can be
+# merged"). The driver still finds its own tools beside the file the link
+# resolves to.
 #
 # WHAT IS VERIFIED: swift.org publishes no checksum for its tarballs, only a
 # detached PGP signature beside each one (the install page,
@@ -220,7 +229,7 @@ if [ -n "$SWIFT_VERSION" ]; then
 	# Written before the install, so a failed install still leaves the gate
 	# in deploy.yml knowing what it must find.
 	[ -z "${GITHUB_ENV:-}" ] || echo "CORRALAI_CI_SWIFT_VERSION=$SWIFT_VERSION" >>"$GITHUB_ENV"
-	[ -z "${GITHUB_PATH:-}" ] || echo "$swift_dest/usr/bin" >>"$GITHUB_PATH"
+	[ -z "${GITHUB_PATH:-}" ] || echo "$swift_dest/corral-links" >>"$GITHUB_PATH"
 fi
 (
 	set -e
@@ -269,6 +278,10 @@ fi
 		echo "swift: the unpacked tarball has no usr/bin/swift and usr/bin/swiftc" >&2
 		exit 1
 	}
+	# Relative links, so they still resolve after the move below.
+	sudo install -d "$stage/corral-links"
+	sudo ln -s ../usr/bin/swift "$stage/corral-links/swift"
+	sudo ln -s ../usr/bin/swiftc "$stage/corral-links/swiftc"
 	sudo rm -rf "$dest"
 	sudo mv "$stage" "$dest"
 	{ sudo ln -sf "$dest/usr/bin/swift" /usr/local/bin/swift &&
@@ -280,10 +293,10 @@ fi
 )
 rc=$?
 [ "$rc" -eq 0 ] || echo "swift toolchain install failed (exit $rc) — the pinned-Swift check in deploy.yml fails the job unless the Swift pinned for this release${SWIFT_VERSION:+ ($SWIFT_VERSION)} is first on PATH"
-# What the job's later steps will run: the pinned directory first, as
-# GITHUB_PATH puts it. A different version here is the runner's own.
-PATH="$swift_dest/usr/bin:$PATH" command -v swift || echo "swift not available"
-PATH="$swift_dest/usr/bin:$PATH" swift --version || echo "swift --version failed"
+# What the job's later steps will run: the pinned links first, as
+# GITHUB_PATH puts them. A different version here is the runner's own.
+PATH="$swift_dest/corral-links:$PATH" command -v swift || echo "swift not available"
+PATH="$swift_dest/corral-links:$PATH" swift --version || echo "swift --version failed"
 
 echo "== bubblewrap (jail tests) =="
 sudo apt-get install -y bubblewrap || true

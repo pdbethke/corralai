@@ -498,8 +498,12 @@ only the authored one.
   6.4.2, failed `TestCapturedCoverageReportsMatchALiveRun/swift` on it). The
   coverage run passes `--build-system native` (`swiftCoverageBuildSystem`).
   swift.org publishes no 6.3.x for Ubuntu 26.04, so the provisioning script
-  pins 6.3.2 on 24.04 and 6.4.2 on 26.04, puts the pinned toolchain first on
-  PATH, and `deploy.yml` fails the job when `swift` is anything else. Swift
+  pins 6.3.2 on 24.04 and 6.4.2 on 26.04, puts links to the pinned toolchain's
+  `swift` and `swiftc` first on PATH, and `deploy.yml` fails the job when
+  `swift` is anything else. (Its whole `usr/bin` first on PATH put Swift's
+  `llvm-profdata` ahead of the one Rust's coverage finds there, and the three
+  real-toolchain Rust coverage tests failed in CI on a raw profile format
+  mismatch.) Swift
   6.4.2 also changes what `swift test` prints (one XCTest and one
   swift-testing summary per test product, a `--filter` matching nothing
   prints only `warning: No matching test cases were run`, colour codes in

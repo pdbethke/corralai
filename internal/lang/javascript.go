@@ -153,6 +153,10 @@ func (jsPlugin) Preflight(repoRoot string, testCmd []string) error {
 	return toolOnPath(preflightBin(testCmd, "node"))
 }
 
+// ReadsSignatures declares that repoindex reads this language's functions
+// and their branches (SignatureReader).
+func (jsPlugin) ReadsSignatures() {}
+
 func (jsPlugin) PromptLang() string { return "JavaScript" }
 
 // EvidencePromotes declares that evidence can add a file with no paired test

@@ -832,6 +832,30 @@ func PromotesByEvidence(p Plugin) bool {
 	return ok
 }
 
+// SignatureReader is the OPTIONAL plugin extension declaring that corral
+// reads the language's functions and their branches from a source file
+// (repoindex.ExtractSignatures, which gives each function its line span and
+// decision points). That reading is what splits a file's mutant generation
+// into one seat per group of functions (advpool.PlanShards), what the
+// prompts' signature surface holds, and what the verdict's exam coverage
+// counts; without it a file gets one generator seat over the whole file, an
+// empty signature surface and exam coverage recorded as not measured. It is
+// a declaration because the reader lives in internal/repoindex, which
+// imports this package; repoindex's
+// TestSignatureDeclarationMatchesTheReader runs the reader on a sample for
+// every registered language and fails when a declaration says otherwise,
+// and TestTheWriterPromptPromisesASignatureSurfaceOnlyWhereOneIsRead keeps
+// each writer's system prompt to what it is sent.
+type SignatureReader interface {
+	ReadsSignatures()
+}
+
+// ReadsSignatures reports p's SignatureReader declaration.
+func ReadsSignatures(p Plugin) bool {
+	_, ok := p.(SignatureReader)
+	return ok
+}
+
 // SelectionDiagnoser is an OPTIONAL TestEvidence extension: a plugin that
 // can recognize its own instrumented selection run's failure text —
 // whatever a runner could capture, possibly just an exit code's worth of

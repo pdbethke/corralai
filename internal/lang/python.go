@@ -444,6 +444,10 @@ func pyPreflightStockDefault() error {
 	return nil
 }
 
+// ReadsSignatures declares that repoindex reads this language's functions
+// and their branches (SignatureReader).
+func (pyPlugin) ReadsSignatures() {}
+
 func (pyPlugin) PromptLang() string { return "Python" }
 
 // EvidencePromotes declares that evidence can add a file with no paired test

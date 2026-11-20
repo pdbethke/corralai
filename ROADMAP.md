@@ -296,7 +296,9 @@ of these has happened, with the evidence linked here:
   provisioning block in clean `ubuntu:24.04` containers (not yet in CI). Still
   ahead for Swift: running in the sandbox, whose copy of the repository leaves
   out the dependency checkouts SwiftPM resolved; adding a file to the audit by
-  evidence; and, for Rust and Swift alike, a warm build shared between runs,
+  evidence; reading a Swift file's functions and branches, so its mutant
+  generation splits by function and its prompts carry a signature surface;
+  handing back a file's proven Swift tests as one file; and, for Rust and Swift alike, a warm build shared between runs,
   which first needs one mutant's build output kept from another's run, and for
   Swift's workspace trees a build that survives being moved to another path.
 - **The bug-catching scorecard + eval harness** — which model actually *catches* bugs,

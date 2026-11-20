@@ -2,7 +2,10 @@
 
 package lang
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // Every language has every capability, or a written reason it does not. An
 // exemption for a capability the language now has fails too, so the list
@@ -72,5 +75,20 @@ func TestSelectionCapabilityNeedsEvidenceAndARowThatRunsASet(t *testing.T) {
 	}
 	if selectionCapable(struct{ Plugin }{ruby}, []Runner{units}) {
 		t.Error("a plugin with no evidence form (neither TestEvidence nor CoverageReporter) must not select")
+	}
+}
+
+// TestTheWriterPromptPromisesASignatureSurfaceOnlyWhereOneIsRead: every
+// test-writer's system prompt opens by naming what it is given. A language
+// whose functions corral does not read (SignatureReader) is sent an empty
+// signature surface, so its prompt must not promise one, and a language
+// that is sent one keeps the promise.
+func TestTheWriterPromptPromisesASignatureSurfaceOnlyWhereOneIsRead(t *testing.T) {
+	const promise = "a target source file, and its signature surface"
+	for _, n := range Names() {
+		p, _ := ByName(n)
+		if got, want := strings.Contains(p.TestWriterSystem(), promise), ReadsSignatures(p); got != want {
+			t.Errorf("%s: the writer's prompt promises a signature surface %v, but corral reads its signatures %v", n, got, want)
+		}
 	}
 }

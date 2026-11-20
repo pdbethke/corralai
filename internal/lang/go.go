@@ -81,6 +81,10 @@ func (goPlugin) Preflight(repoRoot string, testCmd []string) error {
 	return toolOnPath(preflightBin(testCmd, "go"))
 }
 
+// ReadsSignatures declares that repoindex reads this language's functions
+// and their branches (SignatureReader).
+func (goPlugin) ReadsSignatures() {}
+
 func (goPlugin) PromptLang() string { return "Go" }
 
 // EvidencePromotes declares that evidence can add a file with no paired test

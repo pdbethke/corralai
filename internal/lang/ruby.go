@@ -130,6 +130,10 @@ func (rubyPlugin) Preflight(repoRoot string, testCmd []string) error {
 	return toolOnPath(preflightBin(testCmd, "ruby"))
 }
 
+// ReadsSignatures declares that repoindex reads this language's functions
+// and their branches (SignatureReader).
+func (rubyPlugin) ReadsSignatures() {}
+
 func (rubyPlugin) PromptLang() string { return "Ruby" }
 
 // EvidencePromotes declares that evidence can add a file with no paired test

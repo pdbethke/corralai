@@ -327,6 +327,10 @@ func phpSuggestedInterpreter() string {
 	return "php8.5"
 }
 
+// ReadsSignatures declares that repoindex reads this language's functions
+// and their branches (SignatureReader).
+func (phpPlugin) ReadsSignatures() {}
+
 func (phpPlugin) PromptLang() string { return "PHP" }
 
 // EvidencePromotes declares that evidence can add a file with no paired test

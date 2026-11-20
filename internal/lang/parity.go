@@ -20,6 +20,32 @@ var paritySamples = map[string]paritySample{
 	"ruby":       {"a_spec.rb", "describe 'A' do\n  it 'a' do\n  end\nend\n"},
 }
 
+// mergeSamples is two proven tests per language, as the test-writer hands
+// them to the merge (ConcatAuthored): each a whole test file for the same
+// source, declaring a different test, written the way that language's
+// writer prompt asks. The merge capability is judged by merging them.
+var mergeSamples = map[string][2]string{
+	"go":         {"package a\n\nimport \"testing\"\n\nfunc TestA(t *testing.T) {}\n", "package a\n\nimport \"testing\"\n\nfunc TestB(t *testing.T) {}\n"},
+	"python":     {"from a import f\n\ndef test_a():\n    assert f()\n", "from a import f\n\ndef test_b():\n    assert f()\n"},
+	"php":        {"<?php\nuse PHPUnit\\Framework\\TestCase;\nfinal class ATest extends TestCase { public function testA(): void { $this->assertTrue(true); } }\n", "<?php\nuse PHPUnit\\Framework\\TestCase;\nfinal class ATest extends TestCase { public function testB(): void { $this->assertTrue(true); } }\n"},
+	"rust":       {rustPlugin{}.LandTest("#[test]\nfn a() {}", 1, ""), rustPlugin{}.LandTest("#[test]\nfn b() {}", 1, "")},
+	"javascript": {"import { test } from 'node:test';\ntest('a', () => {});\n", "import { test } from 'node:test';\ntest('b', () => {});\n"},
+	"typescript": {"import { test } from 'node:test';\ntest('a', () => {});\n", "import { test } from 'node:test';\ntest('b', () => {});\n"},
+	"swift":      {"import XCTest\n@testable import A\n\nfinal class A_corralTests: XCTestCase {\n    func testA() {}\n}\n", "import XCTest\n@testable import A\n\nfinal class A_corralTests: XCTestCase {\n    func testB() {}\n}\n"},
+	"ruby":       {"require 'minitest/autorun'\n\nclass ATest < Minitest::Test\n  def test_a\n    assert true\n  end\nend\n", "require 'minitest/autorun'\n\nclass ATest < Minitest::Test\n  def test_b\n    assert true\n  end\nend\n"},
+}
+
+// mergesTwoParts is the merge capability judged by doing it: both of the
+// language's sample tests end up in one merged file, none carried out apart.
+func mergesTwoParts(p Plugin) bool {
+	s, ok := mergeSamples[p.Name()]
+	if !ok {
+		return false
+	}
+	merged, extra := ConcatAuthored(p, []AuthoredPart{{MutantID: "s0/m1", Source: s[0]}, {MutantID: "s0/m2", Source: s[1]}})
+	return merged != "" && len(extra) == 0
+}
+
 // Capability is one user-facing thing corral does with a language's tests.
 // Has judges it by running or asking the code that does it, never by a
 // declared flag: the support table and the parity test read this list, so
@@ -129,6 +155,13 @@ var Capabilities = []Capability{
 	// checked against reposcan's landing code by reposcan's
 	// TestEvidencePromotionDeclarationMatchesTheLandingCode.
 	{Key: "evidence-promotion", Title: "Add a file with no paired test to the audit when the evidence shows a test executes it", Has: PromotesByEvidence},
+	// The language's functions and their branches are read from a source
+	// file (SignatureReader, a declaration checked against repoindex's
+	// reader by repoindex's TestSignatureDeclarationMatchesTheReader).
+	{Key: "signatures", Title: "Read a file's functions and their branches (one mutant-generator seat per group of functions, a signature surface in the prompts, exam coverage)", Has: ReadsSignatures},
+	// The proven tests are handed back as one file: judged by merging two
+	// sample tests through ConcatAuthored, the fold every caller uses.
+	{Key: "merge", Title: "Hand back the proven tests as one file", Has: mergesTwoParts},
 	{Key: "coverage", Title: "Coverage pre-flight", Has: func(p Plugin) bool { _, ok := p.(CoverageReporter); return ok }},
 	// Row and Stock as a row capability's, so the support page names the
 	// runners that select when the stock command's does not (Ruby's stock
@@ -225,6 +258,9 @@ var ParityExemptions = []Exemption{
 
 	{"swift", "run-cache", "not built: corral's sandbox does not run Swift, and before a build directory is shared between runs we must settle how one mutant's build output is kept from being read by another's run. What sharing would save a grading run has not been measured; the recorded Swift timing is the free `--dry-run --evidence` on taplin/Lariat at be0c5fd (workspace substrate, Swift 6.3.2 in a container, not in the sandbox), whose unit pass builds under coverage: 1 m 17.8 s for the whole dry run with that first build, and 14.3 s re-run on the built tree with `--no-selection-cache` (the evidence-pairing page)"},
 	{"rust", "evidence-promotion", "not built: a Rust source with no separate test file would have its authored test written into the source itself, which corral does not do yet, so the scan excludes it before pairing and the evidence never reaches it; a source with a separate test file is already paired by name. On indexmap-rs/indexmap at 41a8708 (workspace substrate) a unit executed src/inner/extract.rs in full and nothing was added. The line that counts evidence-paired files says this after the unit pass, and such a source is recorded as test-landing-not-built"},
+	{"swift", "signatures", "not built: corral has no reader for a Swift file's functions and branches yet, so a Swift file is given one mutant-generator seat over the whole file, the signature surface in the prompts is empty (the test-writer's prompt says to read the file's API from the file itself), and the verdict's exam coverage, how many functions and decision points the mutants reached, is recorded as not measured"},
+	{"swift", "merge", "not built: what one merged Swift file is has not been settled. Every top-level name in a test target is shared, and each proven test puts everything in one type named after the file it was written as, so all of a file's proven tests declare the same type. Each is handed back as a file of its own, with that reason, and only one of them can be added to the test target as it stands: rename the type in each of the others first"},
+	{"php", "merge", "PHPUnit 10 and 11 load one class per file, the class named after the file, and a merged file of renamed classes ran no test on PHPUnit 11.5. So the first proven test is handed back as the file, and each other one as a file of its own, to be saved under its own class name"},
 	{"swift", "evidence-promotion", "not built: a Swift test unit is a test target, and which of its files an authored test for a source would go in is not built, so a file with no paired test stays out of the audit even when a target's run executes it. On taplin/Lariat at be0c5fd (workspace substrate) the unit pass executed 40 files under Sources/LassoParser, one of them paired by name, and added none. The line that counts evidence-paired files says this after the unit pass, and a file a test target executed is recorded as evidence-pairing-not-built rather than no-paired-test"},
 	{"go", "lockfile", "not built, and not measured: Go keeps the modules it downloads outside the checkout, in a module cache every tree reads, and a build uses the versions go.mod names, so no tree has a lockfile of its own to lack; whether trees can still differ was not measured"},
 	{"rust", "lockfile", "not built: cargo builds each tree's own target/, and a tree without the checkout's Cargo.lock resolves the dependencies afresh, so Rust needs this. But a cargo workspace keeps Cargo.lock at the workspace root, not beside a member crate's Cargo.toml, and finding that root is not built yet"},

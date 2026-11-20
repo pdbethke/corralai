@@ -209,6 +209,10 @@ func (tsPlugin) Preflight(repoRoot string, testCmd []string) error {
 // tree installed without bin links).
 var projectTscPaths = []string{"node_modules/.bin/tsc", "node_modules/typescript/bin/tsc"}
 
+// ReadsSignatures declares that repoindex reads this language's functions
+// and their branches (SignatureReader).
+func (tsPlugin) ReadsSignatures() {}
+
 func (tsPlugin) PromptLang() string { return "TypeScript" }
 
 // EvidencePromotes declares that evidence can add a file with no paired test

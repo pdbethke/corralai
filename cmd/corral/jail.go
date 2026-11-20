@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -337,6 +338,11 @@ func resolveJail(jailFlag string, containerFallback bool) (sandbox.Isolator, err
 // the shipped one and leaves bwrap without CAP_NET_ADMIN (measured on Ubuntu
 // 26.04, where it broke bwrap and GNOME's glycin), so it now says to remove it. It is a pure formatter — no bwrap invocation — so it is
 // unit-testable without a working (or degraded) bwrap on the host.
+//
+// The advice is kept apart from the cause (sandboxStartError) so a door that
+// knows the languages in play can replace it (sandboxFailureFor): for a
+// language corral's sandbox never runs, every step it names ends at that
+// language's own refusal.
 func bwrapUnavailableError(cause error, containerFallback bool) error {
 	tail := `Otherwise run on a host where bwrap can isolate: this command has no
 sandbox-backend override.`
@@ -345,10 +351,7 @@ sandbox-backend override.`
 CORRALAI_EXEC_IMAGE set to an image with your toolchain, e.g.
 CORRALAI_EXEC_IMAGE=python:3.12-bookworm).`
 	}
-	return fmt.Errorf(
-		`no working bwrap sandbox: %w
-
-corral never runs untrusted test/mutant code unsandboxed. On Ubuntu 24.04 and
+	return &sandboxStartError{cause: cause, advice: `corral never runs untrusted test/mutant code unsandboxed. On Ubuntu 24.04 and
 later, AppArmor restricts the unprivileged user namespaces bwrap needs. Ubuntu
 ships a profile for bwrap, bwrap-userns-restrict; load it (on 24.04 it may
 still be under /usr/share/apparmor/extra-profiles):
@@ -362,7 +365,89 @@ If one is there from earlier advice (corral printed it before 1.0), remove it:
 
   sudo apparmor_parser -R /etc/apparmor.d/bwrap && sudo rm /etc/apparmor.d/bwrap
 
-%s`, cause, tail)
+` + tail}
+}
+
+// sandboxStartError is a bwrap sandbox that would not start (cause, the
+// backend's own error) and the advice the door gives for it.
+type sandboxStartError struct {
+	cause  error
+	advice string
+}
+
+func (e *sandboxStartError) Error() string {
+	return fmt.Sprintf("no working bwrap sandbox: %v\n\n%s", e.cause, e.advice)
+}
+
+func (e *sandboxStartError) Unwrap() error { return e.cause }
+
+// sandboxAdviceFor is the ONE answer every door gives after a sandbox that
+// would not start, for the languages in play: advice (the door's own words
+// about fixing the sandbox) when no language refuses the sandbox outright;
+// in its place, each refusing language's own refusal when every language
+// does, since then no fix to the sandbox can run anything; and both when only
+// some do. A refusal is a language's JailPreflight answer when that is
+// lang.ErrSandboxUnsupported (lang.RefusesEverySandbox), printed as the
+// plugin wrote it, so the remedy it names (for Swift, `certify --repo
+// --substrate workspace` on a scratch clone) is worded once, in the plugin.
+// A language whose JailPreflight refuses only on some hosts keeps the advice
+// unchanged. testCmd is the operator's command; a language it is not for is
+// asked with its own stock command.
+func sandboxAdviceFor(advice string, langs []string, testCmd []string) string {
+	var refusals []string
+	for _, n := range langs {
+		p, ok := lang.ByName(n)
+		if !ok {
+			continue
+		}
+		cmd := testCmd
+		if len(cmd) == 0 {
+			cmd = p.TestCmd()
+		}
+		if err := lang.RefusesEverySandbox(p, cmd); err != nil {
+			refusals = append(refusals, err.Error())
+		}
+	}
+	if len(refusals) == 0 {
+		return advice
+	}
+	if len(refusals) == len(langs) {
+		return "A working sandbox would not help here:\n" + strings.Join(refusals, "\n")
+	}
+	note := "A working sandbox would still not run every file here:\n" + strings.Join(refusals, "\n")
+	if advice == "" {
+		return note
+	}
+	return advice + "\n\n" + note
+}
+
+// sandboxFailureFor is err, a sandbox that would not start, with its advice
+// replaced by sandboxAdviceFor's answer for the languages in play. An error
+// that carries no separable advice (another backend's own message) is kept
+// whole, and any refusal is added after it.
+func sandboxFailureFor(err error, langs []string, testCmd []string) error {
+	if err == nil {
+		return nil
+	}
+	var se *sandboxStartError
+	if errors.As(err, &se) {
+		return &sandboxStartError{cause: se.cause, advice: sandboxAdviceFor(se.advice, langs, testCmd)}
+	}
+	if note := sandboxAdviceFor("", langs, testCmd); note != "" {
+		return fmt.Errorf("%w\n\n%s", err, note)
+	}
+	return err
+}
+
+// sortedLangs is a language set as the sorted list sandboxAdviceFor reads,
+// so a refusal note lists languages in one order on every run.
+func sortedLangs(set map[string]bool) []string {
+	out := make([]string, 0, len(set))
+	for n := range set {
+		out = append(out, n)
+	}
+	slices.Sort(out)
+	return out
 }
 
 // hasContainerRuntime reports whether docker or podman is on PATH, so tests

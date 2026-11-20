@@ -40,7 +40,7 @@ func TestCertifyRepoAcceptsPerRoleModelFlags(t *testing.T) {
 		// deliberately skipped on a dry run, since demanding a sandbox and a
 		// provider key to print the jobs a scan WOULD emit would refuse the one
 		// invocation that costs nothing. The workspace substrate needs no
-		// sandbox, so ex.preflight() is a no-op here and the role resolution is
+		// sandbox, so ex.preflight(nil) is a no-op here and the role resolution is
 		// reached — which is the thing under test.
 		"--substrate", "workspace",
 	}, &out, &errb)

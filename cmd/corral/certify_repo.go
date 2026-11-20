@@ -932,7 +932,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	if *dryRun && ex != nil {
 		// The jail preflight, as a real run asks it: a host that cannot
 		// sandbox would otherwise report every evidence pass as a note.
-		if err := ex.preflight(); err != nil {
+		if err := ex.preflight(enumeratedSourcePaths(cands, excl)); err != nil {
 			fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
 			return 1
 		}
@@ -983,7 +983,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// Jail preflight: a host that cannot sandbox grades nothing, and saying
 		// so now beats reporting every file as ungradable — after paying for a
 		// goal for each of them.
-		if err := ex.preflight(); err != nil {
+		if err := ex.preflight(enumeratedSourcePaths(cands, excl)); err != nil {
 			fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
 			return 1
 		}
@@ -5661,7 +5661,14 @@ func newLocalExecutorWithJail(repoDir string, checkArgv []string, substrate, jai
 // a sandbox that cannot isolate on this host. Checked ONCE before the fan-out,
 // like the provider-key preflight: discovering it per file would report every
 // file as ungradable for a reason the first job could have stated instantly.
-func (l *localExecutor) preflight() error { return l.jailErr }
+//
+// sources are the scan's enumerated sources: the languages they are in decide
+// the advice (sandboxFailureFor), so a repository whose language corral's
+// sandbox never runs is told that, not how to fix a sandbox that would only
+// refuse it.
+func (l *localExecutor) preflight(sources []string) error {
+	return sandboxFailureFor(l.jailErr, sortedLangs(preflightLanguages(sources)), l.checkArgv)
+}
 
 // seedSkipped is what every seed the scan built left out as not text, as
 // the ledger's JSON text; "" for a dry run, the workspace substrate (no

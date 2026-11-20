@@ -162,16 +162,17 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	} else if poolNamed {
 		results = append(results, checkResult{name: "shadow pool", ok: true})
 	}
+	// The language, when --code names one, so the sandbox check's advice and
+	// the rehearsal ask that language's jail-only requirements too; nil asks
+	// none.
+	var plug lang.Plugin
+	if c := strings.TrimSpace(*code); c != "" {
+		plug, _ = lang.Detect(c)
+	}
 	iso, isoErr := sandbox.Resolve(sandbox.Config{Backend: strings.TrimSpace(*backend)})
-	results = append(results, checkSandbox(iso, isoErr))
+	results = append(results, checkSandbox(iso, isoErr, plug, cmd))
 
 	if isoErr == nil {
-		// The language, when --code names one, so the rehearsal asks that
-		// language's jail-only requirements too; nil asks none.
-		var plug lang.Plugin
-		if c := strings.TrimSpace(*code); c != "" {
-			plug, _ = lang.Detect(c)
-		}
 		results = append(results, checkToolchain(iso, cmd, nil, plug))
 	}
 	results = append(results, checkHerd(*mutantModel, *writerModel, *criticModel, *shadow.model, *shadow.writerModel, seats)...)
@@ -206,6 +207,7 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintln(stdout, "Two things doctor does NOT check, because both need a real seeded workspace:")
 	fmt.Fprintln(stdout, "  - whether your suite passes on UNMUTATED code inside the sandbox (the most common way an audit dies);")
 	fmt.Fprintln(stdout, "  - whether a multi-file project needs --repo-dir (it does — the bare --code form seeds only that file and its test).")
+	fmt.Fprintln(stdout, doctorWorkspaceNote)
 	fmt.Fprintln(stdout, "`certify --local` reports the first as COULD-NOT-GRADE with the runner's own output.")
 	return 0
 }
@@ -291,11 +293,31 @@ func checkAgents(st []agentsetup.Status) []checkResult {
 	return out
 }
 
-func checkSandbox(iso sandbox.Isolator, err error) checkResult {
+// doctorWorkspaceNote is what doctor says about the run it cannot rehearse.
+// Its checks are a jailed run's; `certify --repo --substrate workspace`
+// builds no sandbox, so the sandbox check says nothing about it, and doctor
+// has no way to check that run instead.
+const doctorWorkspaceNote = "doctor checks a jailed run only. It cannot check a `corral certify --repo --substrate workspace` run, which builds no sandbox and runs your own toolchain in the checkout."
+
+// checkSandbox is the first check. Its advice on a sandbox that would not
+// start is sandboxAdviceFor's, the answer every door gives, for plug's
+// language when --code named one: a language corral's sandbox never runs gets
+// its own refusal in place of advice that would only lead back to it. It
+// always says what doctor cannot check (doctorWorkspaceNote), and without
+// --code, how to have doctor answer for a language.
+func checkSandbox(iso sandbox.Isolator, err error, plug lang.Plugin, cmd []string) checkResult {
 	if err != nil {
-		return checkResult{name: "sandbox starts", fatal: true, detail: fmt.Sprintf(
-			"%v\ncorral refuses to run your tests against live mutations unsandboxed, so this is not optional.\n"+
-				"On Linux install bubblewrap (apt install bubblewrap); or use --jail container with docker/podman.", err)}
+		var langs []string
+		if plug != nil {
+			langs = []string{plug.Name()}
+		}
+		advice := sandboxAdviceFor("corral refuses to run your tests against live mutations unsandboxed, so this is not optional.\n"+
+			"On Linux install bubblewrap (apt install bubblewrap); or use --jail container with docker/podman.", langs, cmd)
+		note := doctorWorkspaceNote
+		if plug == nil {
+			note += "\nPass --code with a file you will audit to have doctor say whether corral's sandbox runs its language at all."
+		}
+		return checkResult{name: "sandbox starts", fatal: true, detail: fmt.Sprintf("%v\n%s\n%s", err, advice, note)}
 	}
 	_ = iso
 	return checkResult{name: "sandbox starts", ok: true}
@@ -331,7 +353,13 @@ func checkToolchain(iso sandbox.Isolator, cmd []string, depBinds []adequacy.DepB
 	}
 	if plug != nil {
 		if err := lang.JailPreflight(plug, cmd); err != nil {
-			return checkResult{name: "toolchain reachable inside the sandbox", detail: err.Error()}
+			detail := err.Error()
+			if errors.Is(err, lang.ErrSandboxUnsupported) {
+				// No sandbox runs this language, so this check can never
+				// pass; say which run doctor cannot check instead.
+				detail += "\n" + doctorWorkspaceNote
+			}
+			return checkResult{name: "toolchain reachable inside the sandbox", detail: detail}
 		}
 	}
 	tool := cmd[0]

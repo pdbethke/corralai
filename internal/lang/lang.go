@@ -9,6 +9,7 @@
 package lang
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -775,6 +776,34 @@ type JailPreflighter interface {
 func JailPreflight(p Plugin, testCmd []string) error {
 	if j, ok := p.(JailPreflighter); ok {
 		return j.JailPreflight(testCmd)
+	}
+	return nil
+}
+
+// ErrSandboxUnsupported is the JailPreflight refusal that no host can fix:
+// corral's sandbox does not run the language at all, so installing,
+// repairing or swapping the sandbox would only reach the same refusal. A
+// refusal that the host CAN fix (Rust's user-home toolchain, PHP's
+// interpreter behind a symlink the sandbox cannot follow) is not this kind.
+// A plugin marks its refusal with sandboxUnsupported, which keeps the
+// refusal's own text, so every door that prints it prints one wording.
+var ErrSandboxUnsupported = errors.New("corral's sandbox does not run this language")
+
+// sandboxUnsupported is a JailPreflight refusal that is ErrSandboxUnsupported
+// and reads as msg.
+type sandboxUnsupported struct{ msg string }
+
+func (e sandboxUnsupported) Error() string        { return e.msg }
+func (e sandboxUnsupported) Is(target error) bool { return target == ErrSandboxUnsupported }
+
+// RefusesEverySandbox is p's JailPreflight refusal when it is the kind no
+// host can fix (ErrSandboxUnsupported), and nil otherwise, a conditional
+// refusal included. It is how a door whose sandbox would not start decides
+// whether its advice about the sandbox can help this language at all; it is
+// keyed on the plugin's own answer, never on a language name.
+func RefusesEverySandbox(p Plugin, testCmd []string) error {
+	if err := JailPreflight(p, testCmd); errors.Is(err, ErrSandboxUnsupported) {
+		return err
 	}
 	return nil
 }

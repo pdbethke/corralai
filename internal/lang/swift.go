@@ -240,9 +240,11 @@ func swiftPreflight(goos, repoRoot string, testCmd []string) error {
 // BuildDirs), and .build is also where SwiftPM keeps the dependency
 // checkouts it resolved, which the offline sandbox cannot fetch again. The
 // workspace substrate runs the operator's own toolchain in the checkout,
-// .build included, and never asks this (see JailPreflighter).
+// .build included, and never asks this (see JailPreflighter). No host can
+// change that, so the refusal is ErrSandboxUnsupported: a door whose sandbox
+// would not start prints it in place of advice about the sandbox.
 func (swiftPlugin) JailPreflight([]string) error {
-	return errors.New("lang: corral's sandbox does not run Swift yet: its copy of the repository leaves out .build, where SwiftPM keeps the dependency checkouts it resolved, and the sandbox has no network to resolve them again. Run `corral certify --repo --substrate workspace` on a scratch clone of the repository instead: it runs your own Swift toolchain in that clone, writing each mutant into the clone's files and restoring them")
+	return sandboxUnsupported{"lang: corral's sandbox does not run Swift yet: its copy of the repository leaves out .build, where SwiftPM keeps the dependency checkouts it resolved, and the sandbox has no network to resolve them again. Run `corral certify --repo --substrate workspace` on a scratch clone of the repository instead: it runs your own Swift toolchain in that clone, writing each mutant into the clone's files and restoring them"}
 }
 
 func (swiftPlugin) PromptLang() string { return "Swift" }

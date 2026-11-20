@@ -235,6 +235,10 @@ func userHomeRustupNeedsSystemToolchain(name string) error {
 		name, p, sandbox.SystemRustupHome, systemRustLayoutHint)
 }
 
+// ReadsSignatures declares that repoindex reads this language's functions
+// and their branches (SignatureReader).
+func (rustPlugin) ReadsSignatures() {}
+
 func (rustPlugin) PromptLang() string { return "Rust" }
 
 func (rustPlugin) TestWriterSystem() string {

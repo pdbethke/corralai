@@ -153,7 +153,7 @@ func runTestsMap(args []string, stdout, stderr io.Writer) int {
 		}
 		ex.unitWorkers, _ = resolveScanWorkers(*workers, *substrateFlag)
 	}
-	if err := ex.preflight(); err != nil {
+	if err := ex.preflight([]string{langName}); err != nil {
 		fmt.Fprintf(stderr, "%s: %v\n", name, err)
 		return 1
 	}

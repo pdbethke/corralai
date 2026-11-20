@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/pdbethke/corralai/internal/clip"
+	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
@@ -56,6 +57,12 @@ type WorkspaceRunner struct {
 	// exactly one tree in that case and it is the checkout the caller already
 	// named. See WithTreeEnv.
 	treeEnv func(treeRoot string) []string
+	// lockfile is set by WithLockfile and, like treeEnv, read only by
+	// WorkspacePool: it is about the copies, and a lone runner has none.
+	lockfile string
+	// buildDirs is set by WithBuildDirs and, like treeEnv, read only by
+	// WorkspacePool.
+	buildDirs []lang.BuildDir
 }
 
 // WorkspaceOption configures a WorkspaceRunner at construction
@@ -186,6 +193,15 @@ func (w *WorkspaceRunner) Verify() error {
 	}
 	return nil
 }
+
+// RestoreError is a run whose overlay could not be fully put back: the
+// checkout no longer holds the tree under audit. It is joined onto whatever
+// error the run itself returned (applyRunRestore), so errors.As finds it
+// wherever it rides.
+type RestoreError struct{ Err error }
+
+func (e *RestoreError) Error() string { return e.Err.Error() }
+func (e *RestoreError) Unwrap() error { return e.Err }
 
 // savedFile is one entry of the apply/restore ledger: the repo-relative path
 // plus enough state to put the checkout back exactly as it was.
@@ -427,11 +443,13 @@ func (w *WorkspaceRunner) applyRunRestore(ctx context.Context, files map[string]
 	restore, err := w.applyFiles(files)
 	// A restore that could not complete OVERRIDES whatever the run returned:
 	// a pass measured in a tree that cannot be put back is not a result, and
-	// the next mutant would be graded against the wrong source.
+	// the next mutant would be graded against the wrong source. Typed, so a
+	// caller that would otherwise carry on past a failed run can tell this
+	// apart from one (WorkspacePool.MeasureRebuild).
 	defer func() {
 		if rerr := restore(); rerr != nil {
 			code = -1
-			err = errors.Join(err, rerr)
+			err = errors.Join(err, &RestoreError{Err: rerr})
 		}
 	}()
 	if err != nil {

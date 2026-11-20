@@ -422,6 +422,18 @@ var runners = []Runner{
 		UnitsCmd: cargoUnitsCmd, UnitsCoruns: cargoUnitsCoruns, UnitForFile: cargoUnitForFile, UnitNoun: "test targets",
 		Note: "libtest has no retries; flaky tests are named when the output is nextest's (a wrapper that runs nextest under another command); one-target runs (`-p <package>` with `--lib`, `--test` or `--bin`, in place of the command's own package and target selection) verified on cargo 1.90; a run of several targets runs each named target in every named package, since cargo selects targets across the packages it is given (measured on cargo 1.90); doc tests, examples and benches are no unit",
 	},
+	{
+		Name: "swift test", ID: "swift-test", Languages: []string{"swift"}, Default: true, Words: []string{"swift"},
+		// ResolveByList: `swift test list` lists the whole package, not the
+		// test file, and a critic's name (TestNamesInSource's, already in
+		// the listing's form) is checked against it before it is run.
+		ListCmd: swiftListCmd, ParseList: swiftParseList, SingleCmd: swiftSingleCmd, ResolveByList: true, Coruns: swiftCoruns,
+		FirstFailure: swiftFirstFailure,
+		ListUnits:    swiftListUnits, ParseUnits: swiftParseUnits, UnitCmd: oneUnit(swiftUnitsCmd),
+		UnitsCmd: swiftUnitsCmd, UnitForFile: swiftUnitForFile, UnitNoun: "test targets",
+		Disclose: swiftDisclose, PreflightBin: func(argv []string) string { return preflightBin(argv, "swift") },
+		Note: "corral's sandbox does not run Swift, so a Swift audit runs only on `certify --repo --substrate workspace`, and no audit with models has been run on one yet. Run on Swift 6.3.2 on Linux, in a container: the listing; one test alone (`--filter`) for each of four id shapes, an XCTest Class/method, a top-level swift-testing function, one in a suite with a display name and a parameterised one, each running exactly one test; one-target and two-target runs; and the failure lines of both frameworks. Other id shapes (nested suites, a name that is no ASCII identifier) were not run. The --help lists no retry option, so no test is reported flaky; a swift-testing failure is named by its function or display name, as its output prints it, an XCTest one as Class.method without its target; a test target declared with its own `path:` in Package.swift is not mapped to its files",
+	},
 }
 
 // RunnerFor is the ONE place a command is mapped to a runner: the row an

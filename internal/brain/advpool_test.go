@@ -1543,3 +1543,27 @@ func TestAdvPoolStartRunAsksTheJailsPreflight(t *testing.T) {
 		t.Fatalf("StartRun = %v, want the jail's preflight refusal", err)
 	}
 }
+
+// TestAdvPoolStartRunRefusesSwift: the brain grades an uploaded file and its
+// test in the jail, with no repository: a Swift audit needs the project's
+// package and corral's sandbox does not run Swift, so the run is refused
+// before a mission exists, with swift itself on PATH.
+func TestAdvPoolStartRunRefusesSwift(t *testing.T) {
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "swift"), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil { // #nosec G306 -- test stand-in must be executable
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	rt, _ := newTestAdvPoolRuntime(t, nil)
+	in := testRunSpecIn()
+	in.CodePath, in.Code = "Sources/Calc/Calc.swift", "public func add(_ a: Int, _ b: Int) -> Int { a + b }\n"
+	in.DevTestPath, in.DevTestCode = "Tests/CalcTests/CalcTests.swift", "import Testing\n"
+	in.TestCmd = "swift test"
+	_, err := rt.StartRun(in)
+	if err == nil || !strings.Contains(err.Error(), "Package.swift") {
+		t.Fatalf("StartRun = %v, want the refusal for a Swift run with no package", err)
+	}
+	if ms, merr := rt.missions.ListMissions(); merr != nil || len(ms) != 0 {
+		t.Fatalf("a refused run wrote %d mission(s) (err %v)", len(ms), merr)
+	}
+}

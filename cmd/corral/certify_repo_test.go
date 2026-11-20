@@ -1196,7 +1196,7 @@ func TestNewLocalExecutorSkipsSandboxForWorkspaceSubstrate(t *testing.T) {
 
 	ex := newLocalExecutor(t.TempDir(), nil, substrateWorkspace, 0, io.Discard)
 	defer ex.Close()
-	if err := ex.preflight(); err != nil {
+	if err := ex.preflight(nil); err != nil {
 		t.Fatalf("workspace substrate must not demand a sandbox: %v", err)
 	}
 	if resolutions != 0 {
@@ -1218,7 +1218,7 @@ func TestNewLocalExecutorStillRequiresSandboxForJailSubstrate(t *testing.T) {
 
 	for _, substrate := range []string{"", substrateJail} {
 		ex := newLocalExecutor(t.TempDir(), nil, substrate, 0, io.Discard)
-		err := ex.preflight()
+		err := ex.preflight(nil)
 		ex.Close()
 		if err == nil {
 			t.Fatalf("substrate %q: jail substrate must still refuse when no sandbox resolves", substrate)

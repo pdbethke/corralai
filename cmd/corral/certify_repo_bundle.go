@@ -262,6 +262,7 @@ func buildAuditRows(files []scanstore.File, scanID int64, meta bundleMeta) []aud
 			AuthoredLanding:          f.AuthoredLanding,
 			BaselineFlaky:            f.BaselineFlaky,
 			RunCache:                 f.RunCache,
+			CapFloor:                 f.CapFloor,
 			VerdictJSON:              f.VerdictJSON,
 			PromptShape:              f.PromptShape,
 			CoveringTests:            f.CoveringTests,

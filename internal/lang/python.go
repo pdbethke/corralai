@@ -444,7 +444,15 @@ func pyPreflightStockDefault() error {
 	return nil
 }
 
+// ReadsSignatures declares that repoindex reads this language's functions
+// and their branches (SignatureReader).
+func (pyPlugin) ReadsSignatures() {}
+
 func (pyPlugin) PromptLang() string { return "Python" }
+
+// EvidencePromotes declares that evidence can add a file with no paired test
+// to the audit (EvidencePromoter): its per-test evidence names the test file that executed a source, which is where the authored test lands.
+func (pyPlugin) EvidencePromotes() {}
 
 func (pyPlugin) TestWriterSystem() string {
 	return `You are a TEST-WRITER. Given a security control GOAL, a target source file, and its signature surface, write ONE executable pytest test that verifies the code SATISFIES the goal.

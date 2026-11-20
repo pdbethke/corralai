@@ -17,6 +17,7 @@ import (
 	python "github.com/smacker/go-tree-sitter/python"
 	"github.com/smacker/go-tree-sitter/ruby"
 	"github.com/smacker/go-tree-sitter/rust"
+	"github.com/smacker/go-tree-sitter/swift"
 	typescript "github.com/smacker/go-tree-sitter/typescript/typescript"
 
 	"github.com/pdbethke/corralai/internal/pairing"
@@ -186,6 +187,22 @@ func init() {
 			containers: map[string]bool{"class_declaration": true},
 			// Inside class_body: method_declaration nodes.
 			methods: map[string]string{"method_declaration": "method"},
+		},
+		"swift": {
+			grammar: swift.GetLanguage,
+			// Verified by parsing a sample with the grammar: function_declaration
+			// at the top level and inside a type body; class_declaration is
+			// struct, class, enum and extension alike (its declaration_kind
+			// field says which); protocol_declaration is the interface.
+			// No signature extractor yet, so no branches either.
+			defs: map[string]string{
+				"function_declaration": "function",
+				"class_declaration":    "class",
+				"protocol_declaration": "interface",
+			},
+			containers: map[string]bool{"class_declaration": true},
+			// Inside class_body: function_declaration nodes.
+			methods: map[string]string{"function_declaration": "method"},
 		},
 		"c": {
 			grammar: c.GetLanguage,

@@ -4,6 +4,7 @@ package adequacy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -15,8 +16,10 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/sandbox"
 	"github.com/pdbethke/corralai/internal/treedirs"
 )
@@ -29,8 +32,12 @@ import (
 // the operator sees a slow audit and no reason for it, and a report that
 // claims nothing about the substrate it ran on.
 type Disclosure struct {
-	Trees int    // 1 when downgraded
-	Note  string // "" when Trees > 1; otherwise WHY the downgrade happened
+	Trees int // 1 when downgraded
+	// Note says WHY when Trees is 1 after a downgrade. When Trees > 1 it
+	// says what the trees do not have in common with the checkout that a
+	// reader would otherwise assume: the build directories each tree builds
+	// for itself (ownBuildNote), or "" when there are none.
+	Note string
 	// Shared names the dependency directories (in symlinkedDepDirs order)
 	// that exist at the checkout and were SYMLINKED into every tree rather
 	// than copied. It is populated whenever such links were made — including
@@ -58,6 +65,11 @@ type Disclosure struct {
 	// trees could not be used.
 	CopyDuration  time.Duration
 	ProbeDuration time.Duration
+	// RebuildDuration is how long MeasureRebuild's one run took, set by the
+	// caller that ran it (it runs after Probe, on the pool Probe returned).
+	// Zero for a language that measures no rebuild run. Like the two above
+	// it is time spent before a single mutant is scored, passed or failed.
+	RebuildDuration time.Duration
 }
 
 // maxUniverseBytes bounds the checkout a pool is willing to copy N times.
@@ -128,7 +140,21 @@ type WorkspacePool struct {
 	// shared for as long as these trees do, and a caller that records only
 	// the probe's answer must not lose that half of the disclosure.
 	shared []string
+
+	// note is the Disclosure.Note this pool was built with (ownBuildNote),
+	// retained for the reason shared is: Probe restates it when it keeps the
+	// trees.
+	note string
+
+	// warmDur is the rebuild run MeasureRebuild timed, in nanoseconds; zero
+	// until one passed. Written once before scoring and read by every
+	// concurrent cap Score derives, hence atomic.
+	warmDur atomic.Int64
 }
+
+// The pool reports a warm duration, so Score reads a measured rebuild run
+// through the same door it reads a warmed run cache's (WarmDurationJail).
+var _ WarmDurationJail = (*WorkspacePool)(nil)
 
 // The pool must be substitutable for a WorkspaceRunner everywhere one is used
 // today, so every interface a caller may assert is asserted here at COMPILE
@@ -162,6 +188,14 @@ var (
 //     drag in build output, caches and dep trees — so Trees: 1, note
 //     "not a git work tree".
 //   - the universe exceeds 2 GiB: Trees: 1, note "checkout over 2 GiB".
+//   - git lists files under one of the audited language's build directories
+//     (WithBuildDirs; one git does not ignore): Trees: 1, the note naming
+//     the directory. A copy would carry the checkout's build output into
+//     every tree. Copying the universe without it instead would need
+//     reposcan.TreeDigest to leave it out in lockstep (see gitUniverse), and
+//     is not done.
+//   - a lockfile was declared (WithLockfile) and is not in the universe:
+//     Trees: 1, the note naming the file.
 //
 // WithTreeEnv is lifted out of opts and honoured here, per tree; every other
 // option is passed through to each tree's NewWorkspaceRunner unchanged.
@@ -220,6 +254,13 @@ func NewWorkspacePool(ctx context.Context, root string, n int, timeout time.Dura
 	if size > maxUniverseBytes {
 		return single("checkout over 2 GiB")
 	}
+	copiedBuild, ownBuild := buildDirsIn(probe.buildDirs, universe, links)
+	if len(copiedBuild) > 0 {
+		return single(strings.Join(copiedBuild, ", ") + " is build output that git does not ignore, so it would be copied into every tree instead of each tree building its own; ignoring it in git gives each tree a build of its own")
+	}
+	if lf := probe.lockfile; lf != "" && !slices.Contains(universe, lf) {
+		return single(lf + " is not among the files copied into each tree (git neither tracks it nor lists it as an unignored file), so each tree would resolve the dependencies for itself and could build versions the checkout does not")
+	}
 
 	// THE COPY. Measured around the whole loop, not per tree: N trees is one
 	// decision and one cost, and the audit paid all of it before it could
@@ -254,7 +295,95 @@ func NewWorkspacePool(ctx context.Context, root string, n int, timeout time.Dura
 	p := newPool(root, temps, temps, timeout, treeEnv, plugEnv, opts)
 	p.shared = linked
 	p.copyDuration = copied
-	return p, Disclosure{Trees: n, Shared: linked, CopyDuration: copied}, nil
+	p.note = ownBuildNote(ownBuild)
+	return p, Disclosure{Trees: n, Note: p.note, Shared: linked, CopyDuration: copied}, nil
+}
+
+// buildDirsIn reads the universe for dirs, the audited language's build
+// directories (a directory named Name beside its Marker). copied names each
+// such directory git lists files under, so a copy would carry it into every
+// tree; own names, once each, the build directories every tree builds for
+// itself, the ones whose marker the universe holds. A name a tree links (a
+// dependency directory) is in neither: it is not built per tree.
+func buildDirsIn(dirs []lang.BuildDir, universe, links []string) (copied, own []string) {
+	in := make(map[string]bool, len(universe))
+	for _, rel := range universe {
+		in[rel] = true
+	}
+	linked := map[string]bool{}
+	for _, l := range links {
+		linked[path.Base(l)] = true
+	}
+	seenCopied, seenOwn := map[string]bool{}, map[string]bool{}
+	for _, b := range dirs {
+		if linked[b.Name] {
+			continue
+		}
+		for _, rel := range universe {
+			if path.Base(rel) == b.Marker && !seenOwn[b.Name] {
+				seenOwn[b.Name] = true
+				own = append(own, b.Name)
+			}
+			segs := strings.Split(rel, "/")
+			for k := 0; k < len(segs)-1; k++ {
+				if segs[k] != b.Name || !in[path.Join(append(segs[:k:k], b.Marker)...)] {
+					continue
+				}
+				if dir := path.Join(segs[:k+1]...); !seenCopied[dir] {
+					seenCopied[dir] = true
+					copied = append(copied, dir)
+				}
+				break
+			}
+		}
+	}
+	sort.Strings(copied)
+	sort.Strings(own)
+	return copied, own
+}
+
+// ownBuildNote is what a pool of more than one tree says about the build
+// directories its trees build for themselves: none of them is copied
+// (buildDirsIn sent a pool that would copy one to a single tree) or linked,
+// so each tree's first run builds from scratch. "" when there is none.
+func ownBuildNote(own []string) string {
+	if len(own) == 0 {
+		return ""
+	}
+	return "each tree builds its own " + strings.Join(own, ", ") + ", from scratch: the checkout's is neither copied nor linked into a tree"
+}
+
+// WithBuildDirs names the audited language's build directories
+// (lang.BuildDirer), the ones its test command builds. NewWorkspacePool is
+// one tree when git lists files under one of them, and otherwise says that
+// each tree builds its own. Only the audited language's: another language's
+// build output in the same checkout (a Python project's Rust extension and
+// its target/) is not built by this language's test command, so copying it
+// costs nothing but disk, and the pool keeps its trees and says nothing about
+// it. A test command that itself builds another language's output (a Python
+// test that runs cargo) is not covered, as it was not before.
+//
+// A pool built without this option applies neither the rule nor the note:
+// that is the answer for a language that declares no build directory, and a
+// caller that has one must pass it (cmd/corral's workspaceRunnerOpts does).
+// Like WithTreeEnv it is a no-op on a bare WorkspaceRunner.
+func WithBuildDirs(dirs []lang.BuildDir) WorkspaceOption {
+	return func(w *WorkspaceRunner) { w.buildDirs = dirs }
+}
+
+// WithLockfile names the lockfile every private tree must hold, as a slash
+// path relative to the pool's root (lang.LockfileFor, for a language that
+// declares one). A tree that holds no resolved dependencies of its own
+// resolves them on its first run, and trees agree on the versions only when
+// each holds the checkout's lockfile; when the trees would not hold it (it is
+// ignored, absent, or above the root), NewWorkspacePool is one tree, the
+// checkout, and its note names the file. Best-effort like every other reason
+// the pool gives for one tree: never an error.
+//
+// Like WithTreeEnv it is a WorkspaceOption so it travels in the same list,
+// and it is a no-op on a bare WorkspaceRunner, which copies nothing.
+func WithLockfile(rel string) WorkspaceOption {
+	return func(w *WorkspaceRunner) { w.lockfile = rel }
 }
 
 // newPool wires one runner per tree. temps is the subset of trees Close may
@@ -661,6 +790,81 @@ func (p *WorkspacePool) EnumerateDetailed(ctx context.Context, files map[string]
 	return r.EnumerateDetailed(ctx, files, cmd)
 }
 
+// ErrRebuildOverCeiling is a rebuild run whose floor puts the per-mutant cap
+// above maxMutantTimeout: the ceiling would cut every mutant's run short of
+// the margin any other cap gives, and one mutant that ran past it fails the
+// file's grading partway through. The file is not graded (rebuildFloorRefusal).
+// A rebuild run cut off at the runner's timeout is this error too
+// (MeasureRebuild): it is slower than any run that finished.
+var ErrRebuildOverCeiling = errors.New("the rebuild run is too slow for corral's per-mutant ceiling")
+
+// rebuildFloorRefusal is ErrRebuildOverCeiling, with both durations, when a
+// rebuild run of took floors the cap above the ceiling; nil otherwise. The
+// floor is mutantTimeoutCap's own term for it (mutantTimeoutMultiple x took),
+// so the refusal and the cap cannot disagree about where the ceiling bites.
+func rebuildFloorRefusal(took time.Duration) error {
+	if floor := took * mutantTimeoutMultiple; floor > maxMutantTimeout {
+		return fmt.Errorf("%w: it took %s, so each mutant would need %s (%d times that run), over the %s ceiling", ErrRebuildOverCeiling, took.Round(time.Millisecond), floor.Round(time.Millisecond), mutantTimeoutMultiple, maxMutantTimeout)
+	}
+	return nil
+}
+
+// MeasureRebuild runs testCmd once with codePath holding probed, a copy of the
+// file changed so its module must recompile and relink and its tests behave
+// as before (lang.PerRunBuilder), and keeps how long that run took as the
+// pool's WarmDuration: the floor Score puts under every per-mutant cap, so a
+// mutant is given the time its own rebuild takes.
+//
+// It is an ordinary run of the pool (RunTest): a borrowed tree, the probe
+// applied through the runner's journaled overlay, and the original bytes put
+// back by that overlay's deferred restore whether the command passes, fails,
+// times out or panics. There is no second restore path.
+//
+// Only a run that passed sets a floor, and only once: a failed run says
+// nothing about how long a passing one takes. Every error leaves WarmDuration
+// as it was, and is one of three kinds the caller must tell apart:
+//
+//   - a *RestoreError (errors.As): the checkout was not put back. Stop.
+//   - ErrRebuildOverCeiling (errors.Is): the run passed and is too slow to
+//     grade under the ceiling, or it was cut off at the runner's timeout
+//     (it also matches ErrTestTimeout then). The file cannot be graded: a
+//     run cut off is slower than any that finished, and every mutant's
+//     relink would be cut off the same way, a timeout that reads as a kill.
+//   - anything else (the suite failed, the command could not start): no
+//     floor. Disclose it; the audit goes on with the cap it would have had
+//     without this run.
+//
+// took is the run's wall clock whatever the outcome, so the time it cost is
+// accounted even when it yields no floor.
+func (p *WorkspacePool) MeasureRebuild(ctx context.Context, base map[string]string, codePath, probed string, testCmd []string) (took time.Duration, err error) {
+	files := make(map[string]string, len(base)+1)
+	for k, v := range base {
+		files[k] = v
+	}
+	files[codePath] = probed
+	start := time.Now()
+	pass, err := p.RunTest(ctx, files, testCmd)
+	took = time.Since(start)
+	if errors.Is(err, ErrTestTimeout) {
+		return took, fmt.Errorf("%w: it did not finish within the run timeout (%s), so no mutant's rebuild would either: %w", ErrRebuildOverCeiling, p.timeout, err)
+	}
+	if err != nil {
+		return took, fmt.Errorf("adequacy: the rebuild run of %s did not finish: %w", codePath, err)
+	}
+	if !pass {
+		return took, fmt.Errorf("adequacy: the suite did not pass on the rebuild run of %s", codePath)
+	}
+	if rerr := rebuildFloorRefusal(took); rerr != nil {
+		return took, rerr
+	}
+	p.warmDur.Store(int64(took))
+	return took, nil
+}
+
+// WarmDuration is WarmDurationJail.WarmDuration: the rebuild run
+// MeasureRebuild timed, zero until one passed.
+func (p *WorkspacePool) WarmDuration() time.Duration { return time.Duration(p.warmDur.Load()) }
+
 // Verify pre-flights every tree, so a copy that failed to materialise is
 // caught before the first job wastes time discovering it.
 func (p *WorkspacePool) Verify() error {
@@ -789,7 +993,7 @@ func (p *WorkspacePool) Probe(ctx context.Context, base map[string]string, codeP
 			return downgrade(fmt.Sprintf("a tree imports the original checkout (canary passed under %d)", n))
 		}
 	}
-	return p, Disclosure{Trees: n, Shared: p.shared, CopyDuration: p.copyDuration, ProbeDuration: time.Since(probeStart)}
+	return p, Disclosure{Trees: n, Note: p.note, Shared: p.shared, CopyDuration: p.copyDuration, ProbeDuration: time.Since(probeStart)}
 }
 
 // runEverywhere runs one variant of codePath in EVERY tree simultaneously,

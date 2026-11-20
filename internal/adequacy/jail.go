@@ -158,9 +158,27 @@ func WithRunCache(env string) JailOption {
 	}
 }
 
+// WarmDurationJail is a Jail that measured one run which paid for the build
+// work a mutant's run pays and the unmutated baseline's does not. Score floors
+// every per-mutant cap at the same multiple of WarmDuration
+// (mutantTimeoutCap), and reads it from nothing else. Two jails report one:
+//
+//   - a RunCacheJail (Go's shared build cache in the bwrap jail): the warming
+//     run, the one run of a file that paid for a full build, after which a
+//     frozen run of unchanged code is a full cache hit;
+//   - a WorkspacePool whose language rebuilds per run (lang.PerRunBuilder):
+//     the run MeasureRebuild timed, with the file changed so its module
+//     must recompile and relink.
+//
+// Zero means no such run was measured, and changes no cap.
+type WarmDurationJail interface {
+	Jail
+	WarmDuration() time.Duration
+}
+
 // RunCacheJail is a Jail whose runs share a tool cache (WithRunCache).
 type RunCacheJail interface {
-	Jail
+	WarmDurationJail
 	// WarmRun is RunTestDetailed with the cache writable: the run that
 	// fills it. A jail warms at most ONCE: after the first WarmRun has been
 	// issued, every later WarmRun on the same jail runs and returns its

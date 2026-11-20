@@ -135,3 +135,22 @@ func decodeReport(stdout string, v any) bool {
 	}
 	return json.NewDecoder(strings.NewReader(stdout[i:])).Decode(v) == nil
 }
+
+// listLines reads a runner's line-per-test listing: id names the test a line
+// lists, or ok=false for a line that lists none. Blank and indented lines are
+// skipped unread (cargo's progress lines on a merged stream), and a trailing
+// "\r" is dropped. cargo test, cargo nextest and swift test read their
+// listings through it.
+func listLines(output string, id func(line string) (string, bool)) []string {
+	var ids []string
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimRight(line, "\r")
+		if line == "" || line[0] == ' ' || line[0] == '\t' {
+			continue
+		}
+		if v, ok := id(line); ok {
+			ids = append(ids, v)
+		}
+	}
+	return ids
+}

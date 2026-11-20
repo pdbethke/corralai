@@ -502,6 +502,9 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 	// runCache is what the jail wiring decided about a shared tool cache
 	// (localAuditInput.runCache), for the file row of the ledger entry.
 	runCache := new(string)
+	// capFloor is where the file's per-mutant cap took its floor from
+	// (localAuditInput.capFloor), for the same row.
+	capFloor := new(string)
 	// toolCounts is the file's account of --mutants-from's report, handed
 	// back by the audit (localAuditInput.toolSink) for the scan row.
 	var toolCounts []ledger.ToolMutantCounts
@@ -597,6 +600,7 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 		toolSources: toolSources,
 		seedSink:    func(s []seedSkip) { seedSkipped = s },
 		runCache:    runCache,
+		capFloor:    capFloor,
 		toolSink:    func(c ledger.ToolMutantCounts) { toolCounts = append(toolCounts, c) },
 		prior:       loadedPrior,
 
@@ -849,6 +853,11 @@ type localAuditInput struct {
 	// copy. It is NOT part of the verdict (the Verdict's shape is pinned to the
 	// verdict cache's generation); it rides on the file's own result.
 	runCache *string
+	// capFloor, when non-nil, is where the jail wiring RECORDS where this
+	// file's per-mutant time cap took its floor from (reposcan.FileResult.
+	// CapFloor). A pointer sink for runCache's reason, and like it on the
+	// file's own result, never the verdict.
+	capFloor *string
 
 	// selectionDuration is how long the SCAN's single instrumented coverage
 	// run took (cmd/corral's collectSelection), handed down so this file's
@@ -1394,7 +1403,7 @@ func prepareAuditJail(ctx context.Context, in localAuditInput, plug lang.Plugin,
 		bindDirFlag: in.bindDirs, noBindDepsFlag: in.noBindDeps, seedLimit: in.seedLimit, stdout: stdout,
 		seed: in.seed, seedSink: in.seedSink, substrate: in.substrate, mutantConcurrency: in.mutantConcurrency,
 		concurrency: in.concurrency, pool: in.pool, noFailFast: in.noFailFast,
-		runCache: in.runCache,
+		runCache: in.runCache, capFloor: in.capFloor,
 	})
 	if err != nil {
 		return p, auditUsageErr("%v", err)
@@ -1938,19 +1947,65 @@ func mutantRoundCost(d *adequacy.Disclosure) time.Duration {
 }
 
 // poolDuration is what the workspace substrate spent before it could score
-// anything: copying the checkout into N private trees, then probing them with
-// the baseline and the canary. Both halves come from the ONE Disclosure the
-// probe wrote (adequacy.WorkspacePool.Probe), so the number on the verdict is
-// the number the pool actually measured, not a second derivation.
+// anything: copying the checkout into N private trees, probing them with the
+// baseline and the canary, and the rebuild run that floors the per-mutant cap
+// (rebuildFloor). All three come from the ONE Disclosure the job's pool
+// wrote, so the number on the verdict is the number the pool actually
+// measured, not a second derivation.
 //
 // nil is the jail substrate, which builds no trees and has nothing to
-// disclose; a pool of one copies and probes nothing and reports zero. Either
-// way the phase did not happen and the ledger stores NULL.
+// disclose; a pool of one copies and probes nothing, and a language with no
+// rebuild run runs none, each reporting zero. A phase that did not happen is
+// stored as NULL.
 func poolDuration(d *adequacy.Disclosure) time.Duration {
 	if d == nil {
 		return 0
 	}
-	return d.CopyDuration + d.ProbeDuration
+	return d.CopyDuration + d.ProbeDuration + d.RebuildDuration
+}
+
+// measureRebuild is the rebuild run's seam, a variable for the reason
+// newWorkspacePool is one: a test counts the runs and stands in the outcomes
+// a real run cannot cheaply produce.
+var measureRebuild = (*adequacy.WorkspacePool).MeasureRebuild
+
+// rebuildFloor gives the file's grading runs a measured rebuild run to floor
+// the per-mutant cap on (adequacy.WorkspacePool.MeasureRebuild), when the
+// language's mutant pays a relink its baseline does not (lang.PerRunBuilder).
+// It runs nothing for any other language, and nothing when the operator named
+// --test-timeout (testTimeout), a cap no floor reaches.
+//
+// took is the run's wall clock (0 when none ran), for the pool phase of the
+// file's timing. record is the file row's CapFloor: the run that set the
+// floor (capFloorOf), "none: <why>" when a run was due and gave no floor, ""
+// when none was due. A run that gave no floor is said by the scan, from that
+// record (capFloorNoneLine, in localExecutor.Execute: only certify --repo
+// builds a workspace pool, and a file's own stdout is discarded there), and
+// the audit goes on with the cap it would have had. An error is returned, and
+// the file is not graded, only when the floor is over the ceiling (a run cut
+// off at its timeout included: it is slower than any that finished) or the
+// checkout was not put back.
+func rebuildFloor(ctx context.Context, pool *adequacy.WorkspacePool, plug lang.Plugin, codeKey string, code []byte, cmd []string, testTimeout time.Duration) (took time.Duration, record string, err error) {
+	pb, ok := plug.(lang.PerRunBuilder)
+	if !ok || !adequacy.CapFloorApplies(testTimeout) || len(cmd) == 0 {
+		return 0, "", nil
+	}
+	probed, ok := pb.RebuildProbe(codeKey, string(code))
+	if !ok {
+		return 0, "none: its first line must stay first (a shebang), so no rebuild run was made", nil
+	}
+	took, err = measureRebuild(pool, ctx, map[string]string{}, codeKey, probed, cmd)
+	var re *adequacy.RestoreError
+	switch {
+	case err == nil:
+		return took, capFloorOf(pool), nil
+	case errors.As(err, &re):
+		return took, "", fmt.Errorf("the rebuild run of %s could not put the checkout back: %w", codeKey, err)
+	case errors.Is(err, adequacy.ErrRebuildOverCeiling):
+		return took, "", fmt.Errorf("%s cannot be graded: %w", codeKey, err)
+	default:
+		return took, "none: " + err.Error(), nil
+	}
 }
 
 func newAuditRunSpec(in localAuditInput, roles auditRoles, subj runSubject) advpool.RunSpec {
@@ -2543,6 +2598,9 @@ type jailWiringInput struct {
 	// runCache is localAuditInput.runCache, threaded through: where the
 	// wiring records what it decided about the run cache. nil records nothing.
 	runCache *string
+	// capFloor is localAuditInput.capFloor, threaded through. nil records
+	// nothing.
+	capFloor *string
 }
 
 // Substrate names for jailWiringInput.substrate / localAuditInput.substrate,
@@ -2589,7 +2647,46 @@ func workspaceFromSeed(seed repoSeed, overlay map[string]string) map[string]stri
 // NOT hang the pool off jailWiring.cleanup, because that cleanup is released
 // between the baseline and the audit. `certify --local`, which passes no box,
 // keeps the old ownership (the wiring's cleanup closes the pool).
-type workspacePool struct{ pool *adequacy.WorkspacePool }
+type workspacePool struct {
+	pool *adequacy.WorkspacePool
+	// rebuildDue is set by armRebuild and cleared by the wiring that makes
+	// the job's rebuild run (jobRebuildFloor).
+	rebuildDue bool
+}
+
+// armRebuild asks the job's next wiring to make the pool's rebuild run.
+// Execute calls it once the baseline-stability runs have passed, so the run
+// is timed on a tree they warmed. Nil-safe: a jail-substrate job has no box.
+func (h *workspacePool) armRebuild() {
+	if h != nil {
+		h.rebuildDue = true
+	}
+}
+
+// takeRebuild reports whether the rebuild run is due, and clears it.
+func (h *workspacePool) takeRebuild() bool {
+	due := h.rebuildDue
+	h.rebuildDue = false
+	return due
+}
+
+// jobRebuildFloor makes the file's rebuild run on pool (rebuildFloor) and
+// records it: its time in the pool phase of the disclosure, and the floor it
+// set, or why it set none, as the file's CapFloor. An error stops the file.
+func jobRebuildFloor(ctx context.Context, in jailWiringInput, pool *adequacy.WorkspacePool, codeKey string) error {
+	plug, ok := lang.ByName(in.langName)
+	if !ok {
+		return nil
+	}
+	took, record, err := rebuildFloor(ctx, pool, plug, codeKey, in.code, in.checkArgv, in.testTimeout)
+	if in.concurrency != nil {
+		in.concurrency.RebuildDuration = took
+	}
+	if in.capFloor != nil {
+		*in.capFloor = record
+	}
+	return err
+}
 
 // close releases the trees. Nil-safe on both levels: a jail-substrate job has
 // no box, and a job that failed before wiring has a box with no pool.
@@ -2599,6 +2696,43 @@ func (h *workspacePool) close() {
 	}
 	h.pool.Close()
 	h.pool = nil
+}
+
+// workspaceRunnerOpts is the option list a workspace pool of trees trees on
+// the checkout at repoDir is built with, for the language plug: its per-run
+// env, and when there is more than one tree its per-tree env, the lockfile
+// every tree must hold when the language declares one (lang.LockfileFor),
+// and the language's build directories (lang.BuildDirer).
+func workspaceRunnerOpts(plug lang.Plugin, trees int, repoDir string) []adequacy.WorkspaceOption {
+	opts := []adequacy.WorkspaceOption{adequacy.WithPerRunEnv(plug.WorkspaceRunEnv)}
+	// WithTreeEnv is per-TREE and therefore only meaningful once there is
+	// more than one: it gives a copy its own import path (Python) and its
+	// own SHARE of the box (Go). The share is DIVIDED — N trees each
+	// assuming all cores thrash the machine and can fail the probe on
+	// contention alone, downgrading a suite that is perfectly safe. A
+	// plugin that implements no lang.TreeEnver gets no tree env, which is
+	// the honest answer for a language whose toolchain neither records an
+	// absolute import path nor fans out by itself. A pool that downgrades
+	// to the checkout itself drops the tree env entirely — see
+	// adequacy.NewWorkspacePool.
+	if te, ok := plug.(lang.TreeEnver); ok && trees > 1 {
+		share := runtime.NumCPU() / trees
+		if share < 1 {
+			share = 1
+		}
+		opts = append(opts, adequacy.WithTreeEnv(func(tree string) []string {
+			return te.TreeEnv(tree, share)
+		}))
+	}
+	if rel, ok := lang.LockfileFor(plug, repoDir); ok && trees > 1 {
+		opts = append(opts, adequacy.WithLockfile(rel))
+	}
+	// The audited language's build directories, and only its own: see
+	// adequacy.WithBuildDirs. A language that declares none passes none.
+	if b, ok := plug.(lang.BuildDirer); ok && trees > 1 {
+		opts = append(opts, adequacy.WithBuildDirs(b.BuildDirs()))
+	}
+	return opts
 }
 
 // newWorkspacePool and probeWorkspacePool are the pool's construction and
@@ -2770,27 +2904,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 			// rather than failing the whole audit over it.
 			var runnerOpts []adequacy.WorkspaceOption
 			if plug, ok := lang.ByName(in.langName); ok {
-				runnerOpts = append(runnerOpts, adequacy.WithPerRunEnv(plug.WorkspaceRunEnv))
-				// WithTreeEnv is per-TREE and therefore only meaningful once
-				// there is more than one: it gives a copy its own import path
-				// (Python) and its own SHARE of the box (Go). The share is
-				// DIVIDED — N trees each assuming all cores thrash the
-				// machine and can fail the probe on contention alone,
-				// downgrading a suite that is perfectly safe. A plugin that
-				// implements no lang.TreeEnver gets no tree env, which is the
-				// honest answer for a language whose toolchain neither
-				// records an absolute import path nor fans out by itself.
-				// A pool that downgrades to the checkout itself drops the
-				// tree env entirely — see adequacy.NewWorkspacePool.
-				if te, ok := plug.(lang.TreeEnver); ok && trees > 1 {
-					share := runtime.NumCPU() / trees
-					if share < 1 {
-						share = 1
-					}
-					runnerOpts = append(runnerOpts, adequacy.WithTreeEnv(func(tree string) []string {
-						return te.TreeEnv(tree, share)
-					}))
-				}
+				runnerOpts = workspaceRunnerOpts(plug, trees, in.repoDir)
 			}
 
 			built, disc, perr := newWorkspacePool(ctx, in.repoDir, trees, in.timeout, runnerOpts...)
@@ -2821,6 +2935,15 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 			if in.concurrency != nil {
 				*in.concurrency = disc
 			}
+			// A pool no box holds is this wiring's alone: no later wiring
+			// will use it and nothing warms it first, so its rebuild run is
+			// made here. No verb builds one on this substrate.
+			if in.pool == nil {
+				if err := jobRebuildFloor(ctx, in, built, w.codeKey); err != nil {
+					built.Close()
+					return w, err
+				}
+			}
 			pool = built
 			if in.pool != nil {
 				// The job owns it from here: NOT hung off w.cleanup, which is
@@ -2828,6 +2951,24 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 				in.pool.pool = pool
 			} else {
 				w.cleanup = pool.Close
+			}
+		}
+		// THE REBUILD RUN of a job's pool, once Execute has armed it
+		// (workspacePool.armRebuild), which it does after the file's
+		// baseline-stability runs pass and before the audit: those runs have
+		// warmed the tree by then, so the run times a rebuild, not a cold
+		// build. Made where the pool is built it was, on a pool of one tree,
+		// the job's first ordinary run (the probe runs nothing on one tree,
+		// and the evidence pass builds elsewhere), and a cold build was
+		// recorded as the floor. A discarded warm-up run before it was the
+		// other fix; it would add a run to every file, including those whose
+		// tree an earlier file had already warmed, where this adds none, and
+		// a file whose baseline is not stably green now pays for no rebuild
+		// run at all. The floor every cap of this file's grading is derived
+		// over (see rebuildFloor), once per file-job.
+		if in.pool != nil && in.pool.takeRebuild() {
+			if err := jobRebuildFloor(ctx, in, pool, w.codeKey); err != nil {
+				return w, err
 			}
 		}
 
@@ -2892,7 +3033,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 			w.devTestKey: string(in.devTest),
 		})
 		jail, gc := newGradingJail(in.iso, in.timeout, depBinds, gradingPlugin(in.langName), in.inv.WithArgv(in.checkArgv), in.checkArgv)
-		w.closeWithCleanup(jail, in.runCache, gc)
+		w.closeWithCleanup(jail, in.runCache, in.capFloor, gc, in.testTimeout)
 		// enumerator backs the tests×mutants matrix's test-listing step
 		// (--matrix). Wired unconditionally off the SAME backend/timeout/binds
 		// as jail (bwrapJail satisfies both interfaces) — a nil
@@ -2919,7 +3060,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		plug := gradingPlugin(in.langName)
 		warm := gradingBase(plug, "", in.checkArgv)
 		jail, gc := newGradingJail(in.iso, in.timeout, nil, plug, in.inv.WithArgv(warm), warm)
-		w.closeWithCleanup(jail, in.runCache, gc)
+		w.closeWithCleanup(jail, in.runCache, in.capFloor, gc, in.testTimeout)
 		enumerator := newRunEnumerator(in.iso, in.timeout, nil)
 		rewrite := gradingRewrite(plug, in.inv, warm, gc.Rewrite)
 		w.scorer = advpool.JailScorer{Jail: jail, MutantTimeout: in.testTimeout, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, KillerCmd: killerCmd, FailFast: failFast, CommandRewrite: rewrite, WarmCheck: warmCheckFor(plug, in.inv, gc)}
@@ -2956,7 +3097,7 @@ func gradingPlugin(langName string) lang.Plugin {
 // cleanup covers a wiring that fails after this point, and the caller defers
 // w.cleanup on every other path, so the directory is removed on success,
 // COULD-NOT-GRADE, timeout, cancel and panic alike.
-func (w *jailWiring) closeWithCleanup(jail adequacy.Jail, sink *string, gc gradingRunCache) {
+func (w *jailWiring) closeWithCleanup(jail adequacy.Jail, sink, floorSink *string, gc gradingRunCache, testTimeout time.Duration) {
 	w.runCache = gc.Record
 	if sink != nil {
 		*sink = gc.Record
@@ -2968,6 +3109,9 @@ func (w *jailWiring) closeWithCleanup(jail adequacy.Jail, sink *string, gc gradi
 		// then) close it, which removes the cache the answer comes from.
 		if sink != nil {
 			*sink = gc.final(jail)
+		}
+		if floorSink != nil {
+			*floorSink = jailCapFloor(jail, gc, testTimeout)
 		}
 		closeGradingJail(jail)
 	}

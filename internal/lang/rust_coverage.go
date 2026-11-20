@@ -5,7 +5,6 @@ package lang
 import (
 	"fmt"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 )
@@ -52,15 +51,17 @@ const (
 //     (everything before `--`) with `--no-run --message-format=json`, which
 //     rebuilds nothing, and each artifact's "executable".
 //  4. Merges the profiles and has `llvm-cov export -summary-only` count each
-//     file's lines over those executables, then reduces the JSON in awk to
-//     one `<executed> <executable> <path>` line per file, paths relative to
-//     the working directory (the jail runs the suite in a copy, so an
-//     absolute path would be outside the caller's root). Files outside the
-//     working directory (the cargo registry, git dependencies) and under its
-//     vendor/ and target/ (vendored crates, build-script output; see
-//     rustCoverageSkipped) are dependencies and are left out. A file
-//     llvm-cov maps no line of (declarations only) is left out as well, as
-//     every reducer does: nothing in it could have run.
+//     file's lines over those executables, then reduces the JSON with the
+//     reducer Swift shares (llvmCovReduceShell) to one `<executed>
+//     <executable> <path>` line per file, paths relative to the working
+//     directory (the jail runs the suite in a copy, so an absolute path would
+//     be outside the caller's root). Files outside the working directory (the
+//     cargo registry, git dependencies) and under its vendor/ and target/
+//     (vendored crates, build-script output; see llvmCovSkipped) are
+//     dependencies and are left out. A file llvm-cov maps no line of
+//     (declarations only) is left out as well, as every reducer does: nothing
+//     in it could have run. An export that is empty or cut short is disclosed
+//     as unavailable, never read in part.
 //
 // CARGO_TARGET_DIR becomes <the target dir>/corral-coverage. Instrumented
 // artifacts and ordinary ones then sit in different directories, so neither
@@ -122,8 +123,7 @@ func (rustPlugin) CoverageCmd(testCmd []string) (cmd []string, ok bool) {
 		`[ $# -gt 0 ] || unavailable "cargo test --no-run listed no test executable"` + "\n" +
 		`"$pd" merge -sparse -o "$d/merged.profdata" "$d"/prof/*.profraw >&2 || unavailable "$pd merge failed (exit $?); its message is on stderr"` + "\n" +
 		`"$cov" export -format=text -summary-only -instr-profile="$d/merged.profdata" "$@" > "$d/export.json" || unavailable "$cov export failed (exit $?); its message is on stderr"` + "\n" +
-		`printf '%s\n' ` + shellQuote(rustCoverageHeaderV2) + "\n" +
-		`awk -v a="$(pwd -P)/" -v b="$PWD/" -v skip=` + shellQuote(rustCoverageSkipped().String()) + ` ` + shellQuote(rustCoverageReduce) + ` "$d/export.json"` + "\n"
+		llvmCovReduceShell(rustPlugin{}, rustCoverageHeaderV2, `"$d/export.json"`)
 	return []string{"sh", "-c", script}, true
 }
 
@@ -158,55 +158,6 @@ func shellJoin(argv []string) string {
 	}
 	return strings.Join(quoted, " ")
 }
-
-// rustCoverageSkipped matches the working-directory-relative paths the
-// reducer leaves out: the directories rustPlugin declares as dependencies
-// (DependencyDirs: cargo vendor's vendor/) and as build output (BuildDirs:
-// target/, where build-script output that a crate include!s lives), read
-// from those declarations so a new one is skipped here too. Top level only:
-// that is where cargo puts them, and a module directory named vendor/ deeper
-// in a crate's source is the crate's own code.
-func rustCoverageSkipped() *regexp.Regexp {
-	var names []string
-	for _, d := range (rustPlugin{}).DependencyDirs() {
-		names = append(names, regexp.QuoteMeta(d.Name))
-	}
-	for _, d := range (rustPlugin{}).BuildDirs() {
-		names = append(names, regexp.QuoteMeta(d.Name))
-	}
-	return regexp.MustCompile(`^(` + strings.Join(names, "|") + `)/`)
-}
-
-// rustCoverageReduce reads `llvm-cov export -format=text -summary-only` and
-// prints one `<executed> <executable> <path>` line per file of the working
-// directory (a and b: its physical and logical paths, each with a trailing
-// slash). An executable line is what llvm-cov's line summary counts: a line
-// some coverage region of compiled code starts on or spans. The JSON is
-// split on each file's "filename" key; the first "lines" object after it is
-// that file's (the totals' "lines" follows the last file, after its own).
-//
-// A path carrying a JSON escape (a quote or backslash in a file name) cannot
-// be read by splitting on quotes, and a "lines" summary without both counts
-// is not a count: each is disclosed as uncounted rather than guessed at.
-const rustCoverageReduce = `{
-  n = split($0, parts, /\{"filename":"/)
-  for (i = 2; i <= n; i++) {
-    s = parts[i]
-    f = s; sub(/".*/, "", f)
-    if (index(f, a) == 1) f = substr(f, length(a) + 1)
-    else if (index(f, b) == 1) f = substr(f, length(b) + 1)
-    else continue
-    if (f ~ skip) continue
-    if (f ~ /\\/) { print "# uncounted " f ": its path carries a JSON escape this reducer does not decode"; continue }
-    if (!match(s, /"lines":\{[^}]*\}/)) { print "# uncounted " f ": llvm-cov gave no line summary"; continue }
-    l = substr(s, RSTART, RLENGTH)
-    c = l; if (!sub(/.*"count":/, "", c)) c = ""; sub(/[^0-9].*/, "", c)
-    v = l; if (!sub(/.*"covered":/, "", v)) v = ""; sub(/[^0-9].*/, "", v)
-    if (c == "" || v == "") { print "# uncounted " f ": llvm-cov's line summary has no count"; continue }
-    if (c + 0 == 0) continue
-    print (v + 0) " " (c + 0) " " f
-  }
-}`
 
 // ParseCoverage is derived from CoverageCounts: a file is executed when any
 // of its lines ran. Rust has no divergence from that rule.

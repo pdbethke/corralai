@@ -32,32 +32,18 @@ func nextestListCmd(testCmd []string, _ string) ([]string, bool) {
 // nextest's one-line `<binary-id> <id>` lines, each ignoring anything else a
 // merged stream carries (cargo's indented progress lines, benchmarks).
 func libtestParseList(output string) []string {
-	return rustListLines(output, func(line string) (string, bool) {
+	return listLines(output, func(line string) (string, bool) {
 		return strings.CutSuffix(line, ": test")
 	})
 }
 
 func nextestParseList(output string) []string {
-	return rustListLines(output, func(line string) (string, bool) {
+	return listLines(output, func(line string) (string, bool) {
 		if f := strings.Fields(line); len(f) == 2 {
 			return f[1], true
 		}
 		return "", false
 	})
-}
-
-func rustListLines(output string, id func(line string) (string, bool)) []string {
-	var ids []string
-	for _, line := range strings.Split(output, "\n") {
-		line = strings.TrimRight(line, "\r")
-		if line == "" || line[0] == ' ' || line[0] == '\t' {
-			continue
-		}
-		if v, ok := id(line); ok {
-			ids = append(ids, v)
-		}
-	}
-	return ids
 }
 
 // libtestSingleCmd narrows a `cargo test` command to the one test id with

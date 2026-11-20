@@ -1,0 +1,49 @@
+# argv: swift test
+$ swift test --filter ^(?:CalcTests|CalcXCTests)\.CorralCalcTests/
+[0/1] Planning build
+Building for debugging...
+[0/13] Write sources
+[3/13] Write swift-version-24593BA9C3E375BF.txt
+[5/15] Compiling Calc Calc.swift
+[6/15] Emitting module Calc
+[7/16] Wrapping AST for Calc for debugging
+[9/21] Emitting module CalcXCTests
+[10/21] Compiling CalcXCTests Calc_corralTests.swift
+[11/22] Wrapping AST for CalcXCTests for debugging
+[13/22] Compiling CalcTests Calc_corralTests.swift
+[14/22] Emitting module CalcTests
+[15/22] Compiling CalcTests CalcTests.swift
+[16/23] $DIR/swift/.build/x86_64-unknown-linux-gnu/debug/CalcPackageDiscoveredTests.derived/all-discovered-tests.swift
+[17/24] Write sources
+[18/24] Wrapping AST for CalcTests for debugging
+[20/28] Emitting module CalcPackageDiscoveredTests
+[21/28] Compiling CalcPackageDiscoveredTests CalcTests.swift
+[22/28] Compiling CalcPackageDiscoveredTests CalcXCTests.swift
+[23/28] Compiling CalcPackageDiscoveredTests all-discovered-tests.swift
+[24/29] $DIR/swift/.build/x86_64-unknown-linux-gnu/debug/CalcPackageTests.derived/runner.swift
+[25/30] Write sources
+[26/30] Wrapping AST for CalcPackageDiscoveredTests for debugging
+[28/32] Emitting module CalcPackageTests
+[29/32] Compiling CalcPackageTests runner.swift
+[30/32] Write Objects.LinkFileList
+[31/32] Linking CalcPackageTests.xctest
+Build complete! (1.00s)
+Test Suite 'Selected tests' started at 2026-11-19 21:58:51.725
+Test Suite 'CorralCalcTests' started at 2026-11-19 21:58:51.725
+Test Case 'CorralCalcTests.testAdds' started at 2026-11-19 21:58:51.725
+Test Case 'CorralCalcTests.testAdds' passed (0.0 seconds)
+Test Suite 'CorralCalcTests' passed at 2026-11-19 21:58:51.726
+	 Executed 1 test, with 0 failures (0 unexpected) in 0.0 (0.0) seconds
+Test Suite 'Selected tests' passed at 2026-11-19 21:58:51.726
+	 Executed 1 test, with 0 failures (0 unexpected) in 0.0 (0.0) seconds
+◇ Test run started.
+↳ Testing Library Version: 6.3.2 (70eff261d7f462c)
+↳ Target Platform: x86_64-unknown-linux-gnu
+◇ Suite CorralCalcTests started.
+◇ Test parses() started.
+◇ Test adds() started.
+✔ Test adds() passed after 0.001 seconds.
+✔ Test parses() passed after 0.001 seconds.
+✔ Suite CorralCalcTests passed after 0.001 seconds.
+✔ Test run with 2 tests in 1 suite passed after 0.001 seconds.
+# exit: 0

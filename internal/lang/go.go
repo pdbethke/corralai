@@ -81,7 +81,15 @@ func (goPlugin) Preflight(repoRoot string, testCmd []string) error {
 	return toolOnPath(preflightBin(testCmd, "go"))
 }
 
+// ReadsSignatures declares that repoindex reads this language's functions
+// and their branches (SignatureReader).
+func (goPlugin) ReadsSignatures() {}
+
 func (goPlugin) PromptLang() string { return "Go" }
+
+// EvidencePromotes declares that evidence can add a file with no paired test
+// to the audit (EvidencePromoter): a unit is a package; a test authored for a source lands in an internal test file of the source's own package (reposcan.UnitTestFile).
+func (goPlugin) EvidencePromotes() {}
 
 // TestWriterSystem is the EXACT string previously named writeTestSystem in
 // internal/testgen/testgen.go — moved here unchanged so the Go prompt stays

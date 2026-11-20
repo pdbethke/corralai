@@ -54,3 +54,103 @@ go1.26.11, cargo 1.90.0, cargo-nextest 0.9.148, rspec-core 3.13.6, PHPUnit
 11.5.57. The runners are installed from scripts/npm-pins/runner-fixtures
 by npm ci. Dates in the notes above are when each file was first added;
 the hand-captured vitest5-* and *-version.txt files were not re-captured.
+swift-*.txt and toolchain-swift-version.txt (added 2026-11-19; Swift version 6.3.2 (swift-6.3.2-RELEASE),
+Target: x86_64-unknown-linux-gnu): scripts/capture-runner-fixtures.sh
+through a container of corral-swift-spike run as the invoking user, on src/swift, whose test targets are CalcTests (swift-testing, five tests) and
+CalcXCTests (XCTest, three, in class AdderTests). swift-list.txt is the stdout
+of `swift test list`; swift-units.txt the stdout of `swift package describe
+--type json` under the unit-listing prelude, the capture directory written as
+/fixture; every other file is stdout+stderr, not a TTY, with the capture
+directory written as $DIR. swift-fail-testing.txt and swift-fail-xctest.txt
+are `swift test` with CORRAL_FAIL_TESTING or CORRAL_FAIL_XCTEST set, which
+the fixture reads to plant its failures; swift-build-fail.txt is `swift test`
+after a line that does not compile was appended to Sources/Calc/Calc.swift.
+swift-build-target-*.txt are the compile check's `swift build --target`:
+of a test target, of the source target, of a test target while a sibling
+test target did not compile (with a scratch path of its own), and of a test
+target after a line that does not compile was appended to the source.
+swift-authored-wrapped.txt runs the two files under
+src/swift-authored/wrapped, copied into the test targets, and
+swift-authored-collision.txt builds CalcTests with
+src/swift-authored/collision's file copied into it. swift-shapes-list.txt is
+the stdout of `swift test list` with src/swift-authored/shapes's file copied
+into CalcTests.
+swift-single-*.txt, swift-filter-dollar.txt, swift-units-*.txt,
+swift-build-target-*.txt and swift-authored-*.txt open with
+`# argv:` (the operator's command, `-` for corral's own compile check)
+and `$ ` (the command corral builds) and end with `# exit:` (its exit status). swift-testing runs its tests in
+parallel, so the order of its lines differs between captures.
+swift-codecov.json is the llvm-cov export SwiftPM wrote for `swift test
+--enable-code-coverage --scratch-path <package>/.build/corral-coverage` on
+../coverage/swift (named with --package-path), the capture directory written
+as /fixture.
+The swift-build-target-*.txt, swift-authored-*.txt and
+swift-shapes-list.txt files come from a later --swift-only run of the same
+script on the same toolchain (2026-11-19); that run's other Swift captures
+were not kept, because swift-testing's parallel order differs between runs
+and the committed ones are what the tests were written against.
+swift-codecov.json comes from a --swift-coverage-only run of the same
+script on the same toolchain (2026-11-19), in a container with the network
+off.
+That run passed no --build-system; native was 6.3.2's default. The script
+has passed --build-system native since 2026-11-20 (see
+swiftPlugin.CoverageCmd), and --swift-coverage-only runs with it on that
+date, in scratch directories and not committed, on Swift 6.3.2
+(corral-swift-spike) and Swift 6.4.2 (swift:6.4.2-resolute, Ubuntu 26.04)
+wrote exports with this file's file list and per-file line, function and
+region counts; they differ from it only in execution counts inside the test
+runner SwiftPM generates under .build, which the reducer skips.
+
+HAND MEASUREMENTS, 2026-11-19 (not captures)
+These are not fixtures. They are the commands behind figures that tracked
+files cite with this date; their raw output is not committed and no test
+reads them. Each figure is stated where it is cited, and only there. All ran
+on one 32-core Linux workstation. A full run of this script rewrites this
+file from its own text, which does not carry this section.
+
+Swift runs used Swift 6.3.2 in the Docker image corral-swift-spike (Ubuntu
+24.04), the image the Swift captures above came from. taplin/Lariat was
+cloned at be0c5fdc9e046b529bff2b588bf4cc2c32a2ff8a with
+  git clone --depth 1 https://github.com/taplin/Lariat.git
+into a scratch directory $S, and swift was run as
+  SW="docker run --rm -u $(id -u):$(id -g) -e HOME=/tmp -v $S:$S -w $S/lariat corral-swift-spike swift"
+
+- The rebuild probe (lang.PerRunBuilder's comment in internal/lang/lang.go):
+  `$SW build --build-tests` after each change to
+  Sources/LassoParser/Evaluator.swift (rewritten with its own bytes; a
+  `// corral rebuild probe` line appended at the end; the same line put
+  first; a one-line mutant, the `trim` case returning `.string(value)`),
+  timed by SwiftPM's own "Build complete!" line.
+- Whole runs (adequacy.mutantTimeoutCap's comment, and the CHANGELOG entry
+  on each Swift mutant's time limit): `$SW test`, timed by /usr/bin/time
+  (container start included), after `$SW build --build-tests` had settled
+  the tree, with the file rewritten unchanged, with the leading comment, and
+  with the same mutant.
+- The coverage build's own scratch path (internal/lang/swift_coverage.go):
+  in a scratch copy of the clone, `swift package resolve` once with the
+  network on, then, with --network none, in this order: `swift build
+  --build-tests`; `swift test --enable-code-coverage`; `swift build
+  --build-tests` again; and the same with the coverage run given
+  `--scratch-path .build/corral-coverage`. The notes give these steps and
+  their times; the two shell scripts that ran them were not kept.
+- The llvm-cov reducer reading Lariat's export (internal/lang/llvmcov.go):
+  the notes give the export's size and the times under mawk and gawk, but
+  not the command that timed them.
+- Rust (the rebuild-floor exemption for rust in internal/lang/parity.go):
+  `cargo test --lib --no-run`, cargo 1.90.0, outside the sandbox, on
+  regex-syntax 0.8.5 copied from ~/.cargo/registry/src/*/regex-syntax-0.8.5
+  into a scratch directory, after each change to src/hir/translate.rs,
+  timed by cargo's own Finished line.
+- Free dry runs of corral on the Lariat clone (docs/corral/evidence-pairing.md,
+  the run-cache and evidence-promotion exemptions for swift in
+  internal/lang/parity.go, and the CHANGELOG): corral built from
+  feat/swift-lang in an image of corral-swift-spike plus Go 1.26.11, run with
+  --network none, HOME and every corral state path in the scratch directory,
+  timed with bash's `time`:
+    corral certify --repo . --dry-run --evidence --substrate workspace -- swift test
+    corral certify --repo . --dry-run --evidence --substrate workspace --no-selection-cache -- swift test
+    corral tests map --repo-dir . --substrate workspace --out <file> -- swift test
+  The files executed under Sources/LassoParser come from the tests map. The
+  counts of files recorded evidence-pairing-not-built and no-paired-test
+  come from the dry run's --json output (excluded_by_reason); the notes give
+  the counts and not the exact --json invocation.

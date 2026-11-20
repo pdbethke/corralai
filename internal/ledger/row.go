@@ -124,7 +124,9 @@ type Row struct {
 	PerMutant      bool
 	TestsPerMutant *TestsPerMutantSpread
 	// Trees and ConcurrencyNote disclose how many private trees scored this
-	// file at once, or — when it only got one — why. The same fact the
+	// file at once, and the pool's note on them: why it got only one, or,
+	// with more than one, the build directories each tree built for itself
+	// (advpool.Concurrency). The same fact the
 	// report line and the signed attestation carry, denormalized onto this
 	// row so a cross-repo query does not need to reconstruct it. Trees < 1
 	// means nothing measured it and is written SQL NULL, never 0.
@@ -269,6 +271,13 @@ type Row struct {
 	// ungraded file, every row written before it), so those rows hash as they
 	// did.
 	RunCache string `json:",omitempty"`
+	// CapFloor is scanstore.File's: where this file's per-mutant time cap
+	// took its floor from ("run-cache warming run, <duration>", "rebuild
+	// run, <duration>"), or "none: <why>" when a floor source was due and
+	// gave none. Omitted when empty (no floor applied, --test-timeout's cap
+	// included; an ungraded file; every row written before it), so those
+	// rows hash as they did.
+	CapFloor string `json:",omitempty"`
 	// PromptShape mirrors scanstore.File.PromptShape / advpool.Verdict.PromptShape:
 	// "chunk" when every mutant-generator shard on this file's run saw only
 	// its own symbols' bodies plus the file's preamble, "file" when even one

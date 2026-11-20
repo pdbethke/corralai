@@ -90,6 +90,13 @@ var _ CoverageReporter = phpPlugin{}
 // llvm-tools is disclosed as unavailable, never read as an empty report.
 var _ CoverageReporter = rustPlugin{}
 
+// swiftPlugin implements CoverageReporter with SwiftPM's own
+// --enable-code-coverage, whose llvm-cov export it reduces with the reducer
+// Rust's uses (llvmCovReduceShell). A run that wrote no report, which on
+// Swift 6.3.2 and 6.4.2 is every run with a failing test, is disclosed as unavailable,
+// never read as an empty one.
+var _ CoverageReporter = swiftPlugin{}
+
 // executedFromCounts is ParseCoverage derived from CoverageCounts, the one
 // place the rule lives for every reporter but Go (whose one allowed
 // divergence is stated on CoverageReporter.CoverageCounts): a file is executed when any of its lines ran, and the

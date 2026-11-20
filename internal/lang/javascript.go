@@ -153,7 +153,15 @@ func (jsPlugin) Preflight(repoRoot string, testCmd []string) error {
 	return toolOnPath(preflightBin(testCmd, "node"))
 }
 
+// ReadsSignatures declares that repoindex reads this language's functions
+// and their branches (SignatureReader).
+func (jsPlugin) ReadsSignatures() {}
+
 func (jsPlugin) PromptLang() string { return "JavaScript" }
+
+// EvidencePromotes declares that evidence can add a file with no paired test
+// to the audit (EvidencePromoter): a unit is a test file, and is where the authored test lands.
+func (jsPlugin) EvidencePromotes() {}
 
 func (jsPlugin) TestWriterSystem() string {
 	return `You are a TEST-WRITER. Given a security control GOAL, a target source file, and its signature surface, write ONE executable Node.js test using the builtin node:test runner that verifies the code SATISFIES the goal.

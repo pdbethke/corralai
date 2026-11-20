@@ -932,7 +932,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	if *dryRun && ex != nil {
 		// The jail preflight, as a real run asks it: a host that cannot
 		// sandbox would otherwise report every evidence pass as a note.
-		if err := ex.preflight(); err != nil {
+		if err := ex.preflight(ex.sandboxLangs(cands, enumeratedSourcePaths(cands, excl))); err != nil {
 			fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
 			return 1
 		}
@@ -983,7 +983,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// Jail preflight: a host that cannot sandbox grades nothing, and saying
 		// so now beats reporting every file as ungradable — after paying for a
 		// goal for each of them.
-		if err := ex.preflight(); err != nil {
+		if err := ex.preflight(ex.sandboxLangs(cands, enumeratedSourcePaths(cands, excl))); err != nil {
 			fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
 			return 1
 		}
@@ -1188,6 +1188,10 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// some of its units contributed nothing.
 	var evidenceIdx reposcan.EvidenceIndex
 	unitsPartial := false
+	// evidencePlug is the language whose evidence decided candidacy, set
+	// when that evidence was measured: the count line says when that
+	// language's evidence can promote nothing (evidencePromotionNote).
+	var evidencePlug lang.Plugin
 	// noSourcesNote is why neither evidence pass ran when the scan left them
 	// no source to run for (noEvidenceSourcesNote); "" otherwise.
 	noSourcesNote := ""
@@ -1307,6 +1311,9 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			return refuse()
 		}
 		evidenceIdx = idx
+		if idxOK {
+			evidencePlug = plug
+		}
 		var promoted int
 		cands, excl, promoted = reposcan.WidenCandidacyByEvidence(cands, excl, idx, idxOK)
 		evidenceCandidacyOK = idxOK
@@ -1598,6 +1605,9 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	summary := candidacySummaryLine(cands, excl, evidenceCandidacyOK, *dryRun && !*evidenceFlag, selectionNote)
 	if unitsPartial {
 		summary += fmt.Sprintf(" — unit evidence is partial: %d of %d unit(s) contributed none", unitPassFailed(ex.units), len(ex.units.Units))
+	}
+	if evidenceCandidacyOK && evidencePlug != nil {
+		summary += evidencePromotionNote(evidencePlug)
 	}
 	fmt.Fprintln(stdout, summary)
 	// Said once, right after the walk summary the counts belong to, and only
@@ -3665,7 +3675,7 @@ func enumeratedSourcePaths(cands []reposcan.Candidate, enumOnlyExcl []reposcan.E
 		add(c.Path)
 	}
 	for _, e := range enumOnlyExcl {
-		if e.Reason != reposcan.ReasonNoPairedTest && e.Reason != reposcan.ReasonAmbiguousTest &&
+		if !reposcan.IsNoPairedTest(e.Reason) && e.Reason != reposcan.ReasonAmbiguousTest &&
 			!reposcan.IsUncovered(e.Reason) && e.Reason != reposcan.ReasonImportOnly {
 			continue
 		}
@@ -3804,7 +3814,7 @@ func sourcesOrphanedByDeletedTests(repoDir string, changed []string, excl []repo
 	}
 	var out []string
 	for _, e := range excl {
-		if e.Reason != reposcan.ReasonNoPairedTest && e.Reason != reposcan.ReasonMappedTestMissing && !reposcan.IsLandingRefusal(e.Reason) {
+		if !reposcan.IsNoPairedTest(e.Reason) && e.Reason != reposcan.ReasonMappedTestMissing && !reposcan.IsLandingRefusal(e.Reason) {
 			continue
 		}
 		p, ok := lang.Detect(e.Path)
@@ -4164,6 +4174,20 @@ func candidacySummaryLine(cands []reposcan.Candidate, excl []reposcan.Exclusion,
 		}
 	}
 	return line
+}
+
+// evidencePromotionNote is what the count line adds after evidence that was
+// measured for p: nothing when p declares that its evidence can promote a
+// file (lang.PromotesByEvidence, which the language-support page's row reads
+// and reposcan's tests check against the landing code), and otherwise that promotion is not built for p, so a reader does
+// not take "evidence-paired 0" as the evidence having found nothing more to
+// audit. One sentence for every language that lacks it; the reason is the
+// language's exemption on the support page.
+func evidencePromotionNote(p lang.Plugin) string {
+	if lang.PromotesByEvidence(p) {
+		return ""
+	}
+	return fmt.Sprintf(" — %s: adding a file with no paired test by evidence is not built, so a file a test executes but no name pairs is not audited (see the language-support page)", p.PromptLang())
 }
 
 // printEvidencePairings discloses every candidate that has NO filename
@@ -4854,6 +4878,8 @@ func reasonGloss(reason string) string {
 		return " — the --max-tokens cap was reached before goals were derived for this file; it was not audited"
 	case reposcan.ReasonDeclarationsUnreadable:
 		return " — corral cannot audit this file in this build: it cannot read the file's test-module declarations (built without cgo, which the grammar needs), so where a test for it would go is unknown"
+	case reposcan.ReasonEvidencePairingNotBuilt:
+		return " — no test is paired with this file by name; a test unit executed it, but adding a file to the audit by that evidence is not built for its language"
 	case reposcan.ReasonTestLandingNotBuilt:
 		return " — corral cannot audit this file yet: its tests live in the file itself (or it declares no separate test module), and the landing that composes a test into its own source is not built, so a test for it would be written over the file itself"
 	}
@@ -5657,11 +5683,56 @@ func newLocalExecutorWithJail(repoDir string, checkArgv []string, substrate, jai
 	return l
 }
 
-// preflight reports a scan-fatal condition discovered at construction — today,
-// a sandbox that cannot isolate on this host. Checked ONCE before the fan-out,
+// preflight reports a scan-fatal condition discovered at construction: a
+// sandbox that cannot isolate on this host, or a run every one of whose
+// languages corral's sandbox never runs. Checked ONCE before the fan-out,
 // like the provider-key preflight: discovering it per file would report every
 // file as ungradable for a reason the first job could have stated instantly.
-func (l *localExecutor) preflight() error { return l.jailErr }
+//
+// langs are the languages the run would execute in the sandbox
+// (sandboxLangs, or a test map's one language). For a sandbox that would not
+// start they decide the advice (sandboxFailureFor), so a run whose language
+// corral's sandbox never runs is told that, not how to fix a sandbox that
+// would only refuse it. For one that started they are asked the same
+// question (sandboxRefusalWith): a run whose every language refuses is
+// refused here, and a mixed run prints which files the sandbox never runs.
+// The workspace substrate runs no sandbox, so neither applies to it.
+func (l *localExecutor) preflight(langs []string) error {
+	if l.jailErr != nil {
+		return sandboxFailureFor(l.jailErr, langs)
+	}
+	if l.substrate == substrateWorkspace {
+		return nil
+	}
+	note, err := sandboxRefusalWith(langs)
+	if note != "" && l.progress != nil {
+		fmt.Fprintf(l.progress, "  %s\n", note)
+	}
+	return err
+}
+
+// sandboxLangs is every language a certify --repo run would execute in the
+// sandbox: the audit candidates' (candidateLangs) and the language its
+// evidence pass runs, resolved by resolveSelectionPlugin over the enumerated
+// sources exactly as the evidence pass resolves it. The evidence pass runs
+// over every enumerated source, a file with no paired test included, so a
+// Swift package whose tests are named for behaviour has no candidate and
+// still runs Swift in the sandbox. A file of another language with no test
+// (a release script) is neither, and is left out. Where the run will skip
+// the evidence pass (a --diff-base with nothing in scope), its language is
+// still counted: the advice may then name a language the run would not
+// reach, never leave out one it would. Empty when there is neither, and
+// the door then gives its sandbox advice unchanged.
+func (l *localExecutor) sandboxLangs(cands []reposcan.Candidate, sources []string) []string {
+	set := map[string]bool{}
+	for _, n := range candidateLangs(cands) {
+		set[n] = true
+	}
+	if p, _, _, _ := l.resolveSelectionPlugin(sources); p != nil {
+		set[p.Name()] = true
+	}
+	return sortedLangs(set)
+}
 
 // seedSkipped is what every seed the scan built left out as not text, as
 // the ledger's JSON text; "" for a dry run, the workspace substrate (no
@@ -5923,6 +5994,8 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 	// by buildJailWiring through the pointer (the input travels by value),
 	// read back below onto this job's result only.
 	in.runCache = new(string)
+	// And where its per-mutant cap took its floor from, the same way.
+	in.capFloor = new(string)
 	// The job owns its private trees for as long as the job lasts — through
 	// the baseline-stability check AND the audit, which is the whole point of
 	// hanging them here rather than on the wiring's own cleanup (that one is
@@ -6156,6 +6229,9 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 	}
 	release()
 
+	// The baseline is stably green, so the pool's rebuild run is made now,
+	// by the audit's wiring, on a tree those runs warmed (armRebuild).
+	in.pool.armRebuild()
 	v, err := l.audit(ctx, in)
 	if err != nil {
 		// No verdict to carry it, but the measurement was taken: say it.
@@ -6174,6 +6250,13 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 	// adapter is honest on its own, for any caller.)
 	res := reposcan.FileResult{Verdict: v, Gradable: !v.BaselineFailed && !v.SuiteIgnoresFile, Telemetry: measured}
 	res.RunCache = fileRunCache(reposcan.FileResult{Gradable: res.Gradable, RunCache: *in.runCache})
+	res.CapFloor = fileCapFloor(reposcan.FileResult{Gradable: res.Gradable, CapFloor: *in.capFloor})
+	// Said here, from the row's value, because this file's own output is
+	// discarded (auditInputFor): the one place a floor that was due and gave
+	// none reaches the operator, whichever source it was.
+	if line := capFloorNoneLine(j.Path, res.CapFloor); line != "" {
+		l.note("%s\n", line)
+	}
 	// Checked BEFORE BaselineFailed so the more specific diagnosis wins: a
 	// suite that passes on invalid source is not broken, it is pointed at
 	// something other than this file, and an operator told "baseline failed"

@@ -327,7 +327,15 @@ func phpSuggestedInterpreter() string {
 	return "php8.5"
 }
 
+// ReadsSignatures declares that repoindex reads this language's functions
+// and their branches (SignatureReader).
+func (phpPlugin) ReadsSignatures() {}
+
 func (phpPlugin) PromptLang() string { return "PHP" }
+
+// EvidencePromotes declares that evidence can add a file with no paired test
+// to the audit (EvidencePromoter): a unit is a test file, and is where the authored test lands.
+func (phpPlugin) EvidencePromotes() {}
 
 func (phpPlugin) TestWriterSystem() string {
 	return `You are a TEST-WRITER. Given a security control GOAL, a target source file, and its signature surface, write ONE executable PHPUnit test that verifies the code SATISFIES the goal.

@@ -27,6 +27,7 @@ var canarySyntaxChecks = map[string]struct {
 	"javascript": {".js", []string{"node", "--check"}},
 	"typescript": {".ts", []string{"tsc", "--noEmit", "--skipLibCheck"}},
 	"php":        {".php", []string{"php", "-l"}},
+	"swift":      {".swift", []string{"swiftc", "-parse"}},
 	"rust":       {".rs", []string{"rustc", "--edition", "2021", "--crate-type", "lib", "--emit=metadata", "--out-dir", "."}},
 }
 
@@ -84,4 +85,5 @@ var validSource = map[string]string{
 	"typescript": "export const x: number = 1;\n",
 	"php":        "<?php\n$x = 1;\n",
 	"rust":       "pub fn f() {}\n",
+	"swift":      "let x = 1\n",
 }

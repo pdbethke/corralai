@@ -209,7 +209,15 @@ func (tsPlugin) Preflight(repoRoot string, testCmd []string) error {
 // tree installed without bin links).
 var projectTscPaths = []string{"node_modules/.bin/tsc", "node_modules/typescript/bin/tsc"}
 
+// ReadsSignatures declares that repoindex reads this language's functions
+// and their branches (SignatureReader).
+func (tsPlugin) ReadsSignatures() {}
+
 func (tsPlugin) PromptLang() string { return "TypeScript" }
+
+// EvidencePromotes declares that evidence can add a file with no paired test
+// to the audit (EvidencePromoter): a unit is a test file, and is where the authored test lands.
+func (tsPlugin) EvidencePromotes() {}
 
 func (tsPlugin) TestWriterSystem() string {
 	return `You are a TEST-WRITER. Given a security control GOAL, a target source file, and its signature surface, write ONE executable Node.js test in TypeScript using the builtin node:test runner that verifies the code SATISFIES the goal.

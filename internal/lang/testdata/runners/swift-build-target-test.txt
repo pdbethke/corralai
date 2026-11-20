@@ -1,0 +1,7 @@
+# argv: -
+$ swift build --target CalcXCTests
+[0/1] Planning build
+Building for debugging...
+[0/1] Write swift-version-24593BA9C3E375BF.txt
+Build of target: 'CalcXCTests' complete! (0.06s)
+# exit: 0

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Elastic-2.0
 #
-# scripts/capture-runner-fixtures.sh [--keep] [DIR] — runs the real jest,
-# vitest, mocha, node --test, rspec, phpunit, go test, gotestsum, cargo test
-# and cargo nextest against the fixture suites in
+# scripts/capture-runner-fixtures.sh [--swift-only|--swift-coverage-only] [--keep] [DIR] — runs the
+# real jest, vitest, mocha, node --test, rspec, phpunit, go test, gotestsum,
+# cargo test, cargo nextest and swift test against the fixture suites in
 # internal/lang/testdata/runners/src, writes what each runner's LIST command
 # prints into internal/lang/testdata/runners/, and checks that each runner's
 # one-test command really runs one test.
@@ -15,26 +15,254 @@
 # the ones the runner rows build (internal/lang/runner_*.go); keep them equal.
 #
 # Needs the network (npm, composer, go install) and node, ruby with rspec,
-# php, go, cargo and cargo-nextest. DIR
+# php, go, cargo, cargo-nextest and swift (or SWIFT, below). DIR
 # defaults to a temp dir, removed on exit unless --keep; a kept DIR is what
 # CORRALAI_RUNNER_ROOT points TestRealRunnersListAndRunOne at. RSPEC overrides
 # the rspec command (a box whose rspec shim is broken can pass `ruby -S ...`).
+#
+# SWIFT overrides the swift command, as RSPEC does rspec's, for a box with no
+# Swift toolchain: it may be a container command line, run from the fixture
+# package (DIR/swift) for every swift command below. Such a command must mount
+# DIR at its own path (so the paths it prints are the host's, which the
+# captures replace), start in DIR/swift, run as the invoking user (so the
+# build directory it writes into DIR can be removed), and pass the two
+# variables that plant the fixture's failures through, for example:
+#   SWIFT="docker run --rm -u $(id -u):$(id -g) -e HOME=/tmp \
+#     -e CORRAL_FAIL_TESTING -e CORRAL_FAIL_XCTEST -v /tmp/rf:/tmp/rf \
+#     -w /tmp/rf/swift swift:6.3.2-noble swift" \
+#     scripts/capture-runner-fixtures.sh --swift-only /tmp/rf
+# --swift-coverage-only captures swift-codecov.json alone, the same way.
+# --swift-only captures the Swift fixtures alone, needs nothing but SWIFT, and
+# leaves PROVENANCE.txt as it is (a full run rewrites it, the Swift paragraph
+# included, from swift_provenance). Either run checks `$SWIFT --version` before
+# it writes anything, so a box without Swift stops there with every capture
+# as it was, as a box without node stops at the npm pin check.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 REPO="$PWD"
 OUT="$REPO/internal/lang/testdata/runners"
 
-KEEP=0
-[ "${1:-}" = "--keep" ] && { KEEP=1; shift; }
+SWIFT_ONLY=0 SWIFT_COVERAGE_ONLY=0 KEEP=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --swift-only) SWIFT_ONLY=1; shift ;;
+    --swift-coverage-only) SWIFT_COVERAGE_ONLY=1; shift ;;
+    --keep) KEEP=1; shift ;;
+    *) break ;;
+  esac
+done
 DIR="${1:-$(mktemp -d)}"
 [ "$KEEP" = 1 ] || trap 'rm -rf "$DIR"' EXIT
 RSPEC="${RSPEC:-rspec}"
+SWIFT="${SWIFT:-swift}"
 
 JEST=30.5.2 VITEST=5.1.0 MOCHA=12.0.3 PHPUNIT=11.5.57 PHPUNIT9=9.6.39 PHPUNIT10=10.5.67 PHPUNIT12=12.5.44
 
 mkdir -p "$DIR"
 cp -r "$OUT/src/." "$DIR/"
 cd "$DIR"
+# Before any capture is written (and after DIR exists, which a container
+# SWIFT mounts): a missing toolchain must not leave empty or "command not
+# found" captures in place of the committed ones.
+$SWIFT --version >/dev/null 2>&1 || { echo "swift: \`$SWIFT --version\` failed; set SWIFT (see the header). Nothing was captured." >&2; exit 1; }
+
+fail=0
+want() { # want <runner> <expected> <got>
+  if [ "$2" = "$3" ]; then echo "ok   $1: ran $3"; else echo "FAIL $1: ran $3, want $2"; fail=1; fi
+}
+
+# --- swift test (internal/lang/swift_runner.go) ----------------------------
+# The package in src/swift has two test targets: CalcTests (swift-testing,
+# five tests) and CalcXCTests (XCTest, three). Run from DIR/swift; $SWIFT may
+# be a container (see the header), which is why every command is $SWIFT and
+# none is `cd`-relative to it.
+capture_swift() (
+  cd "$DIR/swift"
+  local pdir
+  pdir="$(pwd -P)"
+  # swiftout <fixture> <cmd...>: stdout+stderr, the capture directory as $DIR.
+  swiftout() {
+    local f="$1"; shift
+    "$@" 2>&1 | sed -e "s#$pdir#\$DIR/swift#g" > "$OUT/$f" || true
+  }
+  # swiftran: the tests a run executed, from its own summaries: swift-testing's
+  # "Test run with N tests" plus XCTest's last "Executed N tests" (its suites
+  # repeat the total).
+  swiftran() {
+    local out testing xctest
+    out="$(cat)"
+    testing="$(printf '%s\n' "$out" | sed -n 's/.*Test run with \([0-9]*\) tests\{0,1\} .*/\1/p' | tail -1)"
+    xctest="$(printf '%s\n' "$out" | sed -n 's/^[[:space:]]*Executed \([0-9]*\) tests\{0,1\}, with.*/\1/p' | tail -1)"
+    echo $(( ${testing:-0} + ${xctest:-0} ))
+  }
+  # swiftcmd <fixture> <argv> <cmd...>: `# argv:` the operator's command, `$ `
+  # the row's command (cmd, whose first word is swift), the run of cmd under
+  # $SWIFT, then `# exit:` its exit status. Keep cmd equal to what the row
+  # builds; the tests compare.
+  swiftcmd() {
+    local f="$1" argv="$2"; shift 2
+    { echo "# argv: $argv"; echo "\$ $*"; $SWIFT "${@:2}" 2>&1; echo "# exit: $?"; } | sed -e "s#$pdir#\$DIR/swift#g" > "$OUT/$f" || true
+  }
+  $SWIFT --version 2>/dev/null > "$OUT/toolchain-swift-version.txt"
+  swiftout swift-test-help.txt $SWIFT test --help
+  # The listing builds the tests first; its build lines go to stderr, which
+  # the enumerator does not read.
+  $SWIFT test list 2>/dev/null > "$OUT/swift-list.txt"
+  # `swift test list` takes no --filter or --skip: it lists all eight tests
+  # whatever the command selects (swiftListCmd refuses such a command).
+  want swift-list-ignores-filter 8 "$($SWIFT test list --filter parses 2>/dev/null | wc -l | tr -d ' ')"
+  # The unit listing, under ListUnitsCmd's working-directory prelude, with the
+  # capture directory written as /fixture.
+  sh -c 'printf '"'"'corral-units-cwd %s\n'"'"' "$(pwd -P)" && exec "$@"' corral-units $SWIFT package describe --type json 2>/dev/null |
+    sed -e "s#$pdir#/fixture/swift#g" > "$OUT/swift-units.txt" || true
+  swiftout swift-pass.txt $SWIFT test
+  CORRAL_FAIL_TESTING=1 swiftout swift-fail-testing.txt $SWIFT test
+  CORRAL_FAIL_XCTEST=1 swiftout swift-fail-xctest.txt $SWIFT test
+  # A build failure: the source no longer compiles, so no test runs.
+  cp Sources/Calc/Calc.swift "$DIR/Calc.swift.orig"
+  printf 'public func broken() -> Int { "not an Int" }\n' >> Sources/Calc/Calc.swift
+  swiftout swift-build-fail.txt $SWIFT test
+  cp "$DIR/Calc.swift.orig" Sources/Calc/Calc.swift
+  # One test alone (swiftSingleCmd): the shorter of two ids sharing a prefix,
+  # in each framework, each running exactly one test.
+  swiftcmd swift-single-testing.txt "swift test" swift test --filter '^CalcTests\.parses\(\)(?:/|$)'
+  want swift-single-testing 1 "$(sed '1,2d' "$OUT/swift-single-testing.txt" | swiftran)"
+  swiftcmd swift-single-xctest.txt "swift test" swift test --filter '^CalcXCTests\.AdderTests/testAdds(?:/|$)'
+  want swift-single-xctest 1 "$(sed '1,2d' "$OUT/swift-single-xctest.txt" | swiftran)"
+  # The other two listed shapes: a test in a suite (with a display name) and
+  # a parameterised test (its labels carry a ":"), each alone.
+  swiftcmd swift-single-suite.txt "swift test" swift test --filter '^CalcTests\.Arithmetic/adds\(\)(?:/|$)'
+  want swift-single-suite 1 "$(sed '1,2d' "$OUT/swift-single-suite.txt" | swiftran)"
+  swiftcmd swift-single-param.txt "swift test" swift test --filter '^CalcTests\.Arithmetic/doubles\(value:\)(?:/|$)'
+  want swift-single-param 1 "$(sed '1,2d' "$OUT/swift-single-param.txt" | swiftran)"
+  # Why the pattern does not end in `$` alone: swift-testing matches --filter
+  # against the id followed by "/<file>:<line>:<column>", so an id anchored
+  # at the end selects nothing, and a run of nothing passes (exit 0).
+  swiftcmd swift-filter-dollar.txt "swift test" swift test --filter '^CalcTests\.parses\(\)$'
+  want swift-filter-dollar-runs-none "0 exit 0" "$(sed '1,2d' "$OUT/swift-filter-dollar.txt" | swiftran) exit $(sed -n 's/^# exit: //p' "$OUT/swift-filter-dollar.txt")"
+  # Two --filter options select the union, so a command with its own filter
+  # has no one-test or one-unit form (swiftNarrowable).
+  want swift-filters-union 2 "$($SWIFT test --filter '^CalcTests\.parses\(\)(?:/|$)' --filter '^CalcXCTests\.AdderTests/testAdds(?:/|$)' 2>&1 | swiftran)"
+  # Test targets (swiftUnitsCmd): one, then both.
+  swiftcmd swift-units-one.txt "swift test" swift test --filter '^(?:CalcXCTests)\.'
+  want swift-unit-one 3 "$(sed '1,2d' "$OUT/swift-units-one.txt" | swiftran)"
+  swiftcmd swift-units-multi.txt "swift test" swift test --filter '^(?:CalcTests|CalcXCTests)\.'
+  want swift-units-multi 8 "$(sed '1,2d' "$OUT/swift-units-multi.txt" | swiftran)"
+  # The compile check (swiftPlugin.CompileCheck) builds one target. `# argv:`
+  # is "-": the check is corral's own command, not built from the operator's.
+  swiftcmd swift-build-target-test.txt - swift build --target CalcXCTests
+  swiftcmd swift-build-target-source.txt - swift build --target Calc
+  # A sibling test target that does not compile is not built with this one;
+  # a scratch path of its own, so nothing built above stands in for a build.
+  cp Tests/CalcTests/CalcTests.swift "$DIR/CalcTests.swift.orig"
+  printf 'let broken: Int = "not an Int"\n' >> Tests/CalcTests/CalcTests.swift
+  swiftcmd swift-build-target-scoped.txt - swift build --target CalcXCTests --scratch-path .build-scoped
+  cp "$DIR/CalcTests.swift.orig" Tests/CalcTests/CalcTests.swift
+  rm -rf .build-scoped
+  # A mutant that does not compile fails the test target's build.
+  printf 'public func broken() -> Int { "not an Int" }\n' >> Sources/Calc/Calc.swift
+  swiftcmd swift-build-target-mutant.txt - swift build --target CalcXCTests
+  cp "$DIR/Calc.swift.orig" Sources/Calc/Calc.swift
+  want swift-build-target-exits "0 0 0 1" "$(for f in test source scoped mutant; do sed -n 's/^# exit: //p' "$OUT/swift-build-target-$f.txt"; done | tr '\n' ' ' | sed 's/ $//')"
+  # The writer's one-type rule (swiftPlugin.TestWriterSystem): a corral-named
+  # type in each framework builds and runs beside the target's own tests; a
+  # top-level test named like one of the target's does not build.
+  cp "$DIR/swift-authored/wrapped/CalcTests/Calc_corralTests.swift" Tests/CalcTests/
+  cp "$DIR/swift-authored/wrapped/CalcXCTests/Calc_corralTests.swift" Tests/CalcXCTests/
+  swiftcmd swift-authored-wrapped.txt "swift test" swift test --filter '^(?:CalcTests|CalcXCTests)\.CorralCalcTests/'
+  want swift-authored-wrapped 3 "$(sed '1,2d' "$OUT/swift-authored-wrapped.txt" | swiftran)"
+  rm Tests/CalcTests/Calc_corralTests.swift Tests/CalcXCTests/Calc_corralTests.swift
+  cp "$DIR/swift-authored/collision/CalcTests/Calc_corralTests.swift" Tests/CalcTests/
+  swiftcmd swift-authored-collision.txt - swift build --target CalcTests
+  want swift-authored-collision-exit 1 "$(sed -n 's/^# exit: //p' "$OUT/swift-authored-collision.txt")"
+  rm Tests/CalcTests/Calc_corralTests.swift
+  # Declaration shapes the static test list reads (swift_names.go) that the
+  # fixture's own tests do not show, listed as `swift test list` prints them.
+  cp "$DIR/swift-authored/shapes/CalcTests/Shapes.swift" Tests/CalcTests/
+  $SWIFT test list 2>/dev/null > "$OUT/swift-shapes-list.txt"
+  want swift-shapes-listed 12 "$(wc -l < "$OUT/swift-shapes-list.txt" | tr -d ' ')"
+  rm Tests/CalcTests/Shapes.swift
+  # This body is a subshell (for its cd), so a failed want is its exit status.
+  return "$fail"
+)
+
+# --- swift coverage (internal/lang/swift_coverage.go) -----------------------
+# The llvm-cov export SwiftPM writes for one coverage run of the coverage
+# fixture (internal/lang/testdata/coverage/swift: Calc.swift tested in part,
+# Dead.swift compiled and never called, Shape.swift with no executable line,
+# Unbuilt/Orphan.swift in no target), as swiftPlugin.CoverageCmd runs it:
+# --enable-code-coverage, the native build system (the only one whose export
+# holds every test target's files: see CoverageCmd) and the scratch path it
+# uses. $SWIFT starts in
+# DIR/swift, so the package is named with --package-path and the scratch path
+# is absolute. The capture directory is written as /fixture in the JSON.
+capture_swift_coverage() (
+  local pkg pdir json
+  pkg="$DIR/swift-coverage"
+  rm -rf "$pkg" && cp -r "$REPO/internal/lang/testdata/coverage/swift" "$pkg"
+  pdir="$(cd "$pkg" && pwd -P)"
+  local rc=0
+  $SWIFT test --package-path "$pkg" --enable-code-coverage --build-system native --scratch-path "$pkg/.build/corral-coverage" >/dev/null 2>&1 || rc=$?
+  want swift-coverage-run-exit 0 "$rc"
+  json="$($SWIFT test --package-path "$pkg" --enable-code-coverage --build-system native --scratch-path "$pkg/.build/corral-coverage" --show-codecov-path 2>/dev/null)"
+  sed -e "s#$pdir/#/fixture/swift-coverage/#g" "$json" > "$OUT/swift-codecov.json"
+  want swift-coverage-files 4 "$(grep -o '"filename":"/fixture/swift-coverage/[ST][^"]*"' "$OUT/swift-codecov.json" | wc -l | tr -d ' ')"
+  return "$fail"
+)
+
+# swift_provenance is PROVENANCE.txt's Swift paragraph, from the version the
+# capture ran (toolchain-swift-version.txt). --swift-only leaves the file to
+# the operator; a full run writes this.
+swift_provenance() {
+  # How swift was run: the host's, or a container's image (the word before
+  # the final "swift" of a container SWIFT).
+  local how="the host's swift" words
+  read -ra words <<<"$SWIFT"
+  if [ "${#words[@]}" -gt 2 ]; then how="a container of ${words[${#words[@]}-2]} run as the invoking user"; fi
+  cat <<PROV
+swift-*.txt and toolchain-swift-version.txt (added 2026-11-19; $(head -1 "$OUT/toolchain-swift-version.txt"),
+$(sed -n 2p "$OUT/toolchain-swift-version.txt")): scripts/capture-runner-fixtures.sh
+through $how, on src/swift, whose test targets are CalcTests (swift-testing, five tests) and
+CalcXCTests (XCTest, three, in class AdderTests). swift-list.txt is the stdout
+of \`swift test list\`; swift-units.txt the stdout of \`swift package describe
+--type json\` under the unit-listing prelude, the capture directory written as
+/fixture; every other file is stdout+stderr, not a TTY, with the capture
+directory written as \$DIR. swift-fail-testing.txt and swift-fail-xctest.txt
+are \`swift test\` with CORRAL_FAIL_TESTING or CORRAL_FAIL_XCTEST set, which
+the fixture reads to plant its failures; swift-build-fail.txt is \`swift test\`
+after a line that does not compile was appended to Sources/Calc/Calc.swift.
+swift-build-target-*.txt are the compile check's \`swift build --target\`:
+of a test target, of the source target, of a test target while a sibling
+test target did not compile (with a scratch path of its own), and of a test
+target after a line that does not compile was appended to the source.
+swift-authored-wrapped.txt runs the two files under
+src/swift-authored/wrapped, copied into the test targets, and
+swift-authored-collision.txt builds CalcTests with
+src/swift-authored/collision's file copied into it. swift-shapes-list.txt is
+the stdout of \`swift test list\` with src/swift-authored/shapes's file copied
+into CalcTests.
+swift-single-*.txt, swift-filter-dollar.txt, swift-units-*.txt,
+swift-build-target-*.txt and swift-authored-*.txt open with
+\`# argv:\` (the operator's command, \`-\` for corral's own compile check)
+and \`$ \` (the command corral builds) and end with \`# exit:\` (its exit status). swift-testing runs its tests in
+parallel, so the order of its lines differs between captures.
+swift-codecov.json is the llvm-cov export SwiftPM wrote for \`swift test
+--enable-code-coverage --build-system native --scratch-path
+<package>/.build/corral-coverage\` on
+../coverage/swift (named with --package-path), the capture directory written
+as /fixture.
+PROV
+}
+
+if [ "$SWIFT_COVERAGE_ONLY" = 1 ]; then
+  capture_swift_coverage || fail=1
+  exit "$fail"
+fi
+if [ "$SWIFT_ONLY" = 1 ]; then
+  capture_swift || fail=1
+  capture_swift_coverage || fail=1
+  exit "$fail"
+fi
 # The runners come from scripts/npm-pins/runner-fixtures/package-lock.json via
 # `npm ci`, so every package is pinned by its integrity hash. They are installed
 # beside the fixtures, not into them: a lockfile in the copied src/ would be one
@@ -95,10 +323,6 @@ units node-units.txt node --test --test-only --test-reporter=tap --test-concurre
 units node-units-only.txt node --test --test-only --test-reporter=tap 'units/node-only/*.test.js' 'units/node/*.test.js'
 
 # --- one-test commands: each must run exactly the tests named --------------
-fail=0
-want() { # want <runner> <expected> <got>
-  if [ "$2" = "$3" ]; then echo "ok   $1: ran $3"; else echo "FAIL $1: ran $3, want $2"; fail=1; fi
-}
 want jest 1 "$(npx jest --json --testNamePattern '^Calc adds \(a\+b\)$' calc.jest.test.js 2>/dev/null | node -e 'const j=JSON.parse(require("fs").readFileSync(0));console.log(j.numPassedTests+j.numFailedTests)')"
 # The -t patterns below are the ones corral builds (vitestName): either joiner,
 # since vitest 3 matched titles joined by a space and vitest 5 by " > ".
@@ -355,6 +579,9 @@ want yarn-test-single 1 "$(corepack "yarn@$YARN" test --testNamePattern '^top le
 want pnpm-test-single 1 "$(corepack "pnpm@$PNPM" test -- --testNamePattern '^top level$' calc.jest.test.js 2>&1 | jestran)"
 want composer-test-single 1 "$(composer test -- --filter '/(?:^|\\)CalcTest::testAdds(?: with data set .*)?$/' tests/CalcTest.php 2>&1 | sed -n 's/^OK (\([0-9]*\) test.*/\1/p')"
 
+capture_swift || fail=1
+capture_swift_coverage || fail=1
+
 {
   echo "Captured by scripts/capture-runner-fixtures.sh on $(date -u +%Y-%m-%d)."
   echo "jest $JEST, vitest $VITEST, mocha $MOCHA (npm); PHPUnit $PHPUNIT (composer)"
@@ -372,6 +599,7 @@ want composer-test-single 1 "$(composer test -- --filter '/(?:^|\\)CalcTest::tes
   echo "gotestsum $GOTESTSUM (go install), $(php -r 'echo "PHP ", PHP_VERSION;'),"
   echo "$(cargo --version | awk '{print "cargo", $2}'), $(cargo nextest --version 2>/dev/null | head -1)."
   echo "*-help files are each runner's --help; libtest-help.txt is a cargo-built test binary's."
+  swift_provenance
 } > "$OUT/PROVENANCE.txt"
 
 exit "$fail"

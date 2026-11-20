@@ -576,6 +576,10 @@ var capturedCoverageReport = map[string]struct {
 	// fresh temp directory: a build cache the run would otherwise leave
 	// inside testdata (cargo's target directory).
 	scratchEnv string
+	// buildDir names a directory the live run writes inside the fixture
+	// that no environment variable moves (SwiftPM's .build), removed after
+	// the run so testdata is left as it was.
+	buildDir string
 }{
 	"javascript": {dir: "js", report: "js-report.txt", tool: "node", testCmd: []string{"node", "--test"}, payload: coverageAsIs, compared: coverageAsIs},
 	"go":         {dir: "go", report: "go-report.txt", tool: "go", testCmd: []string{"go", "test", "-count=1", "./..."}, payload: goCoveragePayload, compared: coverageAsIs},
@@ -587,6 +591,8 @@ var capturedCoverageReport = map[string]struct {
 		probe: []string{"python3", "-c", "import coverage, pytest"}},
 	"rust": {dir: "rust", report: "rust-report.txt", tool: "cargo", testCmd: []string{"cargo", "test"}, payload: coverageAsIs, compared: coverageAsIs,
 		probe: rustLLVMToolsProbe, scratchEnv: "CARGO_TARGET_DIR"},
+	"swift": {dir: "swift", report: "swift-report.txt", tool: "swift", testCmd: []string{"swift", "test"}, payload: coverageAsIs, compared: coverageAsIs,
+		buildDir: ".build"},
 }
 
 // rustLLVMToolsProbe exits 0 when the active toolchain carries llvm-tools,
@@ -680,6 +686,9 @@ func TestCapturedCoverageReportsMatchALiveRun(t *testing.T) {
 			}
 			if fx.scratchEnv != "" {
 				t.Setenv(fx.scratchEnv, t.TempDir())
+			}
+			if fx.buildDir != "" {
+				t.Cleanup(func() { _ = os.RemoveAll(filepath.Join("testdata", "coverage", fx.dir, fx.buildDir)) })
 			}
 			stdout, _, stderr, runErr := runCoverageFixture(t, langName, fx.dir, fx.testCmd)
 			stdout = fx.payload(stdout)

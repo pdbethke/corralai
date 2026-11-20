@@ -87,7 +87,7 @@ func (phpPlugin) TestNamesInSource(_, src string) []string {
 			if i > 0 {
 				prev = strings.ToLower(toks[i-1])
 			}
-			if prev != "::" && prev != "->" && prev != "new" && i+1 < len(toks) && phpIdent(toks[i+1]) {
+			if prev != "::" && prev != "->" && prev != "new" && i+1 < len(toks) && isIdent(toks[i+1]) {
 				pendingClass = toks[i+1]
 				i++
 			}
@@ -102,7 +102,7 @@ func (phpPlugin) TestNamesInSource(_, src string) []string {
 			if j < len(toks) && toks[j] == "&" {
 				j++
 			}
-			if class == "" || j >= len(toks) || !phpIdent(toks[j]) {
+			if class == "" || j >= len(toks) || !isIdent(toks[j]) {
 				continue
 			}
 			name := toks[j]
@@ -131,15 +131,7 @@ func (phpPlugin) TestNamesInSource(_, src string) []string {
 func phpCode(src string) (string, bool) {
 	b := []byte(src)
 	out := make([]byte, len(b))
-	blank := func(from, to int) {
-		for k := from; k < to; k++ {
-			if b[k] == '\n' {
-				out[k] = '\n'
-			} else {
-				out[k] = ' '
-			}
-		}
-	}
+	blank := func(from, to int) { blankSpan(out, b, from, to) }
 	i := 0
 	// Inline text before the first open tag.
 	open := func(from int) int {
@@ -217,7 +209,7 @@ func phpHeredocEnd(src string, start int) (int, bool) {
 		k++
 	}
 	idStart := k
-	for k < len(src) && phpIdentByte(src[k]) {
+	for k < len(src) && identByte(src[k]) {
 		k++
 	}
 	id := src[idStart:k]
@@ -235,7 +227,7 @@ func phpHeredocEnd(src string, start int) (int, bool) {
 			line = line[:e]
 		}
 		trimmed := strings.TrimLeft(line, " \t")
-		if strings.HasPrefix(trimmed, id) && (len(trimmed) == len(id) || !phpIdentByte(trimmed[len(id)])) {
+		if strings.HasPrefix(trimmed, id) && (len(trimmed) == len(id) || !identByte(trimmed[len(id)])) {
 			return pos + (len(line) - len(trimmed)) + len(id), true
 		}
 		if len(line) == len(src[pos:]) {
@@ -251,7 +243,7 @@ func phpHeredocEnd(src string, start int) (int, bool) {
 func phpDocHasTest(doc string) bool {
 	for k := strings.Index(doc, "@test"); k >= 0; {
 		after := k + len("@test")
-		if after >= len(doc) || !phpIdentByte(doc[after]) {
+		if after >= len(doc) || !identByte(doc[after]) {
 			return true
 		}
 		n := strings.Index(doc[after:], "@test")
@@ -272,9 +264,9 @@ func phpTokens(code string) []string {
 		switch {
 		case c == ' ' || c == '\t' || c == '\n' || c == '\r':
 			i++
-		case phpIdentByte(c) || c == '\\':
+		case identByte(c) || c == '\\':
 			j := i
-			for j < len(code) && (phpIdentByte(code[j]) || code[j] == '\\') {
+			for j < len(code) && (identByte(code[j]) || code[j] == '\\') {
 				j++
 			}
 			toks = append(toks, code[i:j])
@@ -291,12 +283,4 @@ func phpTokens(code string) []string {
 		}
 	}
 	return toks
-}
-
-func phpIdentByte(c byte) bool {
-	return c == '_' || c >= 0x80 || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
-}
-
-func phpIdent(t string) bool {
-	return t != "" && phpIdentByte(t[0]) && !(t[0] >= '0' && t[0] <= '9')
 }

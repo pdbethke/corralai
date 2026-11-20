@@ -14,6 +14,7 @@ import (
 	"log"
 	"maps"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -210,14 +211,23 @@ func authoredTestPath(l AuthoredLanding, codePath, devTestPath string, base map[
 		if marked, ok := markStem(devBase, stem, marker); ok {
 			pick = filepath.Join(dir, marked)
 		} else {
-			// Hand the plugin a synthetic SOURCE path (code stem + marker,
-			// sited in the dev test's directory) and take its primary test
-			// name for it (pairing.Primary).
+			// Ask the plugin what a test for the marked stem is CALLED
+			// (pairing.Primary on a synthetic source) and keep only that
+			// name, in the dev test's directory. Only the name: the
+			// directory is the dev test's, which its runner collects, and a
+			// rule that maps a source's directory to a test directory would
+			// map this one a second time. SwiftPM's (Sources/<T>/ to
+			// Tests/<T>Tests/) turned Tests/CalcTests/ into
+			// Tests/CalcTestsTests/, a directory SwiftPM never compiles.
+			// Every other path language's primary rule is a sibling, whose
+			// directory is the synthetic source's own, so for them this is
+			// the path it always was (Rust lands Into a file, returned
+			// above).
 			c, ok := pairing.Primary(p.TestRules(), filepath.Join(dir, stem+marker+ext))
 			if !ok {
 				return fallback
 			}
-			pick = c.Path
+			pick = filepath.Join(dir, filepath.Base(c.Path))
 		}
 		if got := filepath.ToSlash(pick); !taken(got) {
 			return got
@@ -498,19 +508,73 @@ func (s JailScorer) gatedScoreOpts(codePath string, base map[string]string) []ad
 		// into "every mutant invalid", which is a worse diagnosis.
 		return opts
 	}
-	testPath := authoredTestPath(s.Landing, codePath, s.DevTestPath, s.BaseFiles)
-	if _, ok := base[testPath]; !ok {
-		// A per-file checker (python, ruby, node) is handed BOTH paths and
-		// fails on one that is not in the workspace — which would mark EVERY
-		// mutant invalid and erase the exam entirely. The code file is always
-		// present, and gating the mutant is what this is for.
-		testPath = codePath
-	}
-	if cc := compileCheckFor(p, s.RepoDir, codePath, testPath); len(cc) > 0 {
+	if cc, test, codeOnly := s.mutantGate(p, codePath, base); len(cc) > 0 {
 		opts = append(opts, adequacy.WithMutantCompileCheck(cc))
+		if len(codeOnly) > 0 {
+			opts = append(opts, adequacy.WithMutantCompileFallback(test, codeOnly))
+		}
 	}
 	return opts
 }
+
+// mutantGate is the compile gate's sequence for codePath, checking the test
+// mutantGateTestPath names, and, when that test is not the code and the
+// plugin's check reads it (the two sequences differ), the test's path and
+// the sequence on the code alone: the check every language ran before the
+// gate was handed a test, which adequacy falls back to when the unmutated
+// tree's check rejects the test (see adequacy.WithMutantCompileFallback).
+// No shipped language therefore loses a gate it had on the code alone.
+func (s JailScorer) mutantGate(p golang.Plugin, codePath string, base map[string]string) (check [][]string, testPath string, codeOnly [][]string) {
+	t := s.mutantGateTestPath(codePath, base)
+	check = compileCheckFor(p, s.RepoDir, codePath, t)
+	if t == codePath {
+		return check, "", nil
+	}
+	alone := compileCheckFor(p, s.RepoDir, codePath, codePath)
+	if reflect.DeepEqual(alone, check) {
+		return check, "", nil
+	}
+	return check, t, alone
+}
+
+// mutantGateTestPath is the test file the mutant compile gate checks beside
+// the code. A mutant can break only the tests' view of the code (a changed
+// signature a test calls): the code itself still builds, the suite's build
+// fails, and without a test in the check that failure is scored as a KILL.
+// So the gate is handed a test the tree holds, in this order:
+//
+//  1. the authored test, when its path is already a file of the tree (a
+//     landing Into the project's own test file);
+//  2. the developer's own test, which every repo-mode run has: the jail's
+//     workspace map holds it (it is put there explicitly), and on the
+//     workspace substrate the map is deliberately EMPTY because the
+//     checkout it was read from IS the tree (see AuthoredLanding);
+//  3. the code alone, when neither is in the tree: single-file mode, where
+//     the dev test sits at the synthetic advPoolTestPath under whatever
+//     name the operator gave it, and a run with no dev test.
+//
+// Never a path the tree lacks: a per-file checker (python, ruby, node) is
+// handed BOTH paths and fails on a missing one, which would mark EVERY
+// mutant invalid and erase the exam entirely.
+//
+// What each plugin's check does with the dev test: Go and Rust ignore the
+// test path (their builds already compile the tests); TypeScript type-checks
+// the dev test against the mutant; Swift builds the dev test's target, which
+// compiles the source with it; Python, Ruby, JavaScript and PHP add the dev
+// test, which a mutant never changes, to their per-file syntax and lint
+// checks. A check that rejects the dev test as it stands falls back to the
+// code alone for the file (mutantGate), never switching the gate off.
+func (s JailScorer) mutantGateTestPath(codePath string, base map[string]string) string {
+	if p := authoredTestPath(s.Landing, codePath, s.DevTestPath, s.BaseFiles); inMap(base, p) {
+		return p
+	}
+	if s.DevTestPath != "" && (inMap(base, s.DevTestPath) || (s.BaseFiles != nil && len(s.BaseFiles) == 0)) {
+		return s.DevTestPath
+	}
+	return codePath
+}
+
+func inMap(m map[string]string, k string) bool { _, ok := m[k]; return ok }
 
 func (s JailScorer) Score(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (float64, []adequacy.Mutant, error) {
 	scoreBase, cmd := s.scoreWorkspace(codePath, test, testCmd)

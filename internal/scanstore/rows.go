@@ -284,6 +284,12 @@ type File struct {
 	// holds no result. "" when the file's runner has no run cache or the file
 	// was not graded here; then omitted.
 	RunCache string `json:",omitempty"`
+	// CapFloor is reposcan.FileResult.CapFloor: where the file's per-mutant
+	// time cap took its floor from, and the duration of the run that set it,
+	// or "none: <why>" for a floor source that was due and gave none. "" when
+	// no floor applied (no source, or --test-timeout set the cap) or the file
+	// was not graded here; then omitted.
+	CapFloor string `json:",omitempty"`
 	// TestSelection, SelectedTests and SuiteTests say WHICH MEASUREMENT this
 	// row's kill rate is: the tests coverage evidence showed execute this
 	// file ("coverage-context", SelectedTests of SuiteTests), rather than the
@@ -366,11 +372,12 @@ type File struct {
 	MutantsFrom string
 	// Trees and ConcurrencyNote mirror advpool.Verdict.Concurrency: how
 	// many private trees the workspace substrate's probe scored this file
-	// with at once, or — when it granted only one — why. Trees 0 is the one
-	// explicit "not recorded" state — a row written before this column
-	// existed, a rejected file that was never scored, or a substrate that
-	// builds no trees — and is stored SQL NULL, never the integer 0, so a
-	// caller (and a query) can always tell it from a measured one tree.
+	// with at once, and the pool's note on them: why it got only one, or,
+	// with more, the build directories each tree built for itself. Trees 0
+	// is the one explicit "not recorded" state — a row written before this
+	// column existed, a rejected file that was never scored, or a substrate
+	// that builds no trees — and is stored SQL NULL, never the integer 0, so
+	// a caller (and a query) can always tell it from a measured one tree.
 	Trees           int
 	ConcurrencyNote string
 	// SharedDirs is the comma-joined list of dependency directories that were

@@ -229,6 +229,9 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 				// runs: the file's own result, not the verdict (a reused
 				// verdict was graded by an earlier run and says nothing here).
 				RunCache: fileRunCache(r),
+				// Where its per-mutant cap took its floor from: also the
+				// file's own result, by the same rule.
+				CapFloor: fileCapFloor(r),
 				// ModelsByRole is canonicalized the same way the scan-wide
 				// model_set is (reposcan.CanonicalKV), so a per-file role
 				// assignment is byte-comparable with it rather than a second,
@@ -704,9 +707,9 @@ func exclusionEvidence(reason, preflightState string) string {
 	switch reason {
 	case reposcan.ReasonNoPairedTest, reposcan.ReasonAmbiguousTest, reposcan.ReasonNotSelected:
 		return "paired"
-	case reposcan.ReasonUncovered, reposcan.ReasonUncoveredByUnits, reposcan.ReasonImportOnly, reposcan.ReasonNoExecutableCode:
-		// These three exist ONLY because an instrumented run measured the
-		// file — "uncovered" and "import-only" are coverage verdicts, and
+	case reposcan.ReasonUncovered, reposcan.ReasonUncoveredByUnits, reposcan.ReasonImportOnly, reposcan.ReasonNoExecutableCode, reposcan.ReasonEvidencePairingNotBuilt:
+		// These exist ONLY because an instrumented run measured the
+		// file (evidence-pairing-not-built: a unit executed it) — "uncovered" and "import-only" are coverage verdicts, and
 		// "no executable code" is what the same instrument says about a
 		// file with nothing to cover. They fell through to "" here and were
 		// labelled like a README, so `WHERE evidence = 'coverage'` — the

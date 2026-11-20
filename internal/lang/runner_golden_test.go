@@ -35,11 +35,35 @@ func goldenCommands() [][]string {
 		{"cargo", "nextest", "run"}, {"cargo", "nextest", "run", "-p", "x", "--", "--nocapture"}, {"cargo", "nextest", "run", "-E", "test(fuzzy)"},
 	}
 	for _, n := range Names() {
+		if !goldenLanguages[n] {
+			continue
+		}
 		p, _ := ByName(n)
 		cmds = append(cmds, p.TestCmd())
 	}
 	return cmds
 }
+
+// goldenLanguages are the languages the golden recorded plugin answers for
+// (the first field of every key). A language registered after the capture has
+// no plugin answers to be held to, so neither its stock command nor its own
+// answers are asked here: its row is held by that language's own tests, and
+// the table's answers for the OLDER languages are unchanged by it.
+var goldenLanguages = func() map[string]bool {
+	b, err := os.ReadFile("testdata/runner-golden.json")
+	if err != nil {
+		return nil // TestRunnerTableAnswersAsThePluginsDid fails on the same read
+	}
+	var recorded map[string]string
+	if err := json.Unmarshal(b, &recorded); err != nil {
+		return nil
+	}
+	langs := map[string]bool{}
+	for k := range recorded {
+		langs[strings.SplitN(k, "|", 2)[0]] = true
+	}
+	return langs
+}()
 
 // goldenOutputs are runner outputs the parsers must read identically: every
 // captured file under testdata/rust, the outputs the per-language parser
@@ -108,6 +132,9 @@ func captureNew(t *testing.T) map[string]string {
 	got := map[string]string{}
 	outs := goldenOutputs(t)
 	for _, n := range Names() {
+		if !goldenLanguages[n] {
+			continue
+		}
 		p, _ := ByName(n)
 		for _, cmd := range goldenCommands() {
 			key := strings.Join(cmd, " ")

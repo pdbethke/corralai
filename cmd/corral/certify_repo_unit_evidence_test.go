@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/pdbethke/corralai/internal/agentbackend"
+	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/reposcan"
 )
@@ -772,5 +774,106 @@ func TestUnitPassLineCountsUnitsGreenAsWritten(t *testing.T) {
 	printUnitPass(&b, &localExecutor{units: ev, unitWorkers: 1})
 	if strings.Contains(b.String(), "green as your command") {
 		t.Errorf("a pass with none says it had some:\n%s", b.String())
+	}
+}
+
+// S2: a Swift unit pass that measures a file with no paired test used to
+// end on a bare "evidence-paired 0", which reads as "the evidence found
+// nothing more to audit". Promotion by evidence is not built for Swift, so
+// the count line now says that, from the same judge the language-support
+// page reads (lang.PromotesByEvidence, checked against the landing code by
+// reposcan's TestEvidencePromotionDeclarationMatchesTheLandingCode).
+func TestUnitEvidenceSaysPromotionIsNotBuiltForSwift(t *testing.T) {
+	root := t.TempDir()
+	writeSwiftPackage(t, root)
+	mustWrite(t, filepath.Join(root, "Sources", "A", "C.swift"), "func c() -> Int { 2 }\n")
+	fake := &fakeUnitPass{ev: reposcan.UnitEvidence{Ran: true, Units: []reposcan.UnitResult{
+		unitRun("ATests", map[string]lang.LineCounts{
+			"Sources/A/B.swift": {Executed: 1, Executable: 1},
+			"Sources/A/C.swift": {Executed: 1, Executable: 1},
+		}),
+	}}}
+	fake.install(t)
+
+	s := runUnitEvidenceScan(t, root, "--dry-run", "--evidence", "--", "swift", "test")
+	if len(fake.called()) != 1 {
+		t.Fatalf("the unit pass did not run:\n%s", s)
+	}
+	want := "evidence-paired 0 · name-paired 1 · uncovered 0 · import-only 0" + evidencePromotionNote(mustPlugin(t, "swift"))
+	if !strings.Contains(s, want+"\n") {
+		t.Errorf("the count line does not say promotion is not built for Swift; want %q in:\n%s", want, s)
+	}
+	if !strings.Contains(s, "Swift") || !strings.Contains(evidencePromotionNote(mustPlugin(t, "swift")), "not built") {
+		t.Errorf("the note must name the language and say promotion is not built: %q", evidencePromotionNote(mustPlugin(t, "swift")))
+	}
+}
+
+// A language that promotes says nothing more on the count line: the
+// TypeScript promotion above prints its count bare.
+func TestEvidencePromotionNoteIsEmptyForALanguageThatPromotes(t *testing.T) {
+	for _, n := range []string{"go", "python", "javascript", "typescript", "ruby", "php"} {
+		if got := evidencePromotionNote(mustPlugin(t, n)); got != "" {
+			t.Errorf("%s: evidencePromotionNote = %q, want empty", n, got)
+		}
+	}
+	for _, n := range []string{"rust", "swift"} {
+		if got := evidencePromotionNote(mustPlugin(t, n)); got == "" {
+			t.Errorf("%s: evidencePromotionNote is empty, but promotion is not built for it", n)
+		}
+	}
+}
+
+// I2: the reason is recorded, not only printed. The file the unit executed
+// but Swift's evidence cannot add is excluded as
+// reposcan.ReasonEvidencePairingNotBuilt in the dry run's --json and in the
+// signed entry's row, where it used to read as plain no-paired-test.
+func TestAnExecutedSwiftFileEvidenceCannotAddIsRecordedWithItsReason(t *testing.T) {
+	root := t.TempDir()
+	writeSwiftPackage(t, root)
+	mustWrite(t, filepath.Join(root, "Sources", "A", "C.swift"), "func c() -> Int { 2 }\n")
+	fake := &fakeUnitPass{ev: reposcan.UnitEvidence{Ran: true, Units: []reposcan.UnitResult{
+		unitRun("ATests", map[string]lang.LineCounts{
+			"Sources/A/B.swift": {Executed: 1, Executable: 1},
+			"Sources/A/C.swift": {Executed: 1, Executable: 1},
+		}),
+	}}}
+	fake.install(t)
+
+	s := runUnitEvidenceScan(t, root, "--dry-run", "--evidence", "--json", "--", "swift", "test")
+	js, _, _ := strings.Cut(s, "\n[stderr]\n")
+	var inv struct {
+		ExcludedByReason map[string]int `json:"excluded_by_reason"`
+	}
+	if err := json.Unmarshal([]byte(js), &inv); err != nil {
+		t.Fatalf("--json did not parse: %v\n%s", err, s)
+	}
+	if inv.ExcludedByReason[reposcan.ReasonEvidencePairingNotBuilt] != 1 || inv.ExcludedByReason[reposcan.ReasonNoPairedTest] != 0 {
+		t.Errorf("excluded_by_reason = %v, want C.swift under %q", inv.ExcludedByReason, reposcan.ReasonEvidencePairingNotBuilt)
+	}
+
+	// The signed entry: a real run on a committed tree. B.swift's audit
+	// cannot run here (no Swift), which the entry records; C.swift's row is
+	// the one this test reads.
+	gitRun := gitCmd(t, root)
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "fixture", "--no-gpg-sign")
+	withMachineLedger(t)
+	runUnitEvidenceScan(t, root, "--", "swift", "test")
+	entries, err := auditpush.ReadLedgerDir(filepath.Join(root, ".corral", "ledger"))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("want one ledger entry, got %d (%v)", len(entries), err)
+	}
+	var found bool
+	for _, f := range entries[0].Bundle.Files {
+		if f.Path == "Sources/A/C.swift" {
+			found = true
+			if f.Reason != reposcan.ReasonEvidencePairingNotBuilt || f.Evidence != "coverage" {
+				t.Errorf("C.swift's signed row: reason %q evidence %q, want %q and coverage", f.Reason, f.Evidence, reposcan.ReasonEvidencePairingNotBuilt)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("no signed row for Sources/A/C.swift")
 	}
 }

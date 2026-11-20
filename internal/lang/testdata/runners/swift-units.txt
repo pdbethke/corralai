@@ -1,0 +1,54 @@
+corral-units-cwd /fixture/swift
+{
+  "dependencies" : [
+
+  ],
+  "manifest_display_name" : "Calc",
+  "name" : "Calc",
+  "path" : "/fixture/swift",
+  "platforms" : [
+
+  ],
+  "products" : [
+
+  ],
+  "targets" : [
+    {
+      "c99name" : "CalcXCTests",
+      "module_type" : "SwiftTarget",
+      "name" : "CalcXCTests",
+      "path" : "Tests/CalcXCTests",
+      "sources" : [
+        "CalcXCTests.swift"
+      ],
+      "target_dependencies" : [
+        "Calc"
+      ],
+      "type" : "test"
+    },
+    {
+      "c99name" : "CalcTests",
+      "module_type" : "SwiftTarget",
+      "name" : "CalcTests",
+      "path" : "Tests/CalcTests",
+      "sources" : [
+        "CalcTests.swift"
+      ],
+      "target_dependencies" : [
+        "Calc"
+      ],
+      "type" : "test"
+    },
+    {
+      "c99name" : "Calc",
+      "module_type" : "SwiftTarget",
+      "name" : "Calc",
+      "path" : "Sources/Calc",
+      "sources" : [
+        "Calc.swift"
+      ],
+      "type" : "library"
+    }
+  ],
+  "tools_version" : "6.0"
+}

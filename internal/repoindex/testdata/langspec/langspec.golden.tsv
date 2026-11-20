@@ -171,6 +171,18 @@ sig	from	method	<Circle as From<i32>>	true	135	1	[]
 sig	from	method	<Circle as From<f64>>	true	141	1	[]
 sig	classify	func		true	146	4	[{148 148} {149 149} {150 150}]
 sig	scale	func		true	154	2	[{155 155}]
+== swift.swift (swift) chunk err=<nil>
+chunk			1-2
+chunk	Priced	interface	3-5
+chunk			6-6
+chunk	total	function	7-12
+chunk			13-13
+chunk	Cart	class	14-16
+chunk	size	method	17-22
+chunk			23-23
+chunk	clear	method	24-26
+chunk			27-27
+sig err=repoindex: no signature extractor for language
 == typescript.ts (typescript) chunk err=<nil>
 chunk			1-2
 chunk	Item	interface	3-5

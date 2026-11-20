@@ -213,7 +213,27 @@ const (
 	// a different, stated reason, and every reader treats the two alike
 	// through IsLandingRefusal.
 	ReasonDeclarationsUnreadable = "test-declarations-unreadable"
+	// ReasonEvidencePairingNotBuilt marks a source no filename pairs that a
+	// green test unit EXECUTED, in a language whose evidence cannot add a
+	// file to the audit (lang.PromotesByEvidence false: Swift, whose unit
+	// landing is not built). It is ReasonNoPairedTest made truthful about the
+	// measurement: left as no-paired-test, the record and the --json output
+	// said nothing ran the file when the evidence had run it. Applied by
+	// WidenCandidacyByEvidence; a language that promotes keeps
+	// ReasonNoPairedTest for a file it executed but could not land (a Go file
+	// run only by another package's tests). Every reader that asks for a
+	// no-paired-test source asks IsNoPairedTest, which counts both.
+	ReasonEvidencePairingNotBuilt = "evidence-pairing-not-built"
 )
+
+// IsNoPairedTest reports whether reason says no filename convention paired
+// the source with a test: ReasonNoPairedTest, or ReasonEvidencePairingNotBuilt
+// (the same, for a file the evidence executed but cannot add). The one
+// question every gate and walk that wants "an unpaired source" asks, so the
+// second reason inherits the first one's treatment everywhere.
+func IsNoPairedTest(reason string) bool {
+	return reason == ReasonNoPairedTest || reason == ReasonEvidencePairingNotBuilt
+}
 
 // IsUncovered reports whether reason is an uncovered finding: the evidence
 // measured the file and nothing it ran executed or loaded it
@@ -245,13 +265,14 @@ func IsLandingRefusal(reason string) bool {
 // A new reason must be classified HERE, once, rather than remembered at
 // every gate that asks the question.
 func UnauditableChangedSource(reason string) bool {
-	switch reason {
-	case ReasonNoPairedTest, ReasonAmbiguousTest, ReasonNotRegularFile:
+	switch {
+	case IsNoPairedTest(reason), reason == ReasonAmbiguousTest, reason == ReasonNotRegularFile:
 		// The source changed and corral could not grade it: no test names
-		// it, its test is claimed by another source, or it is not a file it
-		// can read. Each is "we could not look", not "nothing to look at".
+		// it (every no-paired-test reason, asked through IsNoPairedTest),
+		// its test is claimed by another source, or it is not a file it can
+		// read. Each is "we could not look", not "nothing to look at".
 		return true
-	case ReasonTestLandingNotBuilt, ReasonDeclarationsUnreadable:
+	case reason == ReasonTestLandingNotBuilt, reason == ReasonDeclarationsUnreadable:
 		// A language corral cannot audit YET, ruled (Rust part 1) to be
 		// treated exactly as a language it does not audit at all
 		// (ReasonNoLanguage, the default below): the scan discloses the
@@ -262,7 +283,7 @@ func UnauditableChangedSource(reason string) bool {
 		// accepted: an unaudited Rust change passes the gate with only the
 		// disclosure.
 		return false
-	case ReasonUncovered, ReasonUncoveredByUnits, ReasonImportOnly:
+	case IsUncovered(reason), reason == ReasonImportOnly:
 		// Also "we could not measure it" — but these are REPORTED as
 		// uncovered by the scan itself, which the report already surfaces
 		// and the operator opted into by running with coverage. Left out so
@@ -698,6 +719,10 @@ func WidenCandidacyByEvidence(cands []Candidate, excl []Exclusion, idx EvidenceI
 		}
 		n, mostCovering, hasStatic, hasStatements, measured := idx.CoverageFor(e.Path)
 		switch {
+		case !measured && idx.ExecutedWithoutLanding(e.Path) && !evidenceCanAdd(e.Path):
+			// A green unit ran it, and this language's evidence cannot add a
+			// file: say that, rather than a bare no-paired-test.
+			kept = append(kept, Exclusion{Path: e.Path, Reason: ReasonEvidencePairingNotBuilt})
 		case !measured:
 			// Absence of evidence is not evidence of absence: this file's
 			// only honest reason remains "no filename convention predicted a
@@ -750,6 +775,14 @@ func WidenCandidacyByEvidence(cands []Candidate, excl []Exclusion, idx EvidenceI
 
 	sort.Slice(cands, func(i, j int) bool { return cands[i].Path < cands[j].Path })
 	return cands, kept, promoted
+}
+
+// evidenceCanAdd reports whether path's language declares that its evidence
+// can add a file to the audit (lang.PromotesByEvidence). A path no plugin
+// detects cannot be added.
+func evidenceCanAdd(path string) bool {
+	p, ok := lang.Detect(path)
+	return ok && lang.PromotesByEvidence(p)
 }
 
 // isLibraryCode asks p's OPTIONAL lang.LibraryCodeClassifier, when it

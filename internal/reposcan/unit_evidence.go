@@ -764,7 +764,14 @@ func IndexFromUnits(ev UnitEvidence, uf UnitFiles) (EvidenceIndex, bool) {
 	}
 
 	files := make(map[string]evidenceFileEntry, len(tallies))
+	var executedUnlanded map[string]bool // nil when there is none
 	for src, t := range tallies {
+		if t.units == 0 && t.executed {
+			if executedUnlanded == nil {
+				executedUnlanded = map[string]bool{}
+			}
+			executedUnlanded[src] = true
+		}
 		if t.units == 0 && (t.executed || partial) {
 			continue
 		}
@@ -787,7 +794,7 @@ func IndexFromUnits(ev UnitEvidence, uf UnitFiles) (EvidenceIndex, bool) {
 			hasStatements: s.HasStatements,
 		}
 	}
-	return EvidenceIndex{files: files, unitKind: true}, true
+	return EvidenceIndex{files: files, unitKind: true, executedUnlanded: executedUnlanded}, true
 }
 
 // UnitFiles is what IndexFromUnits needs to know about the repository's

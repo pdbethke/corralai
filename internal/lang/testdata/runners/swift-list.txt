@@ -1,0 +1,8 @@
+CalcXCTests.AdderTests/testAdds
+CalcXCTests.AdderTests/testAddsTwice
+CalcXCTests.AdderTests/testFails
+CalcTests.Arithmetic/adds()
+CalcTests.Arithmetic/doubles(value:)
+CalcTests.Arithmetic/fails()
+CalcTests.parses()
+CalcTests.parsesTwice()

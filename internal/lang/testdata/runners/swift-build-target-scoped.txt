@@ -1,0 +1,11 @@
+# argv: -
+$ swift build --target CalcXCTests --scratch-path .build-scoped
+Building for debugging...
+[0/3] Write sources
+[2/3] Write swift-version-24593BA9C3E375BF.txt
+[4/5] Compiling Calc Calc.swift
+[5/5] Emitting module Calc
+[7/8] Compiling CalcXCTests CalcXCTests.swift
+[8/8] Emitting module CalcXCTests
+Build of target: 'CalcXCTests' complete! (2.42s)
+# exit: 0

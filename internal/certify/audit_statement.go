@@ -98,8 +98,10 @@ type AuditedFile struct {
 	WriterMode     string                `json:"writerMode,omitempty"`
 	TestsPerMutant *TestsPerMutantSpread `json:"testsPerMutant,omitempty"`
 	// Trees and ConcurrencyNote disclose how many private trees the
-	// workspace substrate's probe scored this file with at once, or —
-	// when it granted only one — why. A MEASURED one is signed like any
+	// workspace substrate's probe scored this file with at once, and the
+	// pool's note: when it granted only one, why; when it granted more, which
+	// build directories each tree built for itself, from scratch
+	// (adequacy's ownBuildNote). A MEASURED one is signed like any
 	// other count: a verifier must be able to see the exam ran at
 	// concurrency 1 without inferring it from an absent key. Trees < 1 is
 	// the other thing entirely — nothing measured it (the jail substrate

@@ -227,6 +227,63 @@ type TreeEnver interface {
 	TreeEnv(tree string, cores int) []string
 }
 
+// PerRunBuilder is an OPTIONAL plugin capability: the language's mutant pays
+// build work that the unmutated baseline does not, so the per-mutant time cap
+// must be floored by a run that pays it too. RebuildProbe returns src changed
+// so the file's module must recompile AND relink, and its tests run as
+// before; ok is false for a file it cannot change that way, which then gets
+// no floor. The workspace substrate runs the file's command once on the
+// probe (adequacy.WorkspacePool.MeasureRebuild) and the cap is floored at the
+// same multiple of that run (adequacy.mutantTimeoutCap).
+//
+// Every implementation returns leadingCommentProbe: one line comment, in the
+// language's own marker, before the file's first line. Before and not after,
+// because what a mutant pays and a baseline does not is the RELINK, and only
+// a change that moves code changes the compiled object. Measured 2026-11-19
+// on taplin/Lariat at be0c5fd (Swift 6.3.2, one 32-core machine, in Docker),
+// `swift build --build-tests` after each change to Sources/LassoParser/
+// Evaluator.swift, as SwiftPM's own "Build complete!" line timed it:
+// rewritten with its own bytes (what every run on the workspace substrate
+// does to the file, the baseline included) 6.3 and 6.4 s, compiling the file
+// and linking nothing; a comment line appended at the end 6.3 s, the same; a
+// comment line put first 15.5 s, relinking six products; a one-line mutant
+// 15.4 s, relinking the same six. The line moves every
+// line after it by one, so a test that asserts a line number of this file
+// (a message carrying #line, say) can fail on the probe: that run then sets
+// no floor, and says so.
+//
+// Which languages implement it, and why each other one does not (Rust on a
+// measurement, the rest not measured), is the parity table's
+// "rebuild-floor" capability (parity.go), which the parity test enforces.
+// A language that does not implement it keeps the cap it had.
+type PerRunBuilder interface {
+	RebuildProbe(codePath, src string) (probed string, ok bool)
+}
+
+// rebuildProbeText is the comment leadingCommentProbe writes: what the line
+// is, for anyone who finds it in a tree a killed process left behind.
+const rebuildProbeText = "corral rebuild probe: corral removes this line when the run ends"
+
+// utf8BOM is the UTF-8 byte-order mark, which must stay a file's first bytes.
+const utf8BOM = "\xef\xbb\xbf"
+
+// leadingCommentProbe is the one RebuildProbe rule (see PerRunBuilder): a
+// line comment in marker put before src's first line, after a byte-order
+// mark if src has one. A file that starts with a shebang (`#!`, not Rust's
+// `#![` inner attribute) is refused, because a shebang only works as the
+// first line, and a probe that does not build would measure a failed build.
+func leadingCommentProbe(marker, src string) (string, bool) {
+	body, bom := strings.CutPrefix(src, utf8BOM)
+	if strings.HasPrefix(body, "#!") && !strings.HasPrefix(body, "#![") {
+		return "", false
+	}
+	probed := marker + " " + rebuildProbeText + "\n" + body
+	if bom {
+		probed = utf8BOM + probed
+	}
+	return probed, true
+}
+
 // HarnessConfigurer is the OPTIONAL interface a plugin implements to name
 // the files its test runner reads before any test runs — pytest's
 // conftest.py and its ini files, jest's config and setup files, RSpec's
@@ -720,6 +777,83 @@ func JailPreflight(p Plugin, testCmd []string) error {
 		return j.JailPreflight(testCmd)
 	}
 	return nil
+}
+
+// SandboxRefuser is the OPTIONAL plugin extension a language implements
+// when corral's sandbox never runs it, whatever the host holds: installing,
+// repairing or swapping the sandbox would only reach the same refusal.
+// SandboxRefusal is that refusal, and the plugin's JailPreflight returns it,
+// so a door that prints it prints the one wording the plugin wrote,
+// remedy included. A refusal a host CAN fix (Rust's user-home toolchain,
+// PHP's interpreter behind a symlink the sandbox cannot follow) is not
+// declared here: it stays a JailPreflight answer.
+//
+// It is a declaration, not a probe, so a door can ask it before any sandbox
+// exists and without running a language's JailPreflight (PHP's starts a
+// sandbox run).
+type SandboxRefuser interface {
+	SandboxRefusal() error
+}
+
+// RefusesEverySandbox is p's declared outright refusal (SandboxRefuser), or
+// nil for a language corral's sandbox can run on some host. It is how a door
+// decides whether its advice about the sandbox can help this language at
+// all; it reads the plugin's declaration, never a language name.
+func RefusesEverySandbox(p Plugin) error {
+	if r, ok := p.(SandboxRefuser); ok {
+		return r.SandboxRefusal()
+	}
+	return nil
+}
+
+// EvidencePromoter is the OPTIONAL plugin extension declaring that the
+// language's evidence can add a source no filename pairs to the audit
+// (reposcan.WidenCandidacyByEvidence): its evidence names, for such a file,
+// the test file an authored test would go in. It is a declaration because
+// the code that decides it lives in internal/reposcan (UnitTestFile, and the
+// source's own landing check, lang.CheckTestLanding), which imports this
+// package; reposcan's TestEvidencePromotionDeclarationMatchesTheLandingCode
+// runs that code for every registered language and fails when a
+// declaration says otherwise. The support page's row and the run's count
+// line read it through PromotesByEvidence.
+//
+// That test checks the declaration against SAMPLE repositories, one per
+// language. The promotion a run performs does not read this declaration at
+// all (it promotes wherever UnitTestFile lands), so nothing catches a drift
+// that shows only on a real tree: there the count line or a recorded
+// evidence-pairing-not-built reason could disagree with what was promoted.
+type EvidencePromoter interface {
+	EvidencePromotes()
+}
+
+// PromotesByEvidence reports p's EvidencePromoter declaration.
+func PromotesByEvidence(p Plugin) bool {
+	_, ok := p.(EvidencePromoter)
+	return ok
+}
+
+// SignatureReader is the OPTIONAL plugin extension declaring that corral
+// reads the language's functions and their branches from a source file
+// (repoindex.ExtractSignatures, which gives each function its line span and
+// decision points). That reading is what splits a file's mutant generation
+// into one seat per group of functions (advpool.PlanShards), what the
+// prompts' signature surface holds, and what the verdict's exam coverage
+// counts; without it a file gets one generator seat over the whole file, an
+// empty signature surface and exam coverage recorded as not measured. It is
+// a declaration because the reader lives in internal/repoindex, which
+// imports this package; repoindex's
+// TestSignatureDeclarationMatchesTheReader runs the reader on a sample for
+// every registered language and fails when a declaration says otherwise,
+// and TestTheWriterPromptPromisesASignatureSurfaceOnlyWhereOneIsRead keeps
+// each writer's system prompt to what it is sent.
+type SignatureReader interface {
+	ReadsSignatures()
+}
+
+// ReadsSignatures reports p's SignatureReader declaration.
+func ReadsSignatures(p Plugin) bool {
+	_, ok := p.(SignatureReader)
+	return ok
 }
 
 // SelectionDiagnoser is an OPTIONAL TestEvidence extension: a plugin that

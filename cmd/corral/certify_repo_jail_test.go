@@ -37,7 +37,7 @@ func TestNewLocalExecutorWithJailHandsTheFlagToTheResolver(t *testing.T) {
 	if !gotFallback {
 		t.Error("certify --repo now offers --jail, so a bwrap failure may advise `--jail container`")
 	}
-	if err := ex.preflight(); err == nil || !strings.Contains(err.Error(), "no container runtime") {
+	if err := ex.preflight(nil); err == nil || !strings.Contains(err.Error(), "no container runtime") {
 		t.Errorf("preflight = %v, want the resolver's own error", err)
 	}
 }

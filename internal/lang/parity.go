@@ -16,7 +16,34 @@ var paritySamples = map[string]paritySample{
 	"rust":       {"src/a.rs", "#[test]\nfn a() {}\n"},
 	"javascript": {"a.test.js", "test('a', () => {});\n"},
 	"typescript": {"a.test.ts", "test('a', () => {});\n"},
+	"swift":      {"Tests/ATests/ATests.swift", "import XCTest\n\nfinal class ATests: XCTestCase {\n    func testA() {}\n}\n"},
 	"ruby":       {"a_spec.rb", "describe 'A' do\n  it 'a' do\n  end\nend\n"},
+}
+
+// mergeSamples is two proven tests per language, as the test-writer hands
+// them to the merge (ConcatAuthored): each a whole test file for the same
+// source, declaring a different test, written the way that language's
+// writer prompt asks. The merge capability is judged by merging them.
+var mergeSamples = map[string][2]string{
+	"go":         {"package a\n\nimport \"testing\"\n\nfunc TestA(t *testing.T) {}\n", "package a\n\nimport \"testing\"\n\nfunc TestB(t *testing.T) {}\n"},
+	"python":     {"from a import f\n\ndef test_a():\n    assert f()\n", "from a import f\n\ndef test_b():\n    assert f()\n"},
+	"php":        {"<?php\nuse PHPUnit\\Framework\\TestCase;\nfinal class ATest extends TestCase { public function testA(): void { $this->assertTrue(true); } }\n", "<?php\nuse PHPUnit\\Framework\\TestCase;\nfinal class ATest extends TestCase { public function testB(): void { $this->assertTrue(true); } }\n"},
+	"rust":       {rustPlugin{}.LandTest("#[test]\nfn a() {}", 1, ""), rustPlugin{}.LandTest("#[test]\nfn b() {}", 1, "")},
+	"javascript": {"import { test } from 'node:test';\ntest('a', () => {});\n", "import { test } from 'node:test';\ntest('b', () => {});\n"},
+	"typescript": {"import { test } from 'node:test';\ntest('a', () => {});\n", "import { test } from 'node:test';\ntest('b', () => {});\n"},
+	"swift":      {"import XCTest\n@testable import A\n\nfinal class A_corralTests: XCTestCase {\n    func testA() {}\n}\n", "import XCTest\n@testable import A\n\nfinal class A_corralTests: XCTestCase {\n    func testB() {}\n}\n"},
+	"ruby":       {"require 'minitest/autorun'\n\nclass ATest < Minitest::Test\n  def test_a\n    assert true\n  end\nend\n", "require 'minitest/autorun'\n\nclass ATest < Minitest::Test\n  def test_b\n    assert true\n  end\nend\n"},
+}
+
+// mergesTwoParts is the merge capability judged by doing it: both of the
+// language's sample tests end up in one merged file, none carried out apart.
+func mergesTwoParts(p Plugin) bool {
+	s, ok := mergeSamples[p.Name()]
+	if !ok {
+		return false
+	}
+	merged, extra := ConcatAuthored(p, []AuthoredPart{{MutantID: "s0/m1", Source: s[0]}, {MutantID: "s0/m2", Source: s[1]}})
+	return merged != "" && len(extra) == 0
 }
 
 // Capability is one user-facing thing corral does with a language's tests.
@@ -110,6 +137,31 @@ var Capabilities = []Capability{
 	// Judged on the same row test RunCacheFor reads, so the page cannot claim
 	// a cache the code does not hand the sandbox.
 	rowCapability("run-cache", "Share a build cache between sandboxed runs", runRowCache),
+	// The language measures one run that pays a mutant's rebuild, on the
+	// workspace substrate, and floors each mutant's time cap at three times
+	// it (PerRunBuilder; adequacy.WorkspacePool.MeasureRebuild). Judged on
+	// the interface the wiring asserts, so the page cannot claim a run the
+	// code does not make. Go's floor in the sandbox comes from the run
+	// cache's warming run, a different capability (run-cache); its
+	// exemption here says so, because this table has one answer per
+	// language and not one per substrate.
+	{Key: "rebuild-floor", Title: "Floor each mutant's time limit at three times a measured rebuild run (workspace substrate)", Has: func(p Plugin) bool { _, ok := p.(PerRunBuilder); return ok }},
+	// The language names the lockfile every workspace tree must hold for the
+	// trees to resolve the same dependency versions (Lockfiler;
+	// adequacy.WithLockfile). Judged on the interface the wiring asserts.
+	{Key: "lockfile", Title: "Keep workspace trees on the checkout's locked dependency versions (one tree when they would not hold the lockfile)", Has: func(p Plugin) bool { _, ok := p.(Lockfiler); return ok }},
+	// The language's evidence adds a source with no paired test to the
+	// audit when a test executes it (EvidencePromoter). A declaration,
+	// checked against reposcan's landing code by reposcan's
+	// TestEvidencePromotionDeclarationMatchesTheLandingCode.
+	{Key: "evidence-promotion", Title: "Add a file with no paired test to the audit when the evidence shows a test executes it", Has: PromotesByEvidence},
+	// The language's functions and their branches are read from a source
+	// file (SignatureReader, a declaration checked against repoindex's
+	// reader by repoindex's TestSignatureDeclarationMatchesTheReader).
+	{Key: "signatures", Title: "Read a file's functions and their branches (one mutant-generator seat per group of functions, a signature surface in the prompts, exam coverage)", Has: ReadsSignatures},
+	// The proven tests are handed back as one file: judged by merging two
+	// sample tests through ConcatAuthored, the fold every caller uses.
+	{Key: "merge", Title: "Hand back the proven tests as one file", Has: mergesTwoParts},
 	{Key: "coverage", Title: "Coverage pre-flight", Has: func(p Plugin) bool { _, ok := p.(CoverageReporter); return ok }},
 	// Row and Stock as a row capability's, so the support page names the
 	// runners that select when the stock command's does not (Ruby's stock
@@ -193,4 +245,35 @@ var ParityExemptions = []Exemption{
 	{"ruby", "failure-hook", "not built: corral reads rspec's `Failed examples:` list and minitest's printed failures. rspec takes a second formatter writing to a file (`--format json --out <file>`), which would be the hook; corral does not add it, and nothing comparable was looked for in minitest"},
 
 	{"rust", "failure-hook", "not built: corral reads the lines cargo test and cargo-nextest print. nextest writes a JUnit file when a profile in the project's .config/nextest.toml asks for one, and libtest's JSON output is an unstable option; a way to ask for either from the command line was not looked for"},
+
+	{"swift", "confirm-alone", "not built: the failure line swift-testing prints names a failing test by its function or display name alone (`✘ Test fails() failed after ...`), not its suite or target, and XCTest's names the class and method (`Test Case 'AdderTests.testFails' failed`) but not the target the class is in (measured on Swift 6.3.2); XCTest's `error:` line before it carries the test file's path, `Tests/CalcXCTests/CalcXCTests.swift` in that run. So the killing test cannot be narrowed by name to exactly one test; kills are confirmed by repeating the grading run"},
+
+	{"swift", "fail-fast", "`swift test` has no option to stop at the first failure: the --help of Swift 6.3.2 lists none"},
+
+	{"swift", "readable-failures", "not built: the --help of Swift 6.3.2 names no project file that sets `swift test`'s options, so no project setting is known to hide the lines corral reads; this was read from the help text, not tested against a project that tried"},
+
+	{"swift", "failure-hook", "not built: corral reads the lines `swift test` prints. Its `--xunit-output <path>` (in the --help of Swift 6.3.2) writes a record of each test to a file and would be the hook; corral does not add it, and it has not been run for this"},
+
+	{"swift", "salvage", "not built: `swift test --help` (Swift 6.3.2) lists a `--skip` option, which was not run, and the failure lines name a swift-testing test without its suite or target and an XCTest test by class and method without its target (measured on Swift 6.3.2), so a skip built from them could leave out a passing test of the same name elsewhere and narrow the run"},
+
+	{"swift", "run-cache", "not built: corral's sandbox does not run Swift, and before a build directory is shared between runs we must settle how one mutant's build output is kept from being read by another's run. What sharing would save a grading run has not been measured; the one Swift timing taken is the free `--dry-run --evidence` on taplin/Lariat at be0c5fd on 2026-11-19 (workspace substrate, Swift 6.3.2 in a container, not in the sandbox), whose unit pass builds under coverage: 1 m 17.8 s for the whole dry run with that first build, and 14.3 s re-run on the built tree with `--no-selection-cache` (the evidence-pairing page)"},
+	{"rust", "evidence-promotion", "not built: a Rust source with no separate test file would have its authored test written into the source itself, which corral does not do yet, so the scan excludes it before pairing and the evidence never reaches it; a source with a separate test file is already paired by name. On indexmap-rs/indexmap at 41a8708 (workspace substrate) a unit executed src/inner/extract.rs in full and nothing was added. The line that counts evidence-paired files says this after the unit pass, and such a source is recorded as test-landing-not-built"},
+	{"swift", "signatures", "not built: corral has no reader for a Swift file's functions and branches yet, so a Swift file is given one mutant-generator seat over the whole file, the signature surface in the prompts is empty (the test-writer's prompt says to read the file's API from the file itself), and the verdict's exam coverage, how many functions and decision points the mutants reached, is recorded as not measured"},
+	{"swift", "merge", "not built: what one merged Swift file is has not been settled. Every top-level name in a test target is shared, and each proven test puts everything in one type named after the file it was written as, so all of a file's proven tests declare the same type. Each is handed back as a file of its own, with that reason, and only one of them can be added to the test target as it stands: rename the type in each of the others first"},
+	{"php", "merge", "PHPUnit 10 and 11 load one class per file, the class named after the file, and a merged file of renamed classes ran no test on PHPUnit 11.5. So the first proven test is handed back as the file, and each other one as a file of its own, to be saved under its own class name"},
+	{"swift", "evidence-promotion", "not built: a Swift test unit is a test target, and which of its files an authored test for a source would go in is not built, so a file with no paired test stays out of the audit even when a target's run executes it. On taplin/Lariat at be0c5fd (workspace substrate, a free dry run on 2026-11-19) the unit pass executed 40 files under Sources/LassoParser, one of them paired by name, and added none. The line that counts evidence-paired files says this after the unit pass, and a file a test target executed is recorded as evidence-pairing-not-built rather than no-paired-test"},
+	{"go", "lockfile", "not built, and not measured: Go keeps the modules it downloads outside the checkout, in a module cache every tree reads, and a build uses the versions go.mod names, so no tree has a lockfile of its own to lack; whether trees can still differ was not measured"},
+	{"rust", "lockfile", "not built: cargo builds each tree's own target/, and a tree without the checkout's Cargo.lock resolves the dependencies afresh, so Rust needs this. But a cargo workspace keeps Cargo.lock at the workspace root, not beside a member crate's Cargo.toml, and finding that root is not built yet"},
+	{"python", "lockfile", "not built: dependencies in .venv, venv or site-packages are linked into every tree, so the trees share one installed set and resolve none of it. A suite run through tox builds its own .tox in each tree; whether those resolve the same versions was not measured"},
+	{"ruby", "lockfile", "not measured: a tree without the checkout's Gemfile.lock lets bundler resolve the Gemfile again, and whether trees then build on different versions was not measured"},
+	{"javascript", "lockfile", "not built: node_modules is linked into every tree, so the trees share one installed set and resolve none of it; a test command that installs packages itself was not considered"},
+	{"typescript", "lockfile", "not built: node_modules is linked into every tree, so the trees share one installed set and resolve none of it; a test command that installs packages itself was not considered"},
+	{"php", "lockfile", "not built: vendor/ is linked into every tree (its autoload files are copied, so each tree loads its own code), so the trees share one installed set and resolve none of it"},
+	{"go", "rebuild-floor", "not built, and not measured: on the workspace substrate no rebuild run is made, and whether a Go mutant there pays build work that the unmutated baseline does not has not been timed. In the sandbox, when the build cache is shared (\"Share a build cache between sandboxed runs\"), each mutant's time limit is floored at three times the run that warmed the cache, under the five-minute ceiling: the rule this row applies to a measured rebuild run"},
+	{"rust", "rebuild-floor", "not built, because on the one crate measured the baseline already pays the mutant's rebuild: every run on the workspace substrate writes the audited file back, and cargo rebuilds a file whose timestamp changed. Measured 2026-11-19 on regex-syntax 0.8.5 (cargo 1.90, one 32-core machine, outside the sandbox, three runs each, as cargo's Finished line timed them), `cargo test --lib --no-run` took 0.44 to 0.51 s after src/hir/translate.rs was rewritten with its own bytes and 0.47 to 0.57 s after a one-line change to it; with a comment line put first, 0.61 s in one run. In the sandbox the copy each run gets leaves the checkout's target/ out, the baseline's and a mutant's alike. Other crates were not measured"},
+	{"python", "rebuild-floor", "not measured: the time a mutant's run spends on work the unmutated baseline's does not was not compared. On the workspace substrate each run is given a fresh, empty bytecode cache directory, the baseline's included"},
+	{"ruby", "rebuild-floor", "not measured: the time a mutant's run spends on work the unmutated baseline's does not was not compared"},
+	{"javascript", "rebuild-floor", "not measured: the time a mutant's run spends on work the unmutated baseline's does not (a transform cache, for one) was not compared"},
+	{"typescript", "rebuild-floor", "not measured: the time a mutant's run spends on work the unmutated baseline's does not (transpiling, a transform cache) was not compared"},
+	{"php", "rebuild-floor", "not measured: the time a mutant's run spends on work the unmutated baseline's does not was not compared"},
 }

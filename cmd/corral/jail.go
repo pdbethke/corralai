@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -71,14 +72,28 @@ func (gc gradingRunCache) final(j adequacy.Jail) string {
 	if gc.Record != runCacheShared {
 		return gc.Record
 	}
+	if why, unwarmed := gc.unwarmed(j); unwarmed {
+		return "unshared: " + why
+	}
+	return runCacheShared
+}
+
+// unwarmed reports a cache decided shared whose warming run never happened,
+// and why, as "never warmed (<why>)": the one wording RunCache ("unshared:
+// …") and CapFloor ("none: …") both record. false for a cache that was not
+// decided shared, or that was warmed.
+func (gc gradingRunCache) unwarmed(j adequacy.Jail) (why string, unwarmed bool) {
+	if gc.Record != runCacheShared {
+		return "", false
+	}
 	if rj, ok := j.(adequacy.RunCacheJail); ok && rj.Warmed() {
-		return runCacheShared
+		return "", false
 	}
-	why := "no dev pass ran"
+	reason := "no dev pass ran"
 	if gc.warmRejected != nil && gc.warmRejected.Load() {
-		why = "the dev suite's command could not be given the flag that forbids a cached result"
+		reason = "the dev suite's command could not be given the flag that forbids a cached result"
 	}
-	return "unshared: never warmed (" + why + ")"
+	return "never warmed (" + reason + ")", true
 }
 
 // newGradingJail is the ONE place that decides whether a file's grading shares
@@ -158,6 +173,54 @@ func fileRunCache(r reposcan.FileResult) string {
 	return r.RunCache
 }
 
+// fileCapFloor is the CapFloor a file's row records, by fileRunCache's rule:
+// only for a file that was graded here.
+func fileCapFloor(r reposcan.FileResult) string {
+	if !r.Gradable {
+		return ""
+	}
+	return r.CapFloor
+}
+
+// The two kinds of run that floor a per-mutant cap, as a file row names them.
+const (
+	capFloorWarmRun    = "run-cache warming run"
+	capFloorRebuildRun = "rebuild run"
+)
+
+// jailCapFloor is the CapFloor of a file graded in the jail, read when its run
+// ends: "" when no floor applied (the operator's --test-timeout set the cap,
+// adequacy.CapFloorApplies, however the cache was warmed); the warming run
+// that set it; "none: never warmed (<why>)" for a cache decided shared that
+// was never warmed; "" for a runner with no run cache.
+func jailCapFloor(j adequacy.Jail, gc gradingRunCache, testTimeout time.Duration) string {
+	if !adequacy.CapFloorApplies(testTimeout) {
+		return ""
+	}
+	if why, unwarmed := gc.unwarmed(j); unwarmed {
+		return "none: " + why
+	}
+	return capFloorOf(j)
+}
+
+// capFloorOf names the run that set the floor of the jail a file was graded
+// on, and how long it took, read from the one place Score reads the floor
+// (adequacy.WarmDurationJail). "" when the jail has none. It does not decide
+// whether the floor applied: its callers ask adequacy.CapFloorApplies first
+// (jailCapFloor, rebuildFloor), and a floor source that was due and gave none
+// is recorded by them, which know why.
+func capFloorOf(j adequacy.Jail) string {
+	wj, ok := j.(adequacy.WarmDurationJail)
+	if !ok || wj.WarmDuration() <= 0 {
+		return ""
+	}
+	kind := capFloorRebuildRun
+	if _, ok := j.(adequacy.RunCacheJail); ok {
+		kind = capFloorWarmRun
+	}
+	return kind + ", " + wj.WarmDuration().Round(time.Millisecond).String()
+}
+
 // runCacheUnsharedLine is the line a file's own output carries when its
 // grading shares no cache, "" when it does, or has none to share.
 func runCacheUnsharedLine(path, record string) string {
@@ -166,6 +229,19 @@ func runCacheUnsharedLine(path, record string) string {
 		return ""
 	}
 	return "build cache: not shared for " + path + ": " + reason
+}
+
+// capFloorNoneLine is the line the scan prints for a file whose floor source
+// was due and gave none (a CapFloor of "none: <why>": a rebuild run that gave
+// no floor, a shared run cache never warmed), naming the file and why; ""
+// for a measured floor or none due. Its caller passes the row's CapFloor
+// (fileCapFloor), so a file that was not graded says nothing.
+func capFloorNoneLine(path, record string) string {
+	why, ok := strings.CutPrefix(record, "none: ")
+	if !ok {
+		return ""
+	}
+	return "time cap floor: none for " + path + ": " + why + "; each mutant gets the cap its baseline alone gives"
 }
 
 // closeGradingJail removes a grading jail's cache directory, if it has one.
@@ -275,6 +351,11 @@ func resolveJail(jailFlag string, containerFallback bool) (sandbox.Isolator, err
 // the shipped one and leaves bwrap without CAP_NET_ADMIN (measured on Ubuntu
 // 26.04, where it broke bwrap and GNOME's glycin), so it now says to remove it. It is a pure formatter — no bwrap invocation — so it is
 // unit-testable without a working (or degraded) bwrap on the host.
+//
+// The advice is kept apart from the cause (sandboxStartError) so a door that
+// knows the languages in play can replace it (sandboxFailureFor): for a
+// language corral's sandbox never runs, every step it names ends at that
+// language's own refusal.
 func bwrapUnavailableError(cause error, containerFallback bool) error {
 	tail := `Otherwise run on a host where bwrap can isolate: this command has no
 sandbox-backend override.`
@@ -283,10 +364,7 @@ sandbox-backend override.`
 CORRALAI_EXEC_IMAGE set to an image with your toolchain, e.g.
 CORRALAI_EXEC_IMAGE=python:3.12-bookworm).`
 	}
-	return fmt.Errorf(
-		`no working bwrap sandbox: %w
-
-corral never runs untrusted test/mutant code unsandboxed. On Ubuntu 24.04 and
+	return &sandboxStartError{cause: cause, advice: `corral never runs untrusted test/mutant code unsandboxed. On Ubuntu 24.04 and
 later, AppArmor restricts the unprivileged user namespaces bwrap needs. Ubuntu
 ships a profile for bwrap, bwrap-userns-restrict; load it (on 24.04 it may
 still be under /usr/share/apparmor/extra-profiles):
@@ -300,7 +378,148 @@ If one is there from earlier advice (corral printed it before 1.0), remove it:
 
   sudo apparmor_parser -R /etc/apparmor.d/bwrap && sudo rm /etc/apparmor.d/bwrap
 
-%s`, cause, tail)
+` + tail}
+}
+
+// sandboxStartError is a bwrap sandbox that would not start (cause, the
+// backend's own error) and the advice the door gives for it.
+type sandboxStartError struct {
+	cause  error
+	advice string
+}
+
+func (e *sandboxStartError) Error() string {
+	return "no working bwrap sandbox: " + e.cause.Error() + "\n\n" + e.advice
+}
+
+func (e *sandboxStartError) Unwrap() error { return e.cause }
+
+// sandboxAdviceFor is the ONE answer every door gives after a sandbox that
+// would not start, for the languages the run would execute in the sandbox
+// (langs: certify --repo's sandboxLangs, the candidates' languages and the
+// evidence pass's; the one language a test map is built for; doctor's
+// --code file's). With no language, advice is returned unchanged: nothing
+// is known that it could be wrong for. A language refuses outright when it
+// declares that corral's sandbox never runs it (lang.RefusesEverySandbox,
+// read from the plugin, so no sandbox probe runs); its refusal is printed as
+// the plugin wrote it, so the remedy it names (for Swift, `certify --repo
+// --substrate workspace` on a scratch clone) is worded once, in the plugin.
+//
+//   - No language refuses: advice, the door's own words about fixing the
+//     sandbox, unchanged. A language whose JailPreflight refuses only on
+//     some hosts (Rust, PHP) is in this case.
+//   - Every language refuses: the refusals in place of the advice, since no
+//     fix to the sandbox can run anything the run would grade.
+//   - Some do: both, each saying which files it is for, the advice first
+//     because it is what the operator can act on for the files that can run.
+func sandboxAdviceFor(advice string, langs []string) string {
+	r := sandboxRefusalsFor(langs)
+	if len(r.refusals) == 0 {
+		return advice
+	}
+	if len(r.running) == 0 {
+		return "A working sandbox would not help here:\n" + strings.Join(r.refusals, "\n")
+	}
+	if advice == "" {
+		return r.note()
+	}
+	return advice + "\n\nThat advice is for the " + strings.Join(r.running, ", ") + " files this run would audit. " +
+		"corral's sandbox never runs its " + strings.Join(r.refusing, ", ") + " files, on any host:\n" + strings.Join(r.refusals, "\n")
+}
+
+// sandboxRefusals is langs split by the one decision every door makes about
+// a language and corral's sandbox (lang.RefusesEverySandbox): the refusing
+// languages' own refusals and display names, and the display names of the
+// languages the sandbox can run on some host. A name with no plugin is in
+// neither list.
+type sandboxRefusals struct {
+	refusals, refusing, running []string
+}
+
+func sandboxRefusalsFor(langs []string) sandboxRefusals {
+	var r sandboxRefusals
+	for _, n := range langs {
+		p, ok := lang.ByName(n)
+		if !ok {
+			continue
+		}
+		if err := lang.RefusesEverySandbox(p); err != nil {
+			r.refusals = append(r.refusals, err.Error())
+			r.refusing = append(r.refusing, p.PromptLang())
+		} else {
+			r.running = append(r.running, p.PromptLang())
+		}
+	}
+	return r
+}
+
+// note says which of the run's files the sandbox never runs, and each
+// refusing language's own refusal.
+func (r sandboxRefusals) note() string {
+	return "corral's sandbox never runs this run's " + strings.Join(r.refusing, ", ") + " files, on any host:\n" + strings.Join(r.refusals, "\n")
+}
+
+// sandboxRefusalWith is the same decision for a sandbox that STARTED, which
+// a door must ask too: a working sandbox runs nothing a refusing language
+// would grade, so when every language in langs refuses, the run is refused
+// here, before anything it would run in the sandbox (the unit evidence
+// pass) or pay for (goal derivation), with those refusals; refused per file
+// instead, it pays for a goal for every file first. When only some refuse,
+// the run goes on for the others and note says which files the sandbox
+// never runs. Both are "" / nil when none refuses, so a run in a language
+// the sandbox runs sees nothing new.
+func sandboxRefusalWith(langs []string) (note string, refuse error) {
+	r := sandboxRefusalsFor(langs)
+	switch {
+	case len(r.refusals) == 0:
+		return "", nil
+	case len(r.running) == 0:
+		return "", errors.New(r.note())
+	default:
+		return r.note(), nil
+	}
+}
+
+// sandboxFailureFor is err, a sandbox that would not start, with its advice
+// replaced by sandboxAdviceFor's answer for langs. An error that carries no
+// separable advice (another backend's own message) is kept whole, and any
+// refusal is added after it.
+func sandboxFailureFor(err error, langs []string) error {
+	if err == nil {
+		return nil
+	}
+	var se *sandboxStartError
+	if errors.As(err, &se) {
+		return &sandboxStartError{cause: se.cause, advice: sandboxAdviceFor(se.advice, langs)}
+	}
+	if note := sandboxAdviceFor("", langs); note != "" {
+		return fmt.Errorf("%w\n\n%s", err, note)
+	}
+	return err
+}
+
+// candidateLangs is the languages of the files a scan would audit, sorted:
+// half of what sandboxAdviceFor speaks for on certify --repo (sandboxLangs
+// adds the evidence pass's language).
+func candidateLangs(cands []reposcan.Candidate) []string {
+	set := map[string]bool{}
+	for _, c := range cands {
+		if c.Lang != "" {
+			set[c.Lang] = true
+		}
+	}
+	return sortedLangs(set)
+}
+
+// sortedLangs is a language set as the sorted list sandboxAdviceFor reads,
+// so a refusal note lists languages in one order on every run.
+func sortedLangs(set map[string]bool) []string {
+	out := make([]string, 0, len(set))
+	for n := range set {
+		out = append(out, n)
+	}
+	slices.Sort(out)
+	return out
 }
 
 // hasContainerRuntime reports whether docker or podman is on PATH, so tests

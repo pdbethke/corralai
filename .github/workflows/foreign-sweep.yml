@@ -5,8 +5,8 @@ name: Foreign sweep
 permissions:
   contents: read
 
-# Runs scripts/foreign-sweep.sh — `certify --repo --dry-run` against 8
-# SHA-pinned foreign repos producing 9 golden rows (express is scanned twice:
+# Runs scripts/foreign-sweep.sh — `certify --repo --dry-run` against 9
+# SHA-pinned foreign repos producing 10 golden rows (express is scanned twice:
 # once by convention, once with a tenant --tests map), diffed against
 # testdata/foreign-sweep-expected.tsv (see that script's own header for why it
 # exists and what it does and does not catch).
@@ -23,7 +23,7 @@ permissions:
 #
 # Runs on PRs (not just pushes to main) — a gate that only fires after merge
 # is a report, not a gate — and reuses deploy.yml's docs-only detection
-# pattern so a Markdown-only PR doesn't pay for 7 clones + a Go build.
+# pattern so a Markdown-only PR doesn't pay for 9 clones + a Go build.
 on:
   push:
     branches: [main]
@@ -35,7 +35,7 @@ jobs:
   sweep:
     runs-on: ubuntu-latest
     # The script's own header budgets this at ~10s wall clock locally plus
-    # network for 7 clones; without an explicit cap a hung clone or a wedged
+    # network for 9 clones; without an explicit cap a hung clone or a wedged
     # runner falls back to GitHub's 6-hour default, which is not a "stays
     # under five minutes" budget in any sense a reviewer would recognize.
     timeout-minutes: 10

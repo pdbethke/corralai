@@ -489,7 +489,26 @@ package reposcan
 // so this is a shape bump and not a ride-along. The verdict cache key does
 // not name how a seat was chosen, so a verdict served from cache carries the
 // seating basis it was measured under.
-const VerdictGeneration = "48"
+//
+// "49" (2026-11-19): the mutant compile gate checks the developer's own test
+// beside the code (advpool.JailScorer.mutantGate), where it checked the code
+// alone whenever corral's authored test was not yet a file of the tree, which
+// was every mutant of every path language. A mutant that still compiles but
+// breaks the tests' view of it (a changed signature a test calls) failed the
+// suite's build and was scored as a KILL. Now TypeScript's tsc type-checks
+// the dev test against each mutant and Swift builds the dev test's target,
+// so such a mutant is invalid; Python, Ruby, JavaScript and PHP add the
+// unchanged dev test to their per-file checks. Go and Rust ignore the test
+// path. When the unmutated tree's check rejects the dev test (measured only
+// with oxlint 1.87.0 run by hand: its no-undef rejects a Jest test's globals;
+// a TypeScript test with type errors that only a type-stripping runner loads
+// is the same case by construction and was not run), the gate falls back to the
+// code alone for that file, as every language ran before, and says so in the
+// compile-gate note: adequacy.Report.CompileGateNote, which the driver prints
+// to the run's log beside the dev-adequacy line and which no Verdict field
+// carries. A "48" TypeScript verdict may count such mutants as kills. Shape
+// unchanged; behaviour bump.
+const VerdictGeneration = "49"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

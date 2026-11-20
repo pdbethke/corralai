@@ -1,0 +1,22 @@
+# argv: swift test
+$ swift test --filter ^CalcTests\.parses\(\)(?:/|$)
+[0/1] Planning build
+Building for debugging...
+[0/3] Write sources
+[1/3] Write swift-version-24593BA9C3E375BF.txt
+[3/5] Compiling Calc Calc.swift
+[4/5] Emitting module Calc
+[5/14] Wrapping AST for Calc for debugging
+[6/8] Write Objects.LinkFileList
+[7/8] Linking CalcPackageTests.xctest
+Build complete! (0.24s)
+Test Suite 'Selected tests' started at 2026-11-19 21:30:19.295
+Test Suite 'Selected tests' passed at 2026-11-19 21:30:19.296
+	 Executed 0 tests, with 0 failures (0 unexpected) in 0.0 (0.0) seconds
+◇ Test run started.
+↳ Testing Library Version: 6.3.2 (70eff261d7f462c)
+↳ Target Platform: x86_64-unknown-linux-gnu
+◇ Test parses() started.
+✔ Test parses() passed after 0.001 seconds.
+✔ Test run with 1 test in 0 suites passed after 0.001 seconds.
+# exit: 0

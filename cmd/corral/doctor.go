@@ -162,16 +162,17 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	} else if poolNamed {
 		results = append(results, checkResult{name: "shadow pool", ok: true})
 	}
-	iso, isoErr := sandbox.Resolve(sandbox.Config{Backend: strings.TrimSpace(*backend)})
-	results = append(results, checkSandbox(iso, isoErr))
+	// The language, when --code names one, so the sandbox check's advice and
+	// the rehearsal ask that language's jail-only requirements too; nil asks
+	// none.
+	var plug lang.Plugin
+	if c := strings.TrimSpace(*code); c != "" {
+		plug, _ = lang.Detect(c)
+	}
+	iso, isoErr := doctorResolveSandbox(strings.TrimSpace(*backend))
+	results = append(results, checkSandbox(iso, isoErr, plug))
 
 	if isoErr == nil {
-		// The language, when --code names one, so the rehearsal asks that
-		// language's jail-only requirements too; nil asks none.
-		var plug lang.Plugin
-		if c := strings.TrimSpace(*code); c != "" {
-			plug, _ = lang.Detect(c)
-		}
 		results = append(results, checkToolchain(iso, cmd, nil, plug))
 	}
 	results = append(results, checkHerd(*mutantModel, *writerModel, *criticModel, *shadow.model, *shadow.writerModel, seats)...)
@@ -207,6 +208,7 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintln(stdout, "  - whether your suite passes on UNMUTATED code inside the sandbox (the most common way an audit dies);")
 	fmt.Fprintln(stdout, "  - whether a multi-file project needs --repo-dir (it does — the bare --code form seeds only that file and its test).")
 	fmt.Fprintln(stdout, "`certify --local` reports the first as COULD-NOT-GRADE with the runner's own output.")
+	fmt.Fprintln(stdout, doctorWorkspaceNote)
 	return 0
 }
 
@@ -291,11 +293,37 @@ func checkAgents(st []agentsetup.Status) []checkResult {
 	return out
 }
 
-func checkSandbox(iso sandbox.Isolator, err error) checkResult {
+// doctorResolveSandbox resolves doctor's sandbox for --jail. A variable only
+// so a test can hand doctor a sandbox that starts on a host without one;
+// production never reassigns it.
+var doctorResolveSandbox = func(backend string) (sandbox.Isolator, error) {
+	return sandbox.Resolve(sandbox.Config{Backend: backend})
+}
+
+// doctorWorkspaceNote is what doctor says about the run it cannot rehearse.
+// Only its sandbox and toolchain checks are a jailed run's; the seat,
+// credential and pairing checks are the same for a workspace run.
+const doctorWorkspaceNote = "doctor's sandbox and toolchain checks rehearse a jailed run: they cannot check a `corral certify --repo --substrate workspace` run, which builds no sandbox and runs your own toolchain in the checkout.\nIts seat, credential and pairing checks apply to that run too."
+
+// checkSandbox is the first check. Its advice on a sandbox that would not
+// start is sandboxAdviceFor's, the answer every door gives, for plug's
+// language when --code named one: a language corral's sandbox never runs gets
+// its own refusal in place of advice that would only lead back to it. It
+// always says what doctor cannot check (doctorWorkspaceNote), and without
+// --code, how to have doctor answer for a language.
+func checkSandbox(iso sandbox.Isolator, err error, plug lang.Plugin) checkResult {
 	if err != nil {
-		return checkResult{name: "sandbox starts", fatal: true, detail: fmt.Sprintf(
-			"%v\ncorral refuses to run your tests against live mutations unsandboxed, so this is not optional.\n"+
-				"On Linux install bubblewrap (apt install bubblewrap); or use --jail container with docker/podman.", err)}
+		var langs []string
+		if plug != nil {
+			langs = []string{plug.Name()}
+		}
+		advice := sandboxAdviceFor("corral refuses to run your tests against live mutations unsandboxed, so this is not optional.\n"+
+			"On Linux install bubblewrap (apt install bubblewrap); or use --jail container with docker/podman.", langs)
+		note := doctorWorkspaceNote
+		if plug == nil {
+			note += "\nPass --code with a file you will audit to have doctor say whether corral's sandbox runs its language at all."
+		}
+		return checkResult{name: "sandbox starts", fatal: true, detail: fmt.Sprintf("%v\n%s\n%s", err, advice, note)}
 	}
 	_ = iso
 	return checkResult{name: "sandbox starts", ok: true}
@@ -325,6 +353,18 @@ func checkSandbox(iso sandbox.Isolator, err error) checkResult {
 // would. nil (no --code) asks none: a `--version` probe is all doctor can do
 // without knowing the language.
 func checkToolchain(iso sandbox.Isolator, cmd []string, depBinds []adequacy.DepBind, plug lang.Plugin) checkResult {
+	// A language corral's sandbox never runs fails this check whether or not
+	// a test command was given: no command could make it pass, and passing it
+	// as "skipped" let doctor print "All checks passed" for a file the jailed
+	// certify then refuses. A failed, non-fatal check is doctor's state for
+	// "this did not pass" (it has no could-not-check state that holds back
+	// the all-passed line), so the later checks still run and the exit is 1.
+	// Read from the declaration (lang.RefusesEverySandbox), so nothing runs.
+	if plug != nil {
+		if err := lang.RefusesEverySandbox(plug); err != nil {
+			return checkResult{name: "toolchain reachable inside the sandbox", detail: err.Error() + "\n" + doctorWorkspaceNote}
+		}
+	}
 	if len(cmd) == 0 {
 		return checkResult{name: "toolchain reachable inside the sandbox", ok: true,
 			detail: "skipped — no test command given (pass it after `--`)"}

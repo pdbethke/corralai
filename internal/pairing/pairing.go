@@ -165,6 +165,9 @@ var shapeTable = map[Shape]shapeTraits{
 			if r.KeepLeading {
 				sub = dir
 			}
+			if r.DirSuffix != "" {
+				sub = suffixFirstSegment(sub, r.DirSuffix)
+			}
 			return filepath.Join(r.Dir, sub, name), true
 		},
 		searchRoot:    true,
@@ -325,8 +328,13 @@ type Rule struct {
 	Name        string
 	Dir         string
 	KeepLeading bool
-	MaxDepth    int
-	Rank        int
+	// DirSuffix, for a ParallelTree, is appended to the first directory
+	// segment that survives the strip: SwiftPM pairs Sources/<Target>/ with
+	// Tests/<Target>Tests/, so a file's test sits in its target's directory
+	// plus a suffix, not in a directory of the same name. Empty: none.
+	DirSuffix string
+	MaxDepth  int
+	Rank      int
 }
 
 // Candidate is one place a test may live, ranked most specific first.
@@ -462,6 +470,20 @@ func stripFirstSegment(dir string) string {
 		return filepath.FromSlash(parts[1])
 	}
 	return ""
+}
+
+// suffixFirstSegment appends suffix to the leading component of a dir, e.g.
+// ("Core/Sub", "Tests") -> "CoreTests/Sub". An empty dir has no segment to
+// suffix and stays empty.
+func suffixFirstSegment(dir, suffix string) string {
+	if dir == "" {
+		return ""
+	}
+	first, rest, found := strings.Cut(filepath.ToSlash(dir), "/")
+	if !found {
+		return first + suffix
+	}
+	return filepath.FromSlash(first + suffix + "/" + rest)
 }
 
 // dirDepth returns the number of path segments in dir (0 for a top-level

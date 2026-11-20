@@ -412,7 +412,12 @@ Usage:
                                   It does NOT check two things that need a real seeded
                                   workspace: whether your suite passes on UNMUTATED code inside
                                   the sandbox (the most common way an audit dies), and whether a
-                                  multi-file project needs --repo-dir.
+                                  multi-file project needs --repo-dir. Its sandbox and toolchain
+                                  checks rehearse a jailed run, so they cannot check certify
+                                  --repo --substrate workspace, which builds no sandbox; its seat,
+                                  credential and pairing checks apply to that run too. A --code
+                                  file in a language the sandbox never runs fails the sandbox or
+                                  toolchain check with that language's refusal.
   corral eval [flags]             run the adversarial pool across the versioned eval corpus and
                                   print a soundness report (does the recall metric catch known gaps?)
                                   NEEDS A BRAIN: this is the optional daemon's calibration

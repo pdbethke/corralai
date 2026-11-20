@@ -1,0 +1,6 @@
+# suite-exit 0
+corral-swift-coverage: v2
+3 6 Sources/Calc/Calc.swift
+0 4 Sources/Calc/Dead.swift
+3 3 Tests/CalcTests/CalcTests.swift
+5 5 Tests/CalcXCTests/CalcXCTests.swift

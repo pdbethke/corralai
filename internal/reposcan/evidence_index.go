@@ -22,7 +22,16 @@ type EvidenceIndex struct {
 	// Python index reports and must not be shown as one. ParseEvidenceIndex
 	// leaves it false.
 	unitKind bool
+	// executedUnlanded is, in a unit-kind index, every source a green unit
+	// executed that no unit can land a test for (IndexFromUnits leaves it
+	// out of files: it is not measured at zero). WidenCandidacyByEvidence
+	// reads it to say so for a language whose evidence cannot add a file.
+	executedUnlanded map[string]bool
 }
+
+// ExecutedWithoutLanding reports whether a green unit executed path and no
+// unit could land a test for it, so the index holds no count for it.
+func (idx EvidenceIndex) ExecutedWithoutLanding(path string) bool { return idx.executedUnlanded[path] }
 
 // UnitKind reports whether the index was built from test units
 // (IndexFromUnits) rather than from per-test evidence (ParseEvidenceIndex).

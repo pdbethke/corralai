@@ -258,7 +258,9 @@ jail's own `/tmp`, not the host's, which names a directory the jail does not hav
 the sandbox withholds it (`dropsHostVar`), for every caller. Because a frozen run of
 unchanged code is then a full cache hit while a mutant rebuilds what it changed,
 every per-mutant time cap is floored at three times the warming run
-(`adequacy.mutantTimeoutCap`, `RunCacheJail.WarmDuration`). An authored test that names
+(`adequacy.mutantTimeoutCap`, which reads the floor through `adequacy.WarmDurationJail`;
+`RunCacheJail` embeds it, and `WorkspacePool` implements it with its measured rebuild
+run, see the Swift traps below). An authored test that names
 `/corral-work` is refused at every writer door (`advpool.checkAuthoredTest`): it would
 pass in every jailed run and fail on the developer's machine. A shared cache costs one build cache's worth
 of temporary disk space per file being audited at once, removed when that file's run
@@ -410,7 +412,7 @@ of "decorrelated" and not its point. Prefer genuinely different vendors.
 ## Adding or changing a language plugin
 
 Plugins live in `internal/lang/` (`go.go`, `python.go`, `ruby.go`,
-`javascript.go`, `typescript.go`, `php.go`). A plugin declares detection, test-path
+`javascript.go`, `typescript.go`, `php.go`, `rust.go`, `swift.go`). A plugin declares detection, test-path
 convention, test command, compile check, the role system prompts, and
 `TestNamesInSource` (the static test list the critic must judge, in every language;
 it returns nil — no list — whenever it cannot name every test exactly).
@@ -438,7 +440,81 @@ project-wide.** A whole-project type-check fails on any pre-existing error
 anywhere in the repository, so a perfectly good authored test is rejected for
 reasons the audit never touched, and every survivor is reported unproven while
 the run still looks healthy. Go scopes `go vet` to the audited package;
-TypeScript names the two files explicitly.
+TypeScript names the two files explicitly; Swift builds the one SwiftPM target
+the test belongs to (`swift build --target`). The mutant compile gate hands the
+check the developer's test beside the source (`JailScorer.mutantGateTestPath`),
+so a mutant that breaks only the tests' build is invalid rather than a kill, and
+falls back to the source alone when the check already rejects the unmutated code
+with that test (`adequacy.WithMutantCompileFallback`; the run's log says so). A
+plugin's check must therefore accept a test path that is the developer's, not
+only the authored one.
+
+**Swift: the traps adding it hit.** Each cost a run or a wrong conclusion.
+
+- **Swift does not run in corral's sandbox.** `swiftPlugin.JailPreflight`
+  refuses every jailed run (declared by `lang.SandboxRefuser`, whose refusal
+  its `JailPreflight` returns): the seed leaves `.build` out, which holds
+  SwiftPM's resolved dependency checkouts, and the jail is offline. A Swift
+  audit exists only on `certify --repo --substrate workspace`, so every rule
+  above about that substrate applies to every Swift run: a scratch clone,
+  never someone's working checkout. A dry run builds no sandbox and is not
+  refused. `corral doctor`'s sandbox and toolchain checks rehearse a jailed
+  run and it has no `--substrate` flag, so for a Swift `--code` file it fails
+  the toolchain check (or the sandbox check) with Swift's refusal and says
+  what it cannot check; run the suite by hand in the clone instead.
+- **A warm `.build` copied to another path did not build.** A warm tree
+  copied to another path and built again failed (`error: cancelled`, once, on
+  taplin/Lariat with Swift 6.3.2; the cause was not diagnosed) rather than
+  rebuilt. That one run is why the workspace pool never copies or links a
+  build directory into a tree, so each tree builds its own from scratch (a
+  `.build` git does not ignore makes the pool one tree), and why sharing a
+  warm build between trees is not built.
+- **swift-testing matches `--filter` against the test id followed by its
+  source location** (`/<file>:<line>:<column>`). A `$`-anchored id selected
+  nothing, and the run exited 0 with `Test run with 0 tests`
+  (`testdata/runners/swift-filter-dollar.txt`). The row anchors with
+  `^<id>(?:/|$)`. Nothing shared yet catches a one-test run that ran zero
+  tests and passed, in any language; each of the four id shapes in the
+  runner fixture was run to show it selects exactly one test.
+- **A trailing comment measures nothing; a leading one measures a mutant.**
+  On the workspace substrate every run rewrites the audited file, the baseline
+  included, so SwiftPM recompiles it every time, and what a mutant pays beyond
+  that is the relink. A comment added at the end relinked nothing; a comment
+  put first moves every later line, which changes the compiled object, and
+  relinked the same six products a mutant relinked (measured on
+  taplin/Lariat). That is the rebuild
+  probe (`leadingCommentProbe`, `lang.PerRunBuilder`). An unused `private func`
+  was tried too and rejected: it changes the module's interface and rebuilds
+  every dependent target, far past what a body mutant costs.
+- **`--enable-code-coverage` in the default build directory evicts the
+  ordinary build, and back again.** Coverage therefore builds in
+  `.build/corral-coverage`. A suite with a failing test writes no coverage
+  export at all.
+- **Coverage runs on the native build system, and CI pins the toolchain per
+  Ubuntu release.** Swift 6.4 made `swiftbuild` the default build system;
+  under it each test target is its own product and the codecov export covered
+  one of them, so on 6.4.2 the XCTest target's files were missing from the
+  report (CI's first run on `ubuntu-latest`, Ubuntu 26.04, which ships Swift
+  6.4.2, failed `TestCapturedCoverageReportsMatchALiveRun/swift` on it). The
+  coverage run passes `--build-system native` (`swiftCoverageBuildSystem`).
+  swift.org publishes no 6.3.x for Ubuntu 26.04, so the provisioning script
+  pins 6.3.2 on 24.04 and 6.4.2 on 26.04, puts links to the pinned toolchain's
+  `swift` and `swiftc` first on PATH, and `deploy.yml` fails the job when
+  `swift` is anything else. (Its whole `usr/bin` first on PATH put Swift's
+  `llvm-profdata` ahead of the one Rust's coverage finds there, and the three
+  real-toolchain Rust coverage tests failed in CI on a raw profile format
+  mismatch.) Swift
+  6.4.2 also changes what `swift test` prints (one XCTest and one
+  swift-testing summary per test product, a `--filter` matching nothing
+  prints only `warning: No matching test cases were run`, colour codes in
+  build errors when not a TTY); the committed runner captures are 6.3.2's.
+- **`( set -e; … ) || echo …` makes `set -e` inert inside the subshell**: bash
+  ignores errexit in a command whose status is tested by `||`. In the CI
+  provisioning script that shape would have linked a partly unpacked Swift
+  onto PATH, and it ran as root a `rustup-init` whose checksum had failed
+  (reproduced in a container with a tampered download). The script now runs
+  the subshell on its own and reads `$?` on the next line; its header says
+  why.
 
 **A plugin's system prompt pins ONE harness, and real projects pick their own.**
 That is correct in single-file mode, where corral owns the harness, and wrong

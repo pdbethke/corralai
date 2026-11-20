@@ -91,7 +91,7 @@ func (rustPlugin) TestNamesInSource(_, src string) []string {
 				case x == "]" || x == ")" || x == "}":
 					depth--
 				case x == "::":
-				case inPath && rustIdent(x):
+				case inPath && isIdent(x):
 					attrPath = append(attrPath, x)
 				default:
 					inPath = false
@@ -106,19 +106,19 @@ func (rustPlugin) TestNamesInSource(_, src string) []string {
 			i = k - 1
 			continue
 		case "!":
-			if i > 0 && rustIdent(toks[i-1]) {
+			if i > 0 && isIdent(toks[i-1]) {
 				pendingMacro = toks[i-1]
 			}
 			continue
 		}
 		switch t {
 		case "mod":
-			if i+1 < len(toks) && rustIdent(toks[i+1]) {
+			if i+1 < len(toks) && isIdent(toks[i+1]) {
 				pendingMod = toks[i+1]
 				i++
 			}
 		case "fn":
-			if i+1 >= len(toks) || !rustIdent(toks[i+1]) {
+			if i+1 >= len(toks) || !isIdent(toks[i+1]) {
 				continue
 			}
 			name := toks[i+1]
@@ -165,43 +165,20 @@ func rustJoin(path, name string) string {
 func rustCode(src string) (string, bool) {
 	b := []byte(src)
 	out := make([]byte, len(b))
-	blank := func(from, to int) {
-		for k := from; k < to; k++ {
-			if b[k] == '\n' {
-				out[k] = '\n'
-			} else {
-				out[k] = ' '
-			}
-		}
-	}
+	blank := func(from, to int) { blankSpan(out, b, from, to) }
 	// startsToken: the byte before i cannot continue an identifier, so a
 	// prefix letter at i (r, b, c) begins a literal rather than ends a name.
-	startsToken := func(i int) bool { return i == 0 || !rustIdentByte(b[i-1]) }
+	startsToken := func(i int) bool { return i == 0 || !identByte(b[i-1]) }
 	for i := 0; i < len(b); {
 		c := b[i]
 		switch {
 		case c == '/' && i+1 < len(b) && b[i+1] == '/':
-			end := i
-			for end < len(b) && b[end] != '\n' {
-				end++
-			}
+			end := lineCommentEnd(b, i)
 			blank(i, end)
 			i = end
 		case c == '/' && i+1 < len(b) && b[i+1] == '*':
-			depth, k := 1, i+2
-			for k < len(b) && depth > 0 {
-				switch {
-				case b[k] == '/' && k+1 < len(b) && b[k+1] == '*':
-					depth++
-					k += 2
-				case b[k] == '*' && k+1 < len(b) && b[k+1] == '/':
-					depth--
-					k += 2
-				default:
-					k++
-				}
-			}
-			if depth > 0 {
+			k, ok := nestedCommentEnd(b, i)
+			if !ok {
 				return "", false
 			}
 			blank(i, k)
@@ -310,42 +287,4 @@ func rustCharEnd(b []byte, q int) int {
 // rustTokens splits blanked Rust code into the tokens the lister reads:
 // identifiers (a raw identifier r#name as its name), "::", and single
 // punctuation.
-func rustTokens(code string) []string {
-	var toks []string
-	for i := 0; i < len(code); {
-		c := code[i]
-		switch {
-		case c == ' ' || c == '\t' || c == '\n' || c == '\r':
-			i++
-		case c == 'r' && strings.HasPrefix(code[i:], "r#") && i+2 < len(code) && rustIdentByte(code[i+2]):
-			j := i + 2
-			for j < len(code) && rustIdentByte(code[j]) {
-				j++
-			}
-			toks = append(toks, code[i+2:j])
-			i = j
-		case rustIdentByte(c):
-			j := i
-			for j < len(code) && rustIdentByte(code[j]) {
-				j++
-			}
-			toks = append(toks, code[i:j])
-			i = j
-		case c == ':' && strings.HasPrefix(code[i:], "::"):
-			toks = append(toks, "::")
-			i += 2
-		default:
-			toks = append(toks, string(c))
-			i++
-		}
-	}
-	return toks
-}
-
-func rustIdentByte(c byte) bool {
-	return c == '_' || c >= 0x80 || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
-}
-
-func rustIdent(t string) bool {
-	return t != "" && rustIdentByte(t[0]) && !(t[0] >= '0' && t[0] <= '9')
-}
+func rustTokens(code string) []string { return identTokens(code, "r#") }

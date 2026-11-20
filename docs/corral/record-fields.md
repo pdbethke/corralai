@@ -289,6 +289,7 @@ The table is checked against the record's Go types by a test, so a field cannot 
 | `CacheHit` | measured |  |
 | `CacheKey` | key |  |
 | `Candidates` | measured |  |
+| `CapFloor` | measured | where the per-mutant time cap took its floor from: the run corral executed and timed to set it, with that run's duration; "none: <why>" when a floor source was due and gave none (a run that failed, a shared cache never warmed, or a file the probe could not change, so no run was made); empty when no floor applied (no floor source for the language and substrate, or --test-timeout set the cap); a file whose rebuild run does not finish in time is not graded: its row says it could not be audited, with the reason, and carries no floor |
 | `ChallengerJaccard` | measured |  |
 | `ChallengerKappa` | measured |  |
 | `ChallengerMutants` | measured |  |

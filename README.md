@@ -964,7 +964,7 @@ fails `--min-kill-rate` — a withheld number must never satisfy a threshold.
 
 **The foreign-repo sweep (CI, every PR).** `scripts/foreign-sweep.sh` runs
 `certify --repo --dry-run` — enumeration, pairing, ranking, selection, no
-audit and no suite execution — against eight SHA-pinned real-world repos
+audit and no suite execution — against nine SHA-pinned real-world repos
 nobody on this project wrote, and diffs the walked/candidate/ambiguous
 counts against a checked-in golden file. It exists because pointing corral
 at foreign repos surfaces defects the in-repo suite never can; `express` is

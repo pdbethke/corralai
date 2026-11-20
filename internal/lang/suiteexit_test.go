@@ -13,13 +13,17 @@ import (
 
 // suiteExitProject is a smallest project per reporter whose one test passes
 // or fails on the substitution of OUTCOME, and the exit status its runner
-// gives a failing suite (cargo test exits 101, the others 1).
+// gives a failing suite (cargo test exits 101, the others 1). failNoReport
+// says the runner writes no coverage report for a failing suite, so the
+// failing run must disclose that as unavailable instead (SwiftPM, measured on
+// Swift 6.3.2: see swiftPlugin.CoverageCmd).
 var suiteExitProject = map[string]struct {
-	tool    string
-	probe   []string
-	testCmd []string
-	files   map[string]string
-	failRC  int
+	tool         string
+	probe        []string
+	testCmd      []string
+	files        map[string]string
+	failRC       int
+	failNoReport bool
 }{
 	"go": {tool: "go", testCmd: []string{"go", "test", "-count=1", "./..."}, failRC: 1, files: map[string]string{
 		"go.mod":    "module sx\n\ngo 1.22\n",
@@ -51,6 +55,11 @@ var suiteExitProject = map[string]struct {
 		"Cargo.toml":   "[package]\nname = \"sx\"\nversion = \"0.1.0\"\nedition = \"2021\"\npublish = false\n\n[dependencies]\n",
 		"src/lib.rs":   "pub fn one() -> i32 { 1 }\n",
 		"tests/one.rs": "#[test]\nfn one() {\n    assert!(OUTCOME && sx::one() == 1);\n}\n",
+	}},
+	"swift": {tool: "swift", testCmd: []string{"swift", "test"}, failRC: 1, failNoReport: true, files: map[string]string{
+		"Package.swift":         "// swift-tools-version:6.0\nimport PackageDescription\n\nlet package = Package(\n    name: \"SX\",\n    targets: [.target(name: \"SX\"), .testTarget(name: \"SXTests\", dependencies: [\"SX\"])]\n)\n",
+		"Sources/SX/A.swift":    "public func one() -> Int { 1 }\n",
+		"Tests/SXTests/A.swift": "import XCTest\n@testable import SX\n\nfinal class ATests: XCTestCase {\n    func testOne() {\n        XCTAssert(OUTCOME && one() == 1)\n    }\n}\n",
 	}},
 }
 
@@ -111,6 +120,12 @@ func TestEveryCoverageCmdReportsTheSuiteExit(t *testing.T) {
 				rc, ok := SuiteExit(string(out))
 				if !ok || rc != tc.want {
 					t.Fatalf("outcome %s: SuiteExit = (%d, %v), want (%d, true)\nstdout:\n%s\nstderr:\n%s", tc.outcome, rc, ok, tc.want, out, stderr.String())
+				}
+				if tc.want != 0 && fx.failNoReport {
+					if reason, ok := CoverageUnavailable(string(out)); !ok || !strings.Contains(reason, "wrote no coverage report") {
+						t.Errorf("outcome %s: want the missing report disclosed as unavailable, got %q, %v\nstdout:\n%s", tc.outcome, reason, ok, out)
+					}
+					continue
 				}
 				counts, err := r.CoverageCounts(string(out), dir)
 				if err != nil {

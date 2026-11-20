@@ -24,12 +24,23 @@ type gateJail struct {
 	testRuns      int // how many full suite runs happened
 	compileRuns   int
 	baselineFiles string
+	// rejectArg fails any compile check that names this file, compliant
+	// code included: a checker that rejects that file as it stands.
+	rejectArg string
+	// compiledWith is every argv the compile check was run with.
+	compiledWith [][]string
 }
 
 func (g *gateJail) RunTest(ctx context.Context, files map[string]string, cmd []string) (bool, error) {
 	code := files["x.go"]
 	if len(cmd) > 0 && cmd[0] == g.compileCmd {
 		g.compileRuns++
+		g.compiledWith = append(g.compiledWith, cmd)
+		for _, a := range cmd[1:] {
+			if g.rejectArg != "" && a == g.rejectArg {
+				return false, nil
+			}
+		}
 		if g.compileErr != nil {
 			return false, g.compileErr
 		}
@@ -254,5 +265,90 @@ func TestScore_NoCompileCheckOptionKeepsOldBehavior(t *testing.T) {
 	}
 	if len(rep.Invalid) != 0 || rep.Total != 2 {
 		t.Errorf("Invalid=%v Total=%d, want none/2 unchanged", rep.Invalid, rep.Total)
+	}
+}
+
+// The gate checks each mutant with the developer's test beside it, so a
+// mutant that breaks only the test's build is invalid rather than a kill. A
+// checker that rejects that test as it stands (a linter that does not know
+// the test framework's globals, a type checker over a test only a
+// type-stripping runner ever loads) must not cost the file the gate it had
+// on the code alone: the probe falls back to the code alone, the gate runs,
+// and the note names the test that was rejected.
+func TestScore_AGateThatRejectsTheDevTestFallsBackToTheCodeAlone(t *testing.T) {
+	j := &gateJail{
+		compileCmd:    "COMPILE",
+		uncompilable:  map[string]bool{gateMutants()[1].Replace: true},
+		testPasses:    true,
+		baselineFiles: gateBase,
+		rejectArg:     "x_test.go",
+	}
+	rep, err := Score(context.Background(), j, map[string]string{}, "x.go", gateBase,
+		gateMutants(), []string{"TEST"},
+		WithMutantCompileCheck([][]string{{"COMPILE", "x.go", "x_test.go"}}),
+		WithMutantCompileFallback("x_test.go", [][]string{{"COMPILE", "x.go"}}))
+	if err != nil {
+		t.Fatalf("Score: %v", err)
+	}
+	if len(rep.Invalid) != 1 || rep.Invalid[0] != "m2" {
+		t.Fatalf("Invalid = %v, want [m2]: the gate must still run, on the code alone", rep.Invalid)
+	}
+	for _, want := range []string{"x_test.go", "code alone", "not gated"} {
+		if !strings.Contains(rep.CompileGateNote, want) {
+			t.Errorf("the note must say %q: %q", want, rep.CompileGateNote)
+		}
+	}
+	if strings.Contains(rep.CompileGateNote, "DISABLED") {
+		t.Errorf("the gate ran and must not be reported disabled: %q", rep.CompileGateNote)
+	}
+}
+
+// A checker that rejects the code itself, alone, judges nothing: the gate
+// is switched off as it always was, and the note names the file it rejected.
+func TestScore_AGateThatRejectsTheCodeAloneIsDisabled(t *testing.T) {
+	j := &gateJail{
+		compileCmd:    "COMPILE",
+		uncompilable:  map[string]bool{gateMutants()[1].Replace: true},
+		testPasses:    true,
+		baselineFiles: gateBase,
+		rejectArg:     "x.go",
+	}
+	rep, err := Score(context.Background(), j, map[string]string{}, "x.go", gateBase,
+		gateMutants(), []string{"TEST"},
+		WithMutantCompileCheck([][]string{{"COMPILE", "x.go", "x_test.go"}}),
+		WithMutantCompileFallback("x_test.go", [][]string{{"COMPILE", "x.go"}}))
+	if err != nil {
+		t.Fatalf("Score: %v", err)
+	}
+	if len(rep.Invalid) != 0 || rep.Total != 2 {
+		t.Fatalf("with the gate disabled every mutant is graded by execution: invalid=%v total=%d", rep.Invalid, rep.Total)
+	}
+	if !strings.Contains(rep.CompileGateNote, "DISABLED") || !strings.Contains(rep.CompileGateNote, "x.go") {
+		t.Errorf("the note must say the gate is disabled and name x.go: %q", rep.CompileGateNote)
+	}
+}
+
+// A checker that accepts both runs every mutant's check with the test.
+func TestScore_AGateThatAcceptsTheDevTestChecksWithIt(t *testing.T) {
+	j := &gateJail{
+		compileCmd:    "COMPILE",
+		uncompilable:  map[string]bool{gateMutants()[1].Replace: true},
+		testPasses:    true,
+		baselineFiles: gateBase,
+	}
+	rep, err := Score(context.Background(), j, map[string]string{}, "x.go", gateBase,
+		gateMutants(), []string{"TEST"},
+		WithMutantCompileCheck([][]string{{"COMPILE", "x.go", "x_test.go"}}),
+		WithMutantCompileFallback("x_test.go", [][]string{{"COMPILE", "x.go"}}))
+	if err != nil {
+		t.Fatalf("Score: %v", err)
+	}
+	if rep.CompileGateNote != "" || len(rep.Invalid) != 1 {
+		t.Fatalf("note=%q invalid=%v, want no note and [m2]", rep.CompileGateNote, rep.Invalid)
+	}
+	for _, cmd := range j.compiledWith {
+		if len(cmd) != 3 || cmd[2] != "x_test.go" {
+			t.Errorf("a check ran without the test: %q", cmd)
+		}
 	}
 }

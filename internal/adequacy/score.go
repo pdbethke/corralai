@@ -108,6 +108,11 @@ type scoreConfig struct {
 	// run against each mutant BEFORE the suite. Empty disables the gate, which
 	// preserves the pre-gate behavior for every caller that has not opted in.
 	mutantCompileCheck [][]string
+	// mutantCompileTest and mutantCompileCodeOnly are the gate's fallback
+	// (WithMutantCompileFallback): the test file mutantCompileCheck checks
+	// beside the code, and the sequence that checks the code alone.
+	mutantCompileTest     string
+	mutantCompileCodeOnly [][]string
 	// commandFor, when set, grades each mutant with the command it chooses
 	// for that mutant instead of the shared testCmd. nil (the default)
 	// reproduces today's behavior byte-for-byte.
@@ -224,6 +229,42 @@ func WithMutantTimeout(d time.Duration) ScoreOption {
 // python, ruby, javascript and typescript.
 func WithMutantCompileCheck(cmds [][]string) ScoreOption {
 	return func(c *scoreConfig) { c.mutantCompileCheck = cmds }
+}
+
+// probeGate runs a compile-gate sequence on the compliant code, stopping at
+// the first command that fails or cannot run: ok, or that command, its
+// output and its error.
+func probeGate(ctx context.Context, run func(context.Context, string, []string) (bool, string, error), code string, seq [][]string) (cmd []string, out string, err error, ok bool) {
+	for _, c := range seq {
+		passed, o, e := run(ctx, code, c)
+		if e != nil || !passed {
+			return c, o, e, false
+		}
+	}
+	return nil, "", nil, true
+}
+
+// gateRejectionText is how a note says what a failed probe command did.
+type gateRejectionText struct{ what, output string }
+
+func gateRejection(cmd []string, out string, err error) gateRejectionText {
+	if err != nil {
+		return gateRejectionText{what: fmt.Sprintf("%s could not run (%v)", strings.Join(cmd, " "), err)}
+	}
+	return gateRejectionText{what: strings.Join(cmd, " ") + " rejects it", output: ". Gate output: " + strings.TrimSpace(lastLines(out, 6))}
+}
+
+// WithMutantCompileFallback names the developer's test file the
+// WithMutantCompileCheck sequence checks beside the code, and the sequence
+// that checks the code alone. The gate is probed on the unmutated tree with
+// the test first; when that is rejected and the code alone is not, the gate
+// runs on the code alone for this file, and CompileGateNote names the test:
+// a checker that refuses the test as it stands (a linter that does not know
+// the test framework's globals, a type checker over a test only a
+// type-stripping runner loads) must not cost the file the gate it has on
+// the code. Only when the code alone is rejected is the gate switched off.
+func WithMutantCompileFallback(testPath string, codeOnly [][]string) ScoreOption {
+	return func(c *scoreConfig) { c.mutantCompileTest, c.mutantCompileCodeOnly = testPath, codeOnly }
 }
 
 // WithWarmBaseline makes this Score call's baseline, the run on the unmutated
@@ -1173,22 +1214,35 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 	var gateProbe time.Duration
 	if len(cfg.mutantCompileCheck) > 0 {
 		probeStart := time.Now()
-		for _, cmd := range cfg.mutantCompileCheck {
-			ok, out, gerr := runCmdVerbose(ctx, compliantCode, cmd)
-			if gerr != nil {
-				if cerr := ctx.Err(); cerr != nil {
-					return Report{}, fmt.Errorf("adequacy: probing the compile gate on compliant code: %w", cerr)
-				}
-				rep.CompileGateNote = fmt.Sprintf("compile gate DISABLED for this file: %s could not run on the UNMUTATED source (%v), so it cannot judge a mutant — every mutant graded by execution instead",
-					strings.Join(cmd, " "), gerr)
-				cfg.mutantCompileCheck = nil
-				break
+		if cmd, out, gerr, ok := probeGate(ctx, runCmdVerbose, compliantCode, cfg.mutantCompileCheck); !ok {
+			if cerr := ctx.Err(); cerr != nil {
+				return Report{}, fmt.Errorf("adequacy: probing the compile gate on compliant code: %w", cerr)
 			}
-			if !ok {
-				rep.CompileGateNote = fmt.Sprintf("compile gate DISABLED for this file: %s rejects the UNMUTATED source, so it cannot judge a mutant — every mutant graded by execution instead. Gate output: %s",
-					strings.Join(cmd, " "), strings.TrimSpace(lastLines(out, 6)))
+			checked := codePath
+			if cfg.mutantCompileTest != "" {
+				checked = codePath + " with the developer's test " + cfg.mutantCompileTest
+			}
+			rejected := gateRejection(cmd, out, gerr)
+			switch {
+			case len(cfg.mutantCompileCodeOnly) == 0:
+				rep.CompileGateNote = fmt.Sprintf("compile gate DISABLED for this file: %s on the unmutated %s, so it cannot judge a mutant — every mutant graded by execution instead%s",
+					rejected.what, checked, rejected.output)
 				cfg.mutantCompileCheck = nil
-				break
+			default:
+				cmd2, out2, gerr2, ok2 := probeGate(ctx, runCmdVerbose, compliantCode, cfg.mutantCompileCodeOnly)
+				if !ok2 {
+					if cerr := ctx.Err(); cerr != nil {
+						return Report{}, fmt.Errorf("adequacy: probing the compile gate on compliant code: %w", cerr)
+					}
+					r2 := gateRejection(cmd2, out2, gerr2)
+					rep.CompileGateNote = fmt.Sprintf("compile gate DISABLED for this file: %s on the unmutated %s alone, so it cannot judge a mutant — every mutant graded by execution instead%s",
+						r2.what, codePath, r2.output)
+					cfg.mutantCompileCheck = nil
+					break
+				}
+				rep.CompileGateNote = fmt.Sprintf("compile gate runs on the code alone for this file: %s on the unmutated %s, and accepts %s alone, so a mutant that breaks only the developer's test's build is not gated and is graded by execution%s",
+					rejected.what, checked, codePath, rejected.output)
+				cfg.mutantCompileCheck = cfg.mutantCompileCodeOnly
 			}
 		}
 		gateProbe = time.Since(probeStart)

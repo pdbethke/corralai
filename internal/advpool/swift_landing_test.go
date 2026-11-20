@@ -4,6 +4,7 @@ package advpool
 
 import (
 	"path"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -106,5 +107,54 @@ func TestTheWriterIsToldTheFileTheScorerWrites(t *testing.T) {
 	}
 	if strings.Contains(got, `"`+kept+`"`) {
 		t.Errorf("the writer is told the developer's kept file %q:\n%s", kept, got)
+	}
+}
+
+// TestTheMutantGateFallsBackToTheCodeAlone: the gate is handed the
+// developer's test beside the code, and with it the check on the code alone,
+// which is what every language ran before; adequacy falls back to it when
+// the unmutated tree's check rejects the test (TestScore_AGateThatRejects
+// TheDevTestFallsBackToTheCodeAlone). A language whose check ignores the test
+// path gets no fallback, since it would run the same commands.
+func TestTheMutantGateFallsBackToTheCodeAlone(t *testing.T) {
+	py := JailScorer{BaseFiles: map[string]string{"src/a.py": "x", "tests/test_a.py": "y"}, DevTestPath: "tests/test_a.py"}
+	p, _ := pluginFor("src/a.py")
+	check, test, codeOnly := py.mutantGate(p, "src/a.py", py.BaseFiles)
+	if test != "tests/test_a.py" || !strings.Contains(strings.Join(check[0], " "), "tests/test_a.py") {
+		t.Fatalf("python gate = %q (test %q), want the dev test in it", check, test)
+	}
+	if want := compileCheckFor(p, "", "src/a.py", "src/a.py"); !reflect.DeepEqual(codeOnly, want) {
+		t.Errorf("python fallback = %q, want the code-alone check %q", codeOnly, want)
+	}
+
+	gb := JailScorer{BaseFiles: map[string]string{"x/a.go": "x", "x/a_test.go": "y"}, DevTestPath: "x/a_test.go"}
+	g, _ := pluginFor("x/a.go")
+	if _, test, codeOnly := gb.mutantGate(g, "x/a.go", gb.BaseFiles); test != "" || codeOnly != nil {
+		t.Errorf("go's check ignores the test path, so no fallback: test %q, codeOnly %q", test, codeOnly)
+	}
+
+	none := JailScorer{BaseFiles: map[string]string{"src/a.py": "x"}}
+	if _, test, codeOnly := none.mutantGate(p, "src/a.py", none.BaseFiles); test != "" || codeOnly != nil {
+		t.Errorf("with no test in the tree there is nothing to fall back from: test %q, codeOnly %q", test, codeOnly)
+	}
+}
+
+// TestSingleFileWriterIsToldTheFileTheScorerWrites: in single-file mode
+// certify builds its scorer with no workspace and no dev test path
+// (cmd/corral/certify_local.go), so it writes the authored test at the
+// landing rule's own name, and the run carries that path. The writer must be
+// told the same file; PHP's class name is read from it.
+func TestSingleFileWriterIsToldTheFileTheScorerWrites(t *testing.T) {
+	const code, dev = "Calc.php", "MyCalcTests.php"
+	scorer := JailScorer{}
+	written := scorer.AuthoredTestPath(code)
+	rs := RunSpec{Lang: "php", Goal: "g", CodePath: code, Code: "<?php\n", DevTestPath: dev, AuthoredTestPath: written}
+	got := renderTestWriter(rs, nil, nil)
+	if want := "Your test file will be created at \"" + written + "\""; !strings.Contains(got, want) {
+		t.Errorf("the writer is not told the file the scorer writes (%q):\n%s", written, got)
+	}
+	stem := strings.TrimSuffix(written, ".php")
+	if !strings.Contains(got, "MUST be named exactly \""+stem+"\"") {
+		t.Errorf("the PHP class name is not the written file's stem %q:\n%s", stem, got)
 	}
 }

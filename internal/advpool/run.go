@@ -299,9 +299,11 @@ func (rs RunSpec) inv() lang.Invocation {
 
 // writtenAuthoredPath is where the authored test is written: the scorer's
 // resolved path (AuthoredTestPath) when the run carries it, which every
-// certify run does, else the landing rule on an empty tree (single-file
-// mode and the brain, where the scorer has no workspace files to rename
-// past, so the rule IS its answer).
+// certify run does, single-file mode included, else the landing rule on an
+// empty tree with the run's dev test. Only the brain reaches that fallback,
+// and its scorer is built without a dev test path, so it writes at
+// advPoolTestPath while this names the dev-test-shaped file: the same answer
+// the writer was given before this method existed, not yet corrected.
 func (rs RunSpec) writtenAuthoredPath() string {
 	if rs.AuthoredTestPath != "" {
 		return rs.AuthoredTestPath

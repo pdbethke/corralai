@@ -14,6 +14,7 @@ import (
 	"log"
 	"maps"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -507,10 +508,33 @@ func (s JailScorer) gatedScoreOpts(codePath string, base map[string]string) []ad
 		// into "every mutant invalid", which is a worse diagnosis.
 		return opts
 	}
-	if cc := compileCheckFor(p, s.RepoDir, codePath, s.mutantGateTestPath(codePath, base)); len(cc) > 0 {
+	if cc, test, codeOnly := s.mutantGate(p, codePath, base); len(cc) > 0 {
 		opts = append(opts, adequacy.WithMutantCompileCheck(cc))
+		if len(codeOnly) > 0 {
+			opts = append(opts, adequacy.WithMutantCompileFallback(test, codeOnly))
+		}
 	}
 	return opts
+}
+
+// mutantGate is the compile gate's sequence for codePath, checking the test
+// mutantGateTestPath names, and, when that test is not the code and the
+// plugin's check reads it (the two sequences differ), the test's path and
+// the sequence on the code alone: the check every language ran before the
+// gate was handed a test, which adequacy falls back to when the unmutated
+// tree's check rejects the test (see adequacy.WithMutantCompileFallback).
+// No shipped language therefore loses a gate it had on the code alone.
+func (s JailScorer) mutantGate(p golang.Plugin, codePath string, base map[string]string) (check [][]string, testPath string, codeOnly [][]string) {
+	t := s.mutantGateTestPath(codePath, base)
+	check = compileCheckFor(p, s.RepoDir, codePath, t)
+	if t == codePath {
+		return check, "", nil
+	}
+	alone := compileCheckFor(p, s.RepoDir, codePath, codePath)
+	if reflect.DeepEqual(alone, check) {
+		return check, "", nil
+	}
+	return check, t, alone
 }
 
 // mutantGateTestPath is the test file the mutant compile gate checks beside
@@ -538,7 +562,8 @@ func (s JailScorer) gatedScoreOpts(codePath string, base map[string]string) []ad
 // the dev test against the mutant; Swift builds the dev test's target, which
 // compiles the source with it; Python, Ruby, JavaScript and PHP add the dev
 // test, which a mutant never changes, to their per-file syntax and lint
-// checks.
+// checks. A check that rejects the dev test as it stands falls back to the
+// code alone for the file (mutantGate), never switching the gate off.
 func (s JailScorer) mutantGateTestPath(codePath string, base map[string]string) string {
 	if p := authoredTestPath(s.Landing, codePath, s.DevTestPath, s.BaseFiles); inMap(base, p) {
 		return p

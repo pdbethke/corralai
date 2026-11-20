@@ -71,7 +71,7 @@ hand-written and are not, plus the licensing gate:
 |---|---|
 | `deploy.yml` (`validate`) | the doc gates and the licensing gate ALWAYS; then, only when something other than Markdown changed: vet, provision language toolchains, `go test -v` with a SKIP census, the drift checks, gosec, security gate |
 | `foreign-sweep.yml` (`sweep`) | `certify --repo --dry-run` over SHA-pinned third-party repos, diffed against `testdata/foreign-sweep-expected.tsv` |
-| `self-audit.yml` | corral auditing corral. Non-blocking, label-gated, all-Gemini, `top: "1"` |
+| `self-audit.yml` | corral auditing corral. Non-blocking, label-gated, all-Gemini, `top: "1"`; provisions and checks the pinned Swift as `validate` does |
 | `release.yml` | on a `v*` tag: refuses a tag on an unmerged commit, verifies the console signature for the tag's version, publishes the GitHub Release once `validate` is green on the tag's commit or on a `main` that contains it |
 | `deploy-site.yml` | on `site/**` changes: site tests, Playwright, then deploys corralai.dev to Cloudflare Pages |
 | `cla.yml`, `sbom.yml`, `scorecard.yml` | CLA, SBOM, supply-chain scorecard |
@@ -507,8 +507,12 @@ only the authored one.
   does not tell that from a failing test.
   swift.org publishes no 6.3.x for Ubuntu 26.04, so the provisioning script
   pins 6.3.2 on 24.04 and 6.4.2 on 26.04, puts links to the pinned toolchain's
-  `swift` and `swiftc` first on PATH, and `deploy.yml` fails the job when
-  `swift` is anything else. (Its whole `usr/bin` first on PATH put Swift's
+  `swift` and `swiftc` first on PATH, and `deploy.yml` and `self-audit.yml`
+  fail the job when `swift` is anything else (one script,
+  `scripts/ci-check-pinned-swift.sh`). Both workflows cache the Swift tarball
+  with `actions/cache` under the key `ci-provision-test-toolchains.sh
+  --swift-cache-key` derives from its own pins; the signature is still fetched
+  and checked on every run, cached or not, before anything is unpacked. (Its whole `usr/bin` first on PATH put Swift's
   `llvm-profdata` ahead of the one Rust's coverage finds there, and the three
   real-toolchain Rust coverage tests failed in CI on a raw profile format
   mismatch; Swift's coverage finds its tools beside `swift` through those

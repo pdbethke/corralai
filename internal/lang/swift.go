@@ -108,17 +108,17 @@ func (swiftPlugin) BuildDirs() []BuildDir {
 // Preflight finds the manifest. A workspace tree holds no .build (see
 // DependencyDirs), so each tree resolves the dependencies on its first run,
 // and it gets the versions the checkout has only from this file. A package
-// whose dependencies are all local (path:), or that has none, has nothing to
-// pin: SwiftPM 6.3.2 wrote no Package.resolved for either when it built one,
-// so swiftManifestPins asks for the file only beside a manifest that declares
-// some other dependency.
+// with no dependency, or only a path: one to a local package with none of
+// its own, has nothing to pin: SwiftPM 6.3.2 wrote no Package.resolved for
+// either when it built one. So swiftManifestPins asks for the file only when
+// the manifest, or a local package it names, declares some other dependency.
 func (swiftPlugin) Lockfile() Lockfile {
 	return Lockfile{Name: "Package.resolved", Manifest: "Package.swift", SearchDepth: swiftPackageSearchDepth}
 }
 
 // ManifestPins: see Lockfiler.
-func (swiftPlugin) ManifestPins(manifest string) bool {
-	return swiftManifestPins(manifest)
+func (swiftPlugin) ManifestPins(manifestDir string) bool {
+	return swiftManifestPins(manifestDir)
 }
 
 // CompileCheck builds ONE target, never the package (a compile check is

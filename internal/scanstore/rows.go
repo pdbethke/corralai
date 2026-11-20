@@ -372,11 +372,12 @@ type File struct {
 	MutantsFrom string
 	// Trees and ConcurrencyNote mirror advpool.Verdict.Concurrency: how
 	// many private trees the workspace substrate's probe scored this file
-	// with at once, or — when it granted only one — why. Trees 0 is the one
-	// explicit "not recorded" state — a row written before this column
-	// existed, a rejected file that was never scored, or a substrate that
-	// builds no trees — and is stored SQL NULL, never the integer 0, so a
-	// caller (and a query) can always tell it from a measured one tree.
+	// with at once, and the pool's note on them: why it got only one, or,
+	// with more, the build directories each tree built for itself. Trees 0
+	// is the one explicit "not recorded" state — a row written before this
+	// column existed, a rejected file that was never scored, or a substrate
+	// that builds no trees — and is stored SQL NULL, never the integer 0, so
+	// a caller (and a query) can always tell it from a measured one tree.
 	Trees           int
 	ConcurrencyNote string
 	// SharedDirs is the comma-joined list of dependency directories that were

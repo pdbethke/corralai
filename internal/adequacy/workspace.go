@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/pdbethke/corralai/internal/clip"
+	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
@@ -59,6 +60,9 @@ type WorkspaceRunner struct {
 	// lockfile is set by WithLockfile and, like treeEnv, read only by
 	// WorkspacePool: it is about the copies, and a lone runner has none.
 	lockfile string
+	// buildDirs is set by WithBuildDirs and, like treeEnv, read only by
+	// WorkspacePool.
+	buildDirs []lang.BuildDir
 }
 
 // WorkspaceOption configures a WorkspaceRunner at construction

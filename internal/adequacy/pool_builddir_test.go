@@ -8,12 +8,14 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/pdbethke/corralai/internal/lang"
 )
 
-// A language's declared build directory (lang.BuildDir) is never linked into
-// a tree, and git keeps it out of the copy when it is ignored. Then every tree
-// builds its own, and the pool says so on its disclosure, naming the
-// directory, for every language that declares one (SwiftPM's .build, cargo's
+// The audited language's declared build directory (lang.BuildDir, passed by
+// WithBuildDirs) is never linked into a tree, and git keeps it out of the
+// copy when it is ignored. Then every tree builds its own, and the pool says
+// so on its disclosure, naming the directory (SwiftPM's .build, cargo's
 // target). When git does NOT ignore it, its files are in the universe and
 // would be copied into every tree, build output and all: the pool is one
 // tree, the checkout, and the note names the directory.
@@ -22,11 +24,13 @@ func TestPoolNeverCopiesADeclaredBuildDirectory(t *testing.T) {
 		{"swift", "Package.swift", ".build"},
 		{"rust", "Cargo.toml", "target"},
 	} {
+		plug, _ := lang.ByName(c.lang)
+		opt := WithBuildDirs(plug.(lang.BuildDirer).BuildDirs())
 		files := map[string]string{c.marker: "x\n", "src/a.txt": "a\n"}
 
 		ignored := newGitRepo(t, files, []string{c.dir + "/"})
 		writeFile(t, filepath.Join(ignored, c.dir, "debug", "out.o"), "o\n")
-		p, d, err := NewWorkspacePool(context.Background(), ignored, 3, time.Minute)
+		p, d, err := NewWorkspacePool(context.Background(), ignored, 3, time.Minute, opt)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -40,7 +44,7 @@ func TestPoolNeverCopiesADeclaredBuildDirectory(t *testing.T) {
 
 		copied := newGitRepo(t, files, nil)
 		writeFile(t, filepath.Join(copied, c.dir, "debug", "out.o"), "o\n") // untracked, not ignored
-		p, d, err = NewWorkspacePool(context.Background(), copied, 3, time.Minute)
+		p, d, err = NewWorkspacePool(context.Background(), copied, 3, time.Minute, opt)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -58,7 +62,7 @@ func TestPoolNeverCopiesADeclaredBuildDirectory(t *testing.T) {
 // is somebody's source: it is copied, and nothing is said about it.
 func TestPoolCopiesADirectoryOnlyNamedLikeABuildDirectory(t *testing.T) {
 	root := newGitRepo(t, map[string]string{"target/notes.txt": "n\n", "a.py": "x=1\n"}, nil)
-	p, d, err := NewWorkspacePool(context.Background(), root, 2, time.Minute)
+	p, d, err := NewWorkspacePool(context.Background(), root, 2, time.Minute, WithBuildDirs([]lang.BuildDir{{Name: "target", Marker: "Cargo.toml"}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,10 +80,29 @@ func TestPoolCopiesADirectoryOnlyNamedLikeABuildDirectory(t *testing.T) {
 func TestProbeKeepsTheBuildDirectoryNote(t *testing.T) {
 	root := newGitRepo(t, map[string]string{"Cargo.toml": "x\n", "a.py": "x=0\n"}, []string{"target/"})
 	cmd := []string{"sh", "-c", `[ "$(cat a.py)" = "x=0" ]`}
-	p, built, _ := NewWorkspacePool(context.Background(), root, 2, time.Minute)
+	p, built, _ := NewWorkspacePool(context.Background(), root, 2, time.Minute, WithBuildDirs([]lang.BuildDir{{Name: "target", Marker: "Cargo.toml"}}))
 	defer p.Close()
 	q, d := p.Probe(context.Background(), nil, "a.py", "x=0\n", cmd)
 	if q != p || d.Trees != 2 || d.Note == "" || d.Note != built.Note {
 		t.Errorf("probe disclosure %+v, built %+v", d, built)
+	}
+}
+
+// A pool told no build directories (no WithBuildDirs: the audited language
+// declares none, as Python, Go, JavaScript, TypeScript, Ruby and PHP do)
+// applies neither the one-tree rule nor the note, whatever another
+// language's build output sits in the checkout: a cargo target/ git does not
+// ignore beside a Cargo.toml is copied like any other file, as it was before
+// the rule existed.
+func TestPoolWithNoBuildDirectoriesIgnoresOtherLanguagesBuildOutput(t *testing.T) {
+	root := newGitRepo(t, map[string]string{"Cargo.toml": "x\n", "a.py": "x=1\n"}, nil)
+	writeFile(t, filepath.Join(root, "target", "debug", "out.o"), "o\n")
+	p, d, err := NewWorkspacePool(context.Background(), root, 2, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	if d.Trees != 2 || d.Note != "" {
+		t.Errorf("got %+v", d)
 	}
 }

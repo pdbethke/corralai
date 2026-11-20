@@ -229,9 +229,10 @@ type WeakFile struct {
 	ImportOnly bool
 	// Trees and ConcurrencyNote mirror advpool.Verdict.Concurrency: how many
 	// private trees the workspace substrate's probe scored this file with
-	// at once, or — when it granted only one — why (a downgrade after a
-	// baseline that failed under concurrency, or simply the substrate that
-	// builds no trees at all). Trees < 1 is the one "not recorded" state —
+	// at once, and the pool's note on them: with one tree, why (a downgrade
+	// after a baseline that failed under concurrency, a checkout the pool
+	// would not copy); with more, the build directories each tree built for
+	// itself. Trees < 1 is the one "not recorded" state —
 	// the jail substrate, or a verdict served from a cache row written
 	// before this column existed — and every reader of it (the printer, the
 	// signer, the ledger, the warehouse) says so rather than inventing a 1.

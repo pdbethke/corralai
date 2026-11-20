@@ -124,7 +124,9 @@ type Row struct {
 	PerMutant      bool
 	TestsPerMutant *TestsPerMutantSpread
 	// Trees and ConcurrencyNote disclose how many private trees scored this
-	// file at once, or — when it only got one — why. The same fact the
+	// file at once, and the pool's note on them: why it got only one, or,
+	// with more than one, the build directories each tree built for itself
+	// (advpool.Concurrency). The same fact the
 	// report line and the signed attestation carry, denormalized onto this
 	// row so a cross-repo query does not need to reconstruct it. Trees < 1
 	// means nothing measured it and is written SQL NULL, never 0.

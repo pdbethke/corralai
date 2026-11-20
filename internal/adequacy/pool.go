@@ -188,11 +188,12 @@ var (
 //     drag in build output, caches and dep trees — so Trees: 1, note
 //     "not a git work tree".
 //   - the universe exceeds 2 GiB: Trees: 1, note "checkout over 2 GiB".
-//   - git lists files under a language's declared build directory (one it
-//     does not ignore): Trees: 1, the note naming the directory. A copy
-//     would carry the checkout's build output into every tree. Copying the
-//     universe without it instead would need reposcan.TreeDigest to leave it
-//     out in lockstep (see gitUniverse), and is not done.
+//   - git lists files under one of the audited language's build directories
+//     (WithBuildDirs; one git does not ignore): Trees: 1, the note naming
+//     the directory. A copy would carry the checkout's build output into
+//     every tree. Copying the universe without it instead would need
+//     reposcan.TreeDigest to leave it out in lockstep (see gitUniverse), and
+//     is not done.
 //   - a lockfile was declared (WithLockfile) and is not in the universe:
 //     Trees: 1, the note naming the file.
 //
@@ -253,7 +254,7 @@ func NewWorkspacePool(ctx context.Context, root string, n int, timeout time.Dura
 	if size > maxUniverseBytes {
 		return single("checkout over 2 GiB")
 	}
-	copiedBuild, ownBuild := buildDirsIn(universe, links)
+	copiedBuild, ownBuild := buildDirsIn(probe.buildDirs, universe, links)
 	if len(copiedBuild) > 0 {
 		return single(strings.Join(copiedBuild, ", ") + " is build output that git does not ignore, so it would be copied into every tree instead of each tree building its own; ignoring it in git gives each tree a build of its own")
 	}
@@ -298,14 +299,13 @@ func NewWorkspacePool(ctx context.Context, root string, n int, timeout time.Dura
 	return p, Disclosure{Trees: n, Note: p.note, Shared: linked, CopyDuration: copied}, nil
 }
 
-// buildDirsIn reads the universe for the build directories the languages
-// declare (lang.AllBuildDirs: a directory named Name beside its Marker), as
-// the jail seed does. copied names each such directory git lists files under,
-// so a copy would carry it into every tree; own names, once each, the build
-// directories every tree builds for itself, the ones whose marker the
-// universe holds. A name a tree links (a dependency directory) is in
-// neither: it is not built per tree.
-func buildDirsIn(universe, links []string) (copied, own []string) {
+// buildDirsIn reads the universe for dirs, the audited language's build
+// directories (a directory named Name beside its Marker). copied names each
+// such directory git lists files under, so a copy would carry it into every
+// tree; own names, once each, the build directories every tree builds for
+// itself, the ones whose marker the universe holds. A name a tree links (a
+// dependency directory) is in neither: it is not built per tree.
+func buildDirsIn(dirs []lang.BuildDir, universe, links []string) (copied, own []string) {
 	in := make(map[string]bool, len(universe))
 	for _, rel := range universe {
 		in[rel] = true
@@ -315,7 +315,7 @@ func buildDirsIn(universe, links []string) (copied, own []string) {
 		linked[path.Base(l)] = true
 	}
 	seenCopied, seenOwn := map[string]bool{}, map[string]bool{}
-	for _, b := range buildDirs {
+	for _, b := range dirs {
 		if linked[b.Name] {
 			continue
 		}
@@ -353,9 +353,23 @@ func ownBuildNote(own []string) string {
 	return "each tree builds its own " + strings.Join(own, ", ") + ", from scratch: the checkout's is neither copied nor linked into a tree"
 }
 
-// buildDirs is every language's declared build directory, composed from the
-// registry once, as the jail seed's list is.
-var buildDirs = lang.AllBuildDirs()
+// WithBuildDirs names the audited language's build directories
+// (lang.BuildDirer), the ones its test command builds. NewWorkspacePool is
+// one tree when git lists files under one of them, and otherwise says that
+// each tree builds its own. Only the audited language's: another language's
+// build output in the same checkout (a Python project's Rust extension and
+// its target/) is not built by this language's test command, so copying it
+// costs nothing but disk, and the pool keeps its trees and says nothing about
+// it. A test command that itself builds another language's output (a Python
+// test that runs cargo) is not covered, as it was not before.
+//
+// A pool built without this option applies neither the rule nor the note:
+// that is the answer for a language that declares no build directory, and a
+// caller that has one must pass it (cmd/corral's workspaceRunnerOpts does).
+// Like WithTreeEnv it is a no-op on a bare WorkspaceRunner.
+func WithBuildDirs(dirs []lang.BuildDir) WorkspaceOption {
+	return func(w *WorkspaceRunner) { w.buildDirs = dirs }
+}
 
 // WithLockfile names the lockfile every private tree must hold, as a slash
 // path relative to the pool's root (lang.LockfileFor, for a language that

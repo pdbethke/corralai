@@ -528,11 +528,15 @@ type TestSelection struct {
 
 // Concurrency discloses how many private trees the workspace substrate's
 // concurrency probe granted this file — how many mutants were scored AT ONCE
-// — or, when it granted only one, WHY: the substrate builds no trees at all
-// (the jail path), the budget only bought one, or the probe downgraded a
-// suite that failed under concurrency (Note carries the reason, verbatim,
-// so the screen and the record never disagree — see
-// cmd/corral/certify_repo.go's noteConcurrency).
+// — and Note qualifies that count, verbatim from the pool
+// (adequacy.Disclosure.Note), so the screen and the record never disagree —
+// see cmd/corral/certify_repo.go's noteConcurrency. With one tree, Note says
+// WHY when there was a reason: the pool could not copy the checkout, a
+// build directory or lockfile rule kept it to one, or the probe downgraded a
+// suite that failed under concurrency (with no tree budget there is no
+// note). With more than one, Note says what the trees did not take from the
+// checkout: the build directories each built for itself. "" when there is
+// nothing to say.
 //
 // Trees < 1 is the single explicit "NOT RECORDED" state, and every reader
 // treats it as one: the report prints no concurrency line, the attestation

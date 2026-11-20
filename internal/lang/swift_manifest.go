@@ -3,6 +3,9 @@
 package lang
 
 import (
+	"os"
+	"path"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -19,12 +22,13 @@ var swiftPackageCall = regexp.MustCompile(`\.package\s*\(`)
 
 // swiftDependency is one `.package(...)` call: the labels of its own
 // arguments (not those of a call nested in it), whether it carries the older
-// `.branch("...")` requirement, and its `url:` when that is a plain string
-// literal.
+// `.branch("...")` requirement, and its `url:` and `path:` when each is a
+// plain string literal.
 type swiftDependency struct {
 	labels map[string]bool
 	branch bool
 	url    string
+	path   string
 }
 
 // swiftDependencies reads every `.package(...)` call in a manifest. ok is
@@ -60,8 +64,11 @@ func swiftDependencies(src string) (deps []swiftDependency, ok bool) {
 				switch {
 				case code[i-1] != '.' && next == ':':
 					d.labels[word] = true
-					if word == "url" && d.url == "" {
-						d.url = swiftPlainLiteral(src, skipSpaces(src, after+1)) // the literal is blanked in code
+					switch lit := swiftPlainLiteral(src, skipSpaces(src, after+1)); { // the literal is blanked in code
+					case word == "url" && d.url == "":
+						d.url = lit
+					case word == "path" && d.path == "":
+						d.path = lit
 					}
 				case code[i-1] == '.' && word == "branch" && next == '(':
 					d.branch = true
@@ -92,21 +99,55 @@ func swiftDependencyMember(code string, dot int) bool {
 	return code[start:dot] == "Dependency"
 }
 
-// swiftManifestPins reports whether a manifest declares a dependency a
-// Package.resolved would pin: any `.package(...)` that is not a local
-// `path:` one (a url, a registry id, or a form this reading does not know).
-// A manifest that cannot be read counts as one that does, so the lockfile
-// rule errs toward one tree, never toward trees that could disagree.
-func swiftManifestPins(src string) bool {
-	deps, ok := swiftDependencies(src)
+// swiftManifestPins reports whether the package whose Package.swift is in
+// pkgDir declares a dependency a Package.resolved would pin: any
+// `.package(...)` that is not a local `path:` one (a url, a registry id, or a
+// form this reading does not know), here or in a local package it names,
+// followed through path: dependencies, because SwiftPM records a local
+// package's remote dependencies in the root package's Package.resolved.
+//
+// Every answer this reading cannot establish counts as pinning, so the
+// lockfile rule errs toward one tree, never toward trees that could
+// disagree: a manifest that cannot be read or blanked, a path that is not a
+// plain string literal, one that is absolute or leaves pkgDir (the reads go
+// through an os.Root on pkgDir, which refuses such a path, symlinks
+// included), and a cycle. A local package named twice (two packages sharing
+// a third) is read once.
+func swiftManifestPins(pkgDir string) bool {
+	root, err := os.OpenRoot(pkgDir)
+	if err != nil {
+		return true
+	}
+	defer func() { _ = root.Close() }()
+	return swiftPinsIn(root, ".", map[string]bool{})
+}
+
+// swiftPinsIn is swiftManifestPins for the package at dir, a slash path
+// inside root. state holds each package read: false while it is being read
+// (meeting it again is a cycle), true once it was found to pin nothing.
+func swiftPinsIn(root *os.Root, dir string, state map[string]bool) bool {
+	if done, seen := state[dir]; seen {
+		return !done
+	}
+	state[dir] = false
+	src, err := root.ReadFile(path.Join(dir, "Package.swift"))
+	if err != nil {
+		return true
+	}
+	deps, ok := swiftDependencies(string(src))
 	if !ok {
 		return true
 	}
 	for _, d := range deps {
-		if !d.labels["path"] {
+		if !d.labels["path"] || d.path == "" || filepath.IsAbs(d.path) {
+			return true
+		}
+		child := path.Clean(path.Join(dir, filepath.ToSlash(d.path)))
+		if child == ".." || strings.HasPrefix(child, "../") || swiftPinsIn(root, child, state) {
 			return true
 		}
 	}
+	state[dir] = true
 	return false
 }
 

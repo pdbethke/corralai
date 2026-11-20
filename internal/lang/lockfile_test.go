@@ -46,26 +46,68 @@ let package = Package(name: "P", dependencies: [.package(url: "https://example.c
 `
 
 // SwiftPM writes no Package.resolved for a package with nothing to pin: no
-// dependency at all, or only path: ones (measured with `swift build --build-tests` on
-// Swift 6.3.2). Such a package needs no lockfile for its trees to agree,
-// so LockfileFor asks for none; one remote dependency is enough to ask.
+// dependency at all, or only a path: one to a local package with none of
+// its own (measured with `swift build --build-tests` on Swift 6.3.2). Such a
+// package needs no lockfile for its trees to agree, so LockfileFor asks for
+// none; one remote dependency is enough to ask, including one a local
+// package declares, which SwiftPM records in the root's Package.resolved.
+// A path the reading cannot follow (out of the package, not a plain
+// literal, a cycle, a local package with no readable manifest) counts as
+// pinning, so the rule errs toward one tree.
 func TestLockfileForAsksOnlyForAManifestWithSomethingToPin(t *testing.T) {
 	swift, _ := ByName("swift")
+	const noDeps = "// swift-tools-version:6.0\nimport PackageDescription\nlet package = Package(name: \"Calc\", targets: [.target(name: \"Calc\")])\n"
 	for _, c := range []struct {
-		name, manifest string
-		want           bool
+		name  string
+		files map[string]string
+		want  bool
 	}{
-		{"no dependencies", "// swift-tools-version:6.0\nimport PackageDescription\nlet package = Package(name: \"Calc\", targets: [.target(name: \"Calc\")])\n", false},
-		{"path only", "let package = Package(name: \"P\", dependencies: [.package(path: \"Local\"), .package(name: \"L2\", path: \"../L2\")])\n", false},
-		{"a remote one in a comment", "// .package(url: \"https://example.com/a.git\", from: \"1.0.0\")\nlet package = Package(name: \"P\")\n", false},
-		{"url", remoteManifest, true},
-		{"registry id", "let package = Package(name: \"P\", dependencies: [.package(id: \"scope.name\", from: \"1.0.0\")])\n", true},
-		{"path and url", "dependencies: [.package(path: \"Local\"), .package(url: \"https://example.com/a.git\", branch: \"main\")]\n", true},
-		{"cannot be read", "let package = Package(name: \"P\", dependencies: [.package(path: \"L\")]) /*", true},
+		{"no dependencies", map[string]string{"Package.swift": noDeps}, false},
+		{"path to a local package with no dependencies", map[string]string{
+			"Package.swift":               "let package = Package(name: \"P\", dependencies: [.package(path: \"Packages/Core\"), .package(name: \"L2\", path: \"./Packages/L2\")])\n",
+			"Packages/Core/Package.swift": noDeps,
+			"Packages/L2/Package.swift":   noDeps,
+		}, false},
+		{"two local packages naming one third (no cycle)", map[string]string{
+			"Package.swift":        "dependencies: [.package(path: \"A\"), .package(path: \"B\")]\n",
+			"A/Package.swift":      "dependencies: [.package(path: \"../Shared\")]\n",
+			"B/Package.swift":      "dependencies: [.package(path: \"../Shared\")]\n",
+			"Shared/Package.swift": noDeps,
+		}, false},
+		{"a remote one in a comment", map[string]string{"Package.swift": "// .package(url: \"https://example.com/a.git\", from: \"1.0.0\")\nlet package = Package(name: \"P\")\n"}, false},
+		{"url", map[string]string{"Package.swift": remoteManifest}, true},
+		{"registry id", map[string]string{"Package.swift": "let package = Package(name: \"P\", dependencies: [.package(id: \"scope.name\", from: \"1.0.0\")])\n"}, true},
+		{"path and url", map[string]string{
+			"Package.swift":       "dependencies: [.package(path: \"Local\"), .package(url: \"https://example.com/a.git\", branch: \"main\")]\n",
+			"Local/Package.swift": noDeps,
+		}, true},
+		{"a local package with a remote dependency", map[string]string{
+			"Package.swift":               "let package = Package(name: \"P\", dependencies: [.package(path: \"Packages/Core\")])\n",
+			"Packages/Core/Package.swift": "let package = Package(name: \"Core\", dependencies: [.package(url: \"https://github.com/apple/swift-argument-parser\", from: \"1.0.0\")])\n",
+		}, true},
+		{"a cycle", map[string]string{
+			"Package.swift":   "dependencies: [.package(path: \"A\")]\n",
+			"A/Package.swift": "dependencies: [.package(path: \"../B\")]\n",
+			"B/Package.swift": "dependencies: [.package(path: \"../A\")]\n",
+		}, true},
+		{"a path out of the package", map[string]string{"Package.swift": "dependencies: [.package(path: \"../Elsewhere\")]\n"}, true},
+		{"an absolute path", map[string]string{"Package.swift": "dependencies: [.package(path: \"/opt/pkgs/Core\")]\n"}, true},
+		{"a path that is not a plain literal", map[string]string{
+			"Package.swift":      "let base = \"Core\"\ndependencies: [.package(path: base)]\n",
+			"Core/Package.swift": noDeps,
+		}, true},
+		{"a local package with no manifest", map[string]string{"Package.swift": "dependencies: [.package(path: \"Missing\")]\n"}, true},
+		{"cannot be read", map[string]string{"Package.swift": "let package = Package(name: \"P\", dependencies: [.package(path: \"L\")]) /*"}, true},
 	} {
 		dir := t.TempDir()
-		if err := os.WriteFile(filepath.Join(dir, "Package.swift"), []byte(c.manifest), 0o600); err != nil {
-			t.Fatal(err)
+		for rel, body := range c.files {
+			p := filepath.Join(dir, filepath.FromSlash(rel))
+			if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
 		}
 		if _, ok := LockfileFor(swift, dir); ok != c.want {
 			t.Errorf("%s: LockfileFor asks = %v, want %v", c.name, ok, c.want)

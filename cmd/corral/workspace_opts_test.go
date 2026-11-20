@@ -82,3 +82,55 @@ func swiftCheckout(t *testing.T, manifest string) string {
 
 	return root
 }
+
+// A Python file in a repository that also builds a Rust extension (maturin's
+// layout: Cargo.toml and a target/ git does not ignore) keeps its trees and
+// is told nothing about target/, because its test command does not build
+// it; a Rust file in the same checkout gets one tree, the note naming
+// target. The rule and the note are the audited language's.
+func TestWorkspaceRunnerOptsScopeBuildDirectoriesToTheAuditedLanguage(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	root := t.TempDir()
+	for rel, body := range map[string]string{
+		"Cargo.toml":             "[package]\nname = \"ext\"\n",
+		"src/lib.rs":             "pub fn f() {}\n",
+		"pkg/mod.py":             "x = 1\n",
+		"tests/test_mod.py":      "def test(): pass\n",
+		"target/debug/libext.so": "o\n",
+	} {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, args := range [][]string{{"init", "-q"}, {"add", "Cargo.toml", "src", "pkg", "tests"}, {"-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "init"}} {
+		cmd := exec.Command("git", args...) // #nosec G204 -- test fixture, literal args
+		cmd.Dir = root
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	py, _ := lang.ByName("python")
+	p, d, err := adequacy.NewWorkspacePool(context.Background(), root, 2, time.Minute, workspaceRunnerOpts(py, 2, root)...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Close()
+	if d.Trees != 2 || strings.Contains(d.Note, "target") {
+		t.Errorf("python file: want two trees and nothing about target, got %+v", d)
+	}
+	rust, _ := lang.ByName("rust")
+	p, d, err = adequacy.NewWorkspacePool(context.Background(), root, 2, time.Minute, workspaceRunnerOpts(rust, 2, root)...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Close()
+	if d.Trees != 1 || !strings.Contains(d.Note, "target") {
+		t.Errorf("rust file: want one tree naming target, got %+v", d)
+	}
+}

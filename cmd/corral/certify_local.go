@@ -2662,9 +2662,9 @@ func (h *workspacePool) close() {
 
 // workspaceRunnerOpts is the option list a workspace pool of trees trees on
 // the checkout at repoDir is built with, for the language plug: its per-run
-// env, its per-tree env when there is more than one tree, and the lockfile
+// env, and when there is more than one tree its per-tree env, the lockfile
 // every tree must hold when the language declares one (lang.LockfileFor),
-// without which the pool is one tree and says why.
+// and the language's build directories (lang.BuildDirer).
 func workspaceRunnerOpts(plug lang.Plugin, trees int, repoDir string) []adequacy.WorkspaceOption {
 	opts := []adequacy.WorkspaceOption{adequacy.WithPerRunEnv(plug.WorkspaceRunEnv)}
 	// WithTreeEnv is per-TREE and therefore only meaningful once there is
@@ -2688,6 +2688,11 @@ func workspaceRunnerOpts(plug lang.Plugin, trees int, repoDir string) []adequacy
 	}
 	if rel, ok := lang.LockfileFor(plug, repoDir); ok && trees > 1 {
 		opts = append(opts, adequacy.WithLockfile(rel))
+	}
+	// The audited language's build directories, and only its own: see
+	// adequacy.WithBuildDirs. A language that declares none passes none.
+	if b, ok := plug.(lang.BuildDirer); ok && trees > 1 {
+		opts = append(opts, adequacy.WithBuildDirs(b.BuildDirs()))
 	}
 	return opts
 }

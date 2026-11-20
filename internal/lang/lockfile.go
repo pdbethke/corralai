@@ -3,7 +3,6 @@
 package lang
 
 import (
-	"os"
 	"path/filepath"
 )
 
@@ -42,14 +41,16 @@ type Lockfile struct {
 // tree, so their trees cannot differ by resolution and they need none; the
 // parity table says which language is which.
 //
-// ManifestPins reads the manifest's text and reports whether it declares a
-// dependency the lockfile would pin: a package with nothing to pin needs no
-// lockfile for its trees to agree (SwiftPM writes no Package.resolved for
-// one). A method, not a field, so a reader of the manifest's text is only
-// ever the language's own.
+// ManifestPins reports whether the manifest in manifestDir declares a
+// dependency the lockfile would pin, reading whatever the language must
+// (Swift follows its local path: packages, whose remote dependencies the
+// root's lockfile records): a package with nothing to pin needs no lockfile
+// for its trees to agree (SwiftPM writes no Package.resolved for one). What
+// the reading cannot establish counts as pinning. A method, not a field, so
+// a reader of the manifest is only ever the language's own.
 type Lockfiler interface {
 	Lockfile() Lockfile
-	ManifestPins(manifest string) bool
+	ManifestPins(manifestDir string) bool
 }
 
 // LockfileFor is the lockfile every workspace tree must hold, as a slash path
@@ -57,9 +58,8 @@ type Lockfiler interface {
 // above root, so "../Package.resolved" when root is a directory inside the
 // package (a tree copied from root holds no such file). ok is false when p
 // declares no lockfile, no manifest is found (the language's own preflight
-// refuses that), or the manifest declares nothing the lockfile would pin. A
-// manifest that cannot be read is taken to pin something: the rule errs
-// toward one tree.
+// refuses that), or the manifest declares nothing the lockfile would pin
+// (Lockfiler.ManifestPins).
 func LockfileFor(p Plugin, root string) (rel string, ok bool) {
 	l, isL := p.(Lockfiler)
 	if !isL {
@@ -74,7 +74,7 @@ func LockfileFor(p Plugin, root string) (rel string, ok bool) {
 	if !found {
 		return "", false
 	}
-	if src, err := os.ReadFile(filepath.Join(dir, d.Manifest)); err == nil && !l.ManifestPins(string(src)) { // #nosec G304 -- the operator's own manifest, found by its declared name; only scanned
+	if !l.ManifestPins(dir) {
 		return "", false
 	}
 	r, err := filepath.Rel(abs, filepath.Join(dir, d.Name))

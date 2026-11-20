@@ -351,7 +351,7 @@ func TestSwiftCoverageUnavailableIsAnError(t *testing.T) {
 				t.Errorf("SuiteExit = %d, %v; want the suite's %d", rc, ok, tc.runExit)
 			}
 			for _, c := range fakeSwiftCalls(t, bin) {
-				if strings.HasPrefix(c, "llvm-") && !strings.HasPrefix(c, "llvm-objdump ") {
+				if strings.HasPrefix(c, "llvm-") {
 					t.Errorf("a run that is not read was merged or exported: %s", c)
 				}
 			}
@@ -391,6 +391,22 @@ func TestSwiftCoverageUnavailableIsAnError(t *testing.T) {
 			}
 		})
 	}
+
+	// A failing `llvm-profdata show` is disclosed as that, not as a binary
+	// missing from the products directory: the loop that reads the IDs must
+	// not sit in a pipe, where its notice would be read as a build ID.
+	t.Run("llvm-profdata show fails", func(t *testing.T) {
+		bin := fakeSwift(t, readFixture(t, "swift-codecov.json"), 0, 0)
+		pd := filepath.Join(bin, "llvm-profdata")
+		if err := os.WriteFile(pd, []byte("#!/bin/sh\nexit 3\n"), 0o700); err != nil { // #nosec G306 -- an executable the test runs
+			t.Fatal(err)
+		}
+		stdout, _ := runSwiftCoverage(t, []string{"swift", "test"}, physicalTempDir(t), bin)
+		_, err := r.CoverageCounts(stdout, "")
+		if err == nil || !strings.Contains(err.Error(), "show --binary-ids failed (exit 3)") || strings.Contains(err.Error(), "not in SwiftPM's products directory") {
+			t.Errorf("want the unavailable reason naming the failed show, got %v\nstdout:\n%s", err, stdout)
+		}
+	})
 
 	t.Run("no codecov path", func(t *testing.T) {
 		bin := fakeSwift(t, readFixture(t, "swift-codecov.json"), 1, 0)

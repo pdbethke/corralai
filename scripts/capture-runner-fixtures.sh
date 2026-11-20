@@ -221,6 +221,8 @@ capture_swift_coverage() (
   want swift-coverage-script-exit 0 "$rc"
   want swift-coverage-run-exit "# suite-exit 0" "$(head -n 1 "$DIR/swift-export.out")"
   want swift-coverage-available "" "$(grep '^corral-swift-coverage: unavailable' "$DIR/swift-export.out" || true)"
+  # A capture that failed a check above is not written over the committed one.
+  [ "$fail" -eq 0 ] || return "$fail"
   sed -e '1d' -e "s#$pdir/#/fixture/swift-coverage/#g" "$DIR/swift-export.out" > "$OUT/swift-codecov.json"
   want swift-coverage-files 4 "$(grep -o '"filename":"/fixture/swift-coverage/[ST][^"]*"' "$OUT/swift-codecov.json" | wc -l | tr -d ' ')"
   return "$fail"

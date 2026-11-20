@@ -229,10 +229,16 @@ func swiftCoverageScript(testCmd []string, tail string) (cmd []string, ok bool) 
 		`set -- "$c"/*.profraw` + "\n" +
 		`[ -e "$1" ] || unavailable "swift test exited 0 and wrote no coverage profile in $c"` + "\n" +
 		// The build IDs this run's profiles name, one per line.
-		`for f in "$c"/*.profraw; do "$pd" show --binary-ids "$f" > "$d/show" || unavailable "$pd show --binary-ids failed (exit $?) on $f"; awk '/^Binary IDs:/ { on = 1; next } on && /^[0-9a-f]+$/ { print; next } { on = 0 }' "$d/show"; done | sort -u > "$d/ids"` + "\n" +
+		`bad=; for f in "$c"/*.profraw; do "$pd" show --binary-ids "$f" > "$d/show" || { brc=$?; bad=$f; break; }; awk '/^Binary IDs:/ { on = 1; next } on && /^[0-9a-f]+$/ { print; next } { on = 0 }' "$d/show"; done > "$d/rawids"` + "\n" +
+		// The failure is disclosed after the loop, and the IDs sorted after it:
+		// inside it, unavailable's notice would go where the loop's output goes
+		// and be read as a build ID (and in a pipe its exit would end only the
+		// pipe's subshell).
+		`[ -z "$bad" ] || unavailable "$pd show --binary-ids failed (exit $brc) on $bad"` + "\n" +
+		`sort -u "$d/rawids" > "$d/ids" || exit 1` + "\n" +
 		`[ -s "$d/ids" ] || unavailable "this run's profiles name no binary build ID, so the products that ran cannot be told from ones an earlier build left"` + "\n" +
 		// Each product whose build ID is one of them: "<id> <path>".
-		`for o in "${c%/*}"/*; do [ -f "$o" ] || continue; i=$(readelf -n "$o" 2>/dev/null | sed -n 's/^ *Build ID: *//p'); [ -n "$i" ] && grep -qx "$i" "$d/ids" && printf '%s %s\n' "$i" "$o"; done > "$d/found"` + "\n" +
+		`for o in "${c%/*}"/*; do [ -f "$o" ] || continue; i=$(LC_ALL=C readelf -n "$o" 2>/dev/null | sed -n 's/^ *Build ID: *//p'); [ -n "$i" ] && grep -qx "$i" "$d/ids" && printf '%s %s\n' "$i" "$o"; done > "$d/found"` + "\n" +
 		`cut -d ' ' -f 2- "$d/found" > "$d/objs"` + "\n" +
 		`cut -d ' ' -f 1 "$d/found" | sort -u | comm -23 "$d/ids" - > "$d/missing"` + "\n" +
 		`[ ! -s "$d/missing" ] || unavailable "$(wc -l < "$d/missing" | tr -d ' ') binary(ies) that wrote a profile in this run are not in SwiftPM's products directory ${c%/*} (build ID $(tr '\n' ' ' < "$d/missing")), so the report would leave out what they ran"` + "\n" +

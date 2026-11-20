@@ -239,8 +239,8 @@ type TreeEnver interface {
 // Every implementation returns leadingCommentProbe: one line comment, in the
 // language's own marker, before the file's first line. Before and not after,
 // because what a mutant pays and a baseline does not is the RELINK, and only
-// a change that moves code changes the compiled object. Measured on
-// taplin/Lariat at be0c5fd (Swift 6.3.2, one 32-core machine, in Docker),
+// a change that moves code changes the compiled object. Measured 2026-11-19
+// on taplin/Lariat at be0c5fd (Swift 6.3.2, one 32-core machine, in Docker),
 // `swift build --build-tests` after each change to Sources/LassoParser/
 // Evaluator.swift, as SwiftPM's own "Build complete!" line timed it:
 // rewritten with its own bytes (what every run on the workspace substrate

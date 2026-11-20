@@ -416,8 +416,9 @@ therefore be listed by the scan and then refused by the audit.
 
 - Commit `be0c5fdc9e046b529bff2b588bf4cc2c32a2ff8a`. This run is not from the
   binary and workstation named at the top of this page: corral was built from
-  branch `feat/swift-lang` at `e6d7cfe0` and run in a Docker container
-  (Ubuntu 24.04, Swift 6.3.2) with the network off, on one 32-core machine.
+  branch `feat/swift-lang` at `e6d7cfe0` and run on 2026-11-19 in a Docker
+  container (Ubuntu 24.04, Swift 6.3.2) with the network off, on one 32-core
+  machine.
   It passed neither `--no-ledger` nor `--cache-db` (a dry run writes no
   entry; HOME and every state path pointed into the scratch directory), and
   was timed with bash's `time`.

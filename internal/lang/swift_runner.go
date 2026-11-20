@@ -265,7 +265,7 @@ func swiftDisclose(repoDir string, argv []string) []string {
 	if _, err := os.Stat(filepath.Join(dir, "Package.resolved")); err == nil {
 		return nil
 	}
-	src, err := os.ReadFile(filepath.Join(dir, "Package.swift")) // #nosec G304 -- the operator's own manifest; only scanned, never executed or echoed
+	src, err := os.ReadFile(filepath.Join(dir, "Package.swift")) // #nosec G304 -- the operator's own manifest; only scanned, never executed; the url: literal of each branch-pinned dependency is printed back to the operator
 	if err != nil {
 		return nil
 	}

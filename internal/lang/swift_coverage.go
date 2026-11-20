@@ -68,8 +68,8 @@ var swiftCoverageMovedBuild = []string{"--package-path", "--scratch-path", "--bu
 //
 // THE COVERAGE BUILD HAS ITS OWN SCRATCH PATH, .build/corral-coverage,
 // because in the default one each kind of build evicts the other. Measured
-// on taplin/Lariat at be0c5fd with Swift 6.3.2, in Docker with the network
-// off after its dependencies were resolved: an ordinary `swift build
+// 2026-11-19 on taplin/Lariat at be0c5fd with Swift 6.3.2, in Docker on one
+// 32-core machine with the network off after its dependencies were resolved: an ordinary `swift build
 // --build-tests` that rebuilt nothing took 2.7 s; after one
 // `swift test --enable-code-coverage` (60 s, recompiling) the same ordinary
 // build recompiled again (1,026 compile steps, 56.2 s). With the coverage run

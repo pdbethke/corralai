@@ -99,14 +99,14 @@ func BuildLanguageProfile(cands []Candidate, excl []Exclusion) []LanguageStat {
 		if s == nil {
 			continue // genuinely not code corral audits
 		}
-		switch e.Reason {
-		case ReasonNoPairedTest, ReasonEvidencePairingNotBuilt:
+		switch r := e.Reason; {
+		case IsNoPairedTest(r):
 			s.NoPairedTest++
-		case ReasonAmbiguousTest:
+		case r == ReasonAmbiguousTest:
 			s.Ambiguous++
-		case ReasonIsTest:
+		case r == ReasonIsTest:
 			s.TestFiles++
-		case ReasonTestLandingNotBuilt, ReasonDeclarationsUnreadable:
+		case r == ReasonTestLandingNotBuilt, r == ReasonDeclarationsUnreadable:
 			s.LandingNotBuilt++
 		default:
 			// Anything else this language's source can be excluded for —

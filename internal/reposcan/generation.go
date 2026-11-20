@@ -499,9 +499,10 @@ package reposcan
 // the dev test against each mutant and Swift builds the dev test's target,
 // so such a mutant is invalid; Python, Ruby, JavaScript and PHP add the
 // unchanged dev test to their per-file checks. Go and Rust ignore the test
-// path. When the unmutated tree's check rejects the dev test (oxlint's
-// no-undef on a Jest test's globals, ruff F821, a TypeScript test with type
-// errors that only a type-stripping runner loads), the gate falls back to the
+// path. When the unmutated tree's check rejects the dev test (measured only
+// with oxlint 1.87.0 run by hand: its no-undef rejects a Jest test's globals;
+// a TypeScript test with type errors that only a type-stripping runner loads
+// is the same case by construction and was not run), the gate falls back to the
 // code alone for that file, as every language ran before, and says so in the
 // compile-gate note: adequacy.Report.CompileGateNote, which the driver prints
 // to the run's log beside the dev-adequacy line and which no Verdict field

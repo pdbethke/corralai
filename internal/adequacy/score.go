@@ -86,9 +86,9 @@ func CapFloorApplies(mutantTimeout time.Duration) bool { return mutantTimeout <=
 // there writes the file into the real checkout, the unmutated baseline
 // included, so a toolchain that rebuilds by timestamp recompiles the file on
 // every run alike. But SwiftPM then skips the relink when the object it
-// compiled is unchanged, and a mutant's is not: on taplin/Lariat (Swift
-// 6.3.2, one 32-core machine, in Docker, container start included) `swift
-// test` took 7.8 s with the file rewritten unchanged, as a baseline is, and
+// compiled is unchanged, and a mutant's is not: measured 2026-11-19 on
+// taplin/Lariat (Swift 6.3.2, one 32-core machine, in Docker, container
+// start included), `swift test` took 7.8 s with the file rewritten unchanged, as a baseline is, and
 // 17.1 s on a one-line mutant, which relinked six products.
 //
 // So warmDur floors the cap at the same multiple: max(multiple x baseDur,

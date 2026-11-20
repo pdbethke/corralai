@@ -92,3 +92,57 @@ and the committed ones are what the tests were written against.
 swift-codecov.json comes from a --swift-coverage-only run of the same
 script on the same toolchain (2026-11-19), in a container with the network
 off.
+
+HAND MEASUREMENTS, 2026-11-19 (not captures)
+These are not fixtures. They are the commands behind figures that tracked
+files cite with this date; their raw output is not committed and no test
+reads them. Each figure is stated where it is cited, and only there. All ran
+on one 32-core Linux workstation. A full run of this script rewrites this
+file from its own text, which does not carry this section.
+
+Swift runs used Swift 6.3.2 in the Docker image corral-swift-spike (Ubuntu
+24.04), the image the Swift captures above came from. taplin/Lariat was
+cloned at be0c5fdc9e046b529bff2b588bf4cc2c32a2ff8a with
+  git clone --depth 1 https://github.com/taplin/Lariat.git
+into a scratch directory $S, and swift was run as
+  SW="docker run --rm -u $(id -u):$(id -g) -e HOME=/tmp -v $S:$S -w $S/lariat corral-swift-spike swift"
+
+- The rebuild probe (lang.PerRunBuilder's comment in internal/lang/lang.go):
+  `$SW build --build-tests` after each change to
+  Sources/LassoParser/Evaluator.swift (rewritten with its own bytes; a
+  `// corral rebuild probe` line appended at the end; the same line put
+  first; a one-line mutant, the `trim` case returning `.string(value)`),
+  timed by SwiftPM's own "Build complete!" line.
+- Whole runs (adequacy.mutantTimeoutCap's comment, and the CHANGELOG entry
+  on each Swift mutant's time limit): `$SW test`, timed by /usr/bin/time
+  (container start included), after `$SW build --build-tests` had settled
+  the tree, with the file rewritten unchanged, with the leading comment, and
+  with the same mutant.
+- The coverage build's own scratch path (internal/lang/swift_coverage.go):
+  in a scratch copy of the clone, `swift package resolve` once with the
+  network on, then, with --network none, in this order: `swift build
+  --build-tests`; `swift test --enable-code-coverage`; `swift build
+  --build-tests` again; and the same with the coverage run given
+  `--scratch-path .build/corral-coverage`. The notes give these steps and
+  their times; the two shell scripts that ran them were not kept.
+- The llvm-cov reducer reading Lariat's export (internal/lang/llvmcov.go):
+  the notes give the export's size and the times under mawk and gawk, but
+  not the command that timed them.
+- Rust (the rebuild-floor exemption for rust in internal/lang/parity.go):
+  `cargo test --lib --no-run`, cargo 1.90.0, outside the sandbox, on
+  regex-syntax 0.8.5 copied from ~/.cargo/registry/src/*/regex-syntax-0.8.5
+  into a scratch directory, after each change to src/hir/translate.rs,
+  timed by cargo's own Finished line.
+- Free dry runs of corral on the Lariat clone (docs/corral/evidence-pairing.md,
+  the run-cache and evidence-promotion exemptions for swift in
+  internal/lang/parity.go, and the CHANGELOG): corral built from
+  feat/swift-lang in an image of corral-swift-spike plus Go 1.26.11, run with
+  --network none, HOME and every corral state path in the scratch directory,
+  timed with bash's `time`:
+    corral certify --repo . --dry-run --evidence --substrate workspace -- swift test
+    corral certify --repo . --dry-run --evidence --substrate workspace --no-selection-cache -- swift test
+    corral tests map --repo-dir . --substrate workspace --out <file> -- swift test
+  The files executed under Sources/LassoParser come from the tests map. The
+  counts of files recorded evidence-pairing-not-built and no-paired-test
+  come from the dry run's --json output (excluded_by_reason); the notes give
+  the counts and not the exact --json invocation.

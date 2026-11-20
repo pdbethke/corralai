@@ -17,7 +17,9 @@ import (
 // plugin's CoverageCmd. Rust asks llvm-cov for it with -summary-only; Swift
 // reads the full export SwiftPM writes itself, segments, branches and
 // functions as well (16.2 MB for one run of taplin/Lariat at be0c5fd, which
-// this reducer read in 0.04 s with mawk and 0.3 s with gawk). The reducer
+// this reducer read in 0.04 s with mawk and 0.3 s with gawk, measured
+// 2026-11-19 with Swift 6.3.2 in a Docker container on one 32-core machine).
+// The reducer
 // reads only each file's "filename" and its summary's "lines", which both
 // forms carry.
 

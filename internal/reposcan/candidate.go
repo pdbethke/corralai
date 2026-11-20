@@ -265,13 +265,14 @@ func IsLandingRefusal(reason string) bool {
 // A new reason must be classified HERE, once, rather than remembered at
 // every gate that asks the question.
 func UnauditableChangedSource(reason string) bool {
-	switch reason {
-	case ReasonNoPairedTest, ReasonEvidencePairingNotBuilt, ReasonAmbiguousTest, ReasonNotRegularFile:
+	switch {
+	case IsNoPairedTest(reason), reason == ReasonAmbiguousTest, reason == ReasonNotRegularFile:
 		// The source changed and corral could not grade it: no test names
-		// it, its test is claimed by another source, or it is not a file it
-		// can read. Each is "we could not look", not "nothing to look at".
+		// it (every no-paired-test reason, asked through IsNoPairedTest),
+		// its test is claimed by another source, or it is not a file it can
+		// read. Each is "we could not look", not "nothing to look at".
 		return true
-	case ReasonTestLandingNotBuilt, ReasonDeclarationsUnreadable:
+	case reason == ReasonTestLandingNotBuilt, reason == ReasonDeclarationsUnreadable:
 		// A language corral cannot audit YET, ruled (Rust part 1) to be
 		// treated exactly as a language it does not audit at all
 		// (ReasonNoLanguage, the default below): the scan discloses the
@@ -282,7 +283,7 @@ func UnauditableChangedSource(reason string) bool {
 		// accepted: an unaudited Rust change passes the gate with only the
 		// disclosure.
 		return false
-	case ReasonUncovered, ReasonUncoveredByUnits, ReasonImportOnly:
+	case IsUncovered(reason), reason == ReasonImportOnly:
 		// Also "we could not measure it" — but these are REPORTED as
 		// uncovered by the scan itself, which the report already surfaces
 		// and the operator opted into by running with coverage. Left out so

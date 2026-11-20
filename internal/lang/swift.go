@@ -134,9 +134,12 @@ func (swiftPlugin) ManifestPins(manifestDir string) bool {
 // (JailScorer.mutantGateTestPath), so each mutant is compiled with the test
 // target that calls it, and a mutant that breaks only the tests' view of the
 // source (a changed signature a test calls) is invalid rather than a kill.
-// The source target is built alone only when no test is handed (single-file
-// mode, which Preflight refuses for Swift, or ""), and then such a mutant
-// would fail the suite's own build and count as a kill.
+// The source target is built alone when no test is handed (single-file mode,
+// which Preflight refuses for Swift, or ""), and when the mutant gate falls
+// back to the code alone because the developer's test target does not build
+// on the unmutated tree (adequacy.WithMutantCompileFallback, which says so in
+// the run's log). Then a mutant that breaks only the tests' view of the
+// source passes the gate, fails the suite's own build and counts as a kill.
 //
 // Measured on Swift 6.3.2 (testdata/runners/swift-build-target-*.txt):
 // `swift build --target <TestTarget>` built the test target and its
@@ -304,8 +307,10 @@ func (swiftPlugin) ImportNote(module string, ok bool) string {
 // WorkspaceRunEnv is a no-op FOR NOW, and that is not a claim of safety: whether
 // SwiftPM's incremental build can serve a stale product for a mutant rewritten
 // in the same second on the workspace substrate (the hole CPython's
-// __pycache__ has) is unmeasured, and it is to be measured
-// when Swift runs on that substrate. See Plugin.WorkspaceRunEnv.
+// __pycache__ has) is unmeasured. That substrate is the only one Swift runs
+// on, so every Swift audit is exposed to it until it is measured (two
+// different mutants written back to back, each followed by `swift test`).
+// See Plugin.WorkspaceRunEnv.
 func (swiftPlugin) WorkspaceRunEnv() (env []string, cleanup func()) { return nil, func() {} }
 
 // ConcatTests merges nothing yet: what a merged Swift file is has not been

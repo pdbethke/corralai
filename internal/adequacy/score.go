@@ -54,6 +54,13 @@ const (
 	mutantTimeoutMultiple = 3
 )
 
+// CapFloorApplies reports whether a per-mutant cap is derived at all, and so
+// whether any floor (a warm duration) reaches it: not when the caller set the
+// cap itself (WithMutantTimeout, the operator's --test-timeout), which every
+// mutant then gets as given. Score's budgets follow it, and a record of which
+// floor applied must ask it too, so the two cannot disagree.
+func CapFloorApplies(mutantTimeout time.Duration) bool { return mutantTimeout <= 0 }
+
 // mutantTimeoutCap derives a per-mutant timeout from how long the compliant
 // run of THE SAME COMMAND took (baseDur): mutantTimeoutMultiple x that,
 // clamped to [floor, maxMutantTimeout] (floor is minMutantTimeout outside
@@ -94,13 +101,6 @@ const (
 // changes nothing, and a cap can only grow from it. This is the ONE place a
 // cap is derived from a baseline; every budget in Score comes from it or
 // from a cap it returned.
-// CapFloorApplies reports whether a per-mutant cap is derived at all, and so
-// whether any floor (a warm duration) reaches it: not when the caller set the
-// cap itself (WithMutantTimeout, the operator's --test-timeout), which every
-// mutant then gets as given. Score's budgets follow it, and a record of which
-// floor applied must ask it too, so the two cannot disagree.
-func CapFloorApplies(mutantTimeout time.Duration) bool { return mutantTimeout <= 0 }
-
 func mutantTimeoutCap(baseDur, warmDur, floor time.Duration) time.Duration {
 	d := max(baseDur, warmDur) * mutantTimeoutMultiple
 	return min(max(d, floor), maxMutantTimeout)

@@ -56,6 +56,9 @@ type WorkspaceRunner struct {
 	// exactly one tree in that case and it is the checkout the caller already
 	// named. See WithTreeEnv.
 	treeEnv func(treeRoot string) []string
+	// lockfile is set by WithLockfile and, like treeEnv, read only by
+	// WorkspacePool: it is about the copies, and a lone runner has none.
+	lockfile string
 }
 
 // WorkspaceOption configures a WorkspaceRunner at construction

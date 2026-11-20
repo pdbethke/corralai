@@ -431,8 +431,8 @@ var runners = []Runner{
 		FirstFailure: swiftFirstFailure,
 		ListUnits:    swiftListUnits, ParseUnits: swiftParseUnits, UnitCmd: oneUnit(swiftUnitsCmd),
 		UnitsCmd: swiftUnitsCmd, UnitForFile: swiftUnitForFile, UnitNoun: "test targets",
-		PreflightBin: func(argv []string) string { return preflightBin(argv, "swift") },
-		Note:         "run on Swift 6.3.2 on Linux, in a container, not yet in corral's sandbox: the listing; one test alone (`--filter`) for each of four id shapes, an XCTest Class/method, a top-level swift-testing function, one in a suite with a display name and a parameterised one, each running exactly one test; one-target and two-target runs; and the failure lines of both frameworks. Other id shapes (nested suites, a name that is no ASCII identifier) were not run. The --help lists no retry option, so no test is reported flaky; a swift-testing failure is named by its function or display name, as its output prints it, an XCTest one as Class.method without its target; a test target declared with its own `path:` in Package.swift is not mapped to its files",
+		Disclose: swiftDisclose, PreflightBin: func(argv []string) string { return preflightBin(argv, "swift") },
+		Note: "run on Swift 6.3.2 on Linux, in a container, not yet in corral's sandbox: the listing; one test alone (`--filter`) for each of four id shapes, an XCTest Class/method, a top-level swift-testing function, one in a suite with a display name and a parameterised one, each running exactly one test; one-target and two-target runs; and the failure lines of both frameworks. Other id shapes (nested suites, a name that is no ASCII identifier) were not run. The --help lists no retry option, so no test is reported flaky; a swift-testing failure is named by its function or display name, as its output prints it, an XCTest one as Class.method without its target; a test target declared with its own `path:` in Package.swift is not mapped to its files",
 	},
 }
 

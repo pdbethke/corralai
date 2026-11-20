@@ -178,6 +178,8 @@ var (
 //     drag in build output, caches and dep trees — so Trees: 1, note
 //     "not a git work tree".
 //   - the universe exceeds 2 GiB: Trees: 1, note "checkout over 2 GiB".
+//   - a lockfile was declared (WithLockfile) and is not in the universe:
+//     Trees: 1, the note naming the file.
 //
 // WithTreeEnv is lifted out of opts and honoured here, per tree; every other
 // option is passed through to each tree's NewWorkspaceRunner unchanged.
@@ -236,6 +238,9 @@ func NewWorkspacePool(ctx context.Context, root string, n int, timeout time.Dura
 	if size > maxUniverseBytes {
 		return single("checkout over 2 GiB")
 	}
+	if lf := probe.lockfile; lf != "" && !slices.Contains(universe, lf) {
+		return single(lf + " is not among the files copied into each tree (git neither tracks it nor lists it as an unignored file), so each tree would resolve the dependencies for itself and could build versions the checkout does not")
+	}
 
 	// THE COPY. Measured around the whole loop, not per tree: N trees is one
 	// decision and one cost, and the audit paid all of it before it could
@@ -271,6 +276,21 @@ func NewWorkspacePool(ctx context.Context, root string, n int, timeout time.Dura
 	p.shared = linked
 	p.copyDuration = copied
 	return p, Disclosure{Trees: n, Shared: linked, CopyDuration: copied}, nil
+}
+
+// WithLockfile names the lockfile every private tree must hold, as a slash
+// path relative to the pool's root (lang.LockfileFor, for a language that
+// declares one). A tree that holds no resolved dependencies of its own
+// resolves them on its first run, and trees agree on the versions only when
+// each holds the checkout's lockfile; when the trees would not hold it (it is
+// ignored, absent, or above the root), NewWorkspacePool is one tree, the
+// checkout, and its note names the file. Best-effort like every other reason
+// the pool gives for one tree: never an error.
+//
+// Like WithTreeEnv it is a WorkspaceOption so it travels in the same list,
+// and it is a no-op on a bare WorkspaceRunner, which copies nothing.
+func WithLockfile(rel string) WorkspaceOption {
+	return func(w *WorkspaceRunner) { w.lockfile = rel }
 }
 
 // newPool wires one runner per tree. temps is the subset of trees Close may

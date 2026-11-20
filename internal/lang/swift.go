@@ -104,6 +104,14 @@ func (swiftPlugin) BuildDirs() []BuildDir {
 	return []BuildDir{{Name: ".build", Marker: "Package.swift"}}
 }
 
+// Lockfile is SwiftPM's Package.resolved beside Package.swift, found as
+// Preflight finds the manifest. A workspace tree holds no .build (see
+// DependencyDirs), so each tree resolves the dependencies on its first run,
+// and it gets the versions the checkout has only from this file.
+func (swiftPlugin) Lockfile() Lockfile {
+	return Lockfile{Name: "Package.resolved", Manifest: "Package.swift", SearchDepth: swiftPackageSearchDepth}
+}
+
 // CompileCheck builds ONE target, never the package (a compile check is
 // scoped to the audited file and its test; AGENTS.md): the test target
 // testPath is in, when it is a test (Tests/<Target>/...); otherwise the source

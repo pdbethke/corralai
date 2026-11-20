@@ -2645,6 +2645,38 @@ func (h *workspacePool) close() {
 	h.pool = nil
 }
 
+// workspaceRunnerOpts is the option list a workspace pool of trees trees on
+// the checkout at repoDir is built with, for the language plug: its per-run
+// env, its per-tree env when there is more than one tree, and the lockfile
+// every tree must hold when the language declares one (lang.LockfileFor),
+// without which the pool is one tree and says why.
+func workspaceRunnerOpts(plug lang.Plugin, trees int, repoDir string) []adequacy.WorkspaceOption {
+	opts := []adequacy.WorkspaceOption{adequacy.WithPerRunEnv(plug.WorkspaceRunEnv)}
+	// WithTreeEnv is per-TREE and therefore only meaningful once there is
+	// more than one: it gives a copy its own import path (Python) and its
+	// own SHARE of the box (Go). The share is DIVIDED — N trees each
+	// assuming all cores thrash the machine and can fail the probe on
+	// contention alone, downgrading a suite that is perfectly safe. A
+	// plugin that implements no lang.TreeEnver gets no tree env, which is
+	// the honest answer for a language whose toolchain neither records an
+	// absolute import path nor fans out by itself. A pool that downgrades
+	// to the checkout itself drops the tree env entirely — see
+	// adequacy.NewWorkspacePool.
+	if te, ok := plug.(lang.TreeEnver); ok && trees > 1 {
+		share := runtime.NumCPU() / trees
+		if share < 1 {
+			share = 1
+		}
+		opts = append(opts, adequacy.WithTreeEnv(func(tree string) []string {
+			return te.TreeEnv(tree, share)
+		}))
+	}
+	if rel, ok := lang.LockfileFor(plug, repoDir); ok && trees > 1 {
+		opts = append(opts, adequacy.WithLockfile(rel))
+	}
+	return opts
+}
+
 // newWorkspacePool and probeWorkspacePool are the pool's construction and
 // probe seams. They exist as variables ONLY so a test can count them: "the
 // pool is built once and probed once per file" is a property no assertion
@@ -2814,27 +2846,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 			// rather than failing the whole audit over it.
 			var runnerOpts []adequacy.WorkspaceOption
 			if plug, ok := lang.ByName(in.langName); ok {
-				runnerOpts = append(runnerOpts, adequacy.WithPerRunEnv(plug.WorkspaceRunEnv))
-				// WithTreeEnv is per-TREE and therefore only meaningful once
-				// there is more than one: it gives a copy its own import path
-				// (Python) and its own SHARE of the box (Go). The share is
-				// DIVIDED — N trees each assuming all cores thrash the
-				// machine and can fail the probe on contention alone,
-				// downgrading a suite that is perfectly safe. A plugin that
-				// implements no lang.TreeEnver gets no tree env, which is the
-				// honest answer for a language whose toolchain neither
-				// records an absolute import path nor fans out by itself.
-				// A pool that downgrades to the checkout itself drops the
-				// tree env entirely — see adequacy.NewWorkspacePool.
-				if te, ok := plug.(lang.TreeEnver); ok && trees > 1 {
-					share := runtime.NumCPU() / trees
-					if share < 1 {
-						share = 1
-					}
-					runnerOpts = append(runnerOpts, adequacy.WithTreeEnv(func(tree string) []string {
-						return te.TreeEnv(tree, share)
-					}))
-				}
+				runnerOpts = workspaceRunnerOpts(plug, trees, in.repoDir)
 			}
 
 			built, disc, perr := newWorkspacePool(ctx, in.repoDir, trees, in.timeout, runnerOpts...)

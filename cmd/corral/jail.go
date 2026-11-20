@@ -376,7 +376,7 @@ type sandboxStartError struct {
 }
 
 func (e *sandboxStartError) Error() string {
-	return fmt.Sprintf("no working bwrap sandbox: %v\n\n%s", e.cause, e.advice)
+	return "no working bwrap sandbox: " + e.cause.Error() + "\n\n" + e.advice
 }
 
 func (e *sandboxStartError) Unwrap() error { return e.cause }

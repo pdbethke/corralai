@@ -5683,17 +5683,32 @@ func newLocalExecutorWithJail(repoDir string, checkArgv []string, substrate, jai
 	return l
 }
 
-// preflight reports a scan-fatal condition discovered at construction — today,
-// a sandbox that cannot isolate on this host. Checked ONCE before the fan-out,
+// preflight reports a scan-fatal condition discovered at construction: a
+// sandbox that cannot isolate on this host, or a run every one of whose
+// languages corral's sandbox never runs. Checked ONCE before the fan-out,
 // like the provider-key preflight: discovering it per file would report every
 // file as ungradable for a reason the first job could have stated instantly.
 //
 // langs are the languages the run would execute in the sandbox
-// (sandboxLangs, or a test map's one language): they decide the advice (sandboxFailureFor),
-// so a run whose language corral's sandbox never runs is told that, not how
-// to fix a sandbox that would only refuse it.
+// (sandboxLangs, or a test map's one language). For a sandbox that would not
+// start they decide the advice (sandboxFailureFor), so a run whose language
+// corral's sandbox never runs is told that, not how to fix a sandbox that
+// would only refuse it. For one that started they are asked the same
+// question (sandboxRefusalWith): a run whose every language refuses is
+// refused here, and a mixed run prints which files the sandbox never runs.
+// The workspace substrate runs no sandbox, so neither applies to it.
 func (l *localExecutor) preflight(langs []string) error {
-	return sandboxFailureFor(l.jailErr, langs)
+	if l.jailErr != nil {
+		return sandboxFailureFor(l.jailErr, langs)
+	}
+	if l.substrate == substrateWorkspace {
+		return nil
+	}
+	note, err := sandboxRefusalWith(langs)
+	if note != "" && l.progress != nil {
+		fmt.Fprintf(l.progress, "  %s\n", note)
+	}
+	return err
 }
 
 // sandboxLangs is every language a certify --repo run would execute in the
@@ -6214,6 +6229,9 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 	}
 	release()
 
+	// The baseline is stably green, so the pool's rebuild run is made now,
+	// by the audit's wiring, on a tree those runs warmed (armRebuild).
+	in.pool.armRebuild()
 	v, err := l.audit(ctx, in)
 	if err != nil {
 		// No verdict to carry it, but the measurement was taken: say it.

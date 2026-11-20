@@ -7,14 +7,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
+	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/reposcan"
 )
 
 // rebuildFixture is a one-tree pool on a checkout holding one source file, and
@@ -181,3 +185,134 @@ func TestPoolDurationIncludesTheRebuildRun(t *testing.T) {
 		t.Fatalf("poolDuration = %v, want the 17s rebuild run", got)
 	}
 }
+
+// Final review, finding 3: a rebuild run cut off at the runner's timeout is
+// slower than any rebuild that finished, so it stops the file as a floor over
+// the ceiling does (not graded, with the reason), where it used to record
+// "none: ..." and grade every mutant under a cap its relink could never fit.
+func TestATimedOutRebuildRunStopsTheFile(t *testing.T) {
+	root := t.TempDir()
+	codeKey := "Sources/A/A.swift"
+	mustWrite(t, filepath.Join(root, codeKey), "OK\n")
+	pool, _, err := adequacy.NewWorkspacePool(context.Background(), root, 1, 200*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	_, record, err := rebuildFloor(context.Background(), pool, mustPlugin(t, "swift"), codeKey, []byte("OK\n"), []string{"sleep", "30"}, 0, &out)
+	if err == nil {
+		t.Fatalf("a timed-out rebuild run graded the file: record %q, stdout %q", record, out.String())
+	}
+	if !errors.Is(err, adequacy.ErrRebuildOverCeiling) || !strings.Contains(err.Error(), codeKey) || !strings.Contains(err.Error(), "cannot be graded") {
+		t.Errorf("err = %v, want the file named as not gradable, over the ceiling", err)
+	}
+	if record != "" || pool.WarmDuration() != 0 {
+		t.Errorf("record %q, WarmDuration %v: a run that stops the file sets no floor", record, pool.WarmDuration())
+	}
+}
+
+// Final review, finding 2: on a one-tree pool nothing runs the suite before
+// the pool is built (the probe skips one tree, and the evidence pass builds
+// elsewhere), so a rebuild run made where the pool is built is the first
+// ordinary run of the job and times a cold build as the rebuild. The rebuild
+// run is now made by the audit's wiring, once Execute has armed it after the
+// baseline-stability runs, which warm the tree, so no run is added. Here the "suite" is slow on
+// its first invocation only, as a cold build is.
+func TestTheRebuildRunFollowsTheBaselineStabilityRuns(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "Package.swift"), "// swift-tools-version:5.9\nimport PackageDescription\nlet package = Package(name: \"A\")\n")
+	mustWrite(t, filepath.Join(root, "Sources", "A", "A.swift"), "let ok = \"OK\"\n")
+	mustWrite(t, filepath.Join(root, "Tests", "ATests", "ATests.swift"), "import XCTest\n")
+	if out, err := exec.Command("git", "-C", root, "init", "-q").CombinedOutput(); err != nil {
+		t.Skipf("git init: %v %s", err, out)
+	}
+	// A stand-in swift on PATH, for the host-side toolchain check: the suite
+	// below is the command that runs, and it needs no Swift.
+	bin := t.TempDir()
+	mustWrite(t, filepath.Join(bin, "swift"), "#!/bin/sh\n")
+	if err := os.Chmod(filepath.Join(bin, "swift"), 0o700); err != nil { // #nosec G302 -- test stand-in must be executable
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	mark := filepath.Join(t.TempDir(), "built")
+	cold := 1500 * time.Millisecond
+	cmd := []string{"sh", "-c", fmt.Sprintf(`[ -e %q ] || { touch %q; sleep %g; }; grep -q OK Sources/A/A.swift`, mark, mark, cold.Seconds())}
+	in := localAuditInput{
+		repoDir: root, codePath: "Sources/A/A.swift", testPath: "Tests/ATests/ATests.swift",
+		goal: "the file keeps saying OK", lang: "swift", substrate: substrateWorkspace,
+		mutantConcurrency: 1, checkArgv: cmd, timeout: time.Minute,
+		concurrency: new(adequacy.Disclosure), capFloor: new(string), pool: &workspacePool{},
+		stdout: io.Discard, stderr: io.Discard,
+	}
+	defer in.pool.close()
+
+	runner, cleanup, err := baselineRunnerFor(context.Background(), in)
+	if err != nil {
+		t.Fatalf("baseline wiring: %v", err)
+	}
+	if stable, err := reposcan.CheckBaselineStable(runner, 2); err != nil || !stable {
+		t.Fatalf("baseline stable = %v, err = %v", stable, err)
+	}
+	cleanup()
+	// What Execute does once the baseline is stably green; the audit's wiring
+	// then comes through the same door and reuses the job's pool.
+	if in.pool.pool.WarmDuration() != 0 || *in.capFloor != "" {
+		t.Fatalf("a rebuild run was made before the baseline-stability runs: floor %v, CapFloor %q", in.pool.pool.WarmDuration(), *in.capFloor)
+	}
+	in.pool.armRebuild()
+	_, cleanup2, err := baselineRunnerFor(context.Background(), in)
+	if err != nil {
+		t.Fatalf("audit wiring: %v", err)
+	}
+	cleanup2()
+
+	warm := in.pool.pool.WarmDuration()
+	if warm <= 0 || warm >= cold {
+		t.Fatalf("the recorded floor is %v: want the warm rebuild, under the %v cold first run", warm, cold)
+	}
+	if !strings.HasPrefix(*in.capFloor, "rebuild run, ") {
+		t.Errorf("CapFloor = %q, want the measured rebuild run", *in.capFloor)
+	}
+	if in.concurrency.RebuildDuration != warm {
+		t.Errorf("the pool phase records a rebuild of %v, want the %v the floor was set from", in.concurrency.RebuildDuration, warm)
+	}
+}
+
+// Execute arms the rebuild run only after the baseline-stability runs pass,
+// so the wiring the baseline builds makes none and the audit's makes it; a
+// file whose baseline is not stably green pays for no rebuild run at all.
+func TestExecuteArmsTheRebuildRunAfterAStableGreenBaseline(t *testing.T) {
+	for _, green := range []bool{true, false} {
+		var atBaseline, atAudit bool
+		audited := false
+		ex := localExecutor{
+			baselineRuns: 2,
+			substrate:    substrateWorkspace,
+			progress:     io.Discard,
+			newBaseline: func(_ context.Context, in localAuditInput) (reposcan.BaselineRunner, func(), error) {
+				atBaseline = atBaseline || in.pool.rebuildDue
+				return fixedBaseline(green), func() {}, nil
+			},
+			audit: func(_ context.Context, in localAuditInput) (advpool.Verdict, error) {
+				audited, atAudit = true, in.pool.rebuildDue
+				return advpool.Verdict{}, nil
+			},
+		}
+		if _, err := ex.Execute(context.Background(), reposcan.Job{Path: "Sources/B/B.swift", Lang: "swift", Goal: reposcan.Goal{Text: "g"}}); err != nil {
+			t.Fatal(err)
+		}
+		if atBaseline {
+			t.Errorf("green=%v: the rebuild run was armed before the baseline-stability runs", green)
+		}
+		if green && (!audited || !atAudit) {
+			t.Errorf("a stably green baseline reached the audit with the rebuild run not armed (audited %v)", audited)
+		}
+		if !green && audited {
+			t.Errorf("a red baseline reached the audit")
+		}
+	}
+}
+
+type fixedBaseline bool
+
+func (b fixedBaseline) RunBaseline() (bool, error) { return bool(b), nil }

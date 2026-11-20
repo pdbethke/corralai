@@ -794,6 +794,8 @@ func (p *WorkspacePool) EnumerateDetailed(ctx context.Context, files map[string]
 // above maxMutantTimeout: the ceiling would cut every mutant's run short of
 // the margin any other cap gives, and one mutant that ran past it fails the
 // file's grading partway through. The file is not graded (rebuildFloorRefusal).
+// A rebuild run cut off at the runner's timeout is this error too
+// (MeasureRebuild): it is slower than any run that finished.
 var ErrRebuildOverCeiling = errors.New("the rebuild run is too slow for corral's per-mutant ceiling")
 
 // rebuildFloorRefusal is ErrRebuildOverCeiling, with both durations, when a
@@ -824,10 +826,13 @@ func rebuildFloorRefusal(took time.Duration) error {
 //
 //   - a *RestoreError (errors.As): the checkout was not put back. Stop.
 //   - ErrRebuildOverCeiling (errors.Is): the run passed and is too slow to
-//     grade under the ceiling. The file cannot be graded.
-//   - anything else (the suite failed, the run timed out, the command could
-//     not start): no floor. Disclose it; the audit goes on with the cap it
-//     would have had without this run.
+//     grade under the ceiling, or it was cut off at the runner's timeout
+//     (it also matches ErrTestTimeout then). The file cannot be graded: a
+//     run cut off is slower than any that finished, and every mutant's
+//     relink would be cut off the same way, a timeout that reads as a kill.
+//   - anything else (the suite failed, the command could not start): no
+//     floor. Disclose it; the audit goes on with the cap it would have had
+//     without this run.
 //
 // took is the run's wall clock whatever the outcome, so the time it cost is
 // accounted even when it yields no floor.
@@ -840,6 +845,9 @@ func (p *WorkspacePool) MeasureRebuild(ctx context.Context, base map[string]stri
 	start := time.Now()
 	pass, err := p.RunTest(ctx, files, testCmd)
 	took = time.Since(start)
+	if errors.Is(err, ErrTestTimeout) {
+		return took, fmt.Errorf("%w: it did not finish within the run timeout (%s), so no mutant's rebuild would either: %w", ErrRebuildOverCeiling, p.timeout, err)
+	}
 	if err != nil {
 		return took, fmt.Errorf("adequacy: the rebuild run of %s did not finish: %w", codePath, err)
 	}

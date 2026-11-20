@@ -400,32 +400,71 @@ func (e *sandboxStartError) Unwrap() error { return e.cause }
 //   - Some do: both, each saying which files it is for, the advice first
 //     because it is what the operator can act on for the files that can run.
 func sandboxAdviceFor(advice string, langs []string) string {
-	var refusals []string
-	var refusing, running []string
+	r := sandboxRefusalsFor(langs)
+	if len(r.refusals) == 0 {
+		return advice
+	}
+	if len(r.running) == 0 {
+		return "A working sandbox would not help here:\n" + strings.Join(r.refusals, "\n")
+	}
+	if advice == "" {
+		return r.note()
+	}
+	return advice + "\n\nThat advice is for the " + strings.Join(r.running, ", ") + " files this run would audit. " +
+		"corral's sandbox never runs its " + strings.Join(r.refusing, ", ") + " files, on any host:\n" + strings.Join(r.refusals, "\n")
+}
+
+// sandboxRefusals is langs split by the one decision every door makes about
+// a language and corral's sandbox (lang.RefusesEverySandbox): the refusing
+// languages' own refusals and display names, and the display names of the
+// languages the sandbox can run on some host. A name with no plugin is in
+// neither list.
+type sandboxRefusals struct {
+	refusals, refusing, running []string
+}
+
+func sandboxRefusalsFor(langs []string) sandboxRefusals {
+	var r sandboxRefusals
 	for _, n := range langs {
 		p, ok := lang.ByName(n)
 		if !ok {
 			continue
 		}
 		if err := lang.RefusesEverySandbox(p); err != nil {
-			refusals = append(refusals, err.Error())
-			refusing = append(refusing, p.PromptLang())
+			r.refusals = append(r.refusals, err.Error())
+			r.refusing = append(r.refusing, p.PromptLang())
 		} else {
-			running = append(running, p.PromptLang())
+			r.running = append(r.running, p.PromptLang())
 		}
 	}
-	if len(refusals) == 0 {
-		return advice
+	return r
+}
+
+// note says which of the run's files the sandbox never runs, and each
+// refusing language's own refusal.
+func (r sandboxRefusals) note() string {
+	return "corral's sandbox never runs this run's " + strings.Join(r.refusing, ", ") + " files, on any host:\n" + strings.Join(r.refusals, "\n")
+}
+
+// sandboxRefusalWith is the same decision for a sandbox that STARTED, which
+// a door must ask too: a working sandbox runs nothing a refusing language
+// would grade, so when every language in langs refuses, the run is refused
+// here, before anything it would run in the sandbox (the unit evidence
+// pass) or pay for (goal derivation), with those refusals; refused per file
+// instead, it pays for a goal for every file first. When only some refuse,
+// the run goes on for the others and note says which files the sandbox
+// never runs. Both are "" / nil when none refuses, so a run in a language
+// the sandbox runs sees nothing new.
+func sandboxRefusalWith(langs []string) (note string, refuse error) {
+	r := sandboxRefusalsFor(langs)
+	switch {
+	case len(r.refusals) == 0:
+		return "", nil
+	case len(r.running) == 0:
+		return "", errors.New(r.note())
+	default:
+		return r.note(), nil
 	}
-	if len(running) == 0 {
-		return "A working sandbox would not help here:\n" + strings.Join(refusals, "\n")
-	}
-	note := "corral's sandbox never runs this run's " + strings.Join(refusing, ", ") + " files, on any host:\n" + strings.Join(refusals, "\n")
-	if advice == "" {
-		return note
-	}
-	return advice + "\n\nThat advice is for the " + strings.Join(running, ", ") + " files this run would audit. " +
-		"corral's sandbox never runs its " + strings.Join(refusing, ", ") + " files, on any host:\n" + strings.Join(refusals, "\n")
 }
 
 // sandboxFailureFor is err, a sandbox that would not start, with its advice

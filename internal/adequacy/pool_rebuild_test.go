@@ -65,6 +65,13 @@ func TestMeasureRebuildRestoresWhenTheRunTimesOut(t *testing.T) {
 	if !errors.Is(err, ErrTestTimeout) {
 		t.Fatalf("err = %v, want ErrTestTimeout", err)
 	}
+	// A rebuild run cut off at the runner's own timeout is the slowest rebuild
+	// there is, not a run that merely gave no floor: every mutant's relink
+	// would be cut off the same way and read as a kill. It is over the
+	// ceiling, so the file is not graded.
+	if !errors.Is(err, ErrRebuildOverCeiling) {
+		t.Fatalf("err = %v, want ErrRebuildOverCeiling: a timed-out rebuild run must stop the file", err)
+	}
 	if got := p.WarmDuration(); got != 0 {
 		t.Fatalf("WarmDuration = %v after a timed-out run, want 0 (no floor)", got)
 	}

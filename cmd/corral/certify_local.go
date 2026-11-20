@@ -1981,7 +1981,8 @@ var measureRebuild = (*adequacy.WorkspacePool).MeasureRebuild
 // when none was due. A run that gave no floor is also said on stdout, naming
 // the file and why, and the audit goes on with the cap it would have had. An
 // error is returned, and the file is not graded, only when the floor is over
-// the ceiling or the checkout was not put back.
+// the ceiling (a run cut off at its timeout included: it is slower than any
+// that finished) or the checkout was not put back.
 func rebuildFloor(ctx context.Context, pool *adequacy.WorkspacePool, plug lang.Plugin, codeKey string, code []byte, cmd []string, testTimeout time.Duration, stdout io.Writer) (took time.Duration, record string, err error) {
 	pb, ok := plug.(lang.PerRunBuilder)
 	if !ok || !adequacy.CapFloorApplies(testTimeout) || len(cmd) == 0 {
@@ -2648,7 +2649,46 @@ func workspaceFromSeed(seed repoSeed, overlay map[string]string) map[string]stri
 // NOT hang the pool off jailWiring.cleanup, because that cleanup is released
 // between the baseline and the audit. `certify --local`, which passes no box,
 // keeps the old ownership (the wiring's cleanup closes the pool).
-type workspacePool struct{ pool *adequacy.WorkspacePool }
+type workspacePool struct {
+	pool *adequacy.WorkspacePool
+	// rebuildDue is set by armRebuild and cleared by the wiring that makes
+	// the job's rebuild run (jobRebuildFloor).
+	rebuildDue bool
+}
+
+// armRebuild asks the job's next wiring to make the pool's rebuild run.
+// Execute calls it once the baseline-stability runs have passed, so the run
+// is timed on a tree they warmed. Nil-safe: a jail-substrate job has no box.
+func (h *workspacePool) armRebuild() {
+	if h != nil {
+		h.rebuildDue = true
+	}
+}
+
+// takeRebuild reports whether the rebuild run is due, and clears it.
+func (h *workspacePool) takeRebuild() bool {
+	due := h.rebuildDue
+	h.rebuildDue = false
+	return due
+}
+
+// jobRebuildFloor makes the file's rebuild run on pool (rebuildFloor) and
+// records it: its time in the pool phase of the disclosure, and the floor it
+// set, or why it set none, as the file's CapFloor. An error stops the file.
+func jobRebuildFloor(ctx context.Context, in jailWiringInput, pool *adequacy.WorkspacePool, codeKey string) error {
+	plug, ok := lang.ByName(in.langName)
+	if !ok {
+		return nil
+	}
+	took, record, err := rebuildFloor(ctx, pool, plug, codeKey, in.code, in.checkArgv, in.testTimeout, in.stdout)
+	if in.concurrency != nil {
+		in.concurrency.RebuildDuration = took
+	}
+	if in.capFloor != nil {
+		*in.capFloor = record
+	}
+	return err
+}
 
 // close releases the trees. Nil-safe on both levels: a jail-substrate job has
 // no box, and a job that failed before wiring has a box with no pool.
@@ -2894,24 +2934,17 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 			// support. A pool of one skips it entirely (Probe returns
 			// immediately), so nothing that runs serially today pays for it.
 			built, disc = probeWorkspacePool(ctx, built, base, w.codeKey, string(in.code), in.checkArgv)
-			// THE REBUILD RUN, on the pool the probe settled on and before a
-			// mutant is scored: the floor every cap of this file's grading
-			// is derived over (see rebuildFloor). Once per file-job, here
-			// where the pool is built, so the baseline-stability runs and the
-			// audit read the same floor.
-			if plug, ok := lang.ByName(in.langName); ok {
-				took, record, ferr := rebuildFloor(ctx, built, plug, w.codeKey, in.code, in.checkArgv, in.testTimeout, in.stdout)
-				disc.RebuildDuration = took
-				if in.capFloor != nil {
-					*in.capFloor = record
-				}
-				if ferr != nil {
-					built.Close()
-					return w, ferr
-				}
-			}
 			if in.concurrency != nil {
 				*in.concurrency = disc
+			}
+			// A pool no box holds is this wiring's alone: no later wiring
+			// will use it and nothing warms it first, so its rebuild run is
+			// made here. No verb builds one on this substrate.
+			if in.pool == nil {
+				if err := jobRebuildFloor(ctx, in, built, w.codeKey); err != nil {
+					built.Close()
+					return w, err
+				}
 			}
 			pool = built
 			if in.pool != nil {
@@ -2920,6 +2953,24 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 				in.pool.pool = pool
 			} else {
 				w.cleanup = pool.Close
+			}
+		}
+		// THE REBUILD RUN of a job's pool, once Execute has armed it
+		// (workspacePool.armRebuild), which it does after the file's
+		// baseline-stability runs pass and before the audit: those runs have
+		// warmed the tree by then, so the run times a rebuild, not a cold
+		// build. Made where the pool is built it was, on a pool of one tree,
+		// the job's first ordinary run (the probe runs nothing on one tree,
+		// and the evidence pass builds elsewhere), and a cold build was
+		// recorded as the floor. A discarded warm-up run before it was the
+		// other fix; it would add a run to every file, including those whose
+		// tree an earlier file had already warmed, where this adds none, and
+		// a file whose baseline is not stably green now pays for no rebuild
+		// run at all. The floor every cap of this file's grading is derived
+		// over (see rebuildFloor), once per file-job.
+		if in.pool != nil && in.pool.takeRebuild() {
+			if err := jobRebuildFloor(ctx, in, pool, w.codeKey); err != nil {
+				return w, err
 			}
 		}
 

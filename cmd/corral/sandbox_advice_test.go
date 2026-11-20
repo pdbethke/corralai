@@ -331,3 +331,90 @@ func TestCertifyRepoSandboxRefusalWithNoLanguageKeepsTheAdvice(t *testing.T) {
 		t.Errorf("exit %d, stderr:\n%q\nwant exit 1 and the advice unchanged:\n%q", code, errb.String(), want)
 	}
 }
+
+// startSandbox makes every sandbox resolution succeed, as a host whose bwrap
+// works does: the seam the doors below see, with no sandbox run.
+func startSandbox(t *testing.T) {
+	t.Helper()
+	orig := resolveJailFn
+	resolveJailFn = func(string, bool) (sandbox.Isolator, error) { return namedJail("bwrap"), nil }
+	t.Cleanup(func() { resolveJailFn = orig })
+}
+
+// Final review, finding 1: with a sandbox that STARTS, a repository whose
+// every gradable language refuses every sandbox used to pass the preflight
+// (it asked the languages only when the sandbox failed), run the evidence
+// pass in a sandbox Swift cannot use, derive (pay for) a goal per file, and
+// only then refuse each file. The preflight now refuses the run first, with
+// the language's own refusal, before the model preflight is even reached.
+func TestCertifyRepoWithAWorkingSandboxRefusesALanguageTheSandboxNeverRuns(t *testing.T) {
+	root := t.TempDir()
+	writeSwiftPackage(t, root)
+	startSandbox(t)
+
+	for name, args := range map[string][]string{
+		"real run": {"--repo", root, "--derive-model", testHerdWriter, "--writer-model", testHerdWriter,
+			"--mutant-model", testHerdMutant, "--critic-model", "off", "--no-ledger", "--no-selection-cache", "--no-goal-cache", "--", "swift", "test"},
+		"dry run with --evidence": {"--repo", root, "--dry-run", "--evidence", "--no-selection-cache", "--", "swift", "test"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var out, errb bytes.Buffer
+			code := runCertifyRepo(args, &out, &errb)
+			if code != 1 {
+				t.Fatalf("exit %d, want 1; stdout=%s stderr=%s", code, out.String(), errb.String())
+			}
+			got := errb.String()
+			if !strings.Contains(got, swiftRefusal(t)) {
+				t.Errorf("stderr lacks Swift's refusal:\n%s", got)
+			}
+			for _, never := range []string{"--jail container", "apparmor_parser", "goals derived"} {
+				if strings.Contains(got+out.String(), never) {
+					t.Errorf("output has %q, which a run refused at its preflight never reaches:\n%s%s", never, out.String(), got)
+				}
+			}
+		})
+	}
+}
+
+// The mixed case with a working sandbox: the Go files can run, so the run is
+// not refused, and it says, before anything is spent, that the sandbox never
+// runs its Swift files.
+func TestCertifyRepoWithAWorkingSandboxStatesTheMixedRefusal(t *testing.T) {
+	root := t.TempDir()
+	writeSwiftPackage(t, root)
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "a_test.go"), "package pkg\n")
+	ex := newLocalExecutor(root, nil, substrateJail, 0, nil)
+	defer ex.Close()
+	var out bytes.Buffer
+	ex.progress = &out
+	ex.jailErr = nil
+	if err := ex.preflight([]string{"go", "swift"}); err != nil {
+		t.Fatalf("a mixed run was refused: %v", err)
+	}
+	note := "corral's sandbox never runs this run's Swift files, on any host:\n" + swiftRefusal(t)
+	if !strings.Contains(out.String(), note) {
+		t.Errorf("progress lacks the mixed note %q:\n%s", note, out.String())
+	}
+	// The workspace substrate runs no sandbox, so it says nothing of one.
+	ws := newLocalExecutor(root, nil, substrateWorkspace, 0, nil)
+	defer ws.Close()
+	var wout bytes.Buffer
+	ws.progress = &wout
+	if err := ws.preflight([]string{"swift"}); err != nil || wout.Len() != 0 {
+		t.Errorf("workspace substrate: err=%v progress=%q, want neither", err, wout.String())
+	}
+}
+
+// `corral tests map` asks the same preflight with a working sandbox too.
+func TestTestsMapWithAWorkingSandboxRefusesALanguageTheSandboxNeverRuns(t *testing.T) {
+	root := t.TempDir()
+	writeSwiftPackage(t, root)
+	startSandbox(t)
+
+	var out, errb bytes.Buffer
+	code := runTests([]string{"map", "--repo-dir", root, "--workers", "1", "--no-selection-cache", "--out", filepath.Join(t.TempDir(), "m.json"), "--", "swift", "test"}, &out, &errb)
+	if code != 1 || !strings.Contains(errb.String(), swiftRefusal(t)) {
+		t.Errorf("exit %d, want 1 with Swift's refusal; stdout=%s stderr=%s", code, out.String(), errb.String())
+	}
+}

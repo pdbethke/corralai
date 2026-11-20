@@ -96,3 +96,12 @@ func identTokens(code, rawPrefix string) []string {
 	}
 	return toks
 }
+
+// skipSpaces is the offset of the first byte at or after i that is no space,
+// tab or line break.
+func skipSpaces(s string, i int) int {
+	for i < len(s) && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r') {
+		i++
+	}
+	return i
+}

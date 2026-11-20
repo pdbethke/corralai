@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/sandbox"
 	"github.com/pdbethke/corralai/internal/treedirs"
 )
@@ -31,8 +32,12 @@ import (
 // the operator sees a slow audit and no reason for it, and a report that
 // claims nothing about the substrate it ran on.
 type Disclosure struct {
-	Trees int    // 1 when downgraded
-	Note  string // "" when Trees > 1; otherwise WHY the downgrade happened
+	Trees int // 1 when downgraded
+	// Note says WHY when Trees is 1 after a downgrade. When Trees > 1 it
+	// says what the trees do not have in common with the checkout that a
+	// reader would otherwise assume: the build directories each tree builds
+	// for itself (ownBuildNote), or "" when there are none.
+	Note string
 	// Shared names the dependency directories (in symlinkedDepDirs order)
 	// that exist at the checkout and were SYMLINKED into every tree rather
 	// than copied. It is populated whenever such links were made — including
@@ -136,6 +141,11 @@ type WorkspacePool struct {
 	// the probe's answer must not lose that half of the disclosure.
 	shared []string
 
+	// note is the Disclosure.Note this pool was built with (ownBuildNote),
+	// retained for the reason shared is: Probe restates it when it keeps the
+	// trees.
+	note string
+
 	// warmDur is the rebuild run MeasureRebuild timed, in nanoseconds; zero
 	// until one passed. Written once before scoring and read by every
 	// concurrent cap Score derives, hence atomic.
@@ -178,6 +188,11 @@ var (
 //     drag in build output, caches and dep trees — so Trees: 1, note
 //     "not a git work tree".
 //   - the universe exceeds 2 GiB: Trees: 1, note "checkout over 2 GiB".
+//   - git lists files under a language's declared build directory (one it
+//     does not ignore): Trees: 1, the note naming the directory. A copy
+//     would carry the checkout's build output into every tree. Copying the
+//     universe without it instead would need reposcan.TreeDigest to leave it
+//     out in lockstep (see gitUniverse), and is not done.
 //   - a lockfile was declared (WithLockfile) and is not in the universe:
 //     Trees: 1, the note naming the file.
 //
@@ -238,6 +253,10 @@ func NewWorkspacePool(ctx context.Context, root string, n int, timeout time.Dura
 	if size > maxUniverseBytes {
 		return single("checkout over 2 GiB")
 	}
+	copiedBuild, ownBuild := buildDirsIn(universe, links)
+	if len(copiedBuild) > 0 {
+		return single(strings.Join(copiedBuild, ", ") + " is build output that git does not ignore, so it would be copied into every tree instead of each tree building its own; ignoring it in git gives each tree a build of its own")
+	}
 	if lf := probe.lockfile; lf != "" && !slices.Contains(universe, lf) {
 		return single(lf + " is not among the files copied into each tree (git neither tracks it nor lists it as an unignored file), so each tree would resolve the dependencies for itself and could build versions the checkout does not")
 	}
@@ -275,8 +294,68 @@ func NewWorkspacePool(ctx context.Context, root string, n int, timeout time.Dura
 	p := newPool(root, temps, temps, timeout, treeEnv, plugEnv, opts)
 	p.shared = linked
 	p.copyDuration = copied
-	return p, Disclosure{Trees: n, Shared: linked, CopyDuration: copied}, nil
+	p.note = ownBuildNote(ownBuild)
+	return p, Disclosure{Trees: n, Note: p.note, Shared: linked, CopyDuration: copied}, nil
 }
+
+// buildDirsIn reads the universe for the build directories the languages
+// declare (lang.AllBuildDirs: a directory named Name beside its Marker), as
+// the jail seed does. copied names each such directory git lists files under,
+// so a copy would carry it into every tree; own names, once each, the build
+// directories every tree builds for itself, the ones whose marker the
+// universe holds. A name a tree links (a dependency directory) is in
+// neither: it is not built per tree.
+func buildDirsIn(universe, links []string) (copied, own []string) {
+	in := make(map[string]bool, len(universe))
+	for _, rel := range universe {
+		in[rel] = true
+	}
+	linked := map[string]bool{}
+	for _, l := range links {
+		linked[path.Base(l)] = true
+	}
+	seenCopied, seenOwn := map[string]bool{}, map[string]bool{}
+	for _, b := range buildDirs {
+		if linked[b.Name] {
+			continue
+		}
+		for _, rel := range universe {
+			if path.Base(rel) == b.Marker && !seenOwn[b.Name] {
+				seenOwn[b.Name] = true
+				own = append(own, b.Name)
+			}
+			segs := strings.Split(rel, "/")
+			for k := 0; k < len(segs)-1; k++ {
+				if segs[k] != b.Name || !in[path.Join(append(segs[:k:k], b.Marker)...)] {
+					continue
+				}
+				if dir := path.Join(segs[:k+1]...); !seenCopied[dir] {
+					seenCopied[dir] = true
+					copied = append(copied, dir)
+				}
+				break
+			}
+		}
+	}
+	sort.Strings(copied)
+	sort.Strings(own)
+	return copied, own
+}
+
+// ownBuildNote is what a pool of more than one tree says about the build
+// directories its trees build for themselves: none of them is copied
+// (buildDirsIn sent a pool that would copy one to a single tree) or linked,
+// so each tree's first run builds from scratch. "" when there is none.
+func ownBuildNote(own []string) string {
+	if len(own) == 0 {
+		return ""
+	}
+	return "each tree builds its own " + strings.Join(own, ", ") + ", from scratch: the checkout's is neither copied nor linked into a tree"
+}
+
+// buildDirs is every language's declared build directory, composed from the
+// registry once, as the jail seed's list is.
+var buildDirs = lang.AllBuildDirs()
 
 // WithLockfile names the lockfile every private tree must hold, as a slash
 // path relative to the pool's root (lang.LockfileFor, for a language that
@@ -892,7 +971,7 @@ func (p *WorkspacePool) Probe(ctx context.Context, base map[string]string, codeP
 			return downgrade(fmt.Sprintf("a tree imports the original checkout (canary passed under %d)", n))
 		}
 	}
-	return p, Disclosure{Trees: n, Shared: p.shared, CopyDuration: p.copyDuration, ProbeDuration: time.Since(probeStart)}
+	return p, Disclosure{Trees: n, Note: p.note, Shared: p.shared, CopyDuration: p.copyDuration, ProbeDuration: time.Since(probeStart)}
 }
 
 // runEverywhere runs one variant of codePath in EVERY tree simultaneously,

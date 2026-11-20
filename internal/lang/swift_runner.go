@@ -234,17 +234,13 @@ func swiftUnitForFile(_, testFile string) (string, bool) {
 	return target, ok && swiftModuleName.MatchString(target)
 }
 
-// swiftTreeCost is the scan line on what a workspace tree beyond the
-// checkout costs a Swift audit, in kind only: what it costs in time and disk
-// depends on the package and the machine, and was measured on no repository
-// but one.
-const swiftTreeCost = "runner: swift test — on the workspace substrate, each private tree beyond the checkout itself starts with no .build: it is neither copied nor linked, so that no two trees share build output. Each such tree resolves the dependencies and builds the package cold, into a build directory of its own, before its first mutant is graded; a smaller --swarm makes fewer trees"
-
-// swiftDisclose says what an extra workspace tree costs, and names the
-// dependencies Package.swift pins to a branch when there is no
-// Package.resolved beside it to fix their revisions: SwiftPM then resolves
-// each branch to whatever it holds when the audit runs. corral does not add
-// --disable-automatic-resolution to the operator's command; it says this.
+// swiftDisclose names the dependencies Package.swift pins to a branch when
+// there is no Package.resolved beside it to fix their revisions: SwiftPM then
+// resolves each branch to whatever it holds when the audit runs. corral does
+// not add --disable-automatic-resolution to the operator's command; it says
+// this. What an extra workspace tree costs is the pool's to say, not the
+// runner's (adequacy.NewWorkspacePool), since it holds for every language
+// with a build directory.
 //
 // The manifest is the nearest Package.swift at or above repoDir, where
 // Preflight finds it. A command that builds a package elsewhere
@@ -253,112 +249,29 @@ const swiftTreeCost = "runner: swift test — on the workspace substrate, each p
 // (Package@swift-5.9.swift), which SwiftPM prefers on a matching toolchain,
 // is not read either.
 func swiftDisclose(repoDir string, argv []string) []string {
-	out := []string{swiftTreeCost}
 	for _, a := range argv {
 		if a == "--package-path" || strings.HasPrefix(a, "--package-path=") {
-			return out
+			return nil
 		}
 	}
 	abs, err := filepath.Abs(repoDir)
 	if err != nil {
-		return out
+		return nil
 	}
 	dir, ok := nearestAncestorWith(abs, []string{"Package.swift"}, swiftPackageSearchDepth)
 	if !ok {
-		return out
+		return nil
 	}
 	if _, err := os.Stat(filepath.Join(dir, "Package.resolved")); err == nil {
-		return out
+		return nil
 	}
 	src, err := os.ReadFile(filepath.Join(dir, "Package.swift")) // #nosec G304 -- the operator's own manifest; only scanned, never executed or echoed
 	if err != nil {
-		return out
+		return nil
 	}
 	pins := swiftBranchPins(string(src))
 	if len(pins) == 0 {
-		return out
-	}
-	return append(out, "runner: swift test — Package.swift pins "+strings.Join(pins, ", ")+" to a branch, and there is no Package.resolved beside it, so SwiftPM resolves each such branch to whatever it holds when the audit runs, not to a recorded revision; commit a Package.resolved to grade fixed revisions")
-}
-
-// swiftPackageCall is the start of a dependency declaration in blanked
-// manifest code: `.package(`, an implicit member of Package.Dependency.
-var swiftPackageCall = regexp.MustCompile(`\.package\s*\(`)
-
-// swiftBranchPins names the dependencies a manifest pins to a branch: each
-// `.package(...)` call whose own arguments (not ones nested in a further
-// call) carry the `branch:` label, or the older `.branch("...")`
-// requirement. Each is named by its `url:` literal, or "a dependency" when
-// the url is not a plain string literal. The reading is of blanked code
-// (swiftCode), so a comment or a string literal never yields a pin; nil when
-// the manifest cannot be blanked (it ends inside a comment or literal).
-func swiftBranchPins(src string) []string {
-	code, ok := swiftCode(src)
-	if !ok {
 		return nil
 	}
-	var pins []string
-	for _, loc := range swiftPackageCall.FindAllStringIndex(code, -1) {
-		if loc[0] > 0 && identByte(code[loc[0]-1]) {
-			continue // x.package(...): a member of something else
-		}
-		branch, url := false, ""
-		depth := 0
-		for i := loc[1] - 1; i < len(code); i++ {
-			switch c := code[i]; {
-			case c == '(' || c == '[' || c == '{':
-				depth++
-			case c == ')' || c == ']' || c == '}':
-				depth--
-			case depth == 1 && identByte(c) && !identByte(code[i-1]):
-				j := i
-				for j < len(code) && identByte(code[j]) {
-					j++
-				}
-				word, after := code[i:j], skipSpaces(code, j)
-				switch {
-				case word == "branch" && code[i-1] != '.' && after < len(code) && code[after] == ':':
-					branch = true
-				case word == "branch" && code[i-1] == '.' && after < len(code) && code[after] == '(':
-					branch = true
-				case word == "url" && code[i-1] != '.' && after < len(code) && code[after] == ':' && url == "":
-					url = swiftPlainLiteral(src, skipSpaces(src, after+1)) // the literal is blanked in code
-				}
-				i = j - 1
-			}
-			if depth == 0 {
-				break
-			}
-		}
-		if branch {
-			if url == "" {
-				url = "a dependency"
-			}
-			pins = append(pins, url)
-		}
-	}
-	return pins
-}
-
-// skipSpaces is the offset of the first byte at or after i that is no space,
-// tab or line break.
-func skipSpaces(s string, i int) int {
-	for i < len(s) && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r') {
-		i++
-	}
-	return i
-}
-
-// swiftPlainLiteral is the string literal that opens at src[i] when it is a
-// plain one: a double quote, no escape or interpolation, closed on the same
-// line. "" otherwise.
-func swiftPlainLiteral(src string, i int) string {
-	if i >= len(src) || src[i] != '"' {
-		return ""
-	}
-	end := strings.IndexAny(src[i+1:], "\"\\\n")
-	if end < 0 || src[i+1+end] != '"' {
-		return ""
-	}
-	return src[i+1 : i+1+end]
+	return []string{"runner: swift test — Package.swift pins " + strings.Join(pins, ", ") + " to a branch, and there is no Package.resolved beside it, so SwiftPM resolves each such branch to whatever it holds when the audit runs, not to a recorded revision; commit a Package.resolved to grade fixed revisions"}
 }

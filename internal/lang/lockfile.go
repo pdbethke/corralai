@@ -3,6 +3,7 @@
 package lang
 
 import (
+	"os"
 	"path/filepath"
 )
 
@@ -26,18 +27,39 @@ type Lockfile struct {
 // such a language is therefore one tree when its trees would not hold the
 // lockfile (adequacy.WithLockfile), and the disclosure names the file.
 //
-// A language whose dependencies every tree shares through a link (a
-// SharedDependencies directory such as node_modules or vendor) or that lives
-// outside the tree does not need it: its trees resolve nothing.
+// Swift implements it. Who else could, with one declaration:
+//   - Rust: cargo builds each tree's own target/ and, with no Cargo.lock in
+//     the tree, resolves the dependencies afresh. But a cargo workspace keeps
+//     Cargo.lock at the workspace root, not beside a member's Cargo.toml,
+//     and LockfileFor finds the nearest manifest, so a member crate would be
+//     sent looking in the wrong place. Finding the workspace root comes
+//     first.
+//   - Ruby: an ignored Gemfile.lock lets each tree's bundler resolve the
+//     Gemfile again. Whether trees then disagree was not measured.
+//
+// The languages whose dependency directory is linked into every tree, read
+// only (SharedDependencies: .venv, node_modules, vendor), resolve nothing in a
+// tree, so their trees cannot differ by resolution and they need none; the
+// parity table says which language is which.
+//
+// ManifestPins reads the manifest's text and reports whether it declares a
+// dependency the lockfile would pin: a package with nothing to pin needs no
+// lockfile for its trees to agree (SwiftPM writes no Package.resolved for
+// one). A method, not a field, so a reader of the manifest's text is only
+// ever the language's own.
 type Lockfiler interface {
 	Lockfile() Lockfile
+	ManifestPins(manifest string) bool
 }
 
-// LockfileFor is the lockfile p declares, as a slash path relative to root:
-// beside the nearest manifest at or above root, so "../Package.resolved"
-// when root is a directory inside the package (a tree copied from root holds
-// no such file). ok is false when p declares no lockfile or no manifest is
-// found; the language's own preflight is what refuses a missing manifest.
+// LockfileFor is the lockfile every workspace tree must hold, as a slash path
+// relative to root: the one p declares, beside the nearest manifest at or
+// above root, so "../Package.resolved" when root is a directory inside the
+// package (a tree copied from root holds no such file). ok is false when p
+// declares no lockfile, no manifest is found (the language's own preflight
+// refuses that), or the manifest declares nothing the lockfile would pin. A
+// manifest that cannot be read is taken to pin something: the rule errs
+// toward one tree.
 func LockfileFor(p Plugin, root string) (rel string, ok bool) {
 	l, isL := p.(Lockfiler)
 	if !isL {
@@ -50,6 +72,9 @@ func LockfileFor(p Plugin, root string) (rel string, ok bool) {
 	}
 	dir, found := nearestAncestorWith(abs, []string{d.Manifest}, d.SearchDepth)
 	if !found {
+		return "", false
+	}
+	if src, err := os.ReadFile(filepath.Join(dir, d.Manifest)); err == nil && !l.ManifestPins(string(src)) { // #nosec G304 -- the operator's own manifest, found by its declared name; only scanned
 		return "", false
 	}
 	r, err := filepath.Rel(abs, filepath.Join(dir, d.Name))

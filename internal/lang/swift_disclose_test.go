@@ -39,6 +39,8 @@ let note = ".package(url: \"x\", branch: \"main\")"`, nil},
 		{"a branch whose url is not a plain literal", `let u = "https://example.com/a.git"
 dependencies: [.package(url: u, branch: "main")]`, []string{"a dependency"}},
 		{"name label before url", `dependencies: [.package(name: "A", url: "https://example.com/a.git", branch: "main")]`, []string{"https://example.com/a.git"}},
+		{"qualified call", `dependencies: [Package.Dependency.package(url: "https://example.com/q.git", branch: "main")]`, []string{"https://example.com/q.git"}},
+		{"another type's package member", `let x = Other.package(url: "https://example.com/o.git", branch: "main")`, nil},
 		{"source that ends inside a comment", `dependencies: [.package(url: "https://example.com/a.git", branch: "main")] /*`, nil},
 	}
 	for _, c := range cases {
@@ -48,13 +50,13 @@ dependencies: [.package(url: u, branch: "main")]`, []string{"a dependency"}},
 	}
 }
 
-// The swift row's scan lines. One says, always, what a workspace tree beyond
-// the checkout costs in kind, with no figure: another project's numbers are
-// not this operator's. The other names branch-pinned dependencies when there
-// is no Package.resolved beside the manifest to fix their revisions, and is
+// The swift row's scan line names branch-pinned dependencies when there is
+// no Package.resolved beside the manifest to fix their revisions, and is
 // silent when there is one, when nothing is pinned to a branch, and when the
 // command builds a package elsewhere (--package-path), whose manifest is not
-// the one read here.
+// the one read here. What a workspace tree costs is not the runner's to say:
+// the pool says it, for every language with a build directory, and only when
+// there is more than one tree.
 func TestSwiftRunDisclosures(t *testing.T) {
 	p, _ := ByName("swift")
 	branchy := `// swift-tools-version:5.9
@@ -67,14 +69,6 @@ let package = Package(name: "P", dependencies: [.package(url: "https://example.c
 			t.Fatal(err)
 		}
 	}
-	treeLine := func(lines []string) bool {
-		for _, l := range lines {
-			if strings.Contains(l, ".build") && strings.Contains(l, "tree") && strings.Contains(l, "cold") {
-				return true
-			}
-		}
-		return false
-	}
 	branchLine := func(lines []string) string {
 		for _, l := range lines {
 			if strings.Contains(l, "branch") && strings.Contains(l, "Package.resolved") {
@@ -83,18 +77,12 @@ let package = Package(name: "P", dependencies: [.package(url: "https://example.c
 		}
 		return ""
 	}
-	digits := func(l string) bool { return strings.ContainsAny(l, "0123456789") }
 
 	unresolved := t.TempDir()
 	write(unresolved, "Package.swift", branchy)
 	got := RunDisclosures(p, unresolved, Cmd([]string{"swift", "test"}))
-	if !treeLine(got) {
-		t.Errorf("want the per-tree cost line, got %q", got)
-	}
-	for _, l := range got {
-		if strings.Contains(l, "tree") && digits(strings.ReplaceAll(l, "swift-tools", "")) {
-			t.Errorf("the per-tree line states a figure: %q", l)
-		}
+	if len(got) != 1 {
+		t.Errorf("want only the branch line, got %q", got)
 	}
 	if l := branchLine(got); !strings.Contains(l, "https://example.com/a.git") {
 		t.Errorf("branch pin, no Package.resolved: want a line naming the url, got %q", got)
@@ -103,8 +91,8 @@ let package = Package(name: "P", dependencies: [.package(url: "https://example.c
 	resolved := t.TempDir()
 	write(resolved, "Package.swift", branchy)
 	write(resolved, "Package.resolved", "{}\n")
-	if got := RunDisclosures(p, resolved, Cmd([]string{"swift", "test"})); branchLine(got) != "" || !treeLine(got) {
-		t.Errorf("with Package.resolved: want only the tree line, got %q", got)
+	if got := RunDisclosures(p, resolved, Cmd([]string{"swift", "test"})); len(got) != 0 {
+		t.Errorf("with Package.resolved: want nothing, got %q", got)
 	}
 
 	unpinned := t.TempDir()

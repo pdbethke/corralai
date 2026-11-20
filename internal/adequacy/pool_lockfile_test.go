@@ -13,12 +13,14 @@ import (
 
 // A tree resolves its dependencies for itself when it holds no build
 // directory of its own (a SwiftPM tree has no .build), so trees agree on the
-// versions only when each holds the checkout's lockfile. A lockfile the trees
-// would not hold (ignored, or absent) makes the pool one tree, the checkout
+// versions only when each holds the checkout's lockfile. The caller passes
+// WithLockfile only for a manifest that declares a dependency the lockfile
+// would pin (lang.LockfileFor), as this one does. A lockfile the trees would
+// not hold (ignored, or absent) then makes the pool one tree, the checkout
 // itself, with a note naming the file: never trees that could build
 // different dependency versions.
 func TestPoolIsOneTreeWhenTheTreesWouldNotHoldTheLockfile(t *testing.T) {
-	manifest := map[string]string{"Package.swift": "// swift-tools-version:5.9\n", "Sources/Calc/Calc.swift": "public func f() {}\n"}
+	manifest := map[string]string{"Package.swift": swiftRemoteManifest, "Sources/Calc/Calc.swift": "public func f() {}\n"}
 
 	ignored := newGitRepo(t, manifest, []string{".build/", "Package.resolved"})
 	writeFile(t, filepath.Join(ignored, "Package.resolved"), "{}\n")
@@ -55,7 +57,7 @@ func TestPoolIsOneTreeWhenTheTreesWouldNotHoldTheLockfile(t *testing.T) {
 // it is neither copied (ignored) nor shared (a dependency directory a run
 // writes is never linked).
 func TestPoolKeepsItsTreesWhenEachHoldsTheLockfile(t *testing.T) {
-	files := map[string]string{"Package.swift": "// swift-tools-version:5.9\n", "Package.resolved": "{}\n", "Sources/Calc/Calc.swift": "public func f() {}\n"}
+	files := map[string]string{"Package.swift": swiftRemoteManifest, "Package.resolved": "{}\n", "Sources/Calc/Calc.swift": "public func f() {}\n"}
 	tracked := newGitRepo(t, files, []string{".build/"})
 	delete(files, "Package.resolved")
 	untracked := newGitRepo(t, files, []string{".build/"})
@@ -68,8 +70,8 @@ func TestPoolKeepsItsTreesWhenEachHoldsTheLockfile(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		if d.Trees != 3 || d.Note != "" {
-			t.Errorf("%s: want three trees, got %+v", name, d)
+		if d.Trees != 3 || strings.Contains(d.Note, "Package.resolved") {
+			t.Errorf("%s: want three trees and no word on the lockfile, got %+v", name, d)
 		}
 		for _, tree := range p.treeRoots() {
 			mustExist(t, filepath.Join(tree, "Package.resolved"))
@@ -79,17 +81,23 @@ func TestPoolKeepsItsTreesWhenEachHoldsTheLockfile(t *testing.T) {
 	}
 }
 
+// swiftRemoteManifest declares one dependency a Package.resolved would pin.
+const swiftRemoteManifest = `// swift-tools-version:5.9
+import PackageDescription
+let package = Package(name: "Calc", dependencies: [.package(url: "https://example.com/dep.git", from: "1.0.0")])
+`
+
 // A pool asked for one tree runs on the checkout whatever the lockfile, and
 // a pool told no lockfile copies trees as it always has.
 func TestPoolLockfileOnlyMattersForCopies(t *testing.T) {
-	root := newGitRepo(t, map[string]string{"Package.swift": "// swift-tools-version:5.9\n"}, []string{".build/"})
+	root := newGitRepo(t, map[string]string{"Package.swift": swiftRemoteManifest}, []string{".build/"})
 	p, d, _ := NewWorkspacePool(context.Background(), root, 1, time.Minute, WithLockfile("Package.resolved"))
 	if d.Trees != 1 || d.Note != "" {
 		t.Errorf("n=1: got %+v", d)
 	}
 	p.Close()
 	p, d, _ = NewWorkspacePool(context.Background(), root, 2, time.Minute)
-	if d.Trees != 2 {
+	if d.Trees != 2 || strings.Contains(d.Note, "Package.resolved") {
 		t.Errorf("no lockfile declared: got %+v", d)
 	}
 	p.Close()

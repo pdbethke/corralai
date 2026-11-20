@@ -119,7 +119,8 @@ func (rustPlugin) CoverageCmd(testCmd []string) (cmd []string, ok bool) {
 		`if [ ! -e "$1" ]; then printf '%s\n' ` + shellQuote(rustCoverageHeaderV2) + `; exit 0; fi` + "\n" +
 		shellJoin(listArgs) + ` > "$d/build.json" || unavailable "cargo test --no-run, which lists the test executables, failed (exit $?)"` + "\n" +
 		`sed -n 's/.*"executable":"\([^"]*\)".*/\1/p' "$d/build.json" | sort -u > "$d/objs"` + "\n" +
-		llvmCovMergeExportShell(rustPlugin{}, rustCoverageHeaderV2, `"$d"/prof/*.profraw`, "cargo test --no-run listed no test executable")
+		llvmCovMergeExportShell(`"$d"/prof/*.profraw`, "cargo test --no-run listed no test executable") +
+		llvmCovReduceShell(rustPlugin{}, rustCoverageHeaderV2, `"$d/export.json"`)
 	return []string{"sh", "-c", script}, true
 }
 

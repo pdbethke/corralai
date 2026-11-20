@@ -15,7 +15,7 @@ import (
 // both end in the same three steps, written once below: merge the raw
 // profiles the run wrote, have `llvm-cov export -summary-only` count each
 // file's lines over the binaries that ran, and reduce that JSON
-// (llvmCovMergeExportShell, llvmCovReduceShell). What differs between them is
+// (llvmCovMergeExportShell, then llvmCovReduceShell). What differs between them is
 // a language's facts, and stays in its CoverageCmd: which llvm-profdata and
 // llvm-cov to run, where the run's profiles are, and which binaries are the
 // objects. The reducer reads only each file's "filename" and its summary's
@@ -23,21 +23,22 @@ import (
 
 // llvmCovMergeExportShell is the shell that merges the raw profiles named by
 // profiles (shell words, quoted by the caller; a glob may match any number)
-// with "$pd" (llvm-profdata), exports their line counts with "$cov"
-// (llvm-cov) over every object listed one per line in "$d/objs", and reduces
-// the export under header (llvmCovReduceShell). The caller sets pd, cov and d
-// and defines the `unavailable` shell function, and has already checked that
-// the run is one to read and that a profile exists. An empty object list is
-// disclosed as unavailable with noObjects, the caller's reason; a merge or
-// export that fails is disclosed with its exit status, its message on stderr.
+// with "$pd" (llvm-profdata) and exports their line counts with "$cov"
+// (llvm-cov) over every object listed one per line in "$d/objs", into
+// "$d/export.json". The caller sets pd, cov and d, defines the `unavailable`
+// shell function, has already checked that the run is one to read and that a
+// profile exists, and follows this with the reduction (llvmCovReduceShell) or,
+// for a capture of the raw export, with reading that file. An empty object
+// list is disclosed as unavailable with noObjects, the caller's reason; a
+// merge or export that fails is disclosed with its exit status, its message
+// on stderr.
 //
 // It overwrites the positional parameters, so it runs after the suite.
-func llvmCovMergeExportShell(p Plugin, header, profiles, noObjects string) string {
+func llvmCovMergeExportShell(profiles, noObjects string) string {
 	return `set --; while IFS= read -r o; do set -- "$@" -object "$o"; done < "$d/objs"` + "\n" +
 		`[ $# -gt 0 ] || unavailable ` + shellQuote(noObjects) + "\n" +
 		`"$pd" merge -sparse -o "$d/merged.profdata" ` + profiles + ` >&2 || unavailable "$pd merge failed (exit $?); its message is on stderr"` + "\n" +
-		`"$cov" export -format=text -summary-only -instr-profile="$d/merged.profdata" "$@" > "$d/export.json" || unavailable "$cov export failed (exit $?); its message is on stderr"` + "\n" +
-		llvmCovReduceShell(p, header, `"$d/export.json"`)
+		`"$cov" export -format=text -summary-only -instr-profile="$d/merged.profdata" "$@" > "$d/export.json" || unavailable "$cov export failed (exit $?); its message is on stderr"` + "\n"
 }
 
 // llvmCovReduceShell is the shell that reduces the llvm-cov export at json

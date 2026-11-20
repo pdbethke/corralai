@@ -80,11 +80,10 @@ swift-build-target-*.txt and swift-authored-*.txt open with
 `# argv:` (the operator's command, `-` for corral's own compile check)
 and `$ ` (the command corral builds) and end with `# exit:` (its exit status). swift-testing runs its tests in
 parallel, so the order of its lines differs between captures.
-swift-codecov.json is the `llvm-cov export -format=text -summary-only`,
-by the toolchain's own llvm-cov, of the profiles one `swift test
---enable-code-coverage --scratch-path <package>/.build/corral-coverage` run
-of ../coverage/swift (named with --package-path) wrote, over every product
-carrying a coverage map, as swiftPlugin.CoverageCmd makes it; the capture
+swift-codecov.json is the `llvm-cov export -format=text -summary-only`
+that swiftPlugin.CoverageCmd's own script (scripts/swiftcoverageexport) made
+for one `swift test` run of a copy of ../coverage/swift: the profiles the
+run wrote, over the products whose build ID they name; the capture
 directory written as /fixture.
 The swift-build-target-*.txt, swift-authored-*.txt and
 swift-shapes-list.txt files come from a later --swift-only run of the same
@@ -103,6 +102,11 @@ of the repository and not committed, wrote an export with this file's four
 project files and the same per-file line counts; its other entries are the
 test runner sources SwiftPM generates under .build, which the reducer skips,
 and they differ between the two build systems.
+On 2026-11-20 the script's coverage capture was changed to run the plugin's
+own script (above) instead of a copy of its steps, and the plugin to export
+over only the products whose build ID the run's profiles name; a
+--swift-coverage-only run through swift:6.3.2-noble with the network off
+then wrote this file byte for byte.
 
 HAND MEASUREMENTS, 2026-11-19 (not captures)
 These are not fixtures. They are the commands behind figures that tracked

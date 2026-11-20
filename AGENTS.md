@@ -498,13 +498,24 @@ only the authored one.
   6.4.2, failed `TestCapturedCoverageReportsMatchALiveRun/swift` on it).
   Pinning `--build-system native` fixed that, and 6.4.2 warns native is
   deprecated. Swift's `CoverageCmd` now runs the merge-and-export Rust's
-  coverage shares (`llvmCovMergeExportShell`) over the products beside
-  SwiftPM's codecov directory that carry a coverage map, with the toolchain's
-  own LLVM tools, under whatever build system the operator's command uses
-  (measured 2026-11-20 on 6.3.2 and 6.4.2, native and swiftbuild, all four
-  giving the committed report). A run that does not pass is not read: a
-  test that traps leaves no profile for its process, and the exit status
-  does not tell that from a failing test.
+  coverage shares (`llvmCovMergeExportShell`) with the toolchain's own
+  `llvm-profdata` and `llvm-cov` (only beside the resolved `swift`; missing is
+  unavailable), under whatever build system the operator's command uses.
+  **The objects are the products whose build ID this run's profiles name**
+  (`llvm-profdata show --binary-ids`, `readelf -n`), not every product with
+  a coverage map: `.build/corral-coverage` outlives a run, and a removed test
+  target's product stays there under swiftbuild, so the first version read
+  the removed target's file and a removed function's lines (Calc.swift 3 of
+  6 where a fresh directory gives 3 of 3; `TestSwiftCoverageReadsOnlyThisRunsProducts`).
+  Every ID the profiles name must be found, or coverage is unavailable.
+  Measured 2026-11-20 on 6.3.2 and 6.4.2, native and swiftbuild: the fixture,
+  a library variant and that rerun all gave a fresh directory's report. An
+  unchanged rerun rewrites no product, so "newer than the run" cannot pick
+  them. A run that does not pass is not read: a test that traps leaves no
+  profile for its process, and the exit status does not tell that from a
+  failing test. The capture of `swift-codecov.json` runs the plugin's own
+  script through `scripts/swiftcoverageexport` (`lang.SwiftCoverageExportCmd`),
+  not a copy of it.
   swift.org publishes no 6.3.x for Ubuntu 26.04, so the provisioning script
   pins 6.3.2 on 24.04 and 6.4.2 on 26.04, puts links to the pinned toolchain's
   `swift` and `swiftc` first on PATH, and `deploy.yml` and `self-audit.yml`

@@ -777,13 +777,10 @@ func TestUnitPassLineCountsUnitsGreenAsWritten(t *testing.T) {
 	}
 }
 
-// S2: a Swift unit pass that measures a file with no paired test used to
-// end on a bare "evidence-paired 0", which reads as "the evidence found
-// nothing more to audit". Promotion by evidence is not built for Swift, so
-// the count line now says that, from the same judge the language-support
-// page reads (lang.PromotesByEvidence, checked against the landing code by
-// reposcan's TestEvidencePromotionDeclarationMatchesTheLandingCode).
-func TestUnitEvidenceSaysPromotionIsNotBuiltForSwift(t *testing.T) {
+// swiftPromotionFixture is a SwiftPM package whose one test target pairs by
+// name with B.swift and, by its unit run, executes C.swift too.
+func swiftPromotionFixture(t *testing.T) string {
+	t.Helper()
 	root := t.TempDir()
 	writeSwiftPackage(t, root)
 	mustWrite(t, filepath.Join(root, "Sources", "A", "C.swift"), "func c() -> Int { 2 }\n")
@@ -794,66 +791,59 @@ func TestUnitEvidenceSaysPromotionIsNotBuiltForSwift(t *testing.T) {
 		}),
 	}}}
 	fake.install(t)
+	return root
+}
 
+// S2: a Swift unit pass that executed a file with no paired test ended on
+// "evidence-paired 0" and a note that promotion is not built for Swift. A
+// Swift unit is a test target and now lands an authored test in its own
+// directory, so the file is added and the count line carries no note.
+func TestUnitEvidencePromotesAnUnpairedSwiftFile(t *testing.T) {
+	root := swiftPromotionFixture(t)
 	s := runUnitEvidenceScan(t, root, "--dry-run", "--evidence", "--", "swift", "test")
-	if len(fake.called()) != 1 {
-		t.Fatalf("the unit pass did not run:\n%s", s)
+	if want := "evidence-paired 1 · name-paired 1 · uncovered 0 · import-only 0\n"; !strings.Contains(s, want) {
+		t.Errorf("want %q in:\n%s", want, s)
 	}
-	want := "evidence-paired 0 · name-paired 1 · uncovered 0 · import-only 0" + evidencePromotionNote(mustPlugin(t, "swift"))
-	if !strings.Contains(s, want+"\n") {
-		t.Errorf("the count line does not say promotion is not built for Swift; want %q in:\n%s", want, s)
-	}
-	if !strings.Contains(s, "Swift") || !strings.Contains(evidencePromotionNote(mustPlugin(t, "swift")), "not built") {
-		t.Errorf("the note must name the language and say promotion is not built: %q", evidencePromotionNote(mustPlugin(t, "swift")))
+	if want := "Sources/A/C.swift paired by evidence: 1 covering test unit(s), authored test lands beside Tests/ATests/BTests.swift"; !strings.Contains(s, want) {
+		t.Errorf("want %q in:\n%s", want, s)
 	}
 }
 
 // A language that promotes says nothing more on the count line: the
 // TypeScript promotion above prints its count bare.
 func TestEvidencePromotionNoteIsEmptyForALanguageThatPromotes(t *testing.T) {
-	for _, n := range []string{"go", "python", "javascript", "typescript", "ruby", "php"} {
+	for _, n := range []string{"go", "python", "javascript", "typescript", "ruby", "php", "swift"} {
 		if got := evidencePromotionNote(mustPlugin(t, n)); got != "" {
 			t.Errorf("%s: evidencePromotionNote = %q, want empty", n, got)
 		}
 	}
-	for _, n := range []string{"rust", "swift"} {
-		if got := evidencePromotionNote(mustPlugin(t, n)); got == "" {
-			t.Errorf("%s: evidencePromotionNote is empty, but promotion is not built for it", n)
-		}
+	if got := evidencePromotionNote(mustPlugin(t, "rust")); got == "" {
+		t.Errorf("rust: evidencePromotionNote is empty, but promotion is not built for it")
 	}
 }
 
-// I2: the reason is recorded, not only printed. The file the unit executed
-// but Swift's evidence cannot add is excluded as
-// reposcan.ReasonEvidencePairingNotBuilt in the dry run's --json and in the
-// signed entry's row, where it used to read as plain no-paired-test.
-func TestAnExecutedSwiftFileEvidenceCannotAddIsRecordedWithItsReason(t *testing.T) {
-	root := t.TempDir()
-	writeSwiftPackage(t, root)
-	mustWrite(t, filepath.Join(root, "Sources", "A", "C.swift"), "func c() -> Int { 2 }\n")
-	fake := &fakeUnitPass{ev: reposcan.UnitEvidence{Ran: true, Units: []reposcan.UnitResult{
-		unitRun("ATests", map[string]lang.LineCounts{
-			"Sources/A/B.swift": {Executed: 1, Executable: 1},
-			"Sources/A/C.swift": {Executed: 1, Executable: 1},
-		}),
-	}}}
-	fake.install(t)
-
+// I2, as it now stands: the file the unit executed is a candidate in the dry
+// run's --json, and its signed row is no longer an exclusion for lack of a
+// paired test (it was evidence-pairing-not-built).
+func TestAnExecutedSwiftFileIsACandidateInTheRecord(t *testing.T) {
+	root := swiftPromotionFixture(t)
 	s := runUnitEvidenceScan(t, root, "--dry-run", "--evidence", "--json", "--", "swift", "test")
 	js, _, _ := strings.Cut(s, "\n[stderr]\n")
 	var inv struct {
-		ExcludedByReason map[string]int `json:"excluded_by_reason"`
+		Auditable        []struct{ Path string } `json:"auditable"`
+		ExcludedByReason map[string]int          `json:"excluded_by_reason"`
 	}
 	if err := json.Unmarshal([]byte(js), &inv); err != nil {
 		t.Fatalf("--json did not parse: %v\n%s", err, s)
 	}
-	if inv.ExcludedByReason[reposcan.ReasonEvidencePairingNotBuilt] != 1 || inv.ExcludedByReason[reposcan.ReasonNoPairedTest] != 0 {
-		t.Errorf("excluded_by_reason = %v, want C.swift under %q", inv.ExcludedByReason, reposcan.ReasonEvidencePairingNotBuilt)
+	var listed bool
+	for _, a := range inv.Auditable {
+		listed = listed || a.Path == "Sources/A/C.swift"
+	}
+	if !listed || inv.ExcludedByReason[reposcan.ReasonEvidencePairingNotBuilt] != 0 || inv.ExcludedByReason[reposcan.ReasonNoPairedTest] != 0 {
+		t.Errorf("auditable %v, excluded_by_reason %v: want C.swift auditable and nothing excluded for lack of a paired test", inv.Auditable, inv.ExcludedByReason)
 	}
 
-	// The signed entry: a real run on a committed tree. B.swift's audit
-	// cannot run here (no Swift), which the entry records; C.swift's row is
-	// the one this test reads.
 	gitRun := gitCmd(t, root)
 	gitRun("init", "-q")
 	gitRun("add", ".")
@@ -868,8 +858,8 @@ func TestAnExecutedSwiftFileEvidenceCannotAddIsRecordedWithItsReason(t *testing.
 	for _, f := range entries[0].Bundle.Files {
 		if f.Path == "Sources/A/C.swift" {
 			found = true
-			if f.Reason != reposcan.ReasonEvidencePairingNotBuilt || f.Evidence != "coverage" {
-				t.Errorf("C.swift's signed row: reason %q evidence %q, want %q and coverage", f.Reason, f.Evidence, reposcan.ReasonEvidencePairingNotBuilt)
+			if reposcan.IsNoPairedTest(f.Reason) {
+				t.Errorf("C.swift's signed row is still excluded as %q", f.Reason)
 			}
 		}
 	}

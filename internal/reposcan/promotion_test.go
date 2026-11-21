@@ -115,15 +115,13 @@ func TestEvidencePromotionDeclarationMatchesTheLandingCode(t *testing.T) {
 }
 
 // Each language lacking promotion lacks it for the reason its exemption on
-// the support page states, not because its sample is broken: Swift's source
-// landing is admitted and only the unit landing is missing; Rust's unit
+// the support page states, not because its sample is broken: Rust's unit
 // landing exists and only the source landing is refused.
 func TestPromotionGapsAreWhereTheExemptionsSay(t *testing.T) {
 	for _, tc := range []struct {
 		lang                     string
 		sourceAdmitted, unitLand bool
 	}{
-		{"swift", true, false},
 		{"rust", false, true},
 	} {
 		p, _ := lang.ByName(tc.lang)
@@ -134,13 +132,14 @@ func TestPromotionGapsAreWhereTheExemptionsSay(t *testing.T) {
 	}
 }
 
-// A no-paired-test file that a green unit executed, in a language whose
-// evidence cannot add a file (Swift), is excluded for that fact, not as
-// plain no-paired-test: the bare reason read as "nothing ran it" in the
-// record and the --json output. A language that promotes keeps
-// no-paired-test for a file it could not land (a Go file run only by
-// another package's tests), so no shipped language's rows change.
-func TestAnExecutedFileThatEvidenceCannotAddCarriesItsOwnReason(t *testing.T) {
+// A no-paired-test file that a green unit executed is added to the audit in
+// Swift, whose evidence promotes since a test target has a landing; it was
+// excluded as evidence-pairing-not-built before. A language that promotes
+// keeps no-paired-test for a file it could not land (a Go file run only by
+// another package's tests). No shipped language now reaches
+// evidence-pairing-not-built: Rust, the one that does not promote, excludes
+// such a source before pairing (test-landing-not-built).
+func TestAnExecutedFileIsAddedWhereEvidencePromotes(t *testing.T) {
 	swift, _ := lang.ByName("swift")
 	files := map[string]string{
 		"Package.swift":             "// swift-tools-version:5.9\n",
@@ -155,8 +154,8 @@ func TestAnExecutedFileThatEvidenceCannotAddCarriesItsOwnReason(t *testing.T) {
 	idx, ok := IndexFromUnits(ev, UnitFilesFor(swift, files))
 	cands := []Candidate{{Path: "Sources/A/B.swift", TestPath: "Tests/ATests/BTests.swift", Lang: "swift"}}
 	_, excl, promoted := WidenCandidacyByEvidence(cands, []Exclusion{{Path: "Sources/A/C.swift", Reason: ReasonNoPairedTest}}, idx, ok)
-	if promoted != 0 || len(excl) != 1 || excl[0].Reason != ReasonEvidencePairingNotBuilt {
-		t.Fatalf("Swift: promoted %d, excl %+v; want C.swift excluded as %q", promoted, excl, ReasonEvidencePairingNotBuilt)
+	if promoted != 1 || len(excl) != 0 {
+		t.Fatalf("Swift: promoted %d, excl %+v; want C.swift added to the audit", promoted, excl)
 	}
 
 	goPlug, _ := lang.ByName("go")

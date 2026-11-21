@@ -230,8 +230,7 @@ func swiftUnitForFile(_, testFile string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	target, ok := swiftTestTarget(f)
-	return target, ok && swiftModuleName.MatchString(target)
+	return SwiftTestTarget(f)
 }
 
 // swiftDisclose names the dependencies Package.swift pins to a branch when

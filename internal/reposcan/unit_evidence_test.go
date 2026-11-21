@@ -580,6 +580,55 @@ func TestUnitTestFileRust(t *testing.T) {
 	}
 }
 
+// swiftFiles is a SwiftPM package with two test targets in SwiftPM's default
+// layout (Tests/<target>/) and one declared elsewhere, whose files corral
+// cannot place.
+func swiftFiles() map[string]string {
+	return map[string]string{
+		"Package.swift":                              "// swift-tools-version:5.9\n",
+		"Sources/Vapor/Application.swift":            "",
+		"Sources/Vapor/Routing/Router.swift":         "",
+		"Sources/Vapor/Utilities/Box.swift":          "",
+		"Tests/VaporTests/ApplicationTests.swift":    "",
+		"Tests/VaporTests/AsyncTests.swift":          "",
+		"Tests/VaporTests/Routing/RouterTests.swift": "",
+		"Tests/VaporTests/Utilities/README.md":       "",
+		"Tests/OtherTests/ZTests.swift":              "",
+	}
+}
+
+// A Swift unit is a test target, and its authored test is written beside the
+// project's tests in that target's own directory: the target's
+// <source base>Tests.swift when it has one, anywhere below it, else its
+// lexically first Swift file. A target whose directory holds no Swift file
+// (one declared with its own path: in Package.swift, which corral does not
+// read) lands nothing.
+func TestUnitTestFileSwift(t *testing.T) {
+	swift, _ := lang.ByName("swift")
+	land := UnitTestFile(swift, swiftFiles())
+	for _, tc := range []struct{ unit, source, want string }{
+		{"VaporTests", "Sources/Vapor/Application.swift", "Tests/VaporTests/ApplicationTests.swift"},
+		{"VaporTests", "Sources/Vapor/Routing/Router.swift", "Tests/VaporTests/Routing/RouterTests.swift"},
+		{"VaporTests", "Sources/Vapor/Utilities/Box.swift", "Tests/VaporTests/ApplicationTests.swift"},
+		{"OtherTests", "Sources/Vapor/Utilities/Box.swift", "Tests/OtherTests/ZTests.swift"},
+		{"CustomPathTests", "Sources/Vapor/Utilities/Box.swift", ""},
+		{"VaporTests", "Package.swift", ""},                      // not a target's source
+		{"VaporTests", "Tests/OtherTests/ZTests.swift", ""},      // a test is no source
+		{"Vapor Tests", "Sources/Vapor/Utilities/Box.swift", ""}, // not a module name
+	} {
+		if got := land(tc.unit, tc.source); got != tc.want {
+			t.Errorf("land(%q, %q) = %q, want %q", tc.unit, tc.source, got, tc.want)
+		}
+	}
+	tests := UnitTestFiles(swift, swiftFiles())
+	if got, want := tests("VaporTests"), []string{"Tests/VaporTests/ApplicationTests.swift", "Tests/VaporTests/AsyncTests.swift", "Tests/VaporTests/Routing/RouterTests.swift"}; !slices.Equal(got, want) {
+		t.Errorf("Swift VaporTests test files = %q, want %q", got, want)
+	}
+	if got := tests("CustomPathTests"); len(got) != 0 {
+		t.Errorf("a target with no files here names %q, want none", got)
+	}
+}
+
 func TestUnitTestFileFileUnits(t *testing.T) {
 	for _, name := range []string{"javascript", "typescript", "ruby", "php"} {
 		p, _ := lang.ByName(name)

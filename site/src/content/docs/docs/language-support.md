@@ -26,9 +26,9 @@ This table is what the code can do. What has been executed, and on which reposit
 | Share a build cache between sandboxed runs | ✓ | — (20) | — (21) | — (22) | — (23) | — (24) | — (25) | — (26) |
 | Floor each mutant's time limit at three times a measured rebuild run (workspace substrate) | — (27) | — (28) | — (29) | — (30) | — (29) | — (31) | ✓ | — (32) |
 | Keep workspace trees on the checkout's locked dependency versions (one tree when they would not hold the lockfile) | — (33) | — (34) | — (35) | — (36) | — (37) | — (38) | ✓ | — (34) |
-| Add a file with no paired test to the audit when the evidence shows a test executes it | ✓ | ✓ | ✓ | ✓ | ✓ | — (39) | — (40) | ✓ |
+| Add a file with no paired test to the audit when the evidence shows a test executes it | ✓ | ✓ | ✓ | ✓ | ✓ | — (39) | ✓ | ✓ |
 | Read a file's functions and their branches (one mutant-generator seat per group of functions, a signature surface in the prompts, exam coverage) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Hand back the proven tests as one file | ✓ | ✓ | — (41) | ✓ | ✓ | ✓ | — (42) | ✓ |
+| Hand back the proven tests as one file | ✓ | ✓ | — (40) | ✓ | ✓ | ✓ | — (41) | ✓ |
 | Coverage pre-flight | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Grade only the tests that run the file | ✓ | ✓ | ✓ | ✓ | ✓ (rspec) | ✓ | ✓ | ✓ |
 
@@ -71,9 +71,8 @@ This table is what the code can do. What has been executed, and on which reposit
 37. not measured: a tree without the checkout's Gemfile.lock lets bundler resolve the Gemfile again, and whether trees then build on different versions was not measured
 38. not built: cargo builds each tree's own target/, and a tree without the checkout's Cargo.lock resolves the dependencies afresh, so Rust needs this. But a cargo workspace keeps Cargo.lock at the workspace root, not beside a member crate's Cargo.toml, and finding that root is not built yet
 39. not built: a Rust source with no separate test file would have its authored test written into the source itself, which corral does not do yet, so the scan excludes it before pairing and the evidence never reaches it; a source with a separate test file is already paired by name. On indexmap-rs/indexmap at 41a8708 (workspace substrate) a unit executed src/inner/extract.rs in full and nothing was added. The line that counts evidence-paired files says this after the unit pass, and such a source is recorded as test-landing-not-built
-40. not built: a Swift test unit is a test target, and which of its files an authored test for a source would go in is not built, so a file with no paired test stays out of the audit even when a target's run executes it. On taplin/Lariat at be0c5fd (workspace substrate, a free dry run on 2026-11-19) the unit pass executed 40 files under Sources/LassoParser, one of them paired by name, and added none. The line that counts evidence-paired files says this after the unit pass, and a file a test target executed is recorded as evidence-pairing-not-built rather than no-paired-test
-41. PHPUnit 10 and 11 load one class per file, the class named after the file, and a merged file of renamed classes ran no test on PHPUnit 11.5. So the first proven test is handed back as the file, and each other one as a file of its own, to be saved under its own class name
-42. not built: what one merged Swift file is has not been settled. Every top-level name in a test target is shared, and each proven test puts everything in one type named after the file it was written as, so all of a file's proven tests declare the same type. Each is handed back as a file of its own, with that reason, and only one of them can be added to the test target as it stands: rename the type in each of the others first
+40. PHPUnit 10 and 11 load one class per file, the class named after the file, and a merged file of renamed classes ran no test on PHPUnit 11.5. So the first proven test is handed back as the file, and each other one as a file of its own, to be saved under its own class name
+41. not built: what one merged Swift file is has not been settled. Every top-level name in a test target is shared, and each proven test puts everything in one type named after the file it was written as, so all of a file's proven tests declare the same type. Each is handed back as a file of its own, with that reason, and only one of them can be added to the test target as it stands: rename the type in each of the others first
 
 ## By runner
 

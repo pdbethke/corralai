@@ -192,6 +192,25 @@ func swiftTestTarget(testPath string) (string, bool) { return swiftTargetUnder("
 // the first segment below Sources/. ok=false outside Sources/<Target>/<file>.
 func swiftSourceTarget(codePath string) (string, bool) { return swiftTargetUnder("Sources", codePath) }
 
+// EvidencePromotes declares that evidence can add a file with no paired test
+// to the audit (EvidencePromoter): a unit is a test target, and a test
+// authored for a source it executed is written into that target's directory
+// (reposcan.UnitTestFile).
+func (swiftPlugin) EvidencePromotes() {}
+
+// SwiftTestTarget is the test target a file under Tests/ belongs to, in
+// SwiftPM's default layout, when that target's name is its own module name
+// (swiftModuleName): the one reading the unit pass's units, the runner row
+// (swiftUnitForFile) and evidence promotion (reposcan.UnitTestFile) share.
+func SwiftTestTarget(testPath string) (string, bool) {
+	t, ok := swiftTestTarget(testPath)
+	return t, ok && swiftModuleName.MatchString(t)
+}
+
+// SwiftSourceTarget is the source target a file under Sources/ belongs to,
+// in SwiftPM's default layout. ok=false outside Sources/<Target>/<file>.
+func SwiftSourceTarget(codePath string) (string, bool) { return swiftSourceTarget(codePath) }
+
 // swiftTargetUnder reads <root>/<Target>/<more> and returns Target. A file
 // directly under the root has no target directory, so it is not one.
 func swiftTargetUnder(root, p string) (string, bool) {

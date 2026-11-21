@@ -215,8 +215,10 @@ const (
 	ReasonDeclarationsUnreadable = "test-declarations-unreadable"
 	// ReasonEvidencePairingNotBuilt marks a source no filename pairs that a
 	// green test unit EXECUTED, in a language whose evidence cannot add a
-	// file to the audit (lang.PromotesByEvidence false: Swift, whose unit
-	// landing is not built). It is ReasonNoPairedTest made truthful about the
+	// file to the audit (lang.PromotesByEvidence false). No shipped language
+	// reaches it since Swift's evidence promotes: Rust, the one that does
+	// not, excludes such a source before pairing (test-landing-not-built).
+	// It is ReasonNoPairedTest made truthful about the
 	// measurement: left as no-paired-test, the record and the --json output
 	// said nothing ran the file when the evidence had run it. Applied by
 	// WidenCandidacyByEvidence; a language that promotes keeps

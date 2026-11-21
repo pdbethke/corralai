@@ -33,6 +33,12 @@ type Runner struct {
 	// Detect replaces Words where a word cannot say it (go test vs go build,
 	// cargo test vs cargo nextest). It reads argv only, never a script.
 	Detect func(argv []string) bool
+	// At is where the runner's word is in argv, -1 when it is not there, for
+	// a row Words cannot place: an entry script (node
+	// ./node_modules/jest/bin/jest.js) or a subcommand (cargo nextest).
+	// ReportCmd reads the runner's options from there. nil: the first of
+	// Words.
+	At func(argv []string) int
 
 	// FailFast is the runner's stop-at-first-failure flag, appended only to a
 	// command that NAMES this runner and is not shell-wrapped (see
@@ -328,43 +334,55 @@ var runners = []Runner{
 		// Detect adds jest's entry script (node ./node_modules/jest/bin/jest.js,
 		// the form AGENTS.md gives for the jail) to the word.
 		Name: "jest", ID: "jest", Languages: []string{"javascript", "typescript"}, Words: []string{"jest"}, FailFast: []string{"--bail"},
-		Detect: func(argv []string) bool {
-			return wordIndex(argv, "jest") >= 0 || entryScriptIndex(argv, "jest", "bin/jest.js") >= 0
-		},
-		ListCmd: jestListCmd, ParseList: jestParseList, SingleCmd: jestSingleCmd, ResolveByList: true, Coruns: jestCoruns,
+		Detect: func(argv []string) bool { return jestIndex(argv) >= 0 },
+		At:     jestIndex,
+		// A reporters list in the project's jest config replaces the
+		// default reporter, whose `●` lines the readers take; a reporter
+		// named on the command line replaces the config's (measured on jest
+		// 30.5.2 with reporters ["summary"] and []).
+		ReportArgs: []string{"--reporters=default"},
+		ListCmd:    jestListCmd, ParseList: jestParseList, SingleCmd: jestSingleCmd, ResolveByList: true, Coruns: jestCoruns,
 		FirstFailure: firstOf(jestFailures), FailedTests: jestFailures, DeselectCmd: jestDeselectCmd, FailedUnits: jestFailedUnits, KillerCmd: jestKillerCmd,
 		ListUnits: jestListUnits, ParseUnits: jestParseUnits, UnitCmd: oneUnit(jestUnitsCmd), UnitCoruns: jestUnitCoruns,
 		UnitsCmd: jestUnitsCmd, UnitsCoruns: eachUnitCoruns(jestUnitCoruns), UnitForFile: fileUnitForFile, UnitNoun: "test files",
 		VersionCmd: jestVersionCmd,
-		Note:       "listing, one-test, one-file and several-file runs verified on jest 30.5",
+		Note:       "listing, one-test, one-file and several-file runs verified on jest 30.5; --reporters=default verified on jest 30.5.2 against a config whose reporters list hides the failures (testdata/runners/report-jest-*.txt); through a package script corral adds nothing",
 	},
 	{
 		ListsFullNames: true,
 		Name:           "mocha", ID: "mocha", Languages: []string{"javascript", "typescript"}, Words: []string{"mocha"}, FailFast: []string{"--bail"},
-		Detect: func(argv []string) bool {
-			return wordIndex(argv, "mocha") >= 0 || entryScriptIndex(argv, "mocha", "bin/mocha.js", "bin/_mocha") >= 0
-		},
-		ListCmd: mochaListCmd, ParseList: mochaParseList, SingleCmd: mochaSingleCmd, ResolveByList: true, Coruns: lastFullColl,
+		Detect: func(argv []string) bool { return mochaIndex(argv) >= 0 },
+		At:     mochaIndex,
+		// A .mocharc reporter (json, tap) replaces spec, whose numbered
+		// failure lines the readers take; one on the command line wins
+		// (measured on mocha 12.0.3).
+		ReportArgs: []string{"--reporter", "spec"},
+		ListCmd:    mochaListCmd, ParseList: mochaParseList, SingleCmd: mochaSingleCmd, ResolveByList: true, Coruns: lastFullColl,
 		FirstFailure: firstOf(mochaFailures), FailedTests: mochaFailures, DeselectCmd: mochaDeselectCmd,
 		// No unit form: mocha ADDS a configured spec (.mocharc) to the files
 		// on its command line (measured on mocha 11.8.0), so `mocha <file>`
 		// runs every configured spec as well, and argv cannot show whether
 		// a config names one.
-		Note: "listing and one-test runs verified on mocha 11.8 and 12.0 (listing needs mocha 9 or later); no unit evidence: its config's spec list is always added to the files on its command line, so it has no one-file run",
+		Note: "listing and one-test runs verified on mocha 11.8 and 12.0 (listing needs mocha 9 or later); --reporter spec verified on mocha 12.0.3 against a .mocharc json reporter; no unit evidence: its config's spec list is always added to the files on its command line, so it has no one-file run",
 	},
 	{
 		// Detect adds vitest's entry script to the word; a shell-wrapped
 		// script is still read through Words.
 		Name: "vitest", ID: "vitest", Languages: []string{"javascript", "typescript"}, Words: []string{"vitest"},
-		Detect:  func(argv []string) bool { return vitestIndex(argv) >= 0 },
-		ListCmd: vitestListCmd, ParseList: vitestParseList, SingleCmd: vitestSingleCmd, ResolveByList: true, Coruns: vitestCoruns,
+		Detect: func(argv []string) bool { return vitestIndex(argv) >= 0 },
+		At:     vitestIndex,
+		// A reporters list in the project's vitest config (json, junit)
+		// replaces the default reporter, whose ` FAIL ` lines the readers
+		// take; one on the command line wins (measured on vitest 5.1.0).
+		ReportArgs: []string{"--reporter=default"},
+		ListCmd:    vitestListCmd, ParseList: vitestParseList, SingleCmd: vitestSingleCmd, ResolveByList: true, Coruns: vitestCoruns,
 		FirstFailure: firstOf(vitestFailures), FailedTests: vitestFailures, DeselectCmd: vitestDeselectCmd, FailedUnits: vitestFailedUnits, KillerCmd: vitestKillerCmd,
 		ListUnits: vitestListUnits, ParseUnits: vitestParseUnits, UnitCmd: oneUnit(vitestUnitsCmd), UnitCoruns: vitestUnitCoruns,
 		UnitsCmd: vitestUnitsCmd, UnitsCoruns: eachUnitCoruns(vitestUnitCoruns), UnitForFile: fileUnitForFile, UnitNoun: "test files",
 		EvidenceArgs:   vitestEvidenceArgs,
 		VersionCmd:     vitestVersionCmd,
 		UnitNoCoverage: "no worker coverage: the run's V8 coverage named no project file, though corral ran the unit with --pool=threads; that is what vitest's forks pool gives (measured on vitest 3.2.7 and 5.0.3), so check whether the test file itself forces another pool",
-		Note:           "listing, one-test, one-file and several-file runs verified on vitest 3.2 and 5.1, salvage on 5.1; the unit evidence pass runs each file with --pool=threads, because the forks pool wrote no worker coverage (measured on vitest 3.2.7 and 5.0.3); unit evidence counted through corral's vm source-map preload on vitest 3.2.7 and 5.0.3; vitest 1, 2 and 4 were not run",
+		Note:           "listing, one-test, one-file and several-file runs verified on vitest 3.2 and 5.1, salvage on 5.1; --reporter=default verified on vitest 5.1.0 against a config whose reporters list (json) hides the failures; the unit evidence pass runs each file with --pool=threads, because the forks pool wrote no worker coverage (measured on vitest 3.2.7 and 5.0.3); unit evidence counted through corral's vm source-map preload on vitest 3.2.7 and 5.0.3; vitest 1, 2 and 4 were not run",
 	},
 	{
 		Name: "node --test", ID: "node-test", Languages: []string{"javascript", "typescript"}, Default: true,
@@ -383,16 +401,21 @@ var runners = []Runner{
 	{
 		ListsFullNames: true,
 		Name:           "rspec", ID: "rspec", Languages: []string{"ruby"}, Default: true, Words: []string{"rspec"}, FailFast: []string{"--fail-fast"},
-		ListCmd: rspecListCmd, ParseList: rspecParseList, SingleCmd: rspecSingleCmd, ResolveByList: true, Coruns: lastFullColl,
+		// An .rspec `--format json` or `--format failures` drops the
+		// `Failed examples:` list the readers take; a format named on the
+		// command line replaces the file's (measured on rspec-core 3.13.6,
+		// with documentation too).
+		ReportArgs: []string{"--format", "progress"},
+		ListCmd:    rspecListCmd, ParseList: rspecParseList, SingleCmd: rspecSingleCmd, ResolveByList: true, Coruns: lastFullColl,
 		FirstFailure: firstOf(rspecFailures), FailedTests: rspecFailures, DeselectCmd: rspecDeselectCmd,
 		ListUnits: rspecListUnits, ParseUnits: rspecParseUnits, UnitCmd: oneUnit(rspecUnitsCmd),
 		UnitsCmd: rspecUnitsCmd, UnitForFile: fileUnitForFile, UnitNoun: "test files",
-		Note: "listing, one-test, one-file and several-file runs verified on rspec-core 3.13 (one-test runs need 3.12 or later)",
+		Note: "listing, one-test, one-file and several-file runs verified on rspec-core 3.13 (one-test runs need 3.12 or later); --format progress verified on rspec-core 3.13.6 against an .rspec `--format json`, and it replaces an .rspec `--format documentation` too",
 	},
 	{
 		Name: "minitest", ID: "minitest", Languages: []string{"ruby"}, Words: []string{"ruby", "rake", "testrb"},
 		FirstFailure: firstOf(minitestFailures), FailedTests: minitestFailures, DeselectCmd: minitestDeselectCmd,
-		Note: "minitest has no list mode and no full-name selector; rspec is the Ruby runner that lists and runs one test; no unit evidence: no listing command; Ruby falls back to name pairing under minitest",
+		Note: "minitest has no list mode and no full-name selector; rspec is the Ruby runner that lists and runs one test; no unit evidence: no listing command; Ruby falls back to name pairing under minitest; no report flags: a reporter the project installs in its own test helper (minitest-reporters, not run here) can replace the printed failures, and no flag undoes it",
 	},
 	{
 		Name: "phpunit", ID: "phpunit", Languages: []string{"php"}, Default: true, Words: []string{"phpunit"},
@@ -405,13 +428,19 @@ var runners = []Runner{
 	{
 		// FirstFailure and Flaky read the grammar off the output, not the
 		// command (rustGrammarOf), so both cargo rows share them.
-		Name: "cargo nextest", ID: "cargo-nextest", Languages: []string{"rust"}, Detect: isNextest,
-		ListCmd: nextestListCmd, ParseList: nextestParseList, SingleCmd: nextestSingleCmd, ResolveByList: true,
+		Name: "cargo nextest", ID: "cargo-nextest", Languages: []string{"rust"}, Detect: isNextest, At: nextestIndex,
+		// A .config/nextest.toml profile with status-level and
+		// final-status-level "none" drops the FAIL lines the readers take.
+		// These are nextest's own defaults, so an unconfigured project
+		// prints exactly what it did, retry lines included (measured on
+		// cargo-nextest 0.9.148).
+		ReportArgs: []string{"--status-level", "pass", "--final-status-level", "flaky"},
+		ListCmd:    nextestListCmd, ParseList: nextestParseList, SingleCmd: nextestSingleCmd, ResolveByList: true,
 		FirstFailure: rustFirstFailure, Flaky: rustFlakyTests,
 		Disclose: nextestDisclose, PreflightBin: nextestPreflightBin,
 		ListUnits: nextestListUnits, ParseUnits: nextestParseUnits, UnitCmd: oneUnit(nextestUnitsCmd),
 		UnitsCmd: nextestUnitsCmd, UnitForFile: nextestUnitForFile, UnitNoun: "test targets",
-		Note: "one-binary and several-binary runs (one `-E 'binary_id(=...)'` each) and their `list` listing verified on cargo-nextest 0.9.148; a command with its own filterset or a partition has no unit form",
+		Note: "one-binary and several-binary runs (one `-E 'binary_id(=...)'` each) and their `list` listing verified on cargo-nextest 0.9.148; --status-level pass --final-status-level flaky (nextest's own defaults) verified on 0.9.148 against a profile with both set to none; a command with its own filterset or a partition has no unit form",
 	},
 	{
 		Name: "cargo test", ID: "cargo-test", Languages: []string{"rust"}, Default: true, Words: []string{"cargo"},
@@ -502,6 +531,27 @@ func namedRunner(p Plugin, argv []string) (Runner, bool) {
 // script, node_modules/<pkg>/<one of bins>, or -1. It matches the package
 // path, not a base name, so a test file that happens to be called jest.js
 // names no runner.
+// jestIndex is where jest's word or entry script is in argv, -1 if neither.
+func jestIndex(argv []string) int {
+	return firstIndex(wordIndex(argv, "jest"), entryScriptIndex(argv, "jest", "bin/jest.js"))
+}
+
+// mochaIndex is where mocha's word or entry script is in argv, -1 if neither.
+func mochaIndex(argv []string) int {
+	return firstIndex(wordIndex(argv, "mocha"), entryScriptIndex(argv, "mocha", "bin/mocha.js", "bin/_mocha"))
+}
+
+// firstIndex is the smallest index that is not -1, or -1.
+func firstIndex(is ...int) int {
+	at := -1
+	for _, i := range is {
+		if i >= 0 && (at < 0 || i < at) {
+			at = i
+		}
+	}
+	return at
+}
+
 func entryScriptIndex(argv []string, pkg string, bins ...string) int {
 	return slices.IndexFunc(argv, func(a string) bool {
 		a = filepath.ToSlash(a)

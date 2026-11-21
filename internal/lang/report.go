@@ -154,6 +154,9 @@ func reportDisclosures(p Plugin, inv Invocation) []string {
 // runnerWordIndex is the index of the first word of cmd that names r by one
 // of its Words (cmdHasWord's rule), or -1.
 func runnerWordIndex(cmd []string, r Runner) int {
+	if r.At != nil {
+		return r.At(cmd)
+	}
 	at := -1
 	for _, w := range r.Words {
 		if i := wordIndex(cmd, w); i >= 0 && (at < 0 || i < at) {

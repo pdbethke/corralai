@@ -222,15 +222,7 @@ var ParityExemptions = []Exemption{
 
 	{"go", "readable-failures", "not needed: go test reads no project file that sets its flags or output, so a project cannot hide its `--- FAIL:` lines (GOFLAGS, which could add -json, is the operator's environment, not the project's); gotestsum's format comes from its own flag or GOTESTSUM_FORMAT, also not a project file, and was not run here"},
 
-	{"javascript", "readable-failures", "jest's `reporters`, vitest's `reporters` and a .mocharc `reporter` set in the project's config replace the output corral reads the failing test from (measured 2026-11-17: a reporters list without the default, or json or junit, on jest 30.5.2 and vitest 5.1.0; json or tap on mocha 12.0.3); `--reporters=default`, `--reporter=default` and `--reporter spec` on the command line restore it on those versions, but corral does not add them yet, and through a package script (`npm test`) it adds nothing; node --test 22.23 ignores a node.config.json, so its lines cannot be hidden that way"},
-
-	{"typescript", "readable-failures", "jest's `reporters`, vitest's `reporters` and a .mocharc `reporter` set in the project's config replace the output corral reads the failing test from (measured 2026-11-17: a reporters list without the default, or json or junit, on jest 30.5.2 and vitest 5.1.0; json or tap on mocha 12.0.3); `--reporters=default`, `--reporter=default` and `--reporter spec` on the command line restore it on those versions, but corral does not add them yet, and through a package script (`npm test`) it adds nothing; node --test 22.23 ignores a node.config.json, so its lines cannot be hidden that way"},
-
 	{"php", "readable-failures", "a phpunit.xml with testdox=\"true\" replaces the `N) Class::method` lines corral reads (measured 2026-11-17 on PHPUnit 11.5.57), and 11.5 has no option to turn it off (it refuses --no-testdox), so there is no flag to add"},
-
-	{"ruby", "readable-failures", "an .rspec `--format json` or `--format failures` drops the `Failed examples:` list corral reads, and `--format progress` on the command line restores it (measured 2026-11-17 on rspec-core 3.13.6), but corral does not add it yet; minitest's output can be replaced by a reporter the project installs in its own test helper (minitest-reporters, not run here), which no flag undoes"},
-
-	{"rust", "readable-failures", "a .config/nextest.toml with status-level and final-status-level \"none\" drops the `FAIL` lines corral reads, and `--status-level fail --final-status-level fail` restore them (measured 2026-11-17 on cargo-nextest 0.9.148), but corral does not add them yet; cargo test is not exposed: a .cargo/config.toml `term.quiet` makes libtest print `--- FAILED` lines, which corral still reads (cargo 1.90)"},
 
 	{"php", "run-cache", "nothing worth sharing was found. measured 2026-11-18 on one 32-core machine, outside the sandbox, as the median of 3 to 5 runs: on ramsey/uuid at 7a16331 the PHPUnit run (2,299 tests) took 10.6 s without OPcache and 10.2 s with a warm OPcache file cache after one source file changed, a difference inside the spread of single runs (9.9 s to 11.0 s)"},
 

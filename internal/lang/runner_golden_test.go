@@ -149,7 +149,7 @@ func captureNew(t *testing.T) map[string]string {
 				if base != "libtest" {
 					base = "empty-dir"
 				}
-				got[n+"|disclose|"+key+"|"+base] = show(RunDisclosures(p, dir, Cmd(cmd)))
+				got[n+"|disclose|"+key+"|"+base] = show(withoutReportDisclosures(p, Cmd(cmd), RunDisclosures(p, dir, Cmd(cmd))))
 			}
 			for name, o := range outs {
 				got[n+"|parselist|"+key+"|"+name] = show(ParseTestList(p, Cmd(cmd), o))
@@ -193,6 +193,25 @@ func captureNew(t *testing.T) map[string]string {
 		}
 	}
 	return got
+}
+
+// withoutReportDisclosures is lines without the ones ReportCmd's flags and
+// hook add (reportDisclosures): the plugins added no report flags, so those
+// lines answer a question the golden never asked, and their own tests
+// (TestRunDisclosuresSayWhenReportArgsAreAdded) pin them. Every other line
+// must still be the plugins' answer exactly.
+func withoutReportDisclosures(p Plugin, inv Invocation, lines []string) []string {
+	added := reportDisclosures(p, inv)
+	if len(added) == 0 {
+		return lines
+	}
+	var out []string
+	for _, l := range lines {
+		if !slices.Contains(added, l) {
+			out = append(out, l)
+		}
+	}
+	return out
 }
 
 func TestRunnerTableAnswersAsThePluginsDid(t *testing.T) {

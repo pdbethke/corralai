@@ -102,40 +102,36 @@ jobs:
         run: bash scripts/check-licensing.sh
       - if: steps.filter.outputs.code == 'true'
         run: go vet ./...
+      # The Swift tarball (about 1.1 GB) is cached under a key the
+      # provisioning script derives from its own pins (--swift-cache-key), so
+      # the key cannot drift from the version it installs. Only the tarball is
+      # cached: the script fetches its signature and the signing keyring on
+      # every run and checks the cached tarball against them before unpacking,
+      # exactly as a download (its header says so).
+      - name: Swift tarball cache key, from the provisioning script's pins
+        id: swiftpin
+        if: steps.filter.outputs.code == 'true'
+        run: bash scripts/ci-provision-test-toolchains.sh --swift-cache-key >> "$GITHUB_OUTPUT"
+      - name: Cache the pinned Swift tarball (its signature is checked on every run)
+        if: steps.filter.outputs.code == 'true' && steps.swiftpin.outputs.key != ''
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.swiftpin.outputs.path }}
+          key: ${{ steps.swiftpin.outputs.key }}
       - name: Provision language test toolchains (audit gate)
         if: steps.filter.outputs.code == 'true'
         # Shared with .github/workflows/self-audit.yml, which runs this same
         # suite as the code UNDER AUDIT — the two must provision identically or
         # the audit grades a different suite than CI validates.
+        env:
+          CORRALAI_CI_SWIFT_CACHE: ${{ steps.swiftpin.outputs.path }}
         run: bash scripts/ci-provision-test-toolchains.sh
       - name: Swift is the version pinned for this runner's release
         if: steps.filter.outputs.code == 'true'
         # FAILS rather than lets the real-toolchain Swift tests skip or run on
-        # the runner's own Swift: ubuntu-26.04 ships one, and the first run on
-        # it (2026-11-20) ran those tests on a version nothing here pinned
-        # because the provisioning had refused the release. The provisioning
-        # script exports the version it pins (CORRALAI_CI_SWIFT_VERSION) and
-        # puts links to that toolchain's swift and swiftc first on PATH (GITHUB_PATH).
-        run: |
-          want="${CORRALAI_CI_SWIFT_VERSION:-}"
-          if [ -z "$want" ]; then
-            echo "::error::scripts/ci-provision-test-toolchains.sh pins no Swift for this runner's release; the real-toolchain Swift tests would skip or run on an unpinned swift." >&2
-            exit 1
-          fi
-          at=$(readlink -f "$(command -v swift)" || true)
-          got=$(swift --version 2>/dev/null | head -n 1 || true)
-          echo "swift on PATH: ${at:-none}; $got"
-          case "$at" in
-          "/usr/local/swift-$want/"*) ;;
-          *)
-            echo "::error::swift on PATH is ${at:-absent}, not the pinned /usr/local/swift-$want toolchain." >&2
-            exit 1
-            ;;
-          esac
-          if [ "$got" != "Swift version $want (swift-$want-RELEASE)" ]; then
-            echo "::error::swift --version says '$got', want Swift $want." >&2
-            exit 1
-          fi
+        # the runner's own Swift. One script, shared with self-audit.yml; its
+        # header says why and what it reads.
+        run: bash scripts/ci-check-pinned-swift.sh
       # THE CONTAINER JAIL IS EXERCISED HERE, and it never was before.
       #
       # `--jail container` is what README offers macOS and Windows operators,

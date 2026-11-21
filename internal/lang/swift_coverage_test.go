@@ -15,58 +15,130 @@ import (
 )
 
 // THE COUNTS COME FROM A REAL llvm-cov EXPORT. testdata/runners/swift-codecov.json
-// is what SwiftPM (Swift 6.3.2) wrote for one coverage run of the fixture
-// package testdata/coverage/swift (scripts/capture-runner-fixtures.sh,
+// is what the Swift 6.3.2 toolchain's llvm-cov exported for one coverage run of
+// the fixture package testdata/coverage/swift, run the way
+// swiftPlugin.CoverageCmd runs it (scripts/capture-runner-fixtures.sh,
 // PROVENANCE.txt), its directory written as /fixture/swift-coverage. These
-// tests run swiftPlugin.CoverageCmd's real script with a stand-in `swift`
-// that writes that JSON where `--show-codecov-path` says it is, so the script
-// and the reducer Rust shares are what is tested, and only Swift is stood in
-// for.
+// tests run CoverageCmd's real script with a stand-in toolchain (fakeSwift)
+// whose llvm-cov prints that JSON, so the script, the merge and export it
+// shares with Rust and the reducer are what is tested, and only the toolchain
+// is stood in for.
 const swiftCodecovFixture = "testdata/runners/swift-codecov.json"
 
 // swiftCodecovPrefix is the fixture package's directory as the captured JSON
 // writes it.
 const swiftCodecovPrefix = "/fixture/swift-coverage/"
 
-// fakeSwift writes a stand-in `swift` into a new directory and returns that
-// directory, which is also the PATH the script runs with: it holds the
-// stand-in and the tools the coverage script needs. It answers
-// `--show-codecov-path` with <cwd>/.build/corral-coverage/codecov/Calc.json
-// (exit showExit), and otherwise plays a coverage run: it writes json to that
-// path with the fixture's directory replaced by the working directory, unless
-// json is "", and exits runExit. Every call is appended to <bin>/calls.
+// fakeSwiftCodecov is where the stand-in `swift` says the coverage export goes,
+// relative to the working directory: the codecov directory, whose parent is
+// SwiftPM's products directory, as on every toolchain measured (see
+// CoverageCmd).
+const fakeSwiftCodecov = ".build/corral-coverage/debug/codecov/Calc.json"
+
+// fakeSwift writes a stand-in Swift toolchain into a new directory and returns
+// that directory, which is also the PATH the script runs with: `swift`, the
+// two LLVM tools the coverage script runs from beside it, a `readelf`, and
+// links to the system tools the script needs (systemTools). Every call of a
+// stand-in is appended to <bin>/calls as "<tool> <args>". A stand-in binary's
+// build ID is its text after "id:".
+//
+//   - swift answers `--show-codecov-path` with <cwd>/fakeSwiftCodecov (exit
+//     showExit). Any other call plays a coverage run and exits runExit: unless
+//     json is "" (a build that failed), it writes two profiles into the
+//     codecov directory, one named with a space as SwiftPM's "Swift Testing"
+//     profiles are, naming the build IDs aaa and bbb, and puts into the
+//     products directory the two products with those IDs (CalcTests.so,
+//     CalcTests-test-runner), a product an earlier build left (Stale.so, id
+//     zzz, named by no profile), a file with no build ID (description.json),
+//     and a directory holding an object with id aaa (CalcTests.build/a.o,
+//     which is not a product).
+//   - readelf -n F prints F's build ID as readelf does, if it has one.
+//   - llvm-profdata show --binary-ids F prints the IDs F names under
+//     "Binary IDs:" as llvm-profdata does; merge -sparse -o OUT IN... writes
+//     the inputs to OUT.
+//   - llvm-cov export prints json with the fixture's directory replaced by the
+//     working directory.
 func fakeSwift(t *testing.T, json string, showExit, runExit int) (bin string) {
 	t.Helper()
 	bin = t.TempDir()
-	src := ""
+	src := filepath.Join(bin, "export.json")
+	if err := os.WriteFile(src, []byte(json), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	calls := shellQuote(filepath.Join(bin, "calls"))
+	log := "echo \"$(basename \"$0\") $*\" >> " + calls + "\n"
+	swift := "#!/bin/sh\n" + log +
+		"p=\"$(pwd -P)/" + fakeSwiftCodecov + "\"; c=\"${p%/*}\"; b=\"${c%/*}\"\n" +
+		"case \" $* \" in *' --show-codecov-path '*) echo \"$p\"; exit " + strconv.Itoa(showExit) + ";; esac\n" +
+		"echo 'the suite ran' >&2\n"
 	if json != "" {
-		src = filepath.Join(bin, "export.json")
-		if err := os.WriteFile(src, []byte(json), 0o600); err != nil {
+		swift += "mkdir -p \"$c\" \"$b/CalcTests.build\" || exit 9\n" +
+			"echo id:aaa > \"$c/XCTest1_0.1.profraw\"; echo id:bbb > \"$c/Swift Testing1_0.1.profraw\"\n" +
+			"echo id:aaa > \"$b/CalcTests.so\"; echo id:bbb > \"$b/CalcTests-test-runner\"; echo id:zzz > \"$b/Stale.so\"\n" +
+			"echo '{}' > \"$b/description.json\"; echo id:aaa > \"$b/CalcTests.build/a.o\"\n"
+	}
+	swift += "exit " + strconv.Itoa(runExit) + "\n"
+	tools := map[string]string{
+		"swift":   swift,
+		"readelf": "#!/bin/sh\n" + log + "[ \"$1\" = -n ] || exit 7\nsed -n 's/^id:\\(.*\\)/    Build ID: \\1/p' \"$2\"\n",
+		"llvm-profdata": "#!/bin/sh\n" + log +
+			"if [ \"$1 $2\" = 'show --binary-ids' ]; then echo 'Total functions: 1'; echo 'Binary IDs: '; sed -n 's/^id://p' \"$3\"; exit 0; fi\n" +
+			"[ \"$1 $2 $3\" = 'merge -sparse -o' ] || exit 7\nout=$4; shift 4; printf '%s\\n' \"$@\" > \"$out\"\n",
+		"llvm-cov": "#!/bin/sh\n" + log + "[ \"$1\" = export ] || exit 7\nsed \"s#" + swiftCodecovPrefix + "#$(pwd -P)/#g\" " + shellQuote(src) + "\n",
+	}
+	for name, script := range tools {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte(script), 0o700); err != nil { // #nosec G306 -- an executable the test runs
 			t.Fatal(err)
 		}
 	}
-	script := "#!/bin/sh\n" +
-		"echo \"$*\" >> " + shellQuote(filepath.Join(bin, "calls")) + "\n" +
-		"p=\"$(pwd -P)/.build/corral-coverage/codecov/Calc.json\"\n" +
-		"case \" $* \" in *' --show-codecov-path '*) echo \"$p\"; exit " + strconv.Itoa(showExit) + ";; esac\n" +
-		"echo 'the suite ran' >&2\n"
-	if src != "" {
-		script += "mkdir -p \"$(dirname \"$p\")\" && sed \"s#" + swiftCodecovPrefix + "#$(pwd -P)/#g\" " + shellQuote(src) + " > \"$p\"\n"
-	}
-	script += "exit " + strconv.Itoa(runExit) + "\n"
-	if err := os.WriteFile(filepath.Join(bin, "swift"), []byte(script), 0o700); err != nil { // #nosec G306 -- an executable the test runs
-		t.Fatal(err)
-	}
-	for _, tool := range []string{"sh", "sed", "mktemp", "rm", "mkdir", "dirname", "awk", "cat", "pwd", "tail"} {
+	systemTools(t, bin)
+	return bin
+}
+
+// systemTools links into dir the system tools the coverage script runs, so a
+// directory holding them can be the whole PATH.
+func systemTools(t *testing.T, dir string) {
+	t.Helper()
+	for _, tool := range []string{"sh", "sed", "mktemp", "rm", "mkdir", "dirname", "basename", "awk", "cat", "pwd", "tail", "readlink", "grep", "sort", "cut", "comm", "wc", "tr"} {
 		p, err := exec.LookPath(tool)
 		if err != nil {
 			continue // a shell builtin on this machine
 		}
-		if err := os.Symlink(p, filepath.Join(bin, tool)); err != nil {
+		if err := os.Symlink(p, filepath.Join(dir, tool)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	return bin
+}
+
+// fakeSwiftCalls is what the stand-in toolchain in bin was called with, one
+// call per line.
+func fakeSwiftCalls(t *testing.T, bin string) []string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(bin, "calls")) // #nosec G304 -- the stand-in's own log
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if s := strings.TrimSpace(string(b)); s != "" {
+		return strings.Split(s, "\n")
+	}
+	return nil
+}
+
+// fakeSwiftCall is the one call of tool in calls, or "" with an error when
+// there is not exactly one.
+func fakeSwiftCall(t *testing.T, calls []string, tool string) string {
+	t.Helper()
+	var got []string
+	for _, c := range calls {
+		if strings.HasPrefix(c, tool+" ") {
+			got = append(got, c)
+		}
+	}
+	if len(got) != 1 {
+		t.Errorf("want one %s call, got %q", tool, got)
+		return ""
+	}
+	return got[0]
 }
 
 // runSwiftCoverage runs CoverageCmd(testCmd) in dir with PATH=path, and
@@ -233,19 +305,21 @@ func TestLLVMCovReducerRefusesAnIncompleteExport(t *testing.T) {
 	}
 }
 
-// NO REPORT IS A DISCLOSED FAILURE, never an empty one. On Swift 6.3.2 a run
-// with a failing test or a build that failed writes no export (measured on
-// the fixture package); the stale export of an earlier run must not stand in
-// for it. And when SwiftPM cannot say where the export goes, the suite is not
-// run at all.
+// NO REPORT IS A DISCLOSED FAILURE, never an empty one. A run that did not
+// pass is not read, though it may have written profiles: a test process that
+// crashes writes none for itself, and the rest would read as the whole suite
+// (measured on Swift 6.3.2 and 6.4.2, see CoverageCmd). A run that passed and
+// wrote no profile, or found no product carrying a coverage map, is disclosed
+// too; and when SwiftPM cannot say where its coverage goes, or the toolchain's
+// LLVM tools are not beside its swift, the suite is not run at all.
 func TestSwiftCoverageUnavailableIsAnError(t *testing.T) {
 	r := swiftPlugin{}
-	report := "Building for debugging...\n" + swiftCoverageUnavailable + " swift test exited 1 and wrote no coverage report\n"
+	report := "Building for debugging...\n" + swiftCoverageUnavailable + " swift test exited 1, so its coverage is not read\n"
 	for name, parse := range map[string]func() error{
 		"CoverageCounts": func() error { _, err := r.CoverageCounts(report, ""); return err },
 		"ParseCoverage":  func() error { _, err := r.ParseCoverage(report, ""); return err },
 	} {
-		if err := parse(); err == nil || !strings.Contains(err.Error(), "swift test exited 1 and wrote no coverage report") {
+		if err := parse(); err == nil || !strings.Contains(err.Error(), "swift test exited 1, so its coverage is not read") {
 			t.Errorf("%s: want an error carrying the reason, got %v", name, err)
 		}
 	}
@@ -256,42 +330,209 @@ func TestSwiftCoverageUnavailableIsAnError(t *testing.T) {
 		t.Errorf("CoverageUnavailable = %q, %v: the Swift notice must be one the callers read", reason, ok)
 	}
 
-	t.Run("failing run with a stale export", func(t *testing.T) {
-		dir := physicalTempDir(t)
-		stale := filepath.Join(dir, ".build", "corral-coverage", "codecov", "Calc.json")
-		if err := os.MkdirAll(filepath.Dir(stale), 0o750); err != nil {
+	for _, tc := range []struct {
+		name    string
+		json    string
+		runExit int
+		want    string
+	}{
+		{"failing run that wrote profiles", readFixture(t, "swift-codecov.json"), 1, "swift test exited 1, so its coverage is not read"},
+		{"build that failed", "", 1, "swift test exited 1, so its coverage is not read"},
+		{"passing run that wrote no profile", "", 0, "swift test exited 0 and wrote no coverage profile"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bin := fakeSwift(t, tc.json, 0, tc.runExit)
+			stdout, _ := runSwiftCoverage(t, []string{"swift", "test"}, physicalTempDir(t), bin)
+			_, err := r.CoverageCounts(stdout, "")
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("want the unavailable reason %q, got %v\nstdout:\n%s", tc.want, err, stdout)
+			}
+			if rc, ok := SuiteExit(stdout); !ok || rc != tc.runExit {
+				t.Errorf("SuiteExit = %d, %v; want the suite's %d", rc, ok, tc.runExit)
+			}
+			for _, c := range fakeSwiftCalls(t, bin) {
+				if strings.HasPrefix(c, "llvm-") {
+					t.Errorf("a run that is not read was merged or exported: %s", c)
+				}
+			}
+		})
+	}
+
+	// The run's binaries must all be found, and found by the build IDs its
+	// profiles name: a profile naming a binary that is not in the products
+	// directory, or profiles naming none, would otherwise be read short.
+	for _, tc := range []struct {
+		name, profile, want string
+	}{
+		{"a binary that ran is not in the products directory", "id:aaa\nid:ccc\n", "not in SwiftPM's products directory"},
+		{"profiles that name no build ID", "", "name no binary build ID"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := physicalTempDir(t)
+			bin := fakeSwift(t, readFixture(t, "swift-codecov.json"), 0, 0)
+			// Run as the stand-in does, then give both profiles tc.profile.
+			wrap := "#!/bin/sh\n" + shellQuote(filepath.Join(bin, "swift.real")) + " \"$@\"; rc=$?\n" +
+				"case \" $* \" in *' --show-codecov-path '*) exit $rc;; esac\n" +
+				"for f in \"$(pwd -P)/" + filepath.Dir(fakeSwiftCodecov) + "\"/*.profraw; do printf '" + strings.ReplaceAll(tc.profile, "\n", "\\n") + "' > \"$f\"; done\nexit $rc\n"
+			if err := os.Rename(filepath.Join(bin, "swift"), filepath.Join(bin, "swift.real")); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(bin, "swift"), []byte(wrap), 0o700); err != nil { // #nosec G306 -- an executable the test runs
+				t.Fatal(err)
+			}
+			stdout, _ := runSwiftCoverage(t, []string{"swift", "test"}, dir, bin)
+			if _, err := r.CoverageCounts(stdout, ""); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("want the unavailable reason %q, got %v\nstdout:\n%s", tc.want, err, stdout)
+			}
+			for _, c := range fakeSwiftCalls(t, bin) {
+				if strings.HasPrefix(c, "llvm-cov ") || strings.HasPrefix(c, "llvm-profdata merge") {
+					t.Errorf("a run whose binaries were not all found was merged or exported: %s", c)
+				}
+			}
+		})
+	}
+
+	// A failing `llvm-profdata show` is disclosed as that, not as a binary
+	// missing from the products directory: the loop that reads the IDs must
+	// not sit in a pipe, where its notice would be read as a build ID.
+	t.Run("llvm-profdata show fails", func(t *testing.T) {
+		bin := fakeSwift(t, readFixture(t, "swift-codecov.json"), 0, 0)
+		pd := filepath.Join(bin, "llvm-profdata")
+		if err := os.WriteFile(pd, []byte("#!/bin/sh\nexit 3\n"), 0o700); err != nil { // #nosec G306 -- an executable the test runs
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(stale, []byte(strings.ReplaceAll(readFixture(t, "swift-codecov.json"), swiftCodecovPrefix, dir+"/")), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		path := fakeSwift(t, "", 0, 1)
-		stdout, _ := runSwiftCoverage(t, []string{"swift", "test"}, dir, path)
+		stdout, _ := runSwiftCoverage(t, []string{"swift", "test"}, physicalTempDir(t), bin)
 		_, err := r.CoverageCounts(stdout, "")
-		if err == nil || !strings.Contains(err.Error(), "exited 1 and wrote no coverage report") {
-			t.Errorf("want the unavailable reason naming the exit status, got %v\nstdout:\n%s", err, stdout)
-		}
-		if rc, ok := SuiteExit(stdout); !ok || rc != 1 {
-			t.Errorf("SuiteExit = %d, %v; want the suite's 1", rc, ok)
+		if err == nil || !strings.Contains(err.Error(), "show --binary-ids failed (exit 3)") || strings.Contains(err.Error(), "not in SwiftPM's products directory") {
+			t.Errorf("want the unavailable reason naming the failed show, got %v\nstdout:\n%s", err, stdout)
 		}
 	})
 
 	t.Run("no codecov path", func(t *testing.T) {
-		path := fakeSwift(t, readFixture(t, "swift-codecov.json"), 1, 0)
-		bin := path
-		stdout, stderr := runSwiftCoverage(t, []string{"swift", "test"}, physicalTempDir(t), path)
+		bin := fakeSwift(t, readFixture(t, "swift-codecov.json"), 1, 0)
+		stdout, stderr := runSwiftCoverage(t, []string{"swift", "test"}, physicalTempDir(t), bin)
 		_, err := r.CoverageCounts(stdout, "")
 		if err == nil || !strings.Contains(err.Error(), "--show-codecov-path") {
 			t.Errorf("want the unavailable reason naming --show-codecov-path, got %v\nstdout:\n%s", err, stdout)
 		}
 		if strings.Contains(stderr, "the suite ran") {
-			t.Errorf("the suite ran although its report could never be found:\n%s", stderr)
+			t.Errorf("the suite ran although its profiles could never be found:\n%s", stderr)
 		}
-		calls, _ := os.ReadFile(filepath.Join(bin, "calls")) // #nosec G304 -- the stand-in's own log
-		if strings.Count(string(calls), "\n") != 1 {
-			t.Errorf("want only the --show-codecov-path call, got:\n%s", calls)
+		if calls := fakeSwiftCalls(t, bin); len(calls) != 1 {
+			t.Errorf("want only the --show-codecov-path call, got:\n%s", strings.Join(calls, "\n"))
 		}
 	})
+
+	// llvm-profdata and llvm-cov are looked for beside swift only; readelf on
+	// PATH, which here is the stand-in's directory too.
+	for _, tool := range []string{"llvm-profdata", "llvm-cov", "readelf"} {
+		t.Run("no "+tool, func(t *testing.T) {
+			bin := fakeSwift(t, readFixture(t, "swift-codecov.json"), 0, 0)
+			if err := os.Remove(filepath.Join(bin, tool)); err != nil {
+				t.Fatal(err)
+			}
+			want := filepath.Join(bin, tool)
+			if tool == "readelf" {
+				want = "readelf (binutils) is not on PATH"
+			}
+			stdout, stderr := runSwiftCoverage(t, []string{"swift", "test"}, physicalTempDir(t), bin)
+			if _, err := r.CoverageCounts(stdout, ""); err == nil || !strings.Contains(err.Error(), want) {
+				t.Errorf("want the unavailable reason naming %s, got %v\nstdout:\n%s", want, err, stdout)
+			}
+			if strings.Contains(stderr, "the suite ran") {
+				t.Errorf("the suite ran although its profiles could never be read:\n%s", stderr)
+			}
+		})
+	}
+}
+
+// THE PROFILES ARE MERGED AND EXPORTED OVER THE PRODUCTS THAT RAN, by the
+// mechanism Rust's coverage shares (llvmCovMergeExportShell): the profiles the
+// run wrote into SwiftPM's codecov directory, none left by an earlier run, and
+// as objects exactly the files of the products directory (the codecov
+// directory's parent) whose build ID those profiles name. A product an
+// earlier build left (Stale.so), a file with no build ID, and an object file
+// inside a target's build directory are not handed to llvm-cov.
+func TestSwiftCoverageExportsEveryProduct(t *testing.T) {
+	dir := physicalTempDir(t)
+	codecov := filepath.Dir(filepath.Join(dir, fakeSwiftCodecov))
+	if err := os.MkdirAll(codecov, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(codecov, "stale_0.1.profraw"), []byte("an earlier run's"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bin := fakeSwift(t, readFixture(t, "swift-codecov.json"), 0, 0)
+	stdout, stderr := runSwiftCoverage(t, []string{"swift", "test"}, dir, bin)
+	if _, err := (swiftPlugin{}).CoverageCounts(stdout, ""); err != nil {
+		t.Fatalf("CoverageCounts: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	calls := fakeSwiftCalls(t, bin)
+	var merges []string
+	for _, c := range calls {
+		if strings.HasPrefix(c, "llvm-profdata merge ") {
+			merges = append(merges, c)
+		}
+	}
+	merge := ""
+	if len(merges) != 1 {
+		t.Errorf("want one merge, got %q", merges)
+	} else {
+		merge = merges[0]
+	}
+	if merge != "" {
+		for _, want := range []string{filepath.Join(codecov, "XCTest1_0.1.profraw"), filepath.Join(codecov, "Swift Testing1_0.1.profraw")} {
+			if !strings.Contains(merge, want) {
+				t.Errorf("the merge was not given %s: %s", want, merge)
+			}
+		}
+		if strings.Contains(merge, "stale") {
+			t.Errorf("an earlier run's profile was merged: %s", merge)
+		}
+	}
+	export := fakeSwiftCall(t, calls, "llvm-cov")
+	products := filepath.Dir(codecov)
+	var objects []string
+	fields := strings.Fields(export)
+	for i, f := range fields {
+		if f == "-object" && i+1 < len(fields) {
+			objects = append(objects, fields[i+1])
+		}
+	}
+	if want := []string{filepath.Join(products, "CalcTests-test-runner"), filepath.Join(products, "CalcTests.so")}; !slices.Equal(objects, want) {
+		t.Errorf("objects = %q, want %q (export call: %s)", objects, want, export)
+	}
+	for _, flag := range []string{"-format=text", "-summary-only", "-instr-profile="} {
+		if !strings.Contains(export, flag) {
+			t.Errorf("the export call lacks %s: %s", flag, export)
+		}
+	}
+}
+
+// THE LLVM TOOLS ARE THE SWIFT TOOLCHAIN'S OWN, found beside the swift the
+// command runs after following its links, never elsewhere on PATH: CI puts a
+// link to the pinned toolchain's swift first on PATH, in a directory of its
+// own, and an llvm-profdata from another LLVM release cannot read the
+// profile's format (Rust's coverage failed that way in CI).
+func TestSwiftCoverageFindsTheToolchainsLLVMToolsThroughALink(t *testing.T) {
+	bin := fakeSwift(t, readFixture(t, "swift-codecov.json"), 0, 0)
+	links := t.TempDir()
+	if err := os.Symlink(filepath.Join(bin, "swift"), filepath.Join(links, "swift")); err != nil {
+		t.Fatal(err)
+	}
+	systemTools(t, links)
+	// readelf is a PATH tool; only the LLVM tools must be beside swift.
+	if err := os.Symlink(filepath.Join(bin, "readelf"), filepath.Join(links, "readelf")); err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr := runSwiftCoverage(t, []string{"swift", "test"}, physicalTempDir(t), links)
+	got, err := (swiftPlugin{}).CoverageCounts(stdout, "")
+	if err != nil {
+		t.Fatalf("CoverageCounts: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	if want := (LineCounts{Executed: 3, Executable: 6}); got["Sources/Calc/Calc.swift"] != want {
+		t.Errorf("Sources/Calc/Calc.swift = %+v, want %+v", got["Sources/Calc/Calc.swift"], want)
+	}
 }
 
 // ONLY A PLAIN `swift test` RUN IS INSTRUMENTED, the shapes the row runs
@@ -301,7 +542,9 @@ func TestSwiftCoverageUnavailableIsAnError(t *testing.T) {
 // skips the build directory there, so a package or scratch path elsewhere
 // would be read with the wrong paths. The coverage build has a scratch path
 // of its own (see CoverageCmd), so --disable-code-coverage, which would
-// leave it uninstrumented, is refused too.
+// leave it uninstrumented, is refused too. The build system is the
+// operator's: the profiles are read over the products that ran, under native
+// and swiftbuild alike, so none is added and none refused.
 func TestSwiftCoverageCmdShapes(t *testing.T) {
 	r := swiftPlugin{}
 	refused := [][]string{
@@ -319,13 +562,14 @@ func TestSwiftCoverageCmdShapes(t *testing.T) {
 		{"swift", "test", "--scratch-path=/tmp/b"},
 		{"swift", "test", "--build-path", "b"},
 		{"swift", "test", "--build-path=b"},
+		// --show-codecov-path and both its aliases (swift test --help, Swift
+		// 6.3.2 and 6.4.2): each prints the path and runs no test.
 		{"swift", "test", "--show-codecov-path"},
-		// Any build system but native: its export is not the whole suite's
-		// (see CoverageCmd), and the operator's choice is not overridden.
-		{"swift", "test", "--build-system", "swiftbuild"},
-		{"swift", "test", "--build-system=swiftbuild"},
-		{"swift", "test", "--build-system", "xcode"},
-		{"swift", "test", "--build-system"},
+		{"swift", "test", "--show-code-coverage-path"},
+		{"swift", "test", "--show-coverage-path"},
+	}
+	for _, o := range swiftCodecovPathOptions {
+		refused = append(refused, []string{"swift", "test", o})
 	}
 	for _, c := range refused {
 		if cmd, ok := r.CoverageCmd(c); ok {
@@ -340,6 +584,8 @@ func TestSwiftCoverageCmdShapes(t *testing.T) {
 		{"swift", "test", "--parallel"},
 		{"swift", "test", "--build-system", "native"},
 		{"swift", "test", "--build-system=native"},
+		{"swift", "test", "--build-system", "swiftbuild"},
+		{"swift", "test", "--build-system=swiftbuild"},
 	} {
 		cmd, ok := r.CoverageCmd(c)
 		if !ok {
@@ -354,11 +600,12 @@ func TestSwiftCoverageCmdShapes(t *testing.T) {
 		if !slices.Equal(args[:len(c)], c) {
 			t.Errorf("CoverageCmd(%q): the operator's command must come first and unchanged, got %q", c, args)
 		}
-		if extra := args[len(c):]; !slices.Contains(extra, "--scratch-path") || (!slices.Contains(c, "--enable-code-coverage") && !slices.Contains(extra, "--enable-code-coverage")) {
+		extra := args[len(c):]
+		if !slices.Contains(extra, "--scratch-path") || (!slices.Contains(c, "--enable-code-coverage") && !slices.Contains(extra, "--enable-code-coverage")) {
 			t.Errorf("CoverageCmd(%q) added %q, want --enable-code-coverage and its scratch path", c, extra)
 		}
-		if bs := swiftBuildSystems(args); !slices.Equal(bs, []string{"native"}) {
-			t.Errorf("CoverageCmd(%q) runs with build systems %q, want native exactly once", c, bs)
+		if bs := swiftBuildSystems(extra); len(bs) != 0 {
+			t.Errorf("CoverageCmd(%q) added build system %q; the operator's own is kept", c, bs)
 		}
 		if !slices.Contains(InterpretersIn(cmd), c[0]) {
 			t.Errorf("InterpretersIn(%q) = %q, want the operator's swift among them", cmd, InterpretersIn(cmd))
@@ -377,35 +624,6 @@ func swiftBuildSystems(args []string) []string {
 		}
 	}
 	return out
-}
-
-// THE COVERAGE RUN USES THE NATIVE BUILD SYSTEM, both when it asks where the
-// export goes and when it runs, because only that build system's export holds
-// every test target's files. Measured 2026-11-20 on the coverage fixture plus
-// a library target only the XCTest target depends on: under swiftbuild (the
-// default from Swift 6.4, opt-in on 6.3.2) the export SwiftPM wrote held the
-// files of one test product (6.4.2) or none of the project's at all (6.3.2),
-// so files that product does not link were absent and read as never run;
-// under native, on 6.3.2 and 6.4.2 alike, every file was there.
-func TestSwiftCoverageRunsTheNativeBuildSystem(t *testing.T) {
-	bin := fakeSwift(t, readFixture(t, "swift-codecov.json"), 0, 0)
-	stdout, _ := runSwiftCoverage(t, []string{"swift", "test"}, physicalTempDir(t), bin)
-	if _, err := (swiftPlugin{}).CoverageCounts(stdout, ""); err != nil {
-		t.Fatalf("CoverageCounts: %v\n%s", err, stdout)
-	}
-	calls, err := os.ReadFile(filepath.Join(bin, "calls")) // #nosec G304 -- the stand-in's own log
-	if err != nil {
-		t.Fatal(err)
-	}
-	lines := strings.Split(strings.TrimSpace(string(calls)), "\n")
-	if len(lines) != 2 {
-		t.Fatalf("want the --show-codecov-path call and the run, got:\n%s", calls)
-	}
-	for _, l := range lines {
-		if bs := swiftBuildSystems(strings.Fields(l)); !slices.Equal(bs, []string{"native"}) {
-			t.Errorf("swift %s: build systems %q, want native exactly once", l, bs)
-		}
-	}
 }
 
 // THE SKIPPED DIRECTORIES ARE MATCHED LITERALLY UNDER EVERY awk. awk -v
@@ -451,5 +669,30 @@ func TestLLVMCovSkipIsLiteralUnderEveryAwk(t *testing.T) {
 	}
 	if ran == 0 {
 		t.Skip("no awk on PATH")
+	}
+}
+
+// THE CAPTURE RUNS THE PLUGIN'S OWN STEPS. SwiftCoverageExportCmd, which
+// scripts/capture-runner-fixtures.sh runs to record swift-codecov.json, is
+// CoverageCmd's script with only its ending changed: the raw export printed
+// instead of reduced. So the fixture cannot come from steps the plugin does
+// not run, and its refusals are CoverageCmd's.
+func TestSwiftCoverageExportCmdIsCoverageCmdWithTheExportPrinted(t *testing.T) {
+	for _, c := range [][]string{{"swift", "test"}, {"/usr/bin/swift", "test", "--build-system", "swiftbuild"}} {
+		cov, ok1 := swiftPlugin{}.CoverageCmd(c)
+		exp, ok2 := SwiftCoverageExportCmd(c)
+		if !ok1 || !ok2 || len(cov) != len(exp) {
+			t.Fatalf("%q: CoverageCmd %v, SwiftCoverageExportCmd %v", c, ok1, ok2)
+		}
+		reduce := llvmCovReduceShell(swiftPlugin{}, swiftCoverageHeaderV2, `"$d/export.json"`)
+		if !strings.HasSuffix(cov[2], reduce) || strings.TrimSuffix(cov[2], reduce) != strings.TrimSuffix(exp[2], `cat "$d/export.json"`+"\n") {
+			t.Errorf("%q: the two scripts differ before their endings", c)
+		}
+		if !slices.Equal(append(slices.Clone(cov[:2]), cov[3:]...), append(slices.Clone(exp[:2]), exp[3:]...)) {
+			t.Errorf("%q: the two commands differ outside the script:\n%q\n%q", c, cov, exp)
+		}
+	}
+	if _, ok := SwiftCoverageExportCmd([]string{"swift", "test", "--package-path", "x"}); ok {
+		t.Error("SwiftCoverageExportCmd accepted a command CoverageCmd refuses")
 	}
 }

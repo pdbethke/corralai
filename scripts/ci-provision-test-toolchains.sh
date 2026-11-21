@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 # Provision the toolchains corral's own `go test ./...` needs on a CI runner.
 #
+#   scripts/ci-provision-test-toolchains.sh                   install everything
+#   scripts/ci-provision-test-toolchains.sh --swift-cache-key print the Swift
+#       tarball's cache key and directory (key=..., path=...) and install
+#       nothing; prints nothing when no Swift is pinned for this host. The
+#       workflows write it to GITHUB_OUTPUT for actions/cache, so the key is
+#       derived from the pins in swift_pin below and cannot drift from them.
+#       CORRALAI_CI_SWIFT_CACHE, when set to that directory, is where the
+#       install reads and keeps the tarball (see the Swift block).
+#
 # corral's suite is NOT self-contained: the multi-language audit gate exercises
 # each internal/lang plugin against the REAL tool (pytest, ruby, tsc, bwrap), so
 # a bare runner fails or skips tests that a provisioned one actually runs. This
@@ -32,6 +41,58 @@
 # reports as present on the host. Everything below installs system-wide on
 # purpose. Never add --user here.
 set -uo pipefail
+
+# SWIFT'S PINS: one Swift per Ubuntu release, with the runtime dependencies
+# swift.org's tarball install page lists for it (checked 2026-11-20); the
+# Swift block below says why. swift_pin sets, for this host, SWIFT_VERSION
+# and swift_deps (empty when the release has no pin), swift_tarball and
+# swift_platdir (the release tarball's name without .tar.gz and its directory
+# on download.swift.org; empty when the architecture has none), and
+# swift_cache_key. It is the one place a pin is written: the install and
+# --swift-cache-key both read it.
+swift_pin() {
+	local rel suffix=
+	# shellcheck source=/dev/null
+	swift_release=$(. /etc/os-release && echo "${ID:-unknown} ${VERSION_ID:-unknown}")
+	swift_arch=$(uname -m)
+	case "$swift_release" in
+	"ubuntu 24.04")
+		SWIFT_VERSION=6.3.2
+		swift_deps="binutils git gnupg2 libc6-dev libcurl4-openssl-dev libedit2 libgcc-13-dev libncurses-dev libpython3-dev libsqlite3-0 libstdc++-13-dev libxml2-dev libz3-dev pkg-config tzdata zip unzip zlib1g-dev"
+		;;
+	"ubuntu 26.04")
+		SWIFT_VERSION=6.4.2
+		swift_deps="binutils binutils-gold git gnupg2 libc6-dev libcurl4-openssl-dev libedit2 libgcc-15-dev libpython3-dev libsqlite3-0 libstdc++-15-dev libxml2-dev libncurses-dev libz3-dev pkg-config tzdata unzip zip zlib1g-dev"
+		;;
+	*)
+		SWIFT_VERSION=
+		swift_deps=
+		;;
+	esac
+	swift_tarball='' swift_platdir='' swift_cache_key=''
+	[ -n "$SWIFT_VERSION" ] || return 0
+	rel=${swift_release#ubuntu }
+	case "$swift_arch" in
+	x86_64) swift_platdir="ubuntu${rel//./}" ;;
+	aarch64) swift_platdir="ubuntu${rel//./}-aarch64" suffix=-aarch64 ;;
+	*) return 0 ;;
+	esac
+	swift_tarball="swift-$SWIFT_VERSION-RELEASE-ubuntu$rel$suffix"
+	swift_cache_key="corral-ci-swift-$SWIFT_VERSION-ubuntu$rel-$swift_arch"
+}
+
+if [ "${1:-}" = --swift-cache-key ]; then
+	swift_pin
+	if [ -n "$swift_tarball" ]; then
+		echo "key=$swift_cache_key"
+		echo "path=$HOME/.cache/corral-ci-swift"
+	fi
+	exit 0
+fi
+[ $# -eq 0 ] || {
+	echo "usage: $0 [--swift-cache-key]" >&2
+	exit 2
+}
 
 # Some runner images ship with empty or stale apt lists, so a bare
 # `apt-get install` fails to find the package. Done once, up front.
@@ -202,28 +263,24 @@ echo "== Swift (internal/lang swift plugin; real-toolchain tests) =="
 #
 # Each tarball is about 1.1 GB (download.swift.org's Content-Length: 6.3.2
 # Ubuntu 24.04 x86_64 1.07 GB on 2026-11-19, 6.4.2 Ubuntu 26.04 x86_64
-# 1,121,753,798 bytes on 2026-11-20) and nothing caches it between runs.
+# 1,121,753,798 bytes on 2026-11-20).
+#
+# WHAT IS CACHED, AND WHAT IS STILL VERIFIED: the tarball alone. When
+# CORRALAI_CI_SWIFT_CACHE names a directory (the workflows set it to the path
+# --swift-cache-key prints, which actions/cache restores and saves under the
+# key it prints), a tarball already there is used instead of a download, and
+# a downloaded one is moved there only after it passes the signature check.
+# The signature and the keyring are fetched fresh on every run, cached or
+# not, and the check above runs on the cached tarball exactly as on a
+# download, before anything is unpacked: a cached tarball that fails it fails
+# the install, with no download in its place. A cache entry's key never
+# changes its contents, so such an entry fails every run until it is deleted
+# (`gh cache delete <key>`; the failure names the key). Unset or empty, the
+# tarball is downloaded into a temporary directory and not kept.
 # Bumping a pinned version means checking which key signed the new release;
 # a new major version is signed by a new key, so the pin moves with it.
 SWIFT_SIGNING_FPR=52BB7E3DE28A71BE22EC05FFEF80A866B47A981F
-# shellcheck source=/dev/null
-swift_release=$(. /etc/os-release && echo "${ID:-unknown} ${VERSION_ID:-unknown}")
-# The runtime dependencies swift.org's tarball install page lists for each
-# release (checked 2026-11-20).
-case "$swift_release" in
-"ubuntu 24.04")
-	SWIFT_VERSION=6.3.2
-	swift_deps="binutils git gnupg2 libc6-dev libcurl4-openssl-dev libedit2 libgcc-13-dev libncurses-dev libpython3-dev libsqlite3-0 libstdc++-13-dev libxml2-dev libz3-dev pkg-config tzdata zip unzip zlib1g-dev"
-	;;
-"ubuntu 26.04")
-	SWIFT_VERSION=6.4.2
-	swift_deps="binutils binutils-gold git gnupg2 libc6-dev libcurl4-openssl-dev libedit2 libgcc-15-dev libpython3-dev libsqlite3-0 libstdc++-15-dev libxml2-dev libncurses-dev libz3-dev pkg-config tzdata unzip zip zlib1g-dev"
-	;;
-*)
-	SWIFT_VERSION=
-	swift_deps=
-	;;
-esac
+swift_pin
 swift_dest="/usr/local/swift-$SWIFT_VERSION"
 if [ -n "$SWIFT_VERSION" ]; then
 	# Written before the install, so a failed install still leaves the gate
@@ -237,42 +294,60 @@ fi
 		echo "swift: this script pins Swift for Ubuntu 24.04 and 26.04 only; this host is $swift_release" >&2
 		exit 1
 	fi
-	rel=${swift_release#ubuntu }
-	case "$(uname -m)" in
-	x86_64) platdir="ubuntu${rel//./}" suffix= ;;
-	aarch64) platdir="ubuntu${rel//./}-aarch64" suffix=-aarch64 ;;
-	*)
-		echo "swift: no Swift $SWIFT_VERSION tarball is provisioned for $(uname -m)" >&2
+	if [ -z "$swift_tarball" ]; then
+		echo "swift: no Swift $SWIFT_VERSION tarball is provisioned for $swift_arch" >&2
 		exit 1
-		;;
-	esac
+	fi
 	# shellcheck disable=SC2086 # the list is words on purpose
 	sudo apt-get install -y $swift_deps
 	dest="$swift_dest"
 	stage="$dest.partial"
 	tmp=$(mktemp -d)
 	trap 'rm -rf "$tmp"; sudo rm -rf "$stage"' EXIT
-	name="swift-$SWIFT_VERSION-RELEASE-ubuntu$rel$suffix"
-	url="https://download.swift.org/swift-$SWIFT_VERSION-release/$platdir/swift-$SWIFT_VERSION-RELEASE/$name.tar.gz"
-	curl -fsSL "$url" -o "$tmp/swift.tar.gz"
+	url="https://download.swift.org/swift-$SWIFT_VERSION-release/$swift_platdir/swift-$SWIFT_VERSION-RELEASE/$swift_tarball.tar.gz"
+	cache="${CORRALAI_CI_SWIFT_CACHE:-}"
+	cached=
+	[ -z "$cache" ] || cached="$cache/$swift_tarball.tar.gz"
+	if [ -n "$cached" ] && [ -f "$cached" ]; then
+		echo "swift: using the cached $cached (cache key $swift_cache_key); its signature is checked as a download's is"
+		tarball="$cached"
+	else
+		if [ -z "$cache" ]; then
+			echo "swift: CORRALAI_CI_SWIFT_CACHE is not set, so the tarball is downloaded and not kept"
+		else
+			echo "swift: no cached tarball at $cached; downloading"
+		fi
+		tarball="$tmp/swift.tar.gz"
+		curl -fsSL "$url" -o "$tarball"
+	fi
 	curl -fsSL "$url.sig" -o "$tmp/swift.tar.gz.sig"
 	# --compressed: the server sends this file gzip-encoded whether asked or not.
 	curl -fsSL --compressed https://www.swift.org/keys/all-keys.asc -o "$tmp/keys.asc"
 	export GNUPGHOME="$tmp/gnupg"
 	install -d -m 700 "$GNUPGHOME"
 	gpg --batch --quiet --import "$tmp/keys.asc"
-	gpg --batch --status-fd 1 --verify "$tmp/swift.tar.gz.sig" "$tmp/swift.tar.gz" >"$tmp/status"
+	# A failed check of a cached tarball names the cache entry that holds it.
+	from=
+	[ "$tarball" != "$cached" ] || from=" (the cached tarball $cached: delete the cache entry $swift_cache_key)"
+	gpg --batch --status-fd 1 --verify "$tmp/swift.tar.gz.sig" "$tarball" >"$tmp/status" || true
 	grep -q '^\[GNUPG:\] GOODSIG ' "$tmp/status" || {
-		echo "swift: gpg reported no good signature (an expired or revoked key gives none)" >&2
+		echo "swift: gpg reported no good signature (an expired or revoked key gives none)$from" >&2
 		exit 1
 	}
 	grep -Eq "^\[GNUPG:\] VALIDSIG .* $SWIFT_SIGNING_FPR\$" "$tmp/status" || {
-		echo "swift: the signature is not by the pinned Swift release key $SWIFT_SIGNING_FPR" >&2
+		echo "swift: the signature is not by the pinned Swift release key $SWIFT_SIGNING_FPR$from" >&2
 		exit 1
 	}
+	if [ -n "$cache" ] && [ "$tarball" != "$cached" ]; then
+		# Only a tarball that passed the check is kept for the next run.
+		mkdir -p "$cache"
+		mv "$tarball" "$cached.partial"
+		mv "$cached.partial" "$cached"
+		tarball="$cached"
+	fi
 	sudo rm -rf "$stage"
 	sudo install -d "$stage"
-	sudo tar -xzf "$tmp/swift.tar.gz" -C "$stage" --strip-components=1
+	sudo tar -xzf "$tarball" -C "$stage" --strip-components=1
 	sudo chmod -R a+rX "$stage"
 	test -x "$stage/usr/bin/swift" && test -x "$stage/usr/bin/swiftc" || {
 		echo "swift: the unpacked tarball has no usr/bin/swift and usr/bin/swiftc" >&2

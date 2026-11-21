@@ -8,20 +8,38 @@ import (
 	"strings"
 )
 
-// LLVM-COV EXPORT, REDUCED ONCE FOR EVERY LANGUAGE THAT HAS ONE.
+// LLVM-COV EXPORT, MERGED AND REDUCED ONCE FOR EVERY LANGUAGE THAT HAS ONE.
 //
 // Rust (rustc's -C instrument-coverage) and Swift (`swift test
-// --enable-code-coverage`) both end in the JSON `llvm-cov export` writes, so
-// both reduce it with the one program below: what differs between them is
-// how the JSON is produced and where it lands, and that stays in each
-// plugin's CoverageCmd. Rust asks llvm-cov for it with -summary-only; Swift
-// reads the full export SwiftPM writes itself, segments, branches and
-// functions as well (16.2 MB for one run of taplin/Lariat at be0c5fd, which
-// this reducer read in 0.04 s with mawk and 0.3 s with gawk, measured
-// 2026-11-19 with Swift 6.3.2 in a Docker container on one 32-core machine).
-// The reducer
-// reads only each file's "filename" and its summary's "lines", which both
-// forms carry.
+// --enable-code-coverage`) both build with LLVM's source-based coverage, so
+// both end in the same three steps, written once below: merge the raw
+// profiles the run wrote, have `llvm-cov export -summary-only` count each
+// file's lines over the binaries that ran, and reduce that JSON
+// (llvmCovMergeExportShell, then llvmCovReduceShell). What differs between them is
+// a language's facts, and stays in its CoverageCmd: which llvm-profdata and
+// llvm-cov to run, where the run's profiles are, and which binaries are the
+// objects. The reducer reads only each file's "filename" and its summary's
+// "lines", which the -summary-only export and the full one both carry.
+
+// llvmCovMergeExportShell is the shell that merges the raw profiles named by
+// profiles (shell words, quoted by the caller; a glob may match any number)
+// with "$pd" (llvm-profdata) and exports their line counts with "$cov"
+// (llvm-cov) over every object listed one per line in "$d/objs", into
+// "$d/export.json". The caller sets pd, cov and d, defines the `unavailable`
+// shell function, has already checked that the run is one to read and that a
+// profile exists, and follows this with the reduction (llvmCovReduceShell) or,
+// for a capture of the raw export, with reading that file. An empty object
+// list is disclosed as unavailable with noObjects, the caller's reason; a
+// merge or export that fails is disclosed with its exit status, its message
+// on stderr.
+//
+// It overwrites the positional parameters, so it runs after the suite.
+func llvmCovMergeExportShell(profiles, noObjects string) string {
+	return `set --; while IFS= read -r o; do set -- "$@" -object "$o"; done < "$d/objs"` + "\n" +
+		`[ $# -gt 0 ] || unavailable ` + shellQuote(noObjects) + "\n" +
+		`"$pd" merge -sparse -o "$d/merged.profdata" ` + profiles + ` >&2 || unavailable "$pd merge failed (exit $?); its message is on stderr"` + "\n" +
+		`"$cov" export -format=text -summary-only -instr-profile="$d/merged.profdata" "$@" > "$d/export.json" || unavailable "$cov export failed (exit $?); its message is on stderr"` + "\n"
+}
 
 // llvmCovReduceShell is the shell that reduces the llvm-cov export at json
 // (a shell word, quoted by the caller) to the shared line-count grammar

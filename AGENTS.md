@@ -71,7 +71,7 @@ hand-written and are not, plus the licensing gate:
 |---|---|
 | `deploy.yml` (`validate`) | the doc gates and the licensing gate ALWAYS; then, only when something other than Markdown changed: vet, provision language toolchains, `go test -v` with a SKIP census, the drift checks, gosec, security gate |
 | `foreign-sweep.yml` (`sweep`) | `certify --repo --dry-run` over SHA-pinned third-party repos, diffed against `testdata/foreign-sweep-expected.tsv` |
-| `self-audit.yml` | corral auditing corral. Non-blocking, label-gated, all-Gemini, `top: "1"` |
+| `self-audit.yml` | corral auditing corral. Non-blocking, label-gated, all-Gemini, `top: "1"`; provisions and checks the pinned Swift as `validate` does |
 | `release.yml` | on a `v*` tag: refuses a tag on an unmerged commit, verifies the console signature for the tag's version, publishes the GitHub Release once `validate` is green on the tag's commit or on a `main` that contains it |
 | `deploy-site.yml` | on `site/**` changes: site tests, Playwright, then deploys corralai.dev to Cloudflare Pages |
 | `cla.yml`, `sbom.yml`, `scorecard.yml` | CLA, SBOM, supply-chain scorecard |
@@ -488,26 +488,55 @@ only the authored one.
   every dependent target, far past what a body mutant costs.
 - **`--enable-code-coverage` in the default build directory evicts the
   ordinary build, and back again.** Coverage therefore builds in
-  `.build/corral-coverage`. A suite with a failing test writes no coverage
-  export at all.
-- **Coverage runs on the native build system, and CI pins the toolchain per
+  `.build/corral-coverage`.
+- **SwiftPM's own coverage export is not whole under `swiftbuild`, so corral
+  merges and exports the profiles itself, and CI pins the toolchain per
   Ubuntu release.** Swift 6.4 made `swiftbuild` the default build system;
-  under it each test target is its own product and the codecov export covered
+  under it each test target is its own product and SwiftPM's export covered
   one of them, so on 6.4.2 the XCTest target's files were missing from the
   report (CI's first run on `ubuntu-latest`, Ubuntu 26.04, which ships Swift
-  6.4.2, failed `TestCapturedCoverageReportsMatchALiveRun/swift` on it). The
-  coverage run passes `--build-system native` (`swiftCoverageBuildSystem`).
+  6.4.2, failed `TestCapturedCoverageReportsMatchALiveRun/swift` on it).
+  Pinning `--build-system native` fixed that, and 6.4.2 warns native is
+  deprecated. Swift's `CoverageCmd` now runs the merge-and-export Rust's
+  coverage shares (`llvmCovMergeExportShell`) with the toolchain's own
+  `llvm-profdata` and `llvm-cov` (only beside the resolved `swift`; missing is
+  unavailable), under whatever build system the operator's command uses.
+  **The objects are the products whose build ID this run's profiles name**
+  (`llvm-profdata show --binary-ids`, `readelf -n`), not every product with
+  a coverage map: `.build/corral-coverage` outlives a run, and a removed test
+  target's product stays there under swiftbuild, so the first version read
+  the removed target's file and a removed function's lines (Calc.swift 3 of
+  6 where a fresh directory gives 3 of 3; `TestSwiftCoverageReadsOnlyThisRunsProducts`).
+  Every ID the profiles name must be found, or coverage is unavailable.
+  Measured 2026-11-20 on 6.3.2 and 6.4.2, native and swiftbuild: the fixture,
+  a library variant and that rerun all gave a fresh directory's report. An
+  unchanged rerun rewrites no product, so "newer than the run" cannot pick
+  them. A run that does not pass is not read: a test that traps leaves no
+  profile for its process, and the exit status does not tell that from a
+  failing test. The capture of `swift-codecov.json` runs the plugin's own
+  script through `scripts/swiftcoverageexport` (`lang.SwiftCoverageExportCmd`),
+  not a copy of it.
   swift.org publishes no 6.3.x for Ubuntu 26.04, so the provisioning script
   pins 6.3.2 on 24.04 and 6.4.2 on 26.04, puts links to the pinned toolchain's
-  `swift` and `swiftc` first on PATH, and `deploy.yml` fails the job when
-  `swift` is anything else. (Its whole `usr/bin` first on PATH put Swift's
+  `swift` and `swiftc` first on PATH, and `deploy.yml` and `self-audit.yml`
+  fail the job when `swift` is anything else (one script,
+  `scripts/ci-check-pinned-swift.sh`). Both workflows cache the Swift tarball
+  with `actions/cache` under the key `ci-provision-test-toolchains.sh
+  --swift-cache-key` derives from its own pins; the signature is still fetched
+  and checked on every run, cached or not, before anything is unpacked. (Its whole `usr/bin` first on PATH put Swift's
   `llvm-profdata` ahead of the one Rust's coverage finds there, and the three
   real-toolchain Rust coverage tests failed in CI on a raw profile format
-  mismatch.) Swift
+  mismatch; Swift's coverage finds its tools beside `swift` through those
+  links, never on PATH.) Swift
   6.4.2 also changes what `swift test` prints (one XCTest and one
   swift-testing summary per test product, a `--filter` matching nothing
   prints only `warning: No matching test cases were run`, colour codes in
   build errors when not a TTY); the committed runner captures are 6.3.2's.
+  A count of the tests a run executed must therefore sum every summary, not
+  read the last: the capture script's `swiftran` and the test helper
+  `swiftRan` add every swift-testing `Test run with N tests` and the
+  `Executed N tests` that closes each outermost XCTest suite (reading the
+  last of each counted 5 where 8 ran on 6.4.2).
 - **`( set -e; … ) || echo …` makes `set -e` inert inside the subshell**: bash
   ignores errexit in a command whose status is tested by `||`. In the CI
   provisioning script that shape would have linked a partly unpacked Swift

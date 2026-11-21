@@ -85,15 +85,20 @@ capture_swift() (
     local f="$1"; shift
     "$@" 2>&1 | sed -e "s#$pdir#\$DIR/swift#g" > "$OUT/$f" || true
   }
-  # swiftran: the tests a run executed, from its own summaries: swift-testing's
-  # "Test run with N tests" plus XCTest's last "Executed N tests" (its suites
-  # repeat the total).
+  # swiftran: the tests a run executed, from its own summaries: every
+  # swift-testing "Test run with N tests" plus every XCTest run's total, the
+  # "Executed N tests" that closes its outermost suite (the suites nested in
+  # it repeat their part). Swift 6.4.2 under swiftbuild runs each test product
+  # on its own and prints one summary of each framework per product, so they
+  # are summed; reading the last of each counted 5 where 8 ran. The same
+  # count as swiftRan in internal/lang/swift_runner_test.go.
   swiftran() {
-    local out testing xctest
-    out="$(cat)"
-    testing="$(printf '%s\n' "$out" | sed -n 's/.*Test run with \([0-9]*\) tests\{0,1\} .*/\1/p' | tail -1)"
-    xctest="$(printf '%s\n' "$out" | sed -n 's/^[[:space:]]*Executed \([0-9]*\) tests\{0,1\}, with.*/\1/p' | tail -1)"
-    echo $(( ${testing:-0} + ${xctest:-0} ))
+    awk '
+      /^Test Suite .* started at / { depth++; next }
+      /^Test Suite .* (passed|failed) at / { depth--; outer = (depth == 0); next }
+      /^[ \t]*Executed [0-9]+ tests?, with/ { if (outer) n += $2; outer = 0; next }
+      /Test run with [0-9]+ tests? / { s = $0; sub(/.*Test run with /, "", s); sub(/ .*/, "", s); n += s }
+      END { print n + 0 }'
   }
   # swiftcmd <fixture> <argv> <cmd...>: `# argv:` the operator's command, `$ `
   # the row's command (cmd, whose first word is swift), the run of cmd under
@@ -187,25 +192,38 @@ capture_swift() (
 )
 
 # --- swift coverage (internal/lang/swift_coverage.go) -----------------------
-# The llvm-cov export SwiftPM writes for one coverage run of the coverage
-# fixture (internal/lang/testdata/coverage/swift: Calc.swift tested in part,
-# Dead.swift compiled and never called, Shape.swift with no executable line,
-# Unbuilt/Orphan.swift in no target), as swiftPlugin.CoverageCmd runs it:
-# --enable-code-coverage, the native build system (the only one whose export
-# holds every test target's files: see CoverageCmd) and the scratch path it
-# uses. $SWIFT starts in
-# DIR/swift, so the package is named with --package-path and the scratch path
-# is absolute. The capture directory is written as /fixture in the JSON.
+# The llvm-cov export of one coverage run of the coverage fixture
+# (internal/lang/testdata/coverage/swift: Calc.swift tested in part, Dead.swift
+# compiled and never called, Shape.swift with no executable line,
+# Unbuilt/Orphan.swift in no target), made by swiftPlugin.CoverageCmd's own
+# script: scripts/swiftcoverageexport prints it (lang.SwiftCoverageExportCmd,
+# the same steps ending with the raw export instead of its reduction), and it
+# runs here where $SWIFT runs (every word of $SWIFT but the last, then sh;
+# its last word is the swift the script is built for), started in a copy of
+# the fixture. There is no second copy of those steps to keep equal, and the
+# script's own refusals apply: a --show-codecov-path that fails or names no
+# file stops it before anything is removed or run. It needs Go on the host.
+# The capture directory is written as /fixture in the JSON.
 capture_swift_coverage() (
-  local pkg pdir json
+  local pkg pdir words rc=0
   pkg="$DIR/swift-coverage"
   rm -rf "$pkg" && cp -r "$REPO/internal/lang/testdata/coverage/swift" "$pkg"
   pdir="$(cd "$pkg" && pwd -P)"
-  local rc=0
-  $SWIFT test --package-path "$pkg" --enable-code-coverage --build-system native --scratch-path "$pkg/.build/corral-coverage" >/dev/null 2>&1 || rc=$?
-  want swift-coverage-run-exit 0 "$rc"
-  json="$($SWIFT test --package-path "$pkg" --enable-code-coverage --build-system native --scratch-path "$pkg/.build/corral-coverage" --show-codecov-path 2>/dev/null)"
-  sed -e "s#$pdir/#/fixture/swift-coverage/#g" "$json" > "$OUT/swift-codecov.json"
+  read -ra words <<<"$SWIFT"
+  (cd "$REPO" && go run ./scripts/swiftcoverageexport "${words[${#words[@]}-1]}" test) > "$DIR/swift-export-cmd" || {
+    echo "FAIL swift-coverage-export-cmd: scripts/swiftcoverageexport failed"
+    return 1
+  }
+  local script=()
+  mapfile -d '' -t script < "$DIR/swift-export-cmd"
+  # shellcheck disable=SC2016 # expanded by that sh, not here
+  "${words[@]:0:${#words[@]}-1}" sh -c 'cd "$0" && exec "$@"' "$pkg" "${script[@]}" > "$DIR/swift-export.out" || rc=$?
+  want swift-coverage-script-exit 0 "$rc"
+  want swift-coverage-run-exit "# suite-exit 0" "$(head -n 1 "$DIR/swift-export.out")"
+  want swift-coverage-available "" "$(grep '^corral-swift-coverage: unavailable' "$DIR/swift-export.out" || true)"
+  # A capture that failed a check above is not written over the committed one.
+  [ "$fail" -eq 0 ] || return "$fail"
+  sed -e '1d' -e "s#$pdir/#/fixture/swift-coverage/#g" "$DIR/swift-export.out" > "$OUT/swift-codecov.json"
   want swift-coverage-files 4 "$(grep -o '"filename":"/fixture/swift-coverage/[ST][^"]*"' "$OUT/swift-codecov.json" | wc -l | tr -d ' ')"
   return "$fail"
 )
@@ -246,11 +264,11 @@ swift-build-target-*.txt and swift-authored-*.txt open with
 \`# argv:\` (the operator's command, \`-\` for corral's own compile check)
 and \`$ \` (the command corral builds) and end with \`# exit:\` (its exit status). swift-testing runs its tests in
 parallel, so the order of its lines differs between captures.
-swift-codecov.json is the llvm-cov export SwiftPM wrote for \`swift test
---enable-code-coverage --build-system native --scratch-path
-<package>/.build/corral-coverage\` on
-../coverage/swift (named with --package-path), the capture directory written
-as /fixture.
+swift-codecov.json is the \`llvm-cov export -format=text -summary-only\`
+that swiftPlugin.CoverageCmd's own script (scripts/swiftcoverageexport) made
+for one \`swift test\` run of a copy of ../coverage/swift: the profiles the
+run wrote, over the products whose build ID they name; the capture directory
+written as /fixture.
 PROV
 }
 

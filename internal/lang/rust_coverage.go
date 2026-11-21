@@ -51,8 +51,8 @@ const (
 //     (everything before `--`) with `--no-run --message-format=json`, which
 //     rebuilds nothing, and each artifact's "executable".
 //  4. Merges the profiles and has `llvm-cov export -summary-only` count each
-//     file's lines over those executables, then reduces the JSON with the
-//     reducer Swift shares (llvmCovReduceShell) to one `<executed>
+//     file's lines over those executables, then reduces the JSON, all three
+//     steps shared with Swift (llvmCovMergeExportShell), to one `<executed>
 //     <executable> <path>` line per file, paths relative to the working
 //     directory (the jail runs the suite in a copy, so an absolute path would
 //     be outside the caller's root). Files outside the working directory (the
@@ -119,10 +119,7 @@ func (rustPlugin) CoverageCmd(testCmd []string) (cmd []string, ok bool) {
 		`if [ ! -e "$1" ]; then printf '%s\n' ` + shellQuote(rustCoverageHeaderV2) + `; exit 0; fi` + "\n" +
 		shellJoin(listArgs) + ` > "$d/build.json" || unavailable "cargo test --no-run, which lists the test executables, failed (exit $?)"` + "\n" +
 		`sed -n 's/.*"executable":"\([^"]*\)".*/\1/p' "$d/build.json" | sort -u > "$d/objs"` + "\n" +
-		`set --; while IFS= read -r o; do set -- "$@" -object "$o"; done < "$d/objs"` + "\n" +
-		`[ $# -gt 0 ] || unavailable "cargo test --no-run listed no test executable"` + "\n" +
-		`"$pd" merge -sparse -o "$d/merged.profdata" "$d"/prof/*.profraw >&2 || unavailable "$pd merge failed (exit $?); its message is on stderr"` + "\n" +
-		`"$cov" export -format=text -summary-only -instr-profile="$d/merged.profdata" "$@" > "$d/export.json" || unavailable "$cov export failed (exit $?); its message is on stderr"` + "\n" +
+		llvmCovMergeExportShell(`"$d"/prof/*.profraw`, "cargo test --no-run listed no test executable") +
 		llvmCovReduceShell(rustPlugin{}, rustCoverageHeaderV2, `"$d/export.json"`)
 	return []string{"sh", "-c", script}, true
 }

@@ -89,6 +89,17 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # The same Swift tarball cache, keyed on the provisioning script's own
+      # pins, as deploy.yml's validate job (see the comment there).
+      - name: Swift tarball cache key, from the provisioning script's pins
+        id: swiftpin
+        run: bash scripts/ci-provision-test-toolchains.sh --swift-cache-key >> "$GITHUB_OUTPUT"
+      - name: Cache the pinned Swift tarball (its signature is checked on every run)
+        if: steps.swiftpin.outputs.key != ''
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.swiftpin.outputs.path }}
+          key: ${{ steps.swiftpin.outputs.key }}
       # `go test ./...` is the suite UNDER AUDIT here, so it has to be able to
       # PASS on this runner before corral can grade anything against it. On a
       # bare runner it cannot: corral's own suite exercises each internal/lang
@@ -98,7 +109,14 @@ jobs:
       # reason. Same script deploy.yml's validate job uses, so the audit grades
       # the same suite CI validates rather than a degraded one.
       - name: Provision language test toolchains
+        env:
+          CORRALAI_CI_SWIFT_CACHE: ${{ steps.swiftpin.outputs.path }}
         run: bash scripts/ci-provision-test-toolchains.sh
+      # The suite under audit includes the real-toolchain Swift tests, so it
+      # must run on the Swift pinned for this runner's release, as deploy.yml's
+      # does; the same check, from the same script.
+      - name: Swift is the version pinned for this runner's release
+        run: bash scripts/ci-check-pinned-swift.sh
 
       # The audit needs a model key. Without one it would fail deep inside the
       # run, after the checkout and the toolchain setup, with an error about a

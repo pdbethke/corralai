@@ -14,29 +14,65 @@ import (
 // testdata/runners/src/swift, never output typed here.
 
 // swiftRan is the number of tests a captured run executed, from its own
-// summaries: swift-testing's "Test run with N tests" plus XCTest's last
-// "Executed N tests" (its nested suites repeat the total). It is the count the
-// capture script's swiftran reads.
+// summaries: every swift-testing "Test run with N tests" plus every XCTest
+// run's total, the "Executed N tests" that closes its outermost suite ('All
+// tests' or 'Selected tests'; the suites nested in it repeat their part of
+// the total). Swift 6.4.2 under swiftbuild runs each test product on its own
+// and prints one XCTest and one swift-testing summary for each, so a run can
+// hold several of each and they are summed (TestSwiftRanSumsEveryProductsRun).
+// It is the count the capture script's swiftran reads.
 func swiftRan(t *testing.T, out string) int {
 	t.Helper()
-	swiftTesting, xctest := 0, 0
+	swiftTesting, xctest, depth, outermost := 0, 0, 0, false
 	for _, line := range strings.Split(out, "\n") {
+		trimmed := strings.TrimSpace(line)
 		if _, rest, ok := strings.Cut(line, "Test run with "); ok {
 			n, err := strconv.Atoi(strings.Fields(rest)[0])
 			if err != nil {
 				t.Fatalf("unreadable swift-testing summary %q", line)
 			}
-			swiftTesting = n
+			swiftTesting += n
 		}
-		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "Executed "); ok {
+		if strings.HasPrefix(trimmed, "Test Suite '") {
+			switch {
+			case strings.Contains(trimmed, "' started at "):
+				depth++
+			case strings.Contains(trimmed, "' passed at "), strings.Contains(trimmed, "' failed at "):
+				depth--
+				outermost = depth == 0
+			}
+			continue
+		}
+		if rest, ok := strings.CutPrefix(trimmed, "Executed "); ok {
 			n, err := strconv.Atoi(strings.Fields(rest)[0])
 			if err != nil {
 				t.Fatalf("unreadable XCTest summary %q", line)
 			}
-			xctest = n
+			if outermost {
+				xctest += n
+			}
+			outermost = false
 		}
 	}
 	return swiftTesting + xctest
+}
+
+// SWIFT 6.4.2 PRINTS A SUMMARY PER TEST PRODUCT. Under swiftbuild each test
+// target is its own product, run on its own, and each run prints its own
+// XCTest and swift-testing summaries; reading only the last of each counted 5
+// where 8 ran (scripts/capture-runner-fixtures.sh --swift-only through
+// swift:6.4.2-resolute, 2026-11-20; those captures are not committed, the
+// committed ones are 6.3.2's). Two committed runs back to back have that
+// shape: each run's summaries count once, and the totals add.
+func TestSwiftRanSumsEveryProductsRun(t *testing.T) {
+	_, _, one := multiFixture(t, "swift-units-one.txt")
+	_, _, multi := multiFixture(t, "swift-units-multi.txt")
+	if n := swiftRan(t, one+multi); n != 3+8 {
+		t.Errorf("two runs back to back executed %d tests, want 3 + 8", n)
+	}
+	if n := swiftRan(t, multi+one); n != 8+3 {
+		t.Errorf("two runs back to back executed %d tests, want 8 + 3", n)
+	}
 }
 
 // The listing names every test of both frameworks, in the forms `swift test

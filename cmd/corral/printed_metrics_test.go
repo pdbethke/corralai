@@ -365,6 +365,7 @@ var printedMetrics = map[string]printedRow{
 	"cmd/corral/certify_local.go:runCertifyLocalAs": {Fields: []string{"Row.MutantsPlanted", "Row.MutantsFrom"},
 		Exempt: "tape beat count describes the --record-tape file this run writes, an output artifact; record id is a key"},
 	"cmd/corral/certify_local.go:auditOneFile":             {Fields: []string{"SeatRow.Shard", "SeatRow.Shadow", "SeatRow.ShadowDrawn", "Row.Symbols", "ScanRow.Settings"}},
+	"cmd/corral/certify_local.go:regionsLine":              {Fields: []string{"SeatRow.Shard", "Row.Symbols"}, Exempt: "UNCOVERED: the line range a grammar set aside (repoindex.ErrIncompleteParse), printed in the reader's refusal text; the record has Symbols 0 but not why"},
 	"cmd/corral/certify_local.go:buildJailWiring":          {Fields: []string{"Row.SharedDirs"}},
 	"cmd/corral/certify_local_criticscore.go:Record":       {Exempt: "formats a record id and finding id into a key string, not a measurement"},
 	"cmd/corral/certify_local_drive.go:driveLocalRun":      {Exempt: "error message: consecutive tick errors of the local driver before it gives up"},

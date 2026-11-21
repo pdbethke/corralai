@@ -33,7 +33,7 @@ func TestFileComplexity_AbsentWhereNotMeasured(t *testing.T) {
 	// still true rather than deleted. (php and rust have since gained
 	// theirs; the sample is C-family source, which java/c/cpp all parse.)
 	for _, lang := range []string{"java", "c", "cpp"} {
-		got := fileComplexity("whatever.src", []byte("int f(int a) { if (a > 0) { return 1; } else { return 0; } }"), lang)
+		got, _ := fileComplexity("whatever.src", []byte("int f(int a) { if (a > 0) { return 1; } else { return 0; } }"), lang)
 		if got != nil {
 			t.Errorf("%s complexity = %+v, want nil — no signature extractor exists, so any number would be a fabricated measurement", lang, got)
 		}
@@ -45,7 +45,7 @@ func TestFileComplexity_AbsentWhereNotMeasured(t *testing.T) {
 // the assertion that would catch a silently-disabled node set.
 func TestFileComplexity_PresentForPython(t *testing.T) {
 	src := []byte("def f(a):\n    if a:\n        for x in a:\n            if x:\n                return 1\n    return 0\n")
-	got := fileComplexity("a.py", src, "python")
+	got, _ := fileComplexity("a.py", src, "python")
 	if got == nil {
 		t.Fatal("python complexity = nil, want a measurement")
 	}
@@ -68,7 +68,7 @@ func TestFileComplexity_PresentForPython(t *testing.T) {
 // baking one in.
 func TestFileComplexity_ReportsTermsNotAScore(t *testing.T) {
 	src := []byte("def a(x):\n    if x:\n        return 1\n    return 0\n\ndef b(y):\n    return y\n")
-	got := fileComplexity("a.py", src, "python")
+	got, _ := fileComplexity("a.py", src, "python")
 	if got == nil {
 		t.Fatal("expected a measurement")
 	}
@@ -96,4 +96,29 @@ func contains(hay, needle string) bool {
 		}
 	}
 	return false
+}
+
+// TestFileComplexity_SaysWhyAnIncompleteParseIsUnmeasured: a file whose
+// grammar set code aside between functions is not measured (its complexity
+// would be part of the file's), and the inventory says so, naming the lines,
+// rather than leaving the key absent as it is for a language with no reader.
+func TestFileComplexity_SaysWhyAnIncompleteParseIsUnmeasured(t *testing.T) {
+	src := []byte("package a\n\nfunc F() int { return 1 }\n\ntype struct {\n\nfunc H() int { return 2 }\n")
+	got, unread := fileComplexity("a.go", src, "go")
+	if got != nil {
+		t.Errorf("complexity = %+v, want nil for a file the grammar did not read whole", got)
+	}
+	if !contains(unread, "lines ") {
+		t.Errorf("unread = %q, want the reason naming the unparsed lines", unread)
+	}
+	if _, unread := fileComplexity("x.java", []byte("int f() { return 1; }"), "java"); unread != "" {
+		t.Errorf("a language with no reader gave unread %q; it is unmeasured, not unread", unread)
+	}
+	blob, err := json.Marshal(auditableJSON{Path: "a.go", Lang: "go", ComplexityUnread: unread})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(string(blob), `"complexity_unread"`) || contains(string(blob), `"complexity":`) {
+		t.Errorf("serialised %s; want complexity_unread and no complexity", blob)
+	}
 }

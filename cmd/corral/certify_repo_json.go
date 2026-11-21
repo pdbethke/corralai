@@ -4,6 +4,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -106,13 +107,19 @@ type auditableJSON struct {
 	// invites it a little more.
 	ViaSearch bool   `json:"via_search,omitempty"`
 	Lang      string `json:"lang"`
-	// Complexity is ABSENT (nil) unless corral actually measured it. A
-	// signature extractor exists only for Go and Python; ExtractSignatures
-	// returns "no signature extractor for language" for ruby, javascript and
-	// typescript. Emitting 0 — or the floor of 1 — for those would render
+	// Complexity is ABSENT (nil) unless corral actually measured it.
+	// ExtractSignatures returns "no signature extractor for language" for a
+	// language repoindex can parse but has no reader for (java, c, cpp,
+	// csharp, bash). Emitting 0 — or the floor of 1 — for those would render
 	// "this code is trivial" where the truth is "never measured", the same
 	// not-measured-as-measurement shape as a NULL kill rate printed as 0.00.
 	Complexity *complexityJSON `json:"complexity,omitempty"`
+	// ComplexityUnread says why Complexity is absent for a language that HAS
+	// a reader: the grammar set code aside between the functions it read
+	// (repoindex.ErrIncompleteParse), so any total would be part of the
+	// file's. Empty for a language with no reader, where absence already says
+	// "never measured", and for a file that was measured.
+	ComplexityUnread string `json:"complexity_unread,omitempty"`
 }
 
 // complexityJSON is cyclomatic-style complexity: 1 + the branch, loop, case,
@@ -137,11 +144,16 @@ type complexityJSON struct {
 
 // fileComplexity measures one file, or reports nil when corral cannot. nil is
 // the honest answer for an unmeasured language and must never be softened into
-// a zero value.
-func fileComplexity(path string, src []byte, langName string) *complexityJSON {
+// a zero value. unread is the reader's refusal when the grammar did not parse
+// the whole file, so the inventory can say why a readable language went
+// unmeasured.
+func fileComplexity(path string, src []byte, langName string) (c *complexityJSON, unread string) {
 	sigs, err := repoindex.ExtractSignatures(string(src), langName)
+	if errors.Is(err, repoindex.ErrIncompleteParse) {
+		return nil, err.Error()
+	}
 	if err != nil || len(sigs) == 0 {
-		return nil
+		return nil, ""
 	}
 	out := &complexityJSON{Symbols: len(sigs)}
 	for _, s := range sigs {
@@ -150,7 +162,7 @@ func fileComplexity(path string, src []byte, langName string) *complexityJSON {
 			out.Max = s.Complexity
 		}
 	}
-	return out
+	return out, ""
 }
 
 // writeScanInventory emits the inventory as indented JSON.
@@ -195,7 +207,7 @@ func buildScanInventoryAt(root, repo string, walked int, ranking string, cands [
 			// Best-effort and local: tree-sitter parsing, no model call. An
 			// unreadable file yields no measurement rather than a zero.
 			if src, err := os.ReadFile(filepath.Join(root, c.Path)); err == nil { // #nosec G304 -- operator-supplied repo root + enumerated relative path
-				a.Complexity = fileComplexity(c.Path, src, c.Lang)
+				a.Complexity, a.ComplexityUnread = fileComplexity(c.Path, src, c.Lang)
 			}
 		}
 		inv.Auditable = append(inv.Auditable, a)

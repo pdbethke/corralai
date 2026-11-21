@@ -2327,7 +2327,9 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 	})
 
 	// Signatures are best-effort (mirrors the brain's StartRun): a failure just
-	// degrades the prompt to no signatures, never refuses the run.
+	// degrades the prompt to no signatures, never refuses the run. serr is
+	// kept for regionsLine, which says why when the grammar did not read the
+	// whole file.
 	sigs, serr := repoindex.ExtractSignatures(rs.Code, rs.Lang)
 	if serr != nil {
 		sigs = nil
@@ -2400,17 +2402,7 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 		fmt.Fprintf(stdout, "swarm: %d concurrent model calls (default; --swarm overrides)\n", swarm)
 	}
 	shards, budget := advpool.PlanShards(sigs, rs)
-	if len(shards) > 0 {
-		packed := 0
-		for _, sh := range shards {
-			packed += len(sh.Symbols)
-		}
-		fmt.Fprintf(stdout, "regions: %d generator seats over %d functions\n", len(shards), packed)
-	} else if len(sigs) == 0 {
-		fmt.Fprintf(stdout, "regions: 1 generator seat (whole file — no symbol surface extracted)\n")
-	} else {
-		fmt.Fprintf(stdout, "regions: 1 generator seat (whole file — too few functions to split)\n")
-	}
+	fmt.Fprintln(stdout, regionsLine(shards, sigs, serr))
 	// A replay grades a recorded exam, so it has no budget to disclose; a
 	// tool-only exam does, because the budget capped the tool's sample.
 	if rs.PresetMutants == nil || len(in.toolSources) > 0 {
@@ -3415,3 +3407,25 @@ const runnerHelp = "the test runner behind the test command, when corral cannot 
 // default tuned to one observation would be its own kind of wrong. An operator
 // who wants the old behaviour still has --timeout.
 const defaultRunTimeout = 30 * time.Minute
+
+// regionsLine is the run's account of its generator seats. With no symbol
+// surface the budget falls to the floor, so when the reason is that the
+// grammar set code aside between functions (repoindex.ErrIncompleteParse) the
+// line names the lines; for a language with no reader it says what it always
+// said.
+func regionsLine(shards []advpool.Shard, sigs []repoindex.Signature, serr error) string {
+	switch {
+	case len(shards) > 0:
+		packed := 0
+		for _, sh := range shards {
+			packed += len(sh.Symbols)
+		}
+		return fmt.Sprintf("regions: %d generator seats over %d functions", len(shards), packed)
+	case len(sigs) == 0 && errors.Is(serr, repoindex.ErrIncompleteParse):
+		return fmt.Sprintf("regions: 1 generator seat (whole file — no symbol surface: %v)", serr)
+	case len(sigs) == 0:
+		return "regions: 1 generator seat (whole file — no symbol surface extracted)"
+	default:
+		return "regions: 1 generator seat (whole file — too few functions to split)"
+	}
+}

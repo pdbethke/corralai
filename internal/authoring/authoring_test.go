@@ -93,3 +93,31 @@ func TestAuthorUnsupportedLang(t *testing.T) {
 		t.Fatal("unsupported language must error before calling the model")
 	}
 }
+
+// TestAuthorProceedsPastAnIncompleteParse: a file the grammar could not read
+// whole has no signature surface (repoindex.ErrIncompleteParse), and authoring
+// goes on without one, as certify and the brain do, rather than failing the
+// author. Before that error existed the reader returned the short surface.
+func TestAuthorProceedsPastAnIncompleteParse(t *testing.T) {
+	code := "package target\n\nfunc F() int { return 1 }\n\ntype struct {\n\nfunc H() int { return 2 }\n"
+	m := &fakeLLM{onSystem: func(sys string) string {
+		if strings.Contains(sys, "TEST-WRITER") {
+			return "```go\npackage target\nimport \"testing\"\nfunc TestGoal(t *testing.T){}\n```"
+		}
+		return "===MUTATION_1===\n<<<<<<< SEARCH\nreturn 1\n=======\nreturn 0\n>>>>>>> REPLACE\n"
+	}}
+	jail := &fakeAuthorJail{onRun: func(files map[string]string, cmd []string) bool {
+		return cmd[1] == "build" || files["auth.go"] == code
+	}}
+	res, err := Author(context.Background(), m, jail, Request{
+		Goal: "g", Code: code, Lang: "go", CodePath: "auth.go", TestPath: "auth_gate_test.go",
+		Base: map[string]string{"go.mod": "module target\ngo 1.26\n"}, NMutants: 1,
+		BuildCmd: []string{"go", "build", "./"}, TestCmd: []string{"go", "test", "./"},
+	})
+	if err != nil {
+		t.Fatalf("Author refused a file the grammar did not read whole: %v", err)
+	}
+	if !strings.Contains(res.Test, "func TestGoal") {
+		t.Errorf("test not returned: %q", res.Test)
+	}
+}

@@ -469,6 +469,23 @@ only the authored one.
   build directory into a tree, so each tree builds its own from scratch (a
   `.build` git does not ignore makes the pool one tree), and why sharing a
   warm build between trees is not built.
+- **The Swift grammar sets aside code it cannot parse, often.** tree-sitter
+  wraps what it cannot place in an ERROR node and goes on; with the Swift
+  grammar corral links (smacker's copy of alex-pinkus/tree-sitter-swift
+  0.5.0) 15 of the 68 Swift files under taplin/Lariat's `Sources/` (at
+  be0c5fd) had one, and in
+  `Sources/LassoParser/LassoParser.swift` it was lines 14-312, a whole struct,
+  set aside at a string holding `/*` followed by a negated call on one
+  holding `*/`. A parse that set code aside outside every function it read is
+  no reading of the file (`repoindex.ErrIncompleteParse`, a rule shared by
+  every language): the file gets one generator seat and the default budget,
+  never a surface missing the set-aside functions. That grammar's 0.7.4
+  (`0.7.4-with-generated-files`, ABI 14, loads in smacker's runtime) set
+  aside code in 5 of those 68, that one included; it was
+  not adopted: `go mod tidy` failed in a scratch module that required it
+  (its binding's test imports a module path that does not resolve), it
+  does not link beside smacker's copy (both define `tree_sitter_swift`), and
+  it would not have read that file either.
 - **swift-testing matches `--filter` against the test id followed by its
   source location** (`/<file>:<line>:<column>`). A `$`-anchored id selected
   nothing, and the run exited 0 with `Test run with 0 tests`

@@ -148,6 +148,7 @@ func TestNewLanguagesMeasureComplexity(t *testing.T) {
 		"typescript": "function f(a: number[]): number { if(a){ for(const x of a){ if(x) return 1 } } return 0 }",
 		"php":        "<?php\nfunction f($a) { if ($a) { foreach ($a as $x) { if ($x) { return 1; } } } return 0; }\n",
 		"rust":       "fn f(a: &[i32]) -> i32 { if !a.is_empty() { for x in a { if *x > 0 { return 1; } } } 0 }\n",
+		"swift":      "func f(_ a: [Int]) -> Int { if !a.isEmpty { for x in a { if x > 0 { return 1 } } }; return 0 }\n",
 	}
 	checked := 0
 	for lang, spec := range langSpecs {
@@ -173,8 +174,8 @@ func TestNewLanguagesMeasureComplexity(t *testing.T) {
 			t.Errorf("%s: complexity = %d for a branch-heavy function, want > 1 — the node set is not matching", lang, sigs[0].Complexity)
 		}
 	}
-	if checked < 7 {
-		t.Errorf("checked %d extractor languages, want at least 7 — the walk covered less than it used to", checked)
+	if checked < 8 {
+		t.Errorf("checked %d extractor languages, want at least 8 — the walk covered less than it used to", checked)
 	}
 }
 

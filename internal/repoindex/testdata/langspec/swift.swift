@@ -25,3 +25,14 @@ class Cart {
         items.removeAll()
     }
 }
+
+extension Cart {
+    func pick(_ i: Int?, of n: Int) -> Int {
+        guard let i = i, i < n else { return -1 }
+        switch i {
+        case 0: return items.first ?? 0
+        case 1, 2: return i > 1 && n > 2 ? 2 : 1
+        default: return i
+        }
+    }
+}

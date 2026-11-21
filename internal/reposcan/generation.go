@@ -508,7 +508,19 @@ package reposcan
 // to the run's log beside the dev-adequacy line and which no Verdict field
 // carries. A "48" TypeScript verdict may count such mutants as kills. Shape
 // unchanged; behaviour bump.
-const VerdictGeneration = "49"
+//
+// "50" (2026-11-20): corral reads a Swift file's functions and branches
+// (repoindex's swift row), so a Swift file's exam changes: its mutant budget
+// is derived from its complexity where it was the default 5, it gets one
+// generator seat per group of functions where it had one over the whole
+// file, its prompts carry a signature surface, and its exam coverage is
+// measured. In every language, a file whose parse set code aside outside
+// every function it read now gets no signatures (repoindex.ErrIncompleteParse),
+// where it got the functions that were read, so its exam changes the other
+// way: one seat over the whole file and the default budget. A "49" verdict
+// for either kind of file sat a different exam. "49" has reached main, so
+// this is its own generation. Shape unchanged; behaviour bump.
+const VerdictGeneration = "50"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

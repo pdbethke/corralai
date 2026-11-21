@@ -31,15 +31,10 @@ import (
 // extractor and keeping advpool.symbolIdentity (Receiver + "." + Name)
 // unique: two classes each defining `handle` must not collapse to one
 // identity, or a shard probes one twice while the other goes unprobed.
-func extractPHPSignatures(text string) ([]Signature, error) {
-	tree, src, err := parseTS(text, "php")
-	if err != nil {
-		return nil, err
-	}
-	defer tree.Close()
+func extractPHPSignatures(root *sitter.Node, src []byte) []Signature {
 	var out []Signature
-	phpWalkTop(tree.RootNode(), src, &out)
-	return out, nil
+	phpWalkTop(root, src, &out)
+	return out
 }
 
 // phpWalkTop scans the program's top-level children. A namespace_definition

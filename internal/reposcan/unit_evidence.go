@@ -840,6 +840,9 @@ func UnitTestFiles(p lang.Plugin, files map[string]string) func(unit string) []s
 		return goUnitTestFiles(files)
 	case "rust":
 		return rustUnitTestFiles(files)
+	case "swift":
+		byTarget := swiftTargetTestFiles(files)
+		return func(unit string) []string { return byTarget()[unit] }
 	}
 	return func(string) []string { return nil }
 }
@@ -931,8 +934,64 @@ func UnitTestFile(p lang.Plugin, files map[string]string) func(unit, source stri
 		return goUnitLanding(files)
 	case "rust":
 		return rustUnitLanding(files)
+	case "swift":
+		return swiftUnitLanding(files)
 	}
 	return func(string, string) string { return "" }
+}
+
+// swiftTargetTestFiles maps each test target to the Swift files in its
+// directory, sorted, read once: Tests/<target>/ in SwiftPM's default layout
+// (lang.SwiftTestTarget). A target declared with its own path: in
+// Package.swift is not read from the manifest, so it maps to nothing.
+func swiftTargetTestFiles(files map[string]string) func() map[string][]string {
+	var once sync.Once
+	byTarget := map[string][]string{}
+	return func() map[string][]string {
+		once.Do(func() {
+			for f := range files {
+				if !strings.HasSuffix(f, ".swift") {
+					continue
+				}
+				if t, ok := lang.SwiftTestTarget(f); ok {
+					byTarget[t] = append(byTarget[t], f)
+				}
+			}
+			for _, fs := range byTarget {
+				sort.Strings(fs)
+			}
+		})
+		return byTarget
+	}
+}
+
+// swiftUnitLanding lands a test authored for a source under Sources/ on the
+// test target that executed it. The landing names the project's test file
+// the writer is shown and whose directory the authored test is written into
+// as a file of its own (advpool's authoredTestPath gives it a name no file
+// in the target has): the target's <source base>Tests.swift when it has one,
+// at any depth, else its lexically first Swift file. Nothing checks that the
+// target imports the source's module: coverage measured the target
+// executing the file, and a test that cannot reach it fails the compile
+// check and proves nothing, which the run reports.
+func swiftUnitLanding(files map[string]string) func(unit, source string) string {
+	byTarget := swiftTargetTestFiles(files)
+	return func(unit, source string) string {
+		if _, ok := lang.SwiftSourceTarget(source); !ok {
+			return ""
+		}
+		fs := byTarget()[unit]
+		if len(fs) == 0 {
+			return ""
+		}
+		own := strings.TrimSuffix(path.Base(source), ".swift") + "Tests.swift"
+		for _, f := range fs {
+			if path.Base(f) == own {
+				return f
+			}
+		}
+		return fs[0]
+	}
 }
 
 // under joins a repo-relative directory and a relative path, "." being the

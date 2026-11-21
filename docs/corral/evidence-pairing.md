@@ -455,6 +455,42 @@ than `no-paired-test`: the same command with `--json`, on a binary with that
 change (`143f4b98`'s code), lists 55 files under that reason and 4 under
 `no-paired-test`.
 
+## Swift: vapor/vapor
+
+- Commit `e4a5b705`. Like the Lariat run, this is not from the binary and
+  workstation named at the top of this page: corral was built from branch
+  `feat/swift-evidence-promotion` (on `572bf7fb`) and run on 2026-11-21 in a
+  Docker container with Swift 6.4.2 (vapor's manifest needs tools version
+  6.4), on one 32-core machine, with the network on and `.build` already
+  warm from one plain `swift test`. HOME and every state path pointed into
+  a scratch directory. It was not timed.
+- Command: `corral certify --repo . --substrate workspace --dry-run --evidence --top 3 <seats> -- swift test`
+- Before the change, on `572bf7fb`, the units executed 174 files that no
+  name paired, and none was added:
+
+```
+  units: 3 run, 0 failed (1 at a time)
+  evidence-paired 0 · name-paired 1 · uncovered 12 · import-only 0 — Swift: adding a file with no paired test by evidence is not built, so a file a test executes but no name pairs is not audited (see the language-support page)
+    swift        208 source file(s): 1 auditable, 207 with no paired test (+55 test file(s))
+```
+
+- With it, the same 174 are candidates, and `--top 3` picks three files
+  where it had one:
+
+```
+  widened by evidence: +174 candidate(s); re-ranked by churn-x-size under the same bound, auditing 3 of 175 candidate(s)
+  evidence-paired 174 · name-paired 1 · uncovered 12 · import-only 0
+    swift        208 source file(s): 175 auditable, 33 with no paired test (+55 test file(s))
+  would audit 3 file(s), in rank order:
+    Sources/Vapor/Application.swift (swift) — graded against Tests/VaporTests/ApplicationTests.swift
+    Sources/Vapor/Request/Request.swift (swift) — graded by the tests that cover it; a written test lands beside Tests/VaporTests/RequestTests.swift
+    Sources/Vapor/HTTP/Headers/HTTPMediaType.swift (swift) — graded by the tests that cover it; a written test lands beside Tests/VaporTests/AddressConfigurationFlagTests.swift
+```
+
+The last line shows the rule's limit: vapor has no `HTTPMediaTypeTests.swift`,
+so the file named is the target's first in name order, which tests something
+else. The authored test is still a file of its own in `Tests/VaporTests/`.
+
 ## Real audit
 
 > **Correction (2026-10-26).** The 0.85 below is not a clean measurement.

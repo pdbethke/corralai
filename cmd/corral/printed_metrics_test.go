@@ -765,6 +765,7 @@ var printedMetrics = map[string]printedRow{
 	"internal/repo/repo.go:git":                                          {Exempt: "error message: builds failure text from causes, ids and paths via %v; no measured number"},
 	"internal/repo/snapshot.go:Snapshot":                                 {Exempt: "error message: the numbers are limits, ids, exit codes, offsets and counts inside a failure text, not an audit measurement"},
 	"internal/repoindex/search.go:mergeHits":                             {Exempt: "dedupe key from a start line"},
+	"internal/repoindex/signatures_cgo.go:unreadSpan":                    {Exempt: "error message: the line span of source the grammar could not parse, not an audit measurement"},
 	"internal/repoindex/store_nocgo.go:serializeVector":                  {Exempt: "vector literal serialization"},
 	"internal/reposcan/baseline.go:CheckBaselineStable":                  {Exempt: "error message: the numbers are limits, ids, exit codes, offsets and counts inside a failure text, not an audit measurement"},
 	"internal/reposcan/derive.go:GoalFor":                                {Exempt: "error message: the numbers are limits, ids, exit codes, offsets and counts inside a failure text, not an audit measurement"},

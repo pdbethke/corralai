@@ -6,6 +6,7 @@ package repoindex
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"unicode"
 
@@ -14,14 +15,84 @@ import (
 	"github.com/pdbethke/corralai/internal/pairing"
 )
 
-// extractSignatures dispatches to lang's extractor in its langSpecs row. A
-// language with no extractor refuses with ErrUnsupportedLang rather than
-// returning an empty surface a caller would read as "no functions".
+// extractSignatures parses text once and hands the tree to lang's extractor
+// in its langSpecs row. A language with no extractor refuses with
+// ErrUnsupportedLang rather than returning an empty surface a caller would
+// read as "no functions", and a parse that did not read the whole file
+// refuses with ErrIncompleteParse (unreadSpan) for the same reason.
 func extractSignatures(text, lang string) ([]Signature, error) {
-	if s, ok := langSpecs[lang]; ok && s.extract != nil {
-		return s.extract(text, lang)
+	s, ok := langSpecs[lang]
+	if !ok || s.extract == nil {
+		return nil, ErrUnsupportedLang
 	}
-	return nil, ErrUnsupportedLang
+	tree, src, err := parseTS(text, lang)
+	if err != nil {
+		return nil, err
+	}
+	defer tree.Close()
+	root := tree.RootNode()
+	sigs := s.extract(root, src, lang)
+	if err := unreadSpan(root, sigs); err != nil {
+		return nil, err
+	}
+	return sigs, nil
+}
+
+// unreadSpan refuses a parse whose first ERROR or MISSING node lies outside
+// every symbol the extractor read.
+//
+// tree-sitter does not fail on code its grammar cannot parse: it wraps what
+// it could not place in an ERROR node and goes on. When that node sits
+// between symbols it may have swallowed some, and a surface read around it is
+// short by them with nothing to say so. That short surface is then taken as
+// the file: the mutant budget is derived from part of the file's complexity,
+// the generator seats are split over the symbols that were read, and each
+// seat is shown only its own symbols' lines, so the swallowed code is shown
+// to none of them and no fault is planted in it, and the exam coverage counts
+// the symbols read as all of them. On taplin/Lariat at be0c5fd the Swift
+// grammar wrapped lines 14-312 of Sources/LassoParser/LassoParser.swift, the
+// whole of one private struct and its methods, in a single ERROR node at the
+// top of the file. So such a parse is not a reading of the file: the caller
+// gets the error and treats the file as one with no signatures, which is
+// what it already does for a language with no reader (one generator seat
+// over the whole file, the default budget, exam coverage not measured).
+//
+// An error INSIDE a symbol is kept: the grammar placed the symbol, so its
+// lines are shown to its seat and counted, and only the decision points the
+// error covers can be missing from its complexity. Measured 2026-11-20 with
+// this repository's grammars: of 4077 Rust files in a checkout of
+// warpdotdev/warp, 114 had an error and 64 an error outside every symbol; of
+// 1093 Go files in this repository's internal/, none had one.
+func unreadSpan(root *sitter.Node, sigs []Signature) error {
+	if !root.HasError() {
+		return nil
+	}
+	var bad *sitter.Node
+	var find func(*sitter.Node)
+	find = func(n *sitter.Node) {
+		if bad != nil || n == nil || !n.HasError() {
+			return
+		}
+		if n.IsError() || n.IsMissing() {
+			start, end := int(n.StartPoint().Row)+1, int(n.EndPoint().Row)+1
+			for _, s := range sigs {
+				if s.Line <= start && end <= s.Line+s.Lines-1 {
+					return
+				}
+			}
+			bad = n
+			return
+		}
+		for i := 0; i < int(n.ChildCount()); i++ {
+			find(n.Child(i))
+		}
+	}
+	find(root)
+	if bad == nil {
+		return nil
+	}
+	return fmt.Errorf("%w: lines %d-%d are not inside any function it read", ErrIncompleteParse,
+		int(bad.StartPoint().Row)+1, int(bad.EndPoint().Row)+1)
 }
 
 // readsTestModules: lang's row has a modules reader.
@@ -92,7 +163,7 @@ func symbolDecisions(n *sitter.Node, src []byte, lang string) []Decision {
 		counted := false
 		switch {
 		case types[t]:
-			counted = true
+			counted = spec.defaultArms[t] == "" || firstNamedOfType(node, spec.defaultArms[t]) == nil
 		case spec.boolOp != "" && t == spec.boolOp:
 			if op := node.ChildByFieldName("operator"); op != nil {
 				switch op.Content(src) {
@@ -104,8 +175,27 @@ func symbolDecisions(n *sitter.Node, src []byte, lang string) []Decision {
 		if counted {
 			out = append(out, Decision{Start: int(node.StartPoint().Row) + 1, End: int(node.EndPoint().Row) + 1})
 		}
-		for i := 0; i < int(node.NamedChildCount()); i++ {
-			walk(node.NamedChild(i))
+		// Every child in source order, so a list's separating commas
+		// (conditionLists) take their place among the decisions the
+		// conditions themselves hold.
+		for i := 0; i < int(node.ChildCount()); i++ {
+			c := node.Child(i)
+			if c == nil {
+				continue
+			}
+			if c.IsNamed() {
+				walk(c)
+				continue
+			}
+			if spec.conditionLists[t] && c.Type() == "," && node.FieldNameForChild(i) == "" {
+				// The joined condition's span: from the comma to the end of
+				// the condition after it.
+				end := c.EndPoint().Row
+				if next := c.NextNamedSibling(); next != nil {
+					end = next.EndPoint().Row
+				}
+				out = append(out, Decision{Start: int(c.StartPoint().Row) + 1, End: int(end) + 1})
+			}
 		}
 	}
 	walk(n)
@@ -117,13 +207,7 @@ func symbolLines(n *sitter.Node) int {
 	return int(n.EndPoint().Row-n.StartPoint().Row) + 1
 }
 
-func extractGoSignatures(text string) ([]Signature, error) {
-	tree, src, err := parseTS(text, "go")
-	if err != nil {
-		return nil, err
-	}
-	defer tree.Close()
-	root := tree.RootNode()
+func extractGoSignatures(root *sitter.Node, src []byte) []Signature {
 	var out []Signature
 	for i := 0; i < int(root.NamedChildCount()); i++ {
 		n := root.NamedChild(i)
@@ -140,7 +224,7 @@ func extractGoSignatures(text string) ([]Signature, error) {
 			continue
 		}
 	}
-	return out, nil
+	return out
 }
 
 // goCallable builds a Signature shared by function_declaration and
@@ -245,16 +329,10 @@ func goResults(res *sitter.Node, src []byte) []string {
 // decorated_definition, mirroring chunk_cgo.go's handling) and builds the
 // callable surface. Python has no Go-style exported rule: a leading "_" is
 // unexported, everything else is exported (the community convention).
-func extractPythonSignatures(text string) ([]Signature, error) {
-	tree, src, err := parseTS(text, "python")
-	if err != nil {
-		return nil, err
-	}
-	defer tree.Close()
-	root := tree.RootNode()
+func extractPythonSignatures(root *sitter.Node, src []byte) []Signature {
 	var out []Signature
 	pyWalkDefs(root, src, "", &out)
-	return out, nil
+	return out
 }
 
 // pyUnwrapDecorated returns the function_definition or class_definition a

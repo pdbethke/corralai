@@ -37,15 +37,10 @@ import (
 // symbols of their own (they are part of the enclosing fn's span), and
 // neither is anything under `#[cfg(test)]`: a test module is the audit's
 // evidence, never its target.
-func extractRustSignatures(text string) ([]Signature, error) {
-	tree, src, err := parseTS(text, "rust")
-	if err != nil {
-		return nil, err
-	}
-	defer tree.Close()
+func extractRustSignatures(root *sitter.Node, src []byte) []Signature {
 	var out []Signature
-	rustWalkItems(tree.RootNode(), src, &out)
-	return out, nil
+	rustWalkItems(root, src, &out)
+	return out
 }
 
 // rustWalkItems scans one item list (the file, or an inline `mod x { }`

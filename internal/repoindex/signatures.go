@@ -53,6 +53,11 @@ type Decision struct {
 // wired (never a silent empty result).
 var ErrUnsupportedLang = errors.New("repoindex: no signature extractor for language")
 
+// ErrIncompleteParse is returned when the grammar could not parse part of the
+// file outside every function it read, so the functions read may not be all
+// of them (unreadSpan says why that is refused rather than returned).
+var ErrIncompleteParse = errors.New("repoindex: the grammar did not parse the whole file")
+
 // ExtractSignatures returns the callable surface of text in lang. The concrete
 // implementation is build-tagged: tree-sitter under cgo, a stub otherwise.
 func ExtractSignatures(text, lang string) ([]Signature, error) {

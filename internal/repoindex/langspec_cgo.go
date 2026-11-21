@@ -47,8 +47,11 @@ type langSpec struct {
 	// methods maps node type → kind for method-like defs inside containers.
 	methods map[string]string
 
-	// extract returns the language's callable surface; nil → ErrUnsupportedLang.
-	extract func(text, lang string) ([]Signature, error)
+	// extract returns the language's callable surface from the file's parse
+	// tree; nil → ErrUnsupportedLang. The tree is parsed once by
+	// extractSignatures, which also decides whether the parse read the whole
+	// file (see ErrIncompleteParse), so no extractor parses for itself.
+	extract func(root *sitter.Node, src []byte, lang string) []Signature
 
 	// branches are the tree-sitter node types that introduce an independent
 	// execution path through a symbol. Counting them (plus the boolean
@@ -67,6 +70,24 @@ type langSpec struct {
 	// Python has none because its `boolean_operator` IS its own node type and
 	// falls out of its branches set. "" if none.
 	boolOp string
+
+	// defaultArms maps a branches node type to the child node type that marks
+	// it as a switch's default arm, for a grammar that gives the default arm
+	// the same node type as every other arm (Swift's switch_entry, whose
+	// default holds a default_keyword). A default arm is the fall-through, not
+	// an independent decision, so it is not counted: the rule the javascript
+	// and php rows keep by leaving their own default node types out of
+	// branches. nil when the grammar names the default arm apart.
+	defaultArms map[string]string
+
+	// conditionLists are node types whose condition is a comma-separated list
+	// (Swift's `guard let a = x, let b = y, a < b else`). Each comma that
+	// separates two conditions is a direct child of the node with no field
+	// name (a comma inside one condition, such as a pattern's, carries the
+	// condition field), and each joins one more condition that short-circuits
+	// exactly as && does, so each is counted as && is. nil when the language
+	// joins conditions only with an operator.
+	conditionLists map[string]bool
 
 	// modules reads the test modules a source file declares in itself, for
 	// languages whose tests may live in the file under audit (Rust's
@@ -93,7 +114,7 @@ func init() {
 				"method_declaration":   "method",
 				"type_declaration":     "type",
 			},
-			extract: func(text, _ string) ([]Signature, error) { return extractGoSignatures(text) },
+			extract: func(root *sitter.Node, src []byte, _ string) []Signature { return extractGoSignatures(root, src) },
 			branches: map[string]bool{
 				"if_statement":       true,
 				"for_statement":      true,
@@ -117,7 +138,7 @@ func init() {
 			// decorated_definition wrapping a function_definition is also handled
 			// in findMethodsInContainer (unwrapped there).
 			methods: map[string]string{"function_definition": "method"},
-			extract: func(text, _ string) ([]Signature, error) { return extractPythonSignatures(text) },
+			extract: func(root *sitter.Node, src []byte, _ string) []Signature { return extractPythonSignatures(root, src) },
 			branches: map[string]bool{
 				"if_statement":           true,
 				"elif_clause":            true,
@@ -161,7 +182,7 @@ func init() {
 			containers: map[string]bool{"impl_item": true},
 			// Inside declaration_list of impl_item: function_item nodes.
 			methods: map[string]string{"function_item": "method"},
-			extract: func(text, _ string) ([]Signature, error) { return extractRustSignatures(text) },
+			extract: func(root *sitter.Node, src []byte, _ string) []Signature { return extractRustSignatures(root, src) },
 			// match_arm, not match_expression: one decision per arm, as PHP's
 			// case_statement does. `else` is the fall-through, not a decision,
 			// and `loop` has no condition (its exits are the breaks and ifs it
@@ -192,9 +213,9 @@ func init() {
 			grammar: swift.GetLanguage,
 			// Verified by parsing a sample with the grammar: function_declaration
 			// at the top level and inside a type body; class_declaration is
-			// struct, class, enum and extension alike (its declaration_kind
-			// field says which); protocol_declaration is the interface.
-			// No signature extractor yet, so no branches either.
+			// struct, class, enum, actor and extension alike (its
+			// declaration_kind field says which); protocol_declaration is the
+			// interface.
 			defs: map[string]string{
 				"function_declaration": "function",
 				"class_declaration":    "class",
@@ -203,6 +224,35 @@ func init() {
 			containers: map[string]bool{"class_declaration": true},
 			// Inside class_body: function_declaration nodes.
 			methods: map[string]string{"function_declaration": "method"},
+			extract: func(root *sitter.Node, src []byte, _ string) []Signature { return extractSwiftSignatures(root, src) },
+			// Node types from the grammar's parse of testdata/langspec/swift.swift.
+			// One decision per switch arm (switch_entry, its default left out
+			// by defaultArms), as the rust row counts match_arm; per catch
+			// block, as catch_clause is counted elsewhere; && and || are
+			// their own node types here, as Python's `and`/`or` are. An
+			// `else if` is an if_statement inside the else, counted once.
+			// Not counted, each for the reason another row does not count
+			// its counterpart: `??` and optional chaining (the javascript
+			// and php rows count no `??` and no `?.`), a `where` clause on a
+			// for loop or a switch arm (a filter or a guard on a pattern,
+			// which the python row's comprehension filter and case guard and
+			// the rust row's match guard are not counted as), `try?` (the
+			// rust row's `?`), and `do`, which decides nothing until a catch
+			// block does.
+			branches: map[string]bool{
+				"if_statement":           true,
+				"guard_statement":        true,
+				"for_statement":          true,
+				"while_statement":        true,
+				"repeat_while_statement": true,
+				"switch_entry":           true,
+				"catch_block":            true,
+				"ternary_expression":     true,
+				"conjunction_expression": true, // &&
+				"disjunction_expression": true, // ||
+			},
+			defaultArms:    map[string]string{"switch_entry": "default_keyword"},
+			conditionLists: map[string]bool{"if_statement": true, "guard_statement": true, "while_statement": true},
 		},
 		"c": {
 			grammar: c.GetLanguage,
@@ -252,7 +302,7 @@ func init() {
 			containers: map[string]bool{"class": true, "module": true},
 			// Inside body_statement: method nodes.
 			methods: map[string]string{"method": "method"},
-			extract: func(text, _ string) ([]Signature, error) { return extractRubySignatures(text) },
+			extract: func(root *sitter.Node, src []byte, _ string) []Signature { return extractRubySignatures(root, src) },
 			branches: map[string]bool{
 				"if":     true,
 				"unless": true,
@@ -279,7 +329,7 @@ func init() {
 			containers: map[string]bool{"class_declaration": true},
 			// Inside declaration_list: method_declaration nodes.
 			methods: map[string]string{"method_declaration": "method"},
-			extract: func(text, _ string) ([]Signature, error) { return extractPHPSignatures(text) },
+			extract: func(root *sitter.Node, src []byte, _ string) []Signature { return extractPHPSignatures(root, src) },
 			branches: map[string]bool{
 				"if_statement":                 true,
 				"else_if_clause":               true,

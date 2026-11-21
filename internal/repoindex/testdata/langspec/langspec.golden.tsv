@@ -181,8 +181,15 @@ chunk	Cart	class	14-16
 chunk	size	method	17-22
 chunk			23-23
 chunk	clear	method	24-26
-chunk			27-27
-sig err=repoindex: no signature extractor for language
+chunk			27-28
+chunk	Cart	class	29-29
+chunk	pick	method	30-37
+chunk			38-38
+sig err=<nil>
+sig	total(_:)	func		true	7	2	[{8 10}]
+sig	size()	method	Cart	true	17	2	[{18 20}]
+sig	clear()	method	Cart	true	24	1	[]
+sig	pick(_:of:)	method	Cart	true	30	7	[{31 31} {31 31} {33 34} {34 34} {34 34} {34 34}]
 == typescript.ts (typescript) chunk err=<nil>
 chunk			1-2
 chunk	Item	interface	3-5

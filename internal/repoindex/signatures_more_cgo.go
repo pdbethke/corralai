@@ -29,15 +29,10 @@ import (
 // keeping advpool.symbolIdentity (Receiver + "." + Name) unique: two classes
 // each defining `call` must not collapse to one identity, or a shard probes one
 // twice while the other goes unprobed.
-func extractRubySignatures(text string) ([]Signature, error) {
-	tree, src, err := parseTS(text, "ruby")
-	if err != nil {
-		return nil, err
-	}
-	defer tree.Close()
+func extractRubySignatures(root *sitter.Node, src []byte) []Signature {
 	var out []Signature
-	rubyWalk(tree.RootNode(), src, "", &out)
-	return out, nil
+	rubyWalk(root, src, "", &out)
+	return out
 }
 
 func rubyWalk(parent *sitter.Node, src []byte, receiver string, out *[]Signature) {
@@ -106,15 +101,10 @@ func rubyParams(params *sitter.Node, src []byte) []Param {
 // these nodes identically — TS being a superset of JS. One extractor rather than
 // two so the pair cannot drift; lang is threaded only so complexity uses the
 // right branch table and the caller's language is echoed faithfully.
-func extractCurlySignatures(text, lang string) ([]Signature, error) {
-	tree, src, err := parseTS(text, lang)
-	if err != nil {
-		return nil, err
-	}
-	defer tree.Close()
+func extractCurlySignatures(root *sitter.Node, src []byte, lang string) []Signature {
 	var out []Signature
-	curlyWalk(tree.RootNode(), src, lang, "", &out)
-	return out, nil
+	curlyWalk(root, src, lang, "", &out)
+	return out
 }
 
 func curlyWalk(parent *sitter.Node, src []byte, lang, receiver string, out *[]Signature) {

@@ -4,7 +4,9 @@ package authoring
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/lang"
@@ -54,7 +56,14 @@ type Result struct {
 // earned, inflating the kill rate and corrupting the control owner's adequacy signal.
 func Author(ctx context.Context, m testgen.LLM, jail adequacy.Jail, req Request) (Result, error) {
 	sigs, err := repoindex.ExtractSignatures(req.Code, req.Lang)
-	if err != nil {
+	switch {
+	case errors.Is(err, repoindex.ErrIncompleteParse):
+		// The grammar could not read the whole file, so there is no
+		// signature surface to send; the prompts carry the code itself, as
+		// every other caller does when its reader refuses.
+		log.Printf("authoring: %s: %v (continuing with no signatures)", req.CodePath, err)
+		sigs = nil
+	case err != nil:
 		return Result{}, fmt.Errorf("authoring: extract signatures: %w", err)
 	}
 	goP, _ := lang.ByName("go")

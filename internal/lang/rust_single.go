@@ -83,6 +83,50 @@ func nextestIndex(argv []string) int {
 	return firstIndex(wordIndex(argv, "nextest"), wordIndex(argv, "cargo-nextest"))
 }
 
+// cargoKillerCmd narrows a `cargo test` run to the test its failure reader
+// named, with libtest's `--exact <id>` (libtestSingleCmd). Only a command
+// cargoTestSplit can read is narrowed: one with no test-name filter of its
+// own and no `--skip`, `--ignored`, `--list` or unknown option among the test
+// binaries' arguments, so `--exact` is the only name filter the binaries get.
+// The id is a libtest test path (`tests::adds`); one with a space in it is a
+// nextest name (`<binary> <test>`, printed by a wrapper that runs nextest)
+// and is refused. A test of the same path in another of the run's test
+// binaries runs too: libtest's filter names no binary.
+func cargoKillerCmd(argv []string, id string) ([]string, bool) {
+	if id == "" || strings.ContainsAny(id, " \t") {
+		return nil, false
+	}
+	if _, _, _, ok := cargoTestSplit(argv); !ok {
+		return nil, false
+	}
+	return libtestSingleCmd(argv, "", id)
+}
+
+// nextestKillerCmd narrows a `cargo nextest run` to the test its failure
+// reader named: nextest prints a failure as `<binary id> <test>`, and the
+// filterset `binary_id(=<binary id>) & test(=<test>)` selects exactly that
+// test of that binary. A command nextestRunSplit cannot read, one with a
+// filterset of its own (nextest unions filtersets), or an id with no binary
+// is refused. A name filter of the operator's own still applies, and nextest
+// intersects it with the filterset, so the run can only narrow.
+func nextestKillerCmd(argv []string, id string) ([]string, bool) {
+	bin, test, ok := strings.Cut(id, " ")
+	if !ok || bin == "" || test == "" || strings.ContainsAny(test, " \t") {
+		return nil, false
+	}
+	pre, opts, tail, ok := nextestRunSplit(argv)
+	if !ok {
+		return nil, false
+	}
+	cmd := append(slices.Clone(pre), "run")
+	cmd = append(cmd, opts...)
+	cmd = append(cmd, "-E", "binary_id(="+bin+") & test(="+test+")")
+	if tail != nil {
+		cmd = append(cmd, tail...)
+	}
+	return cmd, true
+}
+
 func isNextest(testCmd []string) bool {
 	return cmdHasWord(testCmd, "nextest") || cmdHasWord(testCmd, "cargo-nextest")
 }

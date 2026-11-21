@@ -41,10 +41,24 @@ func rspecParseList(stdout string) []string {
 // name: -E (--example-matches, rspec 3.12 and later) with \A and \z, which
 // unlike -e's substring match cannot also select a longer description.
 func rspecSingleCmd(argv []string, testPath, id string) ([]string, bool) {
+	cmd, ok := rspecKillerCmd(argv, lastFull(id))
+	if !ok {
+		return nil, false
+	}
+	return append(cmd, testPath), true
+}
+
+// rspecKillerCmd narrows argv to the example whose full description is id,
+// as the `Failed examples:` list names it (rspecFailures): `-E` matches an
+// example's full description, anchored so no other description containing
+// it runs. argv already scopes the files. Two examples sharing one full
+// description both run, as with jest's name pattern; a kill confirmed that
+// way is still a run in which the blamed name failed.
+func rspecKillerCmd(argv []string, id string) ([]string, bool) {
 	if id == "" || !narrowable(argv, rspecFilters...) {
 		return nil, false
 	}
-	return append(slices.Clone(argv), "-E", `\A`+regexQuoter.Replace(lastFull(id))+`\z`, testPath), true
+	return append(slices.Clone(argv), "-E", `\A`+regexQuoter.Replace(id)+`\z`), true
 }
 
 // rspecListUnits is the dry run rspecListCmd makes, over the operator's own

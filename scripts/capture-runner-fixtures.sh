@@ -472,6 +472,12 @@ want cargo-unit-b-test 1 "$(cd units/cargo && cargo test -p units-b --test it 2>
 want nextest-unit 2 "$(cd units/cargo && cargo nextest run --workspace -E 'binary_id(=units-a)' 2>&1 | nextran)"
 want nextest-filtersets-union 3 "$(cd units/cargo && cargo nextest run --workspace -E 'binary_id(=units-a)' -E 'test(negates)' 2>&1 | nextran)"
 want nextest-name-filter-and-binary 0 "$(cd units/cargo && cargo nextest run --workspace integrates -E 'binary_id(=units-a)' 2>&1 | nextran)"
+# KillerCmd: nextest names a failure `<binary id> <test>`, and its killer selects
+# that test of that binary alone; cargo test's names no binary, so a test of the
+# same path in another binary runs too (integrates is in units-a's and units-b's).
+want nextest-killer 1 "$(cd units/cargo && cargo nextest run --workspace -E 'binary_id(=units-a::it) & test(=integrates)' 2>&1 | nextran)"
+want cargo-killer-same-path 2 "$(cd units/cargo && cargo test --workspace -- --exact integrates 2>&1 | cargoran)"
+want cargo-killer 1 "$(cd units/cargo && cargo test --workspace -- --exact tests::adds 2>&1 | cargoran)"
 # An -E written attached is a filterset too, ORed with the unit's.
 want nextest-attached-filterset-ors 2 "$(cd units/cargo && cargo nextest run --workspace '-Etest(negates)' -E 'binary_id(=units-a::it)' 2>&1 | nextran)"
 # Every run-only option (nextestRunOnly, runner_unit_options.go) is refused by list.
@@ -578,6 +584,14 @@ fails phpunit-fail.txt vendor/bin/phpunit fail/tests/FTest.php
 (cd report/rspec && fails report-rspec-shown.txt $RSPEC spec/f_spec.rb --format progress)
 (cd report/nextest && cargo build --tests -q 2>/dev/null; fails report-cargo-nextest-hidden.txt cargo nextest run)
 (cd report/nextest && fails report-cargo-nextest-shown.txt cargo nextest run --status-level pass --final-status-level flaky)
+
+# Each killer command (KillerCmd: the failing run's own command, narrowed to the
+# test its failure reader named, no file added) runs that test and nothing else.
+killed() { grep -oE '([0-9]+ examples?, [0-9]+ failures?)|(Tests: [0-9]+, Assertions: [0-9]+, (Failures|Errors): [0-9]+)' | head -1; }
+want rspec-killer "1 example, 1 failure" "$($RSPEC fail/spec/f_spec.rb -E '\ACalc adds \(a\+b\)\z' 2>&1 | killed)"
+want rspec-killer-nested "1 example, 1 failure" "$($RSPEC fail/spec/f_spec.rb -E '\AMyApp::Calc top level\z' 2>&1 | killed)"
+want phpunit-killer "Tests: 1, Assertions: 1, Failures: 1" "$(vendor/bin/phpunit fail/tests/FTest.php --filter '/(?:^|\\)FTest::testAdds(?: with data set .*)?$/' 2>&1 | killed)"
+want phpunit-killer-dataset "Tests: 2, Assertions: 2, Failures: 1" "$(vendor/bin/phpunit fail/tests/FTest.php --filter '/(?:^|\\)FTest::testData(?: with data set .*)?$/' 2>&1 | killed)"
 
 # Each skip command names the three failing tests; exactly the one passing test
 # must run, and pass.

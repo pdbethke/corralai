@@ -216,6 +216,53 @@ func TestLocalExecutorNamesAFlakyBaseline(t *testing.T) {
 	}
 }
 
+// TestLocalExecutorSaysWhatAFailedAuditBaselineSaid: a baseline that passed
+// the stability check and then failed inside the audit (the pool's own run of
+// the unmutated code) prints what the suite said, as the stability check's
+// red baseline and certify --local both do. A paid vapor/vapor audit
+// (2026-11-21) printed only "baseline failed — not graded" for a file whose
+// suite had trapped in a NIO server thread; the output that said so was in
+// the verdict and never reached the operator. A baseline that failed and
+// printed nothing still says it failed.
+func TestLocalExecutorSaysWhatAFailedAuditBaselineSaid(t *testing.T) {
+	for _, tc := range []struct {
+		output string
+		want   []string
+	}{
+		{"Fatal error: Deinited NIOAsyncWriter without calling finish()\nModuleNotFoundError: No module named 'x'",
+			[]string{
+				"Sources/Vapor/HTTPMediaType.swift: baseline failed in the audit's own run of the unmutated code — not graded. The suite said:\n    Fatal error: Deinited NIOAsyncWriter without calling finish()\n",
+				"Sources/Vapor/HTTPMediaType.swift: " + moduleImportHint("ModuleNotFoundError"),
+			}},
+		{"  \n ", []string{"Sources/Vapor/HTTPMediaType.swift: baseline failed in the audit's own run of the unmutated code — not graded\n"}},
+	} {
+		var buf bytes.Buffer
+		ex := localExecutor{
+			baselineRuns: 2,
+			progress:     &buf,
+			newBaseline: func(context.Context, localAuditInput) (reposcan.BaselineRunner, func(), error) {
+				return flakyBaseline{}, func() {}, nil
+			},
+			audit: func(context.Context, localAuditInput) (advpool.Verdict, error) {
+				return advpool.Verdict{BaselineFailed: true, BaselineOutput: tc.output}, nil
+			},
+		}
+		res, err := ex.Execute(context.Background(), reposcan.Job{Path: "Sources/Vapor/HTTPMediaType.swift", Goal: reposcan.Goal{Text: "g"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Gradable || res.Reason != reposcan.ReasonBaselineFailed {
+			t.Errorf("output %q: Gradable %v, Reason %q; want not gradable, %q", tc.output, res.Gradable, res.Reason, reposcan.ReasonBaselineFailed)
+		}
+		got := buf.String()
+		for _, w := range tc.want {
+			if strings.Count(got, w) != 1 {
+				t.Errorf("output %q: want %q once in:\n%s", tc.output, w, got)
+			}
+		}
+	}
+}
+
 // TestCertifyRepoSaysTheRunnerDisclosureOncePerLanguage: the scan header
 // carries the plugin's runner disclosure once per language in the job set,
 // from the command the jobs are graded with.

@@ -1,0 +1,131 @@
+{
+  "stats": {
+    "suites": 2,
+    "tests": 4,
+    "passes": 1,
+    "pending": 0,
+    "failures": 3,
+    "start": "2026-11-21T20:04:31.121Z",
+    "end": "2026-11-21T20:04:31.123Z",
+    "duration": 2
+  },
+  "tests": [
+    {
+      "title": "top level",
+      "fullTitle": "top level",
+      "file": "$DIR/report/mocha/f.mocha.js",
+      "duration": 1,
+      "currentRetry": 0,
+      "err": {
+        "stack": "AssertionError [ERR_ASSERTION]: 1 == 2\n    at Context.<anonymous> (f.mocha.js:8:32)\n    at process.processImmediate (node:internal/timers:484:21)",
+        "message": "1 == 2",
+        "generatedMessage": true,
+        "name": "AssertionError",
+        "code": "ERR_ASSERTION",
+        "actual": "1",
+        "expected": "2",
+        "operator": "==",
+        "diff": "simple"
+      }
+    },
+    {
+      "title": "adds (a+b)",
+      "fullTitle": "Calc adds (a+b)",
+      "file": "$DIR/report/mocha/f.mocha.js",
+      "duration": 0,
+      "currentRetry": 0,
+      "err": {
+        "stack": "AssertionError [ERR_ASSERTION]: 2 == 3\n    at Context.<anonymous> (f.mocha.js:4:35)\n    at process.processImmediate (node:internal/timers:484:21)",
+        "message": "2 == 3",
+        "generatedMessage": true,
+        "name": "AssertionError",
+        "code": "ERR_ASSERTION",
+        "actual": "2",
+        "expected": "3",
+        "operator": "==",
+        "diff": "simple"
+      }
+    },
+    {
+      "title": "ok",
+      "fullTitle": "Calc ok",
+      "file": "$DIR/report/mocha/f.mocha.js",
+      "duration": 0,
+      "currentRetry": 0,
+      "speed": "fast",
+      "err": {}
+    },
+    {
+      "title": "adds",
+      "fullTitle": "Calc neg adds",
+      "file": "$DIR/report/mocha/f.mocha.js",
+      "duration": 0,
+      "currentRetry": 0,
+      "err": {
+        "stack": "Error: boom\n    at Context.<anonymous> (f.mocha.js:6:52)\n    at process.processImmediate (node:internal/timers:484:21)",
+        "message": "boom"
+      }
+    }
+  ],
+  "pending": [],
+  "failures": [
+    {
+      "title": "top level",
+      "fullTitle": "top level",
+      "file": "$DIR/report/mocha/f.mocha.js",
+      "duration": 1,
+      "currentRetry": 0,
+      "err": {
+        "stack": "AssertionError [ERR_ASSERTION]: 1 == 2\n    at Context.<anonymous> (f.mocha.js:8:32)\n    at process.processImmediate (node:internal/timers:484:21)",
+        "message": "1 == 2",
+        "generatedMessage": true,
+        "name": "AssertionError",
+        "code": "ERR_ASSERTION",
+        "actual": "1",
+        "expected": "2",
+        "operator": "==",
+        "diff": "simple"
+      }
+    },
+    {
+      "title": "adds (a+b)",
+      "fullTitle": "Calc adds (a+b)",
+      "file": "$DIR/report/mocha/f.mocha.js",
+      "duration": 0,
+      "currentRetry": 0,
+      "err": {
+        "stack": "AssertionError [ERR_ASSERTION]: 2 == 3\n    at Context.<anonymous> (f.mocha.js:4:35)\n    at process.processImmediate (node:internal/timers:484:21)",
+        "message": "2 == 3",
+        "generatedMessage": true,
+        "name": "AssertionError",
+        "code": "ERR_ASSERTION",
+        "actual": "2",
+        "expected": "3",
+        "operator": "==",
+        "diff": "simple"
+      }
+    },
+    {
+      "title": "adds",
+      "fullTitle": "Calc neg adds",
+      "file": "$DIR/report/mocha/f.mocha.js",
+      "duration": 0,
+      "currentRetry": 0,
+      "err": {
+        "stack": "Error: boom\n    at Context.<anonymous> (f.mocha.js:6:52)\n    at process.processImmediate (node:internal/timers:484:21)",
+        "message": "boom"
+      }
+    }
+  ],
+  "passes": [
+    {
+      "title": "ok",
+      "fullTitle": "Calc ok",
+      "file": "$DIR/report/mocha/f.mocha.js",
+      "duration": 0,
+      "currentRetry": 0,
+      "speed": "fast",
+      "err": {}
+    }
+  ]
+}

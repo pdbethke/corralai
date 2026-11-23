@@ -1,0 +1,30 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s
+────────────
+    Starting 2 tests across 1 binary
+        PASS [   0.002s] (1/2) report-nextest tests::ok
+        FAIL [   0.002s] (2/2) report-nextest tests::adds
+  stdout ───
+
+    running 1 test
+    test tests::adds ... FAILED
+
+    failures:
+
+    failures:
+        tests::adds
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+  stderr ───
+
+    thread 'tests::adds' panicked at src/lib.rs:8:9:
+    assertion `left == right` failed
+      left: 2
+     right: 3
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+  Cancelling due to test failure
+────────────
+     Summary [   0.003s] 2 tests run: 1 passed, 1 failed, 0 skipped
+        FAIL [   0.002s] (2/2) report-nextest tests::adds
+error: test run failed

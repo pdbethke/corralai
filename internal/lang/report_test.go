@@ -110,7 +110,30 @@ func TestReportCmdAppliesTheRowsReportArgs(t *testing.T) {
 		// language's Default row: the compile check is one.
 		{"py_compile", "python", Cmd([]string{"python3", "-m", "py_compile", "a.py"}), nil},
 		{"go test", "go", Cmd([]string{"go", "test", "./..."}), nil},
-		{"jest", "javascript", Cmd([]string{"npx", "jest"}), nil},
+		// The other rows with report flags: each placed at its runner's
+		// word, entry script or subcommand, before the runner's own `--`.
+		{"jest", "javascript", Cmd([]string{"npx", "jest"}), []string{"npx", "jest", "--reporters=default"}},
+		{"jest entry script", "typescript", Cmd([]string{"node", "./node_modules/jest/bin/jest.js", "src"}),
+			[]string{"node", "./node_modules/jest/bin/jest.js", "src", "--reporters=default"}},
+		{"vitest run", "typescript", Cmd([]string{"npx", "vitest", "run"}), []string{"npx", "vitest", "run", "--reporter=default"}},
+		{"vitest entry script", "javascript", Cmd([]string{"node", "./node_modules/vitest/vitest.mjs", "run"}),
+			[]string{"node", "./node_modules/vitest/vitest.mjs", "run", "--reporter=default"}},
+		{"mocha", "javascript", Cmd([]string{"npx", "mocha", "test/"}), []string{"npx", "mocha", "test/", "--reporter", "spec"}},
+		{"mocha entry script", "javascript", Cmd([]string{"node", "node_modules/mocha/bin/mocha.js"}),
+			[]string{"node", "node_modules/mocha/bin/mocha.js", "--reporter", "spec"}},
+		// The operator's own reporter is replaced, as pytest's -r is.
+		{"mocha --reporter dot", "javascript", Cmd([]string{"mocha", "--reporter", "dot"}), []string{"mocha", "--reporter", "dot", "--reporter", "spec"}},
+		{"rspec", "ruby", Cmd([]string{"bundle", "exec", "rspec", "spec"}), []string{"bundle", "exec", "rspec", "spec", "--format", "progress"}},
+		{"cargo nextest", "rust", Cmd([]string{"cargo", "nextest", "run", "-p", "x", "--", "--exact", "a"}),
+			[]string{"cargo", "nextest", "run", "-p", "x", "--status-level", "pass", "--final-status-level", "flaky", "--", "--exact", "a"}},
+		{"cargo-nextest binary", "rust", Cmd([]string{"cargo-nextest", "nextest", "run"}),
+			[]string{"cargo-nextest", "nextest", "run", "--status-level", "pass", "--final-status-level", "flaky"}},
+		// cargo test, node --test, minitest and go test have none.
+		{"cargo test", "rust", Cmd([]string{"cargo", "test"}), nil},
+		{"node --test", "javascript", Cmd([]string{"node", "--test"}), nil},
+		{"minitest", "ruby", Cmd([]string{"ruby", "-Itest", "test/a_test.rb"}), nil},
+		// Through a package script nothing is added.
+		{"npm test (jest)", "javascript", Invocation{Argv: []string{"npm", "test"}, Script: []string{"jest"}, Pass: "--", Narrow: true}, nil},
 		// --runner names another row than the command's words do.
 		{"--runner unittest on pytest", "python", Invocation{Argv: []string{"pytest", "tests"}, Runner: "unittest"}, nil},
 		{"--runner pytest on pytest", "python", Invocation{Argv: []string{"pytest", "tests"}, Runner: "pytest"},
@@ -120,7 +143,9 @@ func TestReportCmdAppliesTheRowsReportArgs(t *testing.T) {
 		{"package script", "python", Invocation{Argv: []string{"npm", "test"}, Script: []string{"pytest"}, Pass: "--", Narrow: true}, nil},
 	}
 	// flagsOnly: want is the whole result, with no wrapper around it.
-	flagsOnly := map[string]bool{"tox before pytest": true, "nox before pytest": true, "docker before pytest": true,
+	flagsOnly := map[string]bool{"jest": true, "jest entry script": true, "vitest run": true, "vitest entry script": true,
+		"mocha": true, "mocha entry script": true, "mocha --reporter dot": true, "rspec": true, "cargo nextest": true, "cargo-nextest binary": true,
+		"tox before pytest": true, "nox before pytest": true, "docker before pytest": true,
 		"podman before pytest": true, "python -I": true, "python -E": true, "python -sE cluster": true,
 		"python -IWerror": true, "python -W error -E": true}
 	for _, c := range cases {
@@ -180,8 +205,8 @@ func TestReportArgvJudgesEachCommandOnItsOwnWords(t *testing.T) {
 }
 
 // Every row that declares report flags or a report hook names its runner by
-// a word, so ReportCmd can find where the runner's options start, and has a
-// failure reader they exist for. A hook's wrapper is one ReportCmd cannot
+// a word (or places it with At), so ReportCmd can find where the runner's
+// options start, and has a failure reader they exist for. A hook's wrapper is one ReportCmd cannot
 // read again, and says what it does.
 func TestEveryRowWithReportArgsHasWordsAndAReader(t *testing.T) {
 	for _, r := range runners {
@@ -195,8 +220,8 @@ func TestEveryRowWithReportArgsHasWordsAndAReader(t *testing.T) {
 		if len(r.ReportArgs) == 0 && r.ReportHook == nil {
 			continue
 		}
-		if len(r.Words) == 0 {
-			t.Errorf("%s declares ReportArgs but no Words: ReportCmd cannot find where its options start", r.ID)
+		if len(r.Words) == 0 && r.At == nil {
+			t.Errorf("%s declares ReportArgs but no Words and no At: ReportCmd cannot find where its options start", r.ID)
 		}
 		if r.FirstFailure == nil && r.FailedTests == nil {
 			t.Errorf("%s declares ReportArgs but no failure reader they would serve", r.ID)
@@ -379,5 +404,114 @@ func TestReportCmdDoesNotWrapOnWindows(t *testing.T) {
 	}
 	if lines := RunDisclosures(p, t.TempDir(), Cmd(operator)); slices.ContainsFunc(lines, func(l string) bool { return strings.Contains(l, "sh -c") }) {
 		t.Errorf("the wrapper is disclosed on windows, where nothing is wrapped: %v", lines)
+	}
+}
+
+// reportCaptures pairs each row with report flags with the commands its
+// captures came from (scripts/capture-runner-fixtures.sh's report section):
+// a project config that hides the lines the readers take, run as the
+// project runs it (-hidden) and with the row's ReportArgs (-shown). def is
+// the capture of the same failing tests under the runner's DEFAULT
+// reporter, whose reading the shown run must match; "" when none is
+// captured (nextest), and then want is what the readers must name.
+type reportCapture struct {
+	id, lang string
+	cmd      []string
+	def      string
+	want     []string
+}
+
+var reportCaptures = []reportCapture{
+	{"jest", "javascript", []string{"npx", "jest", "f.jest.test.js"}, "jest-fail.txt", nil},
+	{"vitest", "javascript", []string{"npx", "vitest", "run", "f.vitest.test.mjs"}, "vitest-fail.txt", nil},
+	{"mocha", "javascript", []string{"npx", "mocha", "f.mocha.js"}, "mocha-fail.txt", nil},
+	{"rspec", "ruby", []string{"rspec", "spec/f_spec.rb"}, "rspec-fail.txt", nil},
+	{"cargo-nextest", "rust", []string{"cargo", "nextest", "run"}, "", []string{"report-nextest tests::adds"}},
+}
+
+// What each runner printed with a project config that hides its failure
+// lines, and with the row's report flags: hidden, neither reader names a
+// test (the control: the exposure is real and this test can fail); shown,
+// they name what the runner's default reporter lets them name.
+func TestReportFlagsRestoreFailureLinesInRealOutput(t *testing.T) {
+	for _, c := range reportCaptures {
+		t.Run(c.id, func(t *testing.T) {
+			p, _ := ByName(c.lang)
+			inv := Cmd(c.cmd)
+			r, ok := namedRunner(p, c.cmd)
+			if !ok || r.ID != c.id || len(r.ReportArgs) == 0 {
+				t.Fatalf("%v names row %q (ok %v) with report flags %v, want %s with flags", c.cmd, r.ID, ok, r.ReportArgs, c.id)
+			}
+			parser := FailureParserFor(p, inv)
+			if parser == nil {
+				t.Fatalf("%s has no failure parser", c.id)
+			}
+			failed, hasFailed := DeselectorFor(p, inv)
+			read := func(out string) (string, []string) {
+				var all []string
+				if hasFailed {
+					all = failed(out)
+				}
+				return parser.FirstFailure([]byte(out)), all
+			}
+			first, all := read(readFixture(t, "report-"+c.id+"-hidden.txt"))
+			if first != "" || len(all) != 0 {
+				t.Errorf("hidden: the readers named %q / %v from a run whose config hides the lines", first, all)
+			}
+			first, all = read(readFixture(t, "report-"+c.id+"-shown.txt"))
+			if first == "" {
+				t.Fatalf("shown: FirstFailure named nothing with %v", r.ReportArgs)
+			}
+			if c.def != "" {
+				dFirst, dAll := read(readFixture(t, c.def))
+				if first != dFirst || !slices.Equal(all, dAll) {
+					t.Errorf("shown: readers named %q / %v, the default reporter's run %q / %v", first, all, dFirst, dAll)
+				}
+				return
+			}
+			if !slices.Contains(c.want, first) {
+				t.Errorf("shown: FirstFailure = %q, want one of %v", first, c.want)
+			}
+		})
+	}
+}
+
+// The captures above were made with the row's own flags: the capture
+// script's -shown line for each row carries exactly its ReportArgs, so the
+// row cannot drift from what was run.
+func TestReportFlagCapturesUseTheRowsFlags(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "scripts", "capture-runner-fixtures.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(b)
+	for _, c := range reportCaptures {
+		var row Runner
+		for _, r := range runners {
+			if r.ID == c.id {
+				row = r
+			}
+		}
+		var line string
+		for _, l := range strings.Split(script, "\n") {
+			if strings.Contains(l, "fails report-"+c.id+"-shown.txt ") {
+				line = l
+			}
+		}
+		if line == "" {
+			t.Errorf("%s: no -shown capture line in the capture script", c.id)
+			continue
+		}
+		if want := " " + strings.Join(row.ReportArgs, " ") + ")"; !strings.HasSuffix(line, want) {
+			t.Errorf("%s: capture line %q does not end with the row's flags %q", c.id, line, want)
+		}
+	}
+	for _, r := range runners {
+		if len(r.ReportArgs) == 0 || r.ID == "pytest" {
+			continue
+		}
+		if !slices.ContainsFunc(reportCaptures, func(c reportCapture) bool { return c.id == r.ID }) {
+			t.Errorf("%s has report flags and no captured run in reportCaptures", r.ID)
+		}
 	}
 }

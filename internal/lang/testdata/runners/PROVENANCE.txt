@@ -161,3 +161,9 @@ into a scratch directory $S, and swift was run as
   counts of files recorded evidence-pairing-not-built and no-paired-test
   come from the dry run's --json output (excluded_by_reason); the notes give
   the counts and not the exact --json invocation.
+report-<runner>-hidden.txt and report-<runner>-shown.txt (added 2026-11-21;
+jest 30.5.2, vitest 5.1.0, mocha 12.0.3, node v22.23.5, rspec-core 3.13.6,
+cargo 1.90.0, cargo-nextest 0.9.148): src/report/<runner>, whose config hides
+the lines corral reads, run as the project runs it (-hidden) and with the
+runner row's ReportArgs appended (-shown), agent variables unset; captured with
+the script's report section run alone.

@@ -77,6 +77,12 @@ func nextestSingleCmd(testCmd []string, _, id string) ([]string, bool) {
 	return append(cmd, tail...), true
 }
 
+// nextestIndex is where nextest's word is in argv (`cargo nextest`, or the
+// cargo-nextest binary), -1 if neither.
+func nextestIndex(argv []string) int {
+	return firstIndex(wordIndex(argv, "nextest"), wordIndex(argv, "cargo-nextest"))
+}
+
 func isNextest(testCmd []string) bool {
 	return cmdHasWord(testCmd, "nextest") || cmdHasWord(testCmd, "cargo-nextest")
 }

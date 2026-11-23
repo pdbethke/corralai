@@ -520,7 +520,17 @@ package reposcan
 // way: one seat over the whole file and the default budget. A "49" verdict
 // for either kind of file sat a different exam. "49" has reached main, so
 // this is its own generation. Shape unchanged; behaviour bump.
-const VerdictGeneration = "50"
+// "51" (2026-11-21): jest, vitest, mocha, rspec and cargo-nextest commands
+// that grading runs carry their row's report flags (lang.Runner.ReportArgs:
+// --reporters=default, --reporter=default, --reporter spec, --format
+// progress, and nextest's default status levels), as pytest's carry -rfE
+// since "45". A project whose config replaced the default reporter printed no
+// line the readers take, so a "50" verdict on such a project recorded no
+// killing test, confirmed each kill by repeating the grading run, and kept no
+// passing case of an authored test whose cases partly failed. "50" has
+// reached main, so this gets its own generation. Behaviour bump; the shape is
+// unchanged.
+const VerdictGeneration = "51"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

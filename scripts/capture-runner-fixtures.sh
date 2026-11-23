@@ -544,9 +544,9 @@ want nextest-units-multi 3 "$(multiran nextest-units-multi.txt)"
 
 # --- failing suites: what each DEFAULT reporter prints, and the skip commands --
 # (internal/lang/runner_failures.go). $DIR and $HOME are replaced: these files are public.
-fails() { # fails <fixture> <cmd...>: stdout+stderr, ANSI stripped
+fails() { # fails <fixture> <cmd...>: stdout+stderr, ANSI stripped, agent variables unset (see units_multi)
   local f="$1"; shift
-  "$@" 2>&1 | sed -e 's/\x1b\[[0-9;]*m//g' -e "s#$DIR#\$DIR#g" -e "s#$HOME#~#g" -e '/duration_ms\|^Finished in\|^Time: \|Duration \|Start at \|^Run options: --seed\|runs\/s/d' > "$OUT/$f" || true
+  env -u AI_AGENT -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT "$@" 2>&1 | sed -e 's/\x1b\[[0-9;]*m//g' -e "s#$DIR#\$DIR#g" -e "s#$HOME#~#g" -e '/duration_ms\|^Finished in\|^Time: \|Duration \|Start at \|^Run options: --seed\|runs\/s\|Nextest run ID /d' > "$OUT/$f" || true
 }
 fails jest-fail.txt npx jest fail/f.jest.test.js
 fails jest-suitefail.txt npx jest fail/broken.jest.test.js
@@ -563,6 +563,21 @@ fails rspec-fail.txt $RSPEC fail/spec/f_spec.rb
 fails rspec-loadfail.txt $RSPEC fail/spec/broken_spec.rb
 fails minitest-fail.txt ruby fail/f_test.rb
 fails phpunit-fail.txt vendor/bin/phpunit fail/tests/FTest.php
+
+# --- report flags: a project config that hides the lines the readers take, run
+# as the project runs it (-hidden) and with the runner row's ReportArgs appended
+# (-shown). The flags here must be the row's (internal/lang/runner.go);
+# TestReportFlagCapturesUseTheRowsFlags reads this file to hold them equal.
+(cd report/jest && fails report-jest-hidden.txt npx jest f.jest.test.js)
+(cd report/jest && fails report-jest-shown.txt npx jest f.jest.test.js --reporters=default)
+(cd report/vitest && fails report-vitest-hidden.txt npx vitest run f.vitest.test.mjs)
+(cd report/vitest && fails report-vitest-shown.txt npx vitest run f.vitest.test.mjs --reporter=default)
+(cd report/mocha && fails report-mocha-hidden.txt npx mocha f.mocha.js)
+(cd report/mocha && fails report-mocha-shown.txt npx mocha f.mocha.js --reporter spec)
+(cd report/rspec && fails report-rspec-hidden.txt $RSPEC spec/f_spec.rb)
+(cd report/rspec && fails report-rspec-shown.txt $RSPEC spec/f_spec.rb --format progress)
+(cd report/nextest && cargo build --tests -q 2>/dev/null; fails report-cargo-nextest-hidden.txt cargo nextest run)
+(cd report/nextest && fails report-cargo-nextest-shown.txt cargo nextest run --status-level pass --final-status-level flaky)
 
 # Each skip command names the three failing tests; exactly the one passing test
 # must run, and pass.

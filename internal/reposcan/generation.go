@@ -537,7 +537,15 @@ package reposcan
 // is still confirmed by the repeat, so a count can only stay or move to the
 // stricter reading; the recorded confirmation differs. Behaviour bump; the
 // shape is unchanged.
-const VerdictGeneration = "52"
+// "53" (2026-11-23): cargo test and cargo-nextest salvage an authored test
+// whose cases partly fail on the unmutated code (lang.Runner.FailedTests and
+// DeselectCmd: libtest's `--exact --skip`, and a nextest filterset excluding
+// each failing test, folded with the run's own unit filterset), as every
+// other language but Swift does. A "52" Rust verdict discarded such a test
+// whole, so its passing cases proved nothing; now they can prove a survivor.
+// Given its own generation because "52" may reach main before it. Behaviour
+// bump; the shape is unchanged.
+const VerdictGeneration = "53"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

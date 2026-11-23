@@ -1,5 +1,5 @@
 [package]
-name = "failfast-nextest"
+name = "fail-cargo"
 version = "0.1.0"
 edition = "2021"
 

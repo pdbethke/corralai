@@ -444,6 +444,7 @@ var runners = []Runner{
 		// stops at the first failing test binary unless told otherwise.
 		FailFast:     []string{"--fail-fast"},
 		FirstFailure: rustFirstFailure, Flaky: rustFlakyTests, KillerCmd: nextestKillerCmd,
+		FailedTests: rustFailedTests, DeselectCmd: nextestDeselectCmd,
 		Disclose: nextestDisclose, PreflightBin: nextestPreflightBin,
 		ListUnits: nextestListUnits, ParseUnits: nextestParseUnits, UnitCmd: oneUnit(nextestUnitsCmd),
 		UnitsCmd: nextestUnitsCmd, UnitForFile: nextestUnitForFile, UnitNoun: "test targets",
@@ -453,6 +454,7 @@ var runners = []Runner{
 		Name: "cargo test", ID: "cargo-test", Languages: []string{"rust"}, Default: true, Words: []string{"cargo"},
 		ListCmd: libtestListCmd, ParseList: libtestParseList, SingleCmd: libtestSingleCmd, ResolveByList: true,
 		FirstFailure: rustFirstFailure, Flaky: rustFlakyTests, KillerCmd: cargoKillerCmd,
+		FailedTests: rustFailedTests, DeselectCmd: cargoDeselectCmd,
 		Disclose: libtestDisclose, PreflightBin: libtestPreflightBin,
 		ListUnits: cargoListUnits, ParseUnits: cargoParseUnits, UnitCmd: oneUnit(cargoUnitsCmd),
 		UnitsCmd: cargoUnitsCmd, UnitsCoruns: cargoUnitsCoruns, UnitForFile: cargoUnitForFile, UnitNoun: "test targets",

@@ -24,10 +24,13 @@ func TestFailureParsersReadTheRealOutput(t *testing.T) {
 		{"rspec-fail.txt", rspecFailures, []string{"Calc adds (a+b)", "Calc neg adds", "MyApp::Calc top level"}},
 		{"minitest-fail.txt", minitestFailures, []string{"MyApp::NegTest#test_x", "CalcTest#test_adds", "CalcTest#test_boom"}},
 		{"phpunit-fail.txt", phpFailures, []string{"FTest::testBoom", "FTest::testAdds", `FTest::testData with data set "two" (2)`}},
+		{"cargo-test-fail.txt", rustFailedTests, []string{"tests::a_fails", "tests::b_fails"}},
+		{"cargo-nextest-fail.txt", rustFailedTests, []string{"fail-cargo tests::a_fails", "fail-cargo tests::b_fails"}},
 	} {
 		got := c.parse(readFixture(t, c.fixture))
-		if c.fixture == "minitest-fail.txt" {
-			// minitest runs in a random order per seed; the set is what counts.
+		if c.fixture == "minitest-fail.txt" || c.fixture == "cargo-test-fail.txt" || c.fixture == "cargo-nextest-fail.txt" {
+			// minitest runs in a random order per seed, and libtest and
+			// nextest run tests in parallel; the set is what counts.
 			slices.Sort(got)
 			slices.Sort(c.want)
 		}

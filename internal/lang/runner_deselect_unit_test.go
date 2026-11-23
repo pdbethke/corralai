@@ -8,19 +8,24 @@ import (
 )
 
 // deselectUnitBases is one operator command and one unit per row that both
-// salvages (DeselectCmd) and runs units (UnitsCmd). The test below derives
-// the rows from the table and fails on a row missing here, so a new row
-// cannot skip the check by not being listed.
+// salvages (DeselectCmd) and runs units (UnitsCmd), and the failing test's id
+// in the form that row's FailedTests gives it, when it is not a description
+// (Rust: a libtest path, or nextest's `<binary id> <test>`). The test below
+// derives the rows from the table and fails on a row missing here, so a new
+// row cannot skip the check by not being listed.
 var deselectUnitBases = map[string]struct {
 	argv []string
 	unit string
+	id   string
 }{
-	"go-test":   {[]string{"go", "test", "./..."}, "example.com/m/pkg"},
-	"jest":      {[]string{"jest"}, "tests/a.test.js"},
-	"vitest":    {[]string{"vitest", "run"}, "tests/a.test.ts"},
-	"node-test": {[]string{"node", "--test"}, "tests/a.test.js"},
-	"rspec":     {[]string{"bundle", "exec", "rspec"}, "spec/a_corral_spec.rb"},
-	"phpunit":   {[]string{"vendor/bin/phpunit"}, "tests/ACorralTest.php"},
+	"go-test":       {[]string{"go", "test", "./..."}, "example.com/m/pkg", ""},
+	"jest":          {[]string{"jest"}, "tests/a.test.js", ""},
+	"vitest":        {[]string{"vitest", "run"}, "tests/a.test.ts", ""},
+	"node-test":     {[]string{"node", "--test"}, "tests/a.test.js", ""},
+	"rspec":         {[]string{"bundle", "exec", "rspec"}, "spec/a_corral_spec.rb", ""},
+	"phpunit":       {[]string{"vendor/bin/phpunit"}, "tests/ACorralTest.php", ""},
+	"cargo-test":    {[]string{"cargo", "test", "--workspace"}, "units-a/lib", "tests::rejects_bad_input"},
+	"cargo-nextest": {[]string{"cargo", "nextest", "run", "--workspace"}, "units-a", "units-a tests::rejects_bad_input"},
 }
 
 // A salvaged authored pass is built from the run's base like any other
@@ -47,12 +52,18 @@ func TestEveryUnitRowCanExcludeFromItsOwnUnitCommand(t *testing.T) {
 			t.Errorf("%s: fixture: UnitsCmd(%q, [%q]) refused", r.ID, b.argv, b.unit)
 			continue
 		}
-		out, ok := r.DeselectCmd(unit, []string{"A rejects bad input"})
+		id := b.id
+		if id == "" {
+			id = "A rejects bad input"
+		}
+		out, ok := r.DeselectCmd(unit, []string{id})
 		if !ok {
 			t.Errorf("%s: DeselectCmd cannot exclude from its own unit command %q", r.ID, unit)
 			continue
 		}
-		if len(out) <= len(unit) {
+		// Compared whole, not by length: nextest folds the unit's filterset into
+		// the exclusion, which changes a word and adds none.
+		if slices.Equal(out, unit) {
 			t.Errorf("%s: DeselectCmd(%q) = %q excluded nothing", r.ID, unit, out)
 		}
 	}

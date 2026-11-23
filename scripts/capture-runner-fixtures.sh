@@ -478,6 +478,13 @@ want nextest-name-filter-and-binary 0 "$(cd units/cargo && cargo nextest run --w
 want nextest-killer 1 "$(cd units/cargo && cargo nextest run --workspace -E 'binary_id(=units-a::it) & test(=integrates)' 2>&1 | nextran)"
 want cargo-killer-same-path 2 "$(cd units/cargo && cargo test --workspace -- --exact integrates 2>&1 | cargoran)"
 want cargo-killer 1 "$(cd units/cargo && cargo test --workspace -- --exact tests::adds 2>&1 | cargoran)"
+# Salvage from a unit command (DeselectCmd on UnitsCmd's output): the unit's
+# tests less the failing one. nextest folds the unit's filterset into the
+# exclusion, since it unions filtersets; cargo's --exact keeps tests::adds_more,
+# which a substring --skip of tests::adds would drop.
+# TestRustDeselectCapturesAreTheRowsCommands holds these commands equal to the rows'.
+want nextest-deselect-from-unit 1 "$(cd units/cargo && cargo nextest run --workspace -E '((binary_id(=units-a))) & not ((binary_id(=units-a) & test(=tests::adds)))' 2>&1 | nextran)"
+want cargo-deselect-from-unit 1 "$(cd units/cargo && cargo test -p units-a --lib -- --exact --skip tests::adds 2>&1 | cargoran)"
 # An -E written attached is a filterset too, ORed with the unit's.
 want nextest-attached-filterset-ors 2 "$(cd units/cargo && cargo nextest run --workspace '-Etest(negates)' -E 'binary_id(=units-a::it)' 2>&1 | nextran)"
 # Every run-only option (nextestRunOnly, runner_unit_options.go) is refused by list.
@@ -569,6 +576,8 @@ fails rspec-fail.txt $RSPEC fail/spec/f_spec.rb
 fails rspec-loadfail.txt $RSPEC fail/spec/broken_spec.rb
 fails minitest-fail.txt ruby fail/f_test.rb
 fails phpunit-fail.txt vendor/bin/phpunit fail/tests/FTest.php
+(cd fail/cargo && cargo build --tests -q 2>/dev/null; fails cargo-test-fail.txt cargo test)
+(cd fail/cargo && fails cargo-nextest-fail.txt cargo nextest run)
 
 # --- report flags: a project config that hides the lines the readers take, run
 # as the project runs it (-hidden) and with the runner row's ReportArgs appended
@@ -592,10 +601,10 @@ fails phpunit-fail.txt vendor/bin/phpunit fail/tests/FTest.php
 # tests::` and the third is the flag appended after the `--` instead;
 # TestFailFastCaptureIsTheRowsCommand reads this file to hold them equal.
 nextran_of() { grep -oE '[0-9]+(/[0-9]+)? tests? run' | head -1 | grep -oE '^[0-9]+'; }
-(cd failfast/nextest && cargo build --tests -q 2>/dev/null)
-want nextest-profile-no-fail-fast 3 "$(cd failfast/nextest && cargo nextest run -j 1 -- tests:: 2>&1 | nextran_of)"
-want nextest-fail-fast-before-separator 1 "$(cd failfast/nextest && cargo nextest run -j 1 --fail-fast -- tests:: 2>&1 | nextran_of)"
-want nextest-fail-fast-after-separator-refused 96 "$(cd failfast/nextest && cargo nextest run -j 1 -- tests:: --fail-fast >/dev/null 2>&1; echo $?)"
+(cd fail/cargo && cargo build --tests -q 2>/dev/null)
+want nextest-profile-no-fail-fast 3 "$(cd fail/cargo && cargo nextest run -j 1 -- tests:: 2>&1 | nextran_of)"
+want nextest-fail-fast-before-separator 1 "$(cd fail/cargo && cargo nextest run -j 1 --fail-fast -- tests:: 2>&1 | nextran_of)"
+want nextest-fail-fast-after-separator-refused 96 "$(cd fail/cargo && cargo nextest run -j 1 -- tests:: --fail-fast >/dev/null 2>&1; echo $?)"
 
 # Each killer command (KillerCmd: the failing run's own command, narrowed to the
 # test its failure reader named, no file added) runs that test and nothing else.
@@ -624,6 +633,11 @@ skipok minitest ruby fail/f_test.rb --exclude '/\A(?:CalcTest#test_adds|CalcTest
 skipok phpunit vendor/bin/phpunit fail/tests/FTest.php --exclude-filter '/(?:^|\\)(?:FTest::testBoom|FTest::testAdds|FTest::testData)(?: with data set .*)?$/'
 skipok npm-test npm test -- fail/f.jest.test.js --testNamePattern '^(?!(?:Calc adds \(a\+b\)|Calc neg adds|top level)$)'
 skipok composer-test composer test -- fail/tests/FTest.php --exclude-filter '/(?:^|\\)(?:FTest::testBoom|FTest::testAdds|FTest::testData)(?: with data set .*)?$/'
+# fail/cargo holds two failing tests and one passing: the Rust deselect
+# commands (DeselectCmd) name the two; TestRustDeselectCapturesAreTheRowsCommands
+# holds these lines equal to what the rows build from the captured failures.
+skipok cargo-test env -C fail/cargo cargo test -- --exact --skip tests::a_fails --skip tests::b_fails
+skipok cargo-nextest env -C fail/cargo cargo nextest run -E 'not ((binary_id(=fail-cargo) & test(=tests::a_fails)) | (binary_id(=fail-cargo) & test(=tests::b_fails)))'
 
 # --- package scripts: how each launcher hands extra arguments to the script --
 # (internal/lang/invocation.go's launcher table; keep the separators equal)

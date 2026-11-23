@@ -5,6 +5,7 @@ package adequacy
 import (
 	"context"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -168,7 +169,7 @@ func TestScoreRewritesEveryCommandItRuns(t *testing.T) {
 	j := newRC(t, script)
 	rep, err := Score(context.Background(), j, nil, "a.py", confirmCode, oneMutant(), caller,
 		WithFailureParser(pythonFailureParser(t)), WithKillConfirmer(testConfirmer),
-		WithMutantFailFast(func(cmd []string) ([]string, bool) { return []string{"--ff"}, true }),
+		WithMutantFailFast(func(cmd []string) ([]string, bool) { return append(slices.Clone(cmd), "--ff"), true }),
 		WithCommandRewrite(func(cmd []string) []string {
 			mu.Lock()
 			seenArgs = append(seenArgs, cmd)

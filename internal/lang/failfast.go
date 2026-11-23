@@ -50,6 +50,44 @@ func AppendFailFast(cmd, args []string) []string {
 	return append(out, args...)
 }
 
+// FailFastCmd is inv's command with its runner's stop-at-first-failure flag
+// (FailFastArgsFor) placed where the runner reads it, or ok=false where
+// FailFastArgsFor gives none. For MUTANT runs only, for the reasons
+// FailFastArgsFor gives.
+//
+// A runner named in the command gets the flag after its word and before its
+// own `--` (runnerOptionsEnd, the rule ReportCmd uses): appended after that
+// separator the flag is a positional argument, a path to pytest or an
+// argument to cargo's test binary, and nextest then refuses the run (exit 96,
+// "failed to parse test binary arguments", cargo-nextest 0.9.148), which the
+// scorer would read as a kill. A launcher script (`npm test`) gets it
+// appended, after the launcher's separator, where FailFastArgsFor's args
+// already say to put it. A command that already carries one of the args
+// before the separator is returned unchanged, ok still true, so a caller can
+// tell "the operator asked for it" from "this runner has none".
+func FailFastCmd(p Plugin, inv Invocation) ([]string, bool) {
+	args, ok := FailFastArgsFor(p, inv)
+	if !ok {
+		return nil, false
+	}
+	cmd := inv.Argv
+	end := len(cmd)
+	if inv.Script == nil {
+		if r, named := namedRunner(p, inv.detectWords()); named {
+			if at := runnerWordIndex(cmd, r); at >= 0 {
+				end = runnerOptionsEnd(cmd, at)
+			}
+		}
+	}
+	if len(AppendFailFast(cmd[:end], args)) == end {
+		return slices.Clone(cmd), true
+	}
+	out := make([]string, 0, len(cmd)+len(args))
+	out = append(out, cmd[:end]...)
+	out = append(out, args...)
+	return append(out, cmd[end:]...), true
+}
+
 // FailFastArgsFor is the stop-at-first-failure flag of the runner testCmd
 // names, for MUTANT runs only, or ok=false.
 //

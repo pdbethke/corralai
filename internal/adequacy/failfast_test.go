@@ -88,7 +88,7 @@ func pyFailFast(t *testing.T) FailFastFor {
 	if !ok {
 		t.Fatal("python plugin not registered")
 	}
-	return func(cmd []string) ([]string, bool) { return lang.FailFastArgsFor(p, lang.Cmd(cmd)) }
+	return func(cmd []string) ([]string, bool) { return lang.FailFastCmd(p, lang.Cmd(cmd)) }
 }
 
 var ffCmd = []string{"pytest", "t1", "t2", "t3", "t4"}

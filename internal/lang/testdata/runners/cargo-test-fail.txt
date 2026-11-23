@@ -1,0 +1,34 @@
+   Compiling fail-cargo v0.1.0 ($DIR/fail/cargo)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.03s
+     Running unittests src/lib.rs (target/debug/deps/fail_cargo-42de90de37b6079e)
+
+running 3 tests
+test tests::b_fails ... FAILED
+test tests::a_fails ... FAILED
+test tests::c_passes ... ok
+
+failures:
+
+---- tests::b_fails stdout ----
+
+thread 'tests::b_fails' panicked at src/lib.rs:15:9:
+assertion `left == right` failed
+  left: 2
+ right: 4
+
+---- tests::a_fails stdout ----
+
+thread 'tests::a_fails' panicked at src/lib.rs:11:9:
+assertion `left == right` failed
+  left: 2
+ right: 3
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::a_fails
+    tests::b_fails
+
+test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`

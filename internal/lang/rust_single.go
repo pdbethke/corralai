@@ -127,6 +127,95 @@ func nextestKillerCmd(argv []string, id string) ([]string, bool) {
 	return cmd, true
 }
 
+// rustFailedTests is the failing tests' ids in a cargo test or nextest run's
+// output, in the form each runner names them (rustRun.Failures).
+func rustFailedTests(output string) []string {
+	return parseRustRun(rustGrammarOf([]byte(output)), []byte(output)).Failures
+}
+
+// cargoDeselectCmd reruns a `cargo test` command without the tests ids, with
+// libtest's `--exact --skip <path>` per id among the test binaries' arguments.
+// --exact is what makes each skip name one test: libtest's --skip matches a
+// substring, and `--skip tests::a` alone skipped a test it merely prefixed
+// (cargo 1.90.0). Only a command cargoTestSplit reads is rerun (no name
+// filter, --skip, --ignored or --list of its own; --exact would change what
+// such a filter matches), and only libtest ids: one with a space is a
+// nextest name. A test of the same path in another of the run's test
+// binaries is skipped too, since libtest's skip names no binary; it can
+// only make the rerun run less, never a test the run did not.
+func cargoDeselectCmd(argv, ids []string) ([]string, bool) {
+	if len(ids) == 0 || slices.ContainsFunc(ids, func(id string) bool { return id == "" || strings.ContainsAny(id, " \t") }) {
+		return nil, false
+	}
+	_, _, tail, ok := cargoTestSplit(argv)
+	if !ok {
+		return nil, false
+	}
+	var args []string
+	if !slices.Contains(tail, "--exact") {
+		args = append(args, "--exact")
+	}
+	for _, id := range ids {
+		args = append(args, "--skip", id)
+	}
+	return withTestBinaryArgs(argv, args...), true
+}
+
+// nextestDeselectCmd reruns a `cargo nextest run` without the tests ids, with
+// one filterset that excludes each failing test by its binary and its name:
+// `not ((binary_id(=<b>) & test(=<t>)) | …)`. nextest names a failure
+// `<binary id> <test>`, so a test of the same name in another binary still
+// runs.
+//
+// nextest unions the filtersets it is given, so the exclusion cannot sit
+// beside the command's own: their tests would come back. The command's
+// `-E <expr>` filtersets, the form the unit command writes (nextestUnitsCmd),
+// are taken out and folded into the one filterset, `((e1) | (e2)) & not (…)`,
+// which runs what they ran less the failing tests. Without this a unit-graded
+// run could never be salvaged. Any other spelling of a filterset, and any
+// command nextestRunSplit refuses for another reason, is not rerun. A name
+// filter of the operator's still applies, intersected with the filterset. An
+// id with no binary, or with a character that would end a matcher early, is
+// refused.
+func nextestDeselectCmd(argv, ids []string) ([]string, bool) {
+	if len(ids) == 0 {
+		return nil, false
+	}
+	terms := make([]string, 0, len(ids))
+	for _, id := range ids {
+		bin, test, ok := strings.Cut(id, " ")
+		if !ok || bin == "" || test == "" || strings.ContainsAny(id, "()|&,\t\"'\\") || strings.Contains(test, " ") {
+			return nil, false
+		}
+		terms = append(terms, "(binary_id(="+bin+") & test(="+test+"))")
+	}
+	head, rest := splitAtDashDash(argv)
+	var kept, sets []string
+	for i := 0; i < len(head); i++ {
+		if head[i] != "-E" {
+			kept = append(kept, head[i])
+			continue
+		}
+		if i+1 >= len(head) || head[i+1] == "" {
+			return nil, false
+		}
+		sets = append(sets, "("+head[i+1]+")")
+		i++
+	}
+	pre, opts, tail, ok := nextestRunSplit(append(kept, rest...))
+	if !ok {
+		return nil, false
+	}
+	expr := "not (" + strings.Join(terms, " | ") + ")"
+	if len(sets) > 0 {
+		expr = "(" + strings.Join(sets, " | ") + ") & " + expr
+	}
+	cmd := append(slices.Clone(pre), "run")
+	cmd = append(cmd, opts...)
+	cmd = append(cmd, "-E", expr)
+	return append(cmd, tail...), true
+}
+
 func isNextest(testCmd []string) bool {
 	return cmdHasWord(testCmd, "nextest") || cmdHasWord(testCmd, "cargo-nextest")
 }

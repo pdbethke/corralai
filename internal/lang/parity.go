@@ -199,10 +199,6 @@ type Exemption struct{ Lang, Capability, Reason string }
 
 var ParityExemptions = []Exemption{
 
-	{"rust", "fail-fast", "nextest's --fail-fast and libtest's lack of one are not yet verified against a real run (runner table Phase 5)"},
-
-	{"rust", "salvage", "libtest --skip and nextest filtersets are not yet verified for salvage (runner table Phase 5)"},
-
 	{"python", "units", "its evidence is per test, from one instrumented run (lang.TestEvidence), which the selection engine reads at test grain; a unit pass would be a second, coarser answer to the same question"},
 
 	{"rust", "run-cache", "not built. measured 2026-11-18 on one 32-core machine, outside the sandbox, as the median of 3 to 5 runs: on indexmap-rs/indexmap at 41a8708 (224 tests) `cargo test` took 4.3 s from an empty target/ and 0.9 s with a warm target/ after one source file changed, so a shared target/ would be worth building for; a larger crate was not measured. Before one is shared we must settle how a cached test result is kept from standing in for a run and how a shared target/ keeps one mutant's build output from being read by another's"},

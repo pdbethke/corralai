@@ -2818,7 +2818,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 	var failFast adequacy.FailFastFor
 	if !in.noFailFast {
 		if plug, ok := lang.ByName(in.langName); ok {
-			failFast = func(cmd []string) ([]string, bool) { return lang.FailFastArgsFor(plug, in.inv.WithArgv(cmd)) }
+			failFast = func(cmd []string) ([]string, bool) { return lang.FailFastCmd(plug, in.inv.WithArgv(cmd)) }
 		}
 	}
 

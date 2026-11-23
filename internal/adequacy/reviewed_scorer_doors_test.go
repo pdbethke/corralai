@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -156,7 +157,7 @@ func TestPerCommandCapAppliesUnderFailFast(t *testing.T) {
 			WithCommandFor(func(Mutant) MutantCommand { return MutantCommand{Cmd: narrow, Tests: 1, Rule: "lines"} }),
 		}
 		if withFailFast {
-			opts = append(opts, WithMutantFailFast(func([]string) ([]string, bool) { return []string{"-x"}, true }))
+			opts = append(opts, WithMutantFailFast(func(cmd []string) ([]string, bool) { return append(slices.Clone(cmd), "-x"), true }))
 		}
 		rep, err := Score(context.Background(), j, map[string]string{}, "a.py", "x = 0\n",
 			[]Mutant{{ID: "m1", Search: "x = 0", Replace: "x = 1"}}, doorsShared, opts...)

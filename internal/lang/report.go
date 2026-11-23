@@ -96,10 +96,7 @@ func reportCmd(p Plugin, inv Invocation, cmd []string) (out []string, flagged, h
 	if shellWrappedBefore(cmd, at) {
 		return cmd, false, false
 	}
-	end := len(cmd)
-	if i := slices.Index(cmd[at+1:], "--"); i >= 0 {
-		end = at + 1 + i
-	}
+	end := runnerOptionsEnd(cmd, at)
 	out = cmd
 	if len(r.ReportArgs) > 0 && !carriesLast(cmd[at+1:end], r.ReportArgs) {
 		out = make([]string, 0, len(cmd)+len(r.ReportArgs))
@@ -113,6 +110,18 @@ func reportCmd(p Plugin, inv Invocation, cmd []string) (out []string, flagged, h
 		return h.Wrap(out), flagged, true
 	}
 	return out, flagged, false
+}
+
+// runnerOptionsEnd is where options to the runner whose word is cmd[at] end:
+// the index of the runner's own `--` after that word, or len(cmd). Every word
+// after that separator is the runner's positional argument (pytest's paths)
+// or the test binary's (cargo's libtest), so a flag meant for the runner goes
+// before it. The one placement rule ReportCmd and FailFastCmd share.
+func runnerOptionsEnd(cmd []string, at int) int {
+	if i := slices.Index(cmd[at+1:], "--"); i >= 0 {
+		return at + 1 + i
+	}
+	return len(cmd)
 }
 
 // reportHookGOOS is the operating system ReportCmd decides a hook's wrapper

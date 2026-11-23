@@ -585,6 +585,18 @@ fails phpunit-fail.txt vendor/bin/phpunit fail/tests/FTest.php
 (cd report/nextest && cargo build --tests -q 2>/dev/null; fails report-cargo-nextest-hidden.txt cargo nextest run)
 (cd report/nextest && fails report-cargo-nextest-shown.txt cargo nextest run --status-level pass --final-status-level flaky)
 
+# --- fail-fast: nextest's row adds --fail-fast to mutant runs, placed before
+# the runner's own `--` (FailFastCmd). The fixture's profile turns fail-fast
+# off and holds two failing tests before a passing one; -j 1 makes the count
+# exact. The second command is FailFastCmd of `cargo nextest run -j 1 --
+# tests::` and the third is the flag appended after the `--` instead;
+# TestFailFastCaptureIsTheRowsCommand reads this file to hold them equal.
+nextran_of() { grep -oE '[0-9]+(/[0-9]+)? tests? run' | head -1 | grep -oE '^[0-9]+'; }
+(cd failfast/nextest && cargo build --tests -q 2>/dev/null)
+want nextest-profile-no-fail-fast 3 "$(cd failfast/nextest && cargo nextest run -j 1 -- tests:: 2>&1 | nextran_of)"
+want nextest-fail-fast-before-separator 1 "$(cd failfast/nextest && cargo nextest run -j 1 --fail-fast -- tests:: 2>&1 | nextran_of)"
+want nextest-fail-fast-after-separator-refused 96 "$(cd failfast/nextest && cargo nextest run -j 1 -- tests:: --fail-fast >/dev/null 2>&1; echo $?)"
+
 # Each killer command (KillerCmd: the failing run's own command, narrowed to the
 # test its failure reader named, no file added) runs that test and nothing else.
 killed() { grep -oE '([0-9]+ examples?, [0-9]+ failures?)|(Tests: [0-9]+, Assertions: [0-9]+, (Failures|Errors): [0-9]+)' | head -1; }

@@ -436,6 +436,13 @@ var runners = []Runner{
 		// cargo-nextest 0.9.148).
 		ReportArgs: []string{"--status-level", "pass", "--final-status-level", "flaky"},
 		ListCmd:    nextestListCmd, ParseList: nextestParseList, SingleCmd: nextestSingleCmd, ResolveByList: true,
+		// --fail-fast is nextest's default, so it changes a run only where a
+		// profile or the command turned it off (`fail-fast = false`,
+		// --no-fail-fast); the last of the two flags wins and the command
+		// line overrides the profile (measured on cargo-nextest 0.9.148).
+		// cargo test has no such flag: libtest has none, and cargo already
+		// stops at the first failing test binary unless told otherwise.
+		FailFast:     []string{"--fail-fast"},
 		FirstFailure: rustFirstFailure, Flaky: rustFlakyTests, KillerCmd: nextestKillerCmd,
 		Disclose: nextestDisclose, PreflightBin: nextestPreflightBin,
 		ListUnits: nextestListUnits, ParseUnits: nextestParseUnits, UnitCmd: oneUnit(nextestUnitsCmd),

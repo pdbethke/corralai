@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -207,11 +208,14 @@ func WithKillConfirmer(f KillerCmdFor) ScoreOption {
 	return func(c *scoreConfig) { c.killConfirmer = f }
 }
 
-// FailFastFor returns the stop-at-first-failure arguments to append to one
-// MUTANT run's command, or ok=false for a runner that has none. It is the
-// runner's row (lang.FailFastArgsFor), passed in rather than looked up here so
-// adequacy stays language-agnostic.
-type FailFastFor func(cmd []string) (args []string, ok bool)
+// FailFastFor returns one MUTANT run's command with the runner's
+// stop-at-first-failure flag placed where the runner reads it, or ok=false
+// for a runner that has none; a command that already carries the flag comes
+// back unchanged with ok true. It is the runner's row (lang.FailFastCmd),
+// passed in rather than looked up here so adequacy stays language-agnostic:
+// where the flag goes is the runner's business too (before cargo's `--`, not
+// after it).
+type FailFastFor func(cmd []string) (out []string, ok bool)
 
 // MutantCommand is what CommandFor decides for one mutant.
 type MutantCommand struct {
@@ -1119,9 +1123,8 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 	// baseline or the canary above, which must run everything.
 	failFast := func(cmd []string) []string { return cmd }
 	if cfg.failFast != nil && len(mutants) > 0 {
-		if args, ok := cfg.failFast(testCmd); ok {
-			probeCmd := lang.AppendFailFast(testCmd, args)
-			if len(probeCmd) == len(testCmd) {
+		if probeCmd, ok := cfg.failFast(testCmd); ok {
+			if slices.Equal(probeCmd, testCmd) {
 				rep.FailFastNote = "the test command already stops at the first failure"
 			} else {
 				pctx, pcancel := context.WithTimeout(ctx, perMutant)
@@ -1129,12 +1132,17 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 				pcancel()
 				switch {
 				case ffErr != nil:
-					rep.FailFastNote = fmt.Sprintf("fail-fast (%s) not used: the probe run failed: %v", strings.Join(args, " "), ffErr)
+					rep.FailFastNote = fmt.Sprintf("fail-fast (%s) not used: the probe run failed: %v", strings.Join(probeCmd, " "), ffErr)
 				case !ffPass:
-					rep.FailFastNote = fmt.Sprintf("fail-fast (%s) not used: the healthy suite does not pass with it, so the runner does not accept it", strings.Join(args, " "))
+					rep.FailFastNote = fmt.Sprintf("fail-fast (%s) not used: the healthy suite does not pass with it, so the runner does not accept it", strings.Join(probeCmd, " "))
 				default:
 					rep.FailFast = true
-					failFast = func(cmd []string) []string { return lang.AppendFailFast(cmd, args) }
+					failFast = func(cmd []string) []string {
+						if out, ok := cfg.failFast(cmd); ok {
+							return out
+						}
+						return cmd
+					}
 				}
 			}
 		} else {

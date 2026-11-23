@@ -6204,16 +6204,11 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 		// one day a paid audit dead-ended here with nothing to go on: a Python
 		// venv the offline jail could not see, and a Go repo never diagnosed at
 		// all. The refusal to grade is correct; the silence about WHY was not.
+		var out string
 		if br, ok := runner.(interface{ BaselineOutput() string }); ok {
-			if out := strings.TrimSpace(br.BaselineOutput()); out != "" {
-				l.note("%s: baseline does not pass unmutated — not graded. The suite said:\n%s\n", j.Path, indentLines(out, "    "))
-				if hint := moduleImportHint(out); hint != "" {
-					l.note("%s: %s\n", j.Path, hint)
-				}
-				return reposcan.FileResult{Gradable: false, Reason: reposcan.ReasonBaselineFailed}, nil
-			}
+			out = br.BaselineOutput()
 		}
-		l.note("%s: baseline does not pass unmutated — not graded\n", j.Path)
+		l.noteRedBaseline(j.Path, "baseline does not pass unmutated — not graded", out)
 		return reposcan.FileResult{Gradable: false, Reason: reposcan.ReasonBaselineFailed}, nil
 	}
 	// A pass that leaned on the runner's retries is still a pass — the
@@ -6267,8 +6262,14 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 		return res, nil
 	}
 	if v.BaselineFailed {
+		// The stability check above passed, so this red is the audit's own
+		// run of the unmutated code: said as that, with what the suite said
+		// (the verdict carries it, as it does for certify --local). A paid
+		// vapor/vapor audit printed only "baseline failed" here for a suite
+		// that had trapped in a server thread, and the reason was in v the
+		// whole time. Terminal only: the record never holds suite output.
 		res.Reason = reposcan.ReasonBaselineFailed
-		l.note("%s: baseline failed — not graded\n", j.Path)
+		l.noteRedBaseline(j.Path, "baseline failed in the audit's own run of the unmutated code — not graded", v.BaselineOutput)
 		return res, nil
 	}
 	// ProvenMissed rides along on the same line as DevKillRate/Survivors
@@ -6658,6 +6659,23 @@ func (l *localExecutor) note(format string, a ...any) {
 // indentLines prefixes every line of s with pad — used to set a subprocess's
 // own output apart from corral's report lines, so a multi-line traceback reads
 // as quoted evidence rather than as more report.
+// noteRedBaseline says that path's unmutated baseline failed, in lead's
+// words, followed by what the suite printed when it printed anything, and
+// moduleImportHint's note when the output carries one. The one way a red
+// baseline reaches the operator on certify --repo, whichever run found it:
+// the stability check before the audit, or the audit's own.
+func (l *localExecutor) noteRedBaseline(path, lead, output string) {
+	out := strings.TrimSpace(output)
+	if out == "" {
+		l.note("%s: %s\n", path, lead)
+		return
+	}
+	l.note("%s: %s. The suite said:\n%s\n", path, lead, indentLines(out, "    "))
+	if hint := moduleImportHint(out); hint != "" {
+		l.note("%s: %s\n", path, hint)
+	}
+}
+
 func indentLines(s, pad string) string {
 	lines := strings.Split(s, "\n")
 	for i, l := range lines {

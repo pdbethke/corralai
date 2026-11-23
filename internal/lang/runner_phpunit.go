@@ -51,12 +51,25 @@ func phpunitParseList(stdout string) []string {
 // namespace its class is: PHPUnit matches --filter against
 // `Ns\Class::method with data set "name"`.
 func phpunitSingleCmd(argv []string, testPath, id string) ([]string, bool) {
+	cmd, ok := phpunitKillerCmd(argv, id)
+	if !ok {
+		return nil, false
+	}
+	return append(cmd, testPath), true
+}
+
+// phpunitKillerCmd narrows argv to the method id names (`Class::method`, as
+// PHPUnit's `N) Class::method` failure lines give it, phpFailures): every
+// data set of that method runs, since the failure line's data set is
+// dropped from the id, so the run is that one method. argv already scopes
+// the files.
+func phpunitKillerCmd(argv []string, id string) ([]string, bool) {
 	class, method, ok := strings.Cut(id, "::")
 	if !ok || class == "" || method == "" || !narrowable(argv, "--filter") {
 		return nil, false
 	}
 	filter := `/(?:^|\\)` + regexQuoter.Replace(class) + "::" + regexQuoter.Replace(method) + `(?: with data set .*)?$/`
-	return append(slices.Clone(argv), "--filter", filter, testPath), true
+	return append(slices.Clone(argv), "--filter", filter), true
 }
 
 // phpunitListUnits is PHPUnit's own `--list-tests` over argv, run under

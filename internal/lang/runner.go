@@ -407,7 +407,7 @@ var runners = []Runner{
 		// with documentation too).
 		ReportArgs: []string{"--format", "progress"},
 		ListCmd:    rspecListCmd, ParseList: rspecParseList, SingleCmd: rspecSingleCmd, ResolveByList: true, Coruns: lastFullColl,
-		FirstFailure: firstOf(rspecFailures), FailedTests: rspecFailures, DeselectCmd: rspecDeselectCmd,
+		FirstFailure: firstOf(rspecFailures), FailedTests: rspecFailures, DeselectCmd: rspecDeselectCmd, KillerCmd: rspecKillerCmd,
 		ListUnits: rspecListUnits, ParseUnits: rspecParseUnits, UnitCmd: oneUnit(rspecUnitsCmd),
 		UnitsCmd: rspecUnitsCmd, UnitForFile: fileUnitForFile, UnitNoun: "test files",
 		Note: "listing, one-test, one-file and several-file runs verified on rspec-core 3.13 (one-test runs need 3.12 or later); --format progress verified on rspec-core 3.13.6 against an .rspec `--format json`, and it replaces an .rspec `--format documentation` too",
@@ -419,7 +419,7 @@ var runners = []Runner{
 	},
 	{
 		Name: "phpunit", ID: "phpunit", Languages: []string{"php"}, Default: true, Words: []string{"phpunit"},
-		FailFast: []string{"--stop-on-failure"}, FirstFailure: phpFirstFailure, FailedTests: phpFailures, DeselectCmd: phpunitDeselectCmd,
+		FailFast: []string{"--stop-on-failure"}, FirstFailure: phpFirstFailure, FailedTests: phpFailures, DeselectCmd: phpunitDeselectCmd, KillerCmd: phpunitKillerCmd,
 		ListCmd: phpunitListCmd, ParseList: phpunitParseList, SingleCmd: phpunitSingleCmd, ResolveByList: true,
 		ListUnits: phpunitListUnits, ParseUnits: phpunitParseUnits, ListUnitsSetup: phpunitUnitsSetup, UnitCmd: oneUnit(phpunitUnitsCmd),
 		UnitsCmd: phpunitUnitsCmd, UnitForFile: fileUnitForFile, UnitNoun: "test files",
@@ -436,7 +436,7 @@ var runners = []Runner{
 		// cargo-nextest 0.9.148).
 		ReportArgs: []string{"--status-level", "pass", "--final-status-level", "flaky"},
 		ListCmd:    nextestListCmd, ParseList: nextestParseList, SingleCmd: nextestSingleCmd, ResolveByList: true,
-		FirstFailure: rustFirstFailure, Flaky: rustFlakyTests,
+		FirstFailure: rustFirstFailure, Flaky: rustFlakyTests, KillerCmd: nextestKillerCmd,
 		Disclose: nextestDisclose, PreflightBin: nextestPreflightBin,
 		ListUnits: nextestListUnits, ParseUnits: nextestParseUnits, UnitCmd: oneUnit(nextestUnitsCmd),
 		UnitsCmd: nextestUnitsCmd, UnitForFile: nextestUnitForFile, UnitNoun: "test targets",
@@ -445,7 +445,7 @@ var runners = []Runner{
 	{
 		Name: "cargo test", ID: "cargo-test", Languages: []string{"rust"}, Default: true, Words: []string{"cargo"},
 		ListCmd: libtestListCmd, ParseList: libtestParseList, SingleCmd: libtestSingleCmd, ResolveByList: true,
-		FirstFailure: rustFirstFailure, Flaky: rustFlakyTests,
+		FirstFailure: rustFirstFailure, Flaky: rustFlakyTests, KillerCmd: cargoKillerCmd,
 		Disclose: libtestDisclose, PreflightBin: libtestPreflightBin,
 		ListUnits: cargoListUnits, ParseUnits: cargoParseUnits, UnitCmd: oneUnit(cargoUnitsCmd),
 		UnitsCmd: cargoUnitsCmd, UnitsCoruns: cargoUnitsCoruns, UnitForFile: cargoUnitForFile, UnitNoun: "test targets",

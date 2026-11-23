@@ -3,7 +3,10 @@
 package lang
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -41,6 +44,25 @@ func TestKillerCmdNarrowsTheRunByName(t *testing.T) {
 			[]string{"node", "./node_modules/vitest/vitest.mjs", "run", "-t", `^A(?: | > )b$`}},
 		{"javascript", "vitest", []string{"node", "./node_modules/vitest/vitest.mjs"}, "A::b",
 			[]string{"node", "./node_modules/vitest/vitest.mjs", "run", "-t", `^A(?: | > )b$`}},
+		// rspec: the full description `Failed examples:` names, anchored.
+		{"ruby", "rspec", []string{"bundle", "exec", "rspec", "spec"}, "Calc adds (a+b)",
+			[]string{"bundle", "exec", "rspec", "spec", "-E", `\ACalc adds \(a\+b\)\z`}},
+		{"ruby", "rspec", []string{"rspec"}, "MyApp::Calc top level", []string{"rspec", "-E", `\AMyApp::Calc top level\z`}},
+		// cargo test: libtest's --exact, after the binaries' `--`.
+		{"rust", "cargo-test", []string{"cargo", "test", "--workspace"}, "tests::adds",
+			[]string{"cargo", "test", "--workspace", "--", "--exact", "tests::adds"}},
+		{"rust", "cargo-test", []string{"cargo", "test", "-p", "a", "--", "--nocapture"}, "tests::adds",
+			[]string{"cargo", "test", "-p", "a", "--", "--nocapture", "--exact", "tests::adds"}},
+		// nextest: that test of that binary, before nextest's own `--`.
+		{"rust", "cargo-nextest", []string{"cargo", "nextest", "run", "--workspace"}, "units-a::it integrates",
+			[]string{"cargo", "nextest", "run", "--workspace", "-E", "binary_id(=units-a::it) & test(=integrates)"}},
+		{"rust", "cargo-nextest", []string{"cargo", "nextest", "run", "--", "--nocapture"}, "rf tests::bad",
+			[]string{"cargo", "nextest", "run", "-E", "binary_id(=rf) & test(=tests::bad)", "--", "--nocapture"}},
+		// PHPUnit: the method, every data set of it, any namespace before it.
+		{"php", "phpunit", []string{"vendor/bin/phpunit"}, "FTest::testData",
+			[]string{"vendor/bin/phpunit", "--filter", `/(?:^|\\)FTest::testData(?: with data set .*)?$/`}},
+		{"php", "phpunit", []string{"vendor/bin/phpunit", "tests"}, `App\Tests\FTest::testAdds`,
+			[]string{"vendor/bin/phpunit", "tests", "--filter", `/(?:^|\\)App\\Tests\\FTest::testAdds(?: with data set .*)?$/`}},
 	}
 	for _, c := range cases {
 		got, ok := killerRow(t, c.lang, c.runner).KillerCmd(c.argv, c.id)
@@ -65,6 +87,21 @@ func TestKillerCmdRefusesAFilteredArgv(t *testing.T) {
 		{"go", "go-test", []string{"sh", "-c", "go test ./..."}, "TestX"},
 		{"javascript", "vitest", []string{"node", "./node_modules/vitest/vitest.mjs", "run"}, ""},
 		{"javascript", "jest", []string{"npx", "jest"}, ""},
+		{"ruby", "rspec", []string{"rspec", "-e", "adds"}, "Calc adds"},
+		{"ruby", "rspec", []string{"rspec", "--example", "adds"}, "Calc adds"},
+		{"ruby", "rspec", []string{"rspec"}, ""},
+		{"php", "phpunit", []string{"vendor/bin/phpunit", "--filter", "x"}, "FTest::testAdds"},
+		{"php", "phpunit", []string{"vendor/bin/phpunit"}, "FTest"},
+		{"php", "phpunit", []string{"vendor/bin/phpunit"}, ""},
+		// cargo test with a name filter of its own, a --skip, or a nextest id.
+		{"rust", "cargo-test", []string{"cargo", "test", "adds"}, "tests::adds"},
+		{"rust", "cargo-test", []string{"cargo", "test", "--", "--skip", "slow"}, "tests::adds"},
+		{"rust", "cargo-test", []string{"cargo", "test"}, "units-a tests::adds"},
+		{"rust", "cargo-test", []string{"sh", "-c", "cargo test"}, "tests::adds"},
+		// nextest with a filterset of its own (unioned), or an id with no binary.
+		{"rust", "cargo-nextest", []string{"cargo", "nextest", "run", "-E", "test(x)"}, "rf tests::bad"},
+		{"rust", "cargo-nextest", []string{"cargo", "nextest", "run"}, "tests::bad"},
+		{"rust", "cargo-nextest", []string{"cargo", "nextest", "run", "--partition", "count:1/2"}, "rf tests::bad"},
 	}
 	for _, c := range cases {
 		if got, ok := killerRow(t, c.lang, c.runner).KillerCmd(c.argv, c.id); ok {
@@ -98,8 +135,8 @@ func TestStripPyPositionalsKeepsOptionsAndTheirValues(t *testing.T) {
 
 func TestKillerCmdForIsNilWithoutARow(t *testing.T) {
 	p, _ := ByName("ruby")
-	if KillerCmdFor(p, Invocation{Argv: []string{"bundle", "exec", "rspec"}}) != nil {
-		t.Error("rspec has no KillerCmd, KillerCmdFor must be nil")
+	if KillerCmdFor(p, Invocation{Argv: []string{"ruby", "-Itest", "test/a_test.rb"}}) != nil {
+		t.Error("minitest has no KillerCmd, KillerCmdFor must be nil")
 	}
 }
 
@@ -153,5 +190,34 @@ func TestPyKillerCmdRefusesAWordAfterAnUnknownLongOption(t *testing.T) {
 	got, ok = r.KillerCmd([]string{"pytest", "--some-plugin-opt=val", "tests"}, "tests/test_a.py::test_x")
 	if want := []string{"pytest", "--some-plugin-opt=val", "tests/test_a.py::test_x"}; !ok || !slices.Equal(got, want) {
 		t.Errorf("--opt=val tests: got %q ok=%v, want %q", got, ok, want)
+	}
+}
+
+// The capture script's killer checks (scripts/capture-runner-fixtures.sh,
+// "Each killer command") ran these filters against the real runners; each
+// must be what KillerCmd builds, so the row cannot drift from what was run.
+func TestKillerFiltersAreTheOnesTheCaptureScriptRan(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "scripts", "capture-runner-fixtures.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ lang, runner, id string }{
+		{"ruby", "rspec", "Calc adds (a+b)"},
+		{"ruby", "rspec", "MyApp::Calc top level"},
+		{"php", "phpunit", "FTest::testAdds"},
+		{"php", "phpunit", "FTest::testData"},
+		{"rust", "cargo-nextest", "units-a::it integrates"},
+	} {
+		argv := []string{c.runner}
+		if c.runner == "cargo-nextest" {
+			argv = []string{"cargo", "nextest", "run", "--workspace"}
+		}
+		cmd, ok := killerRow(t, c.lang, c.runner).KillerCmd(argv, c.id)
+		if !ok {
+			t.Fatalf("%s %q: no killer command", c.runner, c.id)
+		}
+		if filter := "'" + cmd[len(cmd)-1] + "'"; !strings.Contains(string(b), filter) {
+			t.Errorf("%s %q: the capture script ran no %s", c.runner, c.id, filter)
+		}
 	}
 }

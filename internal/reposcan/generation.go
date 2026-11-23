@@ -530,7 +530,14 @@ package reposcan
 // passing case of an authored test whose cases partly failed. "50" has
 // reached main, so this gets its own generation. Behaviour bump; the shape is
 // unchanged.
-const VerdictGeneration = "51"
+// "52" (2026-11-21): rspec, PHPUnit, cargo test and cargo-nextest confirm a
+// kill by running the killing test alone (lang.Runner.KillerCmd), as Go,
+// Python, jest and vitest have; a "51" verdict for those confirmed every kill
+// by repeating the whole grading run. A kill the test alone does not repeat
+// is still confirmed by the repeat, so a count can only stay or move to the
+// stricter reading; the recorded confirmation differs. Behaviour bump; the
+// shape is unchanged.
+const VerdictGeneration = "52"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

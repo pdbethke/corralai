@@ -198,11 +198,6 @@ func selectionCapable(p Plugin, rows []Runner) bool {
 type Exemption struct{ Lang, Capability, Reason string }
 
 var ParityExemptions = []Exemption{
-	{"ruby", "confirm-alone", "no row narrows a run to the killing test by name yet; kills there are confirmed by repeating the grading run (kill-confirmation phase 1)"},
-
-	{"php", "confirm-alone", "no row narrows a run to the killing test by name yet; kills there are confirmed by repeating the grading run (kill-confirmation phase 1)"},
-
-	{"rust", "confirm-alone", "no row narrows a run to the killing test by name yet; kills there are confirmed by repeating the grading run (kill-confirmation phase 1)"},
 
 	{"rust", "fail-fast", "nextest's --fail-fast and libtest's lack of one are not yet verified against a real run (runner table Phase 5)"},
 

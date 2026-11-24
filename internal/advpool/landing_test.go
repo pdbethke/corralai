@@ -103,7 +103,7 @@ func TestTheWritePathIsTheAdmittedLanding(t *testing.T) {
 
 	// The workspace substrate's BaseFiles is EMPTY: the composition must
 	// still keep the project's tests, from the carried Existing.
-	ws := JailScorer{BaseFiles: map[string]string{}, DevTestPath: "src/foo_tests.rs", Landing: l}.authoredWorkspace("src/foo.rs", test)
+	ws := JailScorer{BaseFiles: map[string]string{}, DevTestPath: "src/foo_tests.rs", Landing: l}.authoredWorkspace("src/foo.rs", test).Base
 	if !strings.HasPrefix(ws["src/foo_tests.rs"], existing) {
 		t.Fatalf("on an empty base the landing dropped the project's tests:\n%s", ws["src/foo_tests.rs"])
 	}

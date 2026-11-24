@@ -2,6 +2,8 @@
 
 package adequacy
 
+import "strings"
+
 // Overlay is the workspace one run sees: Base, with code placed at CodePath
 // through Compose. The one place a run's files are assembled: every grading
 // run (baseline, mutant, canary, compile check, enumeration) builds its map
@@ -28,4 +30,19 @@ func (o Overlay) With(code string) map[string]string {
 	}
 	files[o.CodePath] = code
 	return files
+}
+
+// AppendBlock is the inline rule: Compose for a run whose authored test
+// lands IN the audited file itself (a Rust source's own `mod tests`, the
+// test reaching the code with `use super::*`). The block is appended to
+// whatever code is in place (original, mutant or canary), on a line of its
+// own: a newline is put between them only when the code does not already
+// end in one.
+func AppendBlock(block string) func(code string) string {
+	return func(code string) string {
+		if code != "" && !strings.HasSuffix(code, "\n") {
+			return code + "\n" + block
+		}
+		return code + block
+	}
 }

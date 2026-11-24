@@ -153,6 +153,9 @@ type scoreConfig struct {
 	// rewrite, when set, is applied to a COPY of every command Score hands
 	// the jail, at the one point it does so (see toJail in Score).
 	rewrite func(cmd []string) []string
+	// compose, when set, is the Overlay.Compose every run of this Score
+	// writes its code through (WithInlineTest). nil writes the code as is.
+	compose func(code string) string
 }
 
 // The values of MutantGrading.KillConfirmation: what the confirmation of a
@@ -232,6 +235,17 @@ type CommandFor func(m Mutant) MutantCommand
 // The baseline and the compile gate are unaffected — they run with testCmd.
 func WithCommandFor(f CommandFor) ScoreOption {
 	return func(c *scoreConfig) { c.commandFor = f }
+}
+
+// WithInlineTest appends block to the code at codePath on every run of this
+// Score (baseline, canary, mutants, fail-fast probe, kill confirmation), by
+// AppendBlock through the one Overlay every run is built with. It is how an
+// authored test that lands IN the audited file is graded: every run rewrites
+// that file with the code it is asking about, so a test written there once
+// would be overwritten by the first mutant, and the block must instead ride
+// the code into each run.
+func WithInlineTest(block string) ScoreOption {
+	return func(c *scoreConfig) { c.compose = AppendBlock(block) }
 }
 
 // WithMutantTimeout overrides the auto-derived per-mutant timeout with an
@@ -934,8 +948,13 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 		return cfg.rewrite(append([]string(nil), cmd...))
 	}
 
+	// ov is every run's workspace: base, with the code in place at codePath
+	// through cfg.compose (WithInlineTest). Built once, so no run below can
+	// be the one that forgot the block.
+	ov := Overlay{Base: base, CodePath: codePath, Compose: cfg.compose}
+
 	runCmd := func(rctx context.Context, code string, cmd []string) (bool, error) {
-		files := Overlay{Base: base, CodePath: codePath}.With(code)
+		files := ov.With(code)
 		return j.RunTest(rctx, files, toJail(cmd))
 	}
 
@@ -950,7 +969,7 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 	dj, detailed := j.(DetailedJail)
 	nameKiller := cfg.failureParser != nil && detailed
 	runCmdDetailed := func(rctx context.Context, code string, cmd []string) (bool, []byte, error) {
-		files := Overlay{Base: base, CodePath: codePath}.With(code)
+		files := ov.With(code)
 		return dj.RunTestDetailed(rctx, files, toJail(cmd))
 	}
 
@@ -964,7 +983,7 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 			pass, err := runCmd(rctx, code, cmd)
 			return pass, "", err
 		}
-		files := Overlay{Base: base, CodePath: codePath}.With(code)
+		files := ov.With(code)
 		return vj.RunTestVerbose(rctx, files, toJail(cmd))
 	}
 
@@ -979,7 +998,7 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 	// sixth run (2026-10-30) failed its baseline and printed 64 KiB of
 	// passing acceptance tests, cut off before vitest's failure summary.
 	baselineRun := func(rctx context.Context, code string) (bool, string, error) {
-		files := Overlay{Base: base, CodePath: codePath}.With(code)
+		files := ov.With(code)
 		// WARM THE RUN CACHE with this run, only when the caller asked
 		// (WithWarmBaseline): the warming run writes what every later run
 		// reads, so it must be a run of the project's own code and tests. A

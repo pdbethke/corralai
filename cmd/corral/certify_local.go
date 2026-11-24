@@ -2435,7 +2435,7 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 	// it anyway. Checking the base command refused those audits for a problem
 	// the run had already solved.
 	authoredArgv := scorer.AuthoredCommand(rs.CodePath, adequacy.ShellSplit(rs.TestCmd))
-	if collected, cerr := scorer.AuthoredTestWouldBeCollected(ctx, rs.CodePath, authoredArgv); cerr == nil && !collected {
+	if collected, cerr := scorer.AuthoredTestWouldBeCollected(ctx, rs.CodePath, rs.Code, authoredArgv); cerr == nil && !collected {
 		return zero, auditNotCollectedErr(notCollectedAdvice, advpool.AuthoredTestPathFor(rs.Landing, rs.CodePath, rs.DevTestPath))
 	}
 

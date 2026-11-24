@@ -117,14 +117,40 @@ func (l AuthoredLanding) AppendTo() string {
 	return l.Path
 }
 
-// overlay writes an authored test (content, as ParseTest landed it) at its
-// path in ws: ComposeLanding — the landing file's existing bytes with the
-// block appended, for an Into landing; the test alone, as a file of its own,
-// otherwise. The one overlay rule for an authored test, shared by
-// CompileTest and authoredWorkspace so the file compiled and the file graded
-// are composed the same way.
-func (l AuthoredLanding) overlay(ws map[string]string, path, content string) {
-	ws[path] = golang.ComposeLanding(l.Landing, l.Existing, content)
+// Inline reports whether the authored test lands in the code file itself: a
+// landing Into the audited source (Rust's inline `mod tests`, the block
+// reaching the code with `use super::*` at depth 0). Such a test cannot be
+// written once at its path, because every grading run writes the code it is
+// asking about (original, mutant or canary) at that very path; it must ride
+// the code into each run instead (authored).
+func (l AuthoredLanding) Inline(codePath string) bool {
+	return l.Into && l.Path != "" && filepath.Clean(filepath.FromSlash(l.Path)) == filepath.Clean(filepath.FromSlash(codePath))
+}
+
+// authored is the workspace a run of the authored test (content, as
+// ParseTest landed it) sees, as the Overlay its code is written through: base
+// with the test landed at testPath — ComposeLanding, the landing file's
+// existing bytes with the block appended, for an Into landing; the test
+// alone, as a file of its own, otherwise — or, for an Inline landing, base
+// untouched and the block appended to whatever code the run writes at
+// codePath (adequacy.AppendBlock). Nothing is ever written at testPath for an
+// inline landing: that path IS codePath, and a write there would be
+// overwritten by the code, or would overwrite it.
+//
+// The one rule for where an authored test goes in a workspace, shared by
+// CompileTest, the authored pass, the clean-code failure run and the
+// positive control, so the file compiled and the file graded are composed
+// the same way. base is never modified.
+func (l AuthoredLanding) authored(base map[string]string, codePath, testPath, content string) adequacy.Overlay {
+	ws := maps.Clone(base)
+	if ws == nil {
+		ws = map[string]string{}
+	}
+	if l.Inline(codePath) {
+		return adequacy.Overlay{Base: ws, CodePath: codePath, Compose: adequacy.AppendBlock(content)}
+	}
+	ws[testPath] = golang.ComposeLanding(l.Landing, l.Existing, content)
+	return adequacy.Overlay{Base: ws, CodePath: codePath}
 }
 
 // authoredTestPath derives the path the POOL-AUTHORED test is written to in
@@ -740,8 +766,16 @@ func (s JailScorer) scoreAuthoredReport(ctx context.Context, codePath, code, tes
 	if err != nil {
 		return adequacy.Report{}, err
 	}
+	opts := s.baseScoreOpts()
 	if s.BaseFiles != nil {
-		scoreBase = s.authoredWorkspace(codePath, test)
+		ov := s.authoredWorkspace(codePath, test)
+		scoreBase = ov.Base
+		if s.Landing.Inline(codePath) {
+			// The block rides every run of the Score — baseline, canary,
+			// each survivor, its confirmation — appended to the code each
+			// one writes (see AuthoredLanding.authored).
+			opts = append(opts, adequacy.WithInlineTest(test))
+		}
 	}
 
 	// The mutants here are SURVIVORS of the dev pass: no selected dev test
@@ -761,7 +795,6 @@ func (s JailScorer) scoreAuthoredReport(ctx context.Context, codePath, code, tes
 	// satisfied it for free, whether or not the authored test ever read the
 	// file. It is also more honest on the kill: a dev test that flaked
 	// during this pass used to count as the authored test proving a gap.
-	opts := s.baseScoreOpts()
 	if r, ok := s.selectionRow(); ok {
 		path := authoredTestPath(s.Landing, codePath, s.DevTestPath, s.BaseFiles)
 		if alone, aerr := testmap.AuthoredTestCmd(s.SelectionMap, golang.Selection{Base: s.Selection.Base}, r, base, s.RepoDir, path); aerr == nil {
@@ -795,7 +828,7 @@ func (s JailScorer) scoreAuthoredReport(ctx context.Context, codePath, code, tes
 	// unsound via the existing checks below, with no need to spend another
 	// jail run proving it twice.
 	if s.BaseFiles != nil && rep.Total > 0 {
-		reaches, verr := s.verifyAuthoredTestReaches(ctx, codePath, cmd)
+		reaches, verr := s.verifyAuthoredTestReaches(ctx, codePath, code, cmd)
 		if verr != nil {
 			return adequacy.Report{}, fmt.Errorf("advpool: positive-control authored test: %w", verr)
 		}
@@ -902,12 +935,14 @@ func (s JailScorer) CompliantRun(ctx context.Context, codePath, code, test, test
 	// auto-discover, and this is feedback text rather than a measured number,
 	// which is why it is a one-line fix and not an incident. (2026-09-08.)
 	cmd := s.authoredCmd(codePath, base)
+	ov := adequacy.Overlay{Base: ws, CodePath: codePath}
 	if s.BaseFiles != nil {
-		ws = s.authoredWorkspace(codePath, test)
+		ov = s.authoredWorkspace(codePath, test)
 	}
 	// The UNMUTATED code: this asks "why does your test fail on software that
-	// is correct", which is the only question worth feeding back.
-	ws = adequacy.Overlay{Base: ws, CodePath: codePath}.With(code)
+	// is correct", which is the only question worth feeding back. For an
+	// inline landing the test rides it (ov.Compose).
+	ws = ov.With(code)
 	if ends {
 		return ej.RunTestEnds(ctx, ws, rewriteCmd(s.CommandRewrite, cmd))
 	}
@@ -920,14 +955,11 @@ func (s JailScorer) CompliantRun(ctx context.Context, codePath, code, test, test
 // already contain, so there is nothing to shadow; see the method's own doc)
 // and the positive control below needs too, just with the canary in place
 // of the real test. Extracted so both call sites build the identical
-// workspace shape.
-func (s JailScorer) authoredWorkspace(codePath, content string) map[string]string {
-	ws := make(map[string]string, len(s.BaseFiles)+1)
-	for k, v := range s.BaseFiles {
-		ws[k] = v
-	}
-	s.Landing.overlay(ws, authoredTestPath(s.Landing, codePath, s.DevTestPath, s.BaseFiles), content)
-	return ws
+// workspace shape. It is returned as the Overlay the run's code goes
+// through, because for an inline landing the test is not a file of the
+// workspace at all but a block appended to that code (AuthoredLanding.authored).
+func (s JailScorer) authoredWorkspace(codePath, content string) adequacy.Overlay {
+	return s.Landing.authored(s.BaseFiles, codePath, authoredTestPath(s.Landing, codePath, s.DevTestPath, s.BaseFiles), content)
 }
 
 // verifyAuthoredTestReaches is corral's POSITIVE CONTROL for a pool-authored
@@ -960,8 +992,19 @@ func (s JailScorer) authoredWorkspace(codePath, content string) map[string]strin
 //     exists for) or something else masks it. Either way the authored
 //     test's own verdict from the real scoring run is worthless.
 //     reaches=false.
-func (s JailScorer) verifyAuthoredTestReaches(ctx context.Context, codePath string, cmd []string) (bool, error) {
-	ws := s.authoredWorkspace(codePath, adequacy.CanaryCode)
+//
+// For an INLINE landing the authored test's own file is codePath, so there is
+// no separate path to plant the canary at: it is appended to code as the
+// block (AuthoredLanding.authored), exactly where the real test rides, and
+// the question becomes whether the command reacts to invalid source after the
+// code in that file. code is read only then; a landing with a file of its own
+// leaves codePath as the workspace already has it, as it always did.
+func (s JailScorer) verifyAuthoredTestReaches(ctx context.Context, codePath, code string, cmd []string) (bool, error) {
+	ov := s.authoredWorkspace(codePath, adequacy.CanaryCode)
+	ws := ov.Base
+	if ov.Compose != nil {
+		ws = ov.With(code)
+	}
 	passed, err := s.Jail.RunTest(ctx, ws, rewriteCmd(s.CommandRewrite, cmd))
 	if err != nil {
 		if errors.Is(err, adequacy.ErrTestTimeout) {
@@ -997,14 +1040,15 @@ func AuthoredTestPathFor(l AuthoredLanding, codePath, devTestPath string) string
 // — which is an ordinary way to invoke a suite, not an exotic one.
 //
 // Returns (true, nil) when the authored test would be collected. Costs one
-// jail run and nothing else.
-func (s JailScorer) AuthoredTestWouldBeCollected(ctx context.Context, codePath string, cmd []string) (bool, error) {
+// jail run and nothing else. code is the unmutated source, which an inline
+// landing's canary is appended to (see verifyAuthoredTestReaches).
+func (s JailScorer) AuthoredTestWouldBeCollected(ctx context.Context, codePath, code string, cmd []string) (bool, error) {
 	if s.BaseFiles == nil {
 		// Single-file mode overlays the test at the plugin's own synthetic
 		// path and supplies the command, so collection is not in question.
 		return true, nil
 	}
-	return s.verifyAuthoredTestReaches(ctx, codePath, cmd)
+	return s.verifyAuthoredTestReaches(ctx, codePath, code, cmd)
 }
 
 // selectionRow is the runner row the engine builds this scorer's authored
@@ -1429,12 +1473,11 @@ func (v JailValidator) CompileTest(ctx context.Context, codePath, code, test str
 	if v.BaseFiles != nil {
 		base = v.BaseFiles
 	}
-	ws := adequacy.Overlay{Base: base, CodePath: codePath}.With(code)
 	// The workspace as it stands WITHOUT the authored test, kept to ask one
 	// question of a failing check: does it fail here too? See below.
-	unmodified := maps.Clone(ws)
+	unmodified := adequacy.Overlay{Base: base, CodePath: codePath}.With(code)
 	testPath := authoredTestPath(v.Landing, codePath, v.DevTestPath, v.BaseFiles)
-	v.Landing.overlay(ws, testPath, test)
+	ws := v.Landing.authored(base, codePath, testPath, test).With(code)
 
 	// CompileCheck returns a SEQUENCE of commands (see lang.Plugin.CompileCheck's
 	// doc comment): most plugins yield exactly one, but a plugin whose checker

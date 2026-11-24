@@ -628,7 +628,7 @@ func TestAuthoredTestWouldBeCollectedDetectsAnUncollectedPath(t *testing.T) {
 	base := map[string]string{"scripts/x.js": "// code", "tests/x.test.js": "// dev test"}
 
 	notCollected := JailScorer{Jail: &collectionProbeJail{collects: false}, BaseFiles: base, DevTestPath: "tests/x.test.js"}
-	ok, err := notCollected.AuthoredTestWouldBeCollected(context.Background(), "scripts/x.js", []string{"node", "tests/x.test.js"})
+	ok, err := notCollected.AuthoredTestWouldBeCollected(context.Background(), "scripts/x.js", "// code", []string{"node", "tests/x.test.js"})
 	if err != nil {
 		t.Fatalf("AuthoredTestWouldBeCollected: %v", err)
 	}
@@ -637,7 +637,7 @@ func TestAuthoredTestWouldBeCollectedDetectsAnUncollectedPath(t *testing.T) {
 	}
 
 	collected := JailScorer{Jail: &collectionProbeJail{collects: true}, BaseFiles: base, DevTestPath: "tests/x.test.js"}
-	ok, err = collected.AuthoredTestWouldBeCollected(context.Background(), "scripts/x.js", []string{"npx", "jest", "tests/"})
+	ok, err = collected.AuthoredTestWouldBeCollected(context.Background(), "scripts/x.js", "// code", []string{"npx", "jest", "tests/"})
 	if err != nil {
 		t.Fatalf("AuthoredTestWouldBeCollected: %v", err)
 	}
@@ -650,7 +650,7 @@ func TestAuthoredTestWouldBeCollectedDetectsAnUncollectedPath(t *testing.T) {
 // command, so collection is never in question and the probe must not run.
 func TestAuthoredTestCollectionIsNotQuestionedInSingleFileMode(t *testing.T) {
 	s := JailScorer{Jail: &collectionProbeJail{collects: false}} // BaseFiles nil
-	ok, err := s.AuthoredTestWouldBeCollected(context.Background(), "scripts/x.js", []string{"node", "x.test.js"})
+	ok, err := s.AuthoredTestWouldBeCollected(context.Background(), "scripts/x.js", "// code", []string{"node", "x.test.js"})
 	if err != nil || !ok {
 		t.Errorf("single-file mode must answer true without probing; got (%v, %v)", ok, err)
 	}

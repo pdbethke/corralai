@@ -282,12 +282,12 @@ func TestAuthoredCollectionPreflightChecksTheAuthoredPassesCommand(t *testing.T)
 		t.Fatalf("AuthoredCommand = %v, want it to name %q", got, authored)
 	}
 	// The base command alone: correctly reported as not collecting it.
-	if ok, err := s.AuthoredTestWouldBeCollected(context.Background(), "pkg/a.py", base); err != nil || ok {
+	if ok, err := s.AuthoredTestWouldBeCollected(context.Background(), "pkg/a.py", "x = 1\n", base); err != nil || ok {
 		t.Fatalf("base command: collected=%v err=%v, want false", ok, err)
 	}
 	// The command the authored pass really runs: collected, so the audit
 	// must NOT be refused.
-	if ok, err := s.AuthoredTestWouldBeCollected(context.Background(), "pkg/a.py", s.AuthoredCommand("pkg/a.py", base)); err != nil || !ok {
+	if ok, err := s.AuthoredTestWouldBeCollected(context.Background(), "pkg/a.py", "x = 1\n", s.AuthoredCommand("pkg/a.py", base)); err != nil || !ok {
 		t.Fatalf("authored pass command: collected=%v err=%v, want true — the selection names the file explicitly", ok, err)
 	}
 }

@@ -135,7 +135,7 @@ func TestScoreAuthoredReport_OverlaysAtTheRelocatedPath(t *testing.T) {
 		t.Fatalf("genuine proven kill did not come through: %+v", rep)
 	}
 
-	ws := s.authoredWorkspace(codePath, "AUTHORED-TEST")
+	ws := s.authoredWorkspace(codePath, "AUTHORED-TEST").Base
 	if ws[want] != "AUTHORED-TEST" {
 		t.Fatalf("authored test not overlaid at %q; keys=%v", want, wsKeys(ws))
 	}
@@ -189,7 +189,7 @@ func TestScoreAuthoredReport_LandsBesideAnEvidenceOnlyCoveringTest(t *testing.T)
 		t.Fatalf("genuine proven kill did not come through: %+v", rep)
 	}
 
-	ws := s.authoredWorkspace(codePath, "AUTHORED-TEST")
+	ws := s.authoredWorkspace(codePath, "AUTHORED-TEST").Base
 	if ws[want] != "AUTHORED-TEST" {
 		t.Fatalf("authored test not overlaid beside the covering test at %q; keys=%v", want, wsKeys(ws))
 	}

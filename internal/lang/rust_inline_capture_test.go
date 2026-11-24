@@ -48,16 +48,22 @@ func inlineLanding(src string) pairing.Landing {
 // control, the reach canary landed the same way.
 func inlineBlock(t *testing.T, src string, canary bool) string {
 	t.Helper()
-	l := inlineLanding(src)
-	target := readInline(t, "cargo/src/"+src)
+	return inlineBlockOn(t, src, "cargo/src/"+src, canary)
+}
+
+// inlineBlockOn is inlineBlock landed on the file at target (under inline/)
+// in place of the crate's own src.
+func inlineBlockOn(t *testing.T, src, target string, canary bool) string {
+	t.Helper()
+	l, on := inlineLanding(src), readInline(t, target)
 	if canary {
-		b, err := lang.ReachCanaryBlock(l, target)
+		b, err := lang.ReachCanaryBlock(l, on)
 		if err != nil {
 			t.Fatal(err)
 		}
 		return b
 	}
-	return lang.LandBody(l, target, readInline(t, "authored/"+src))
+	return lang.LandBody(l, on, readInline(t, "authored/"+src))
 }
 
 // The capture script runs the real cargo test and cargo nextest on the files
@@ -74,6 +80,7 @@ func TestRustInlineCapturesAreWhatCorralComposes(t *testing.T) {
 		dir, src, code, composed string
 		canary                   bool
 	}{
+		{"deny-lib-canary", "lib.rs", "deny/lib.rs", "deny.canary.rs", true},
 		{"lib-pass", "lib.rs", "cargo/src/lib.rs", "lib.rs", false},
 		{"lib-kill", "lib.rs", "mutants/lib.rs", "lib.mutant.rs", false},
 		{"lib-canary", "lib.rs", "cargo/src/lib.rs", "lib.canary.rs", true},
@@ -83,7 +90,11 @@ func TestRustInlineCapturesAreWhatCorralComposes(t *testing.T) {
 		{"named-pass", "named.rs", "cargo/src/named.rs", "named.rs", false},
 	} {
 		path := "src/" + c.src
-		ov := adequacy.Overlay{CodePath: path, Compose: adequacy.AppendBlock(inlineBlock(t, c.src, c.canary))}
+		target := c.code
+		if strings.HasPrefix(c.code, "mutants/") {
+			target = "cargo/src/" + c.src // a mutant run's block was landed on the original
+		}
+		ov := adequacy.Overlay{CodePath: path, Compose: adequacy.AppendBlock(inlineBlockOn(t, c.src, target, c.canary))}
 		if got, want := readInline(t, "composed/"+c.composed), ov.With(readInline(t, c.code))[path]; got != want {
 			t.Errorf("composed/%s is not what corral writes at %s:\n--- file\n%s\n--- corral\n%s", c.composed, path, got, want)
 		}
@@ -97,6 +108,10 @@ func TestRustInlineCapturesAreWhatCorralComposes(t *testing.T) {
 		if line := "inline " + dir + " " + src + " mutants/" + src; !slices.Contains(script, line) {
 			t.Errorf("the capture script has no line\n%s", line)
 		}
+	}
+	// The module's canary under a crate root that denies warnings.
+	if line := "inline deny-extra-canary lib.rs deny/lib.rs extra.rs composed/extra.canary.rs"; !slices.Contains(script, line) {
+		t.Errorf("the capture script has no line\n%s", line)
 	}
 	// A source that already declares corral_tests takes corral_tests_2.
 	if b := inlineBlock(t, "named.rs", false); !strings.HasPrefix(b, "#[cfg(test)]\nmod corral_tests_2 {\n") {
@@ -172,18 +187,27 @@ func TestRustInlineSelectCapturesAreTheRowsCommands(t *testing.T) {
 // must be exactly the ids InlineTestIDs builds: one that differs drops
 // nothing, silently. These are the real runners' failing runs of the
 // composed mutants, for the crate root (src/lib.rs, ids with no module path)
-// and a module (src/extra.rs), read by each row's own failure reader.
+// and a module (src/extra.rs), read by each row's own failure reader. The
+// same holds for the reach canary under #![deny(warnings)]: the inline
+// positive control counts the block reached only when the row's reader
+// names the canary failing, so the canary must build there and fail as a
+// test, by the id InlineTestIDs gives it.
 func TestRustInlineFailingIDsAreInlineTestIDs(t *testing.T) {
 	p, _ := lang.ByName("rust")
 	root := filepath.Join(inlineFixture, "cargo")
 	for _, c := range []struct {
 		fixture, src, killer string
 		argv                 []string
+		canary               bool
 	}{
-		{"inline-cargo-test-kill-lib.txt", "lib.rs", "corral_tests::zero_is_zero", []string{"cargo", "test"}},
-		{"inline-nextest-kill-lib.txt", "lib.rs", "corral_tests::zero_is_zero", []string{"cargo", "nextest", "run"}},
-		{"inline-cargo-test-kill-extra.txt", "extra.rs", "extra::corral_tests::above", []string{"cargo", "test"}},
-		{"inline-nextest-kill-extra.txt", "extra.rs", "extra::corral_tests::above", []string{"cargo", "nextest", "run"}},
+		{"inline-cargo-test-deny-canary-lib.txt", "lib.rs", "corral_tests::corral_reach_canary", []string{"cargo", "test"}, true},
+		{"inline-nextest-deny-canary-lib.txt", "lib.rs", "corral_tests::corral_reach_canary", []string{"cargo", "nextest", "run"}, true},
+		{"inline-cargo-test-deny-canary-extra.txt", "extra.rs", "extra::corral_tests::corral_reach_canary", []string{"cargo", "test"}, true},
+		{"inline-nextest-deny-canary-extra.txt", "extra.rs", "extra::corral_tests::corral_reach_canary", []string{"cargo", "nextest", "run"}, true},
+		{"inline-cargo-test-kill-lib.txt", "lib.rs", "corral_tests::zero_is_zero", []string{"cargo", "test"}, false},
+		{"inline-nextest-kill-lib.txt", "lib.rs", "corral_tests::zero_is_zero", []string{"cargo", "nextest", "run"}, false},
+		{"inline-cargo-test-kill-extra.txt", "extra.rs", "extra::corral_tests::above", []string{"cargo", "test"}, false},
+		{"inline-nextest-kill-extra.txt", "extra.rs", "extra::corral_tests::above", []string{"cargo", "nextest", "run"}, false},
 	} {
 		r, ok := lang.RunnerFor(p, lang.Cmd(c.argv))
 		if !ok || r.FailedTests == nil {
@@ -202,7 +226,7 @@ func TestRustInlineFailingIDsAreInlineTestIDs(t *testing.T) {
 				failed = append(failed, id)
 			}
 		}
-		ids, err := lang.InlineTestIDs(root, "src/"+c.src, inlineBlock(t, c.src, false))
+		ids, err := lang.InlineTestIDs(root, "src/"+c.src, inlineBlock(t, c.src, c.canary))
 		if err != nil {
 			t.Fatal(err)
 		}

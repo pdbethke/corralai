@@ -1,21 +1,21 @@
    Compiling inline-cargo v0.1.0 ($DIR/inline/extra-kill)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
      Running unittests src/lib.rs (target/debug/deps/inline_cargo-995b603fb05bc563)
 
 running 7 tests
 test extra::corral_tests::within_is_identity ... ok
 test extra::corral_tests::above ... FAILED
-test extra::tests::below ... ok
 test named::corral_tests::zero_is_zero ... ok
-test extra::tests::inside ... ok
 test tests::negative ... ok
+test extra::tests::inside ... ok
+test extra::tests::below ... ok
 test tests::positive ... ok
 
 failures:
 
 ---- extra::corral_tests::above stdout ----
 
-thread 'extra::corral_tests::above' panicked at src/extra.rs:40:5:
+thread 'extra::corral_tests::above' panicked at src/extra.rs:41:5:
 assertion `left == right` failed
   left: 30
  right: 10

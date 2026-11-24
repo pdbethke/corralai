@@ -651,8 +651,10 @@ skipok cargo-nextest env -C fail/cargo cargo nextest run -E 'not ((binary_id(=fa
 # corral composes from inline/authored, the select lines equal to what the
 # rows' SelectCmd builds from InlineTestIDs, and the failing ids captured here
 # equal to the ids InlineTestIDs gives (a salvage drops failing tests by them).
-inline() { # inline <case> <src file> <file under inline/>: inline/cargo copied to inline/<case>, the file at src/<src file>
-  cp -r inline/cargo "inline/$1" && cp "inline/$3" "inline/$1/src/$2"
+inline() { # inline <case> (<src file> <file under inline/>)...: inline/cargo copied to inline/<case>, each file at src/<src file>
+  local d="inline/$1"; shift
+  cp -r inline/cargo "$d"
+  while [ $# -gt 0 ]; do cp "inline/$2" "$d/src/$1"; shift 2; done
 }
 pf() { # "<passed> passed <failed> failed": libtest's result lines summed, or nextest's summary
   sed 's/\x1b\[[0-9;]*m//g' | awk '/^test result: |^ *Summary / {
@@ -669,6 +671,8 @@ inline extra-kill extra.rs composed/extra.mutant.rs
 inline extra-canary extra.rs composed/extra.canary.rs
 inline extra-dev extra.rs mutants/extra.rs
 inline named-pass named.rs composed/named.rs
+inline deny-lib-canary lib.rs composed/deny.canary.rs
+inline deny-extra-canary lib.rs deny/lib.rs extra.rs composed/extra.canary.rs
 # The mutant survives the file's own tests: only the landed block can kill it.
 want inline-cargo-test-dev-misses-lib "5 passed 0 failed" "$(cd inline/lib-dev && cargo test 2>&1 | pf)"
 want inline-cargo-test-dev-misses-extra "5 passed 0 failed" "$(cd inline/extra-dev && cargo test 2>&1 | pf)"
@@ -712,6 +716,28 @@ want inline-nextest-select-kills-extra "1 passed 1 failed" "$(cd inline/extra-ki
 want inline-nextest-select-canary-extra "0 passed 1 failed" "$(cd inline/extra-canary && cargo nextest run -E '((binary_id(=inline-cargo))) & (test(=extra::corral_tests::above) | test(=extra::corral_tests::within_is_identity) | test(=extra::corral_tests::corral_reach_canary))' 2>&1 | pf)"
 want inline-cargo-test-select-named "1 passed 0 failed" "$(cd inline/named-pass && cargo test -p inline-cargo --lib -- --exact named::corral_tests_2::doubles named::corral_tests_2::corral_reach_canary 2>&1 | pf)"
 want inline-nextest-select-named "1 passed 0 failed" "$(cd inline/named-pass && cargo nextest run -E '((binary_id(=inline-cargo))) & (test(=named::corral_tests_2::doubles) | test(=named::corral_tests_2::corral_reach_canary))' 2>&1 | pf)"
+# Under #![deny(warnings)] (inline/deny: src/lib.rs with that first line, as a
+# crate that denies warnings or builds with RUSTFLAGS=-Dwarnings) the
+# reach canary's block still builds, and the canary fails AS A TEST: the
+# landing's glob carries #[allow(unused_imports)] (rustGlobAllow), and the
+# canary uses nothing it imports. The failing runs are kept for the canary's
+# id, which the positive control requires the row's failure reader to name.
+pfexit() { # pfexit <cmd...>: pf of the command's output, then its exit status
+  local out rc
+  out="$("$@" 2>&1)" && rc=0 || rc=$?
+  echo "$(printf '%s\n' "$out" | pf) exit $rc"
+}
+want inline-cargo-test-deny-canary-lib "5 passed 1 failed exit 101" "$(cd inline/deny-lib-canary && pfexit cargo test)"
+want inline-nextest-deny-canary-lib "5 passed 1 failed exit 100" "$(cd inline/deny-lib-canary && pfexit cargo nextest run --no-fail-fast)"
+want inline-cargo-test-deny-canary-extra "5 passed 1 failed exit 101" "$(cd inline/deny-extra-canary && pfexit cargo test)"
+want inline-nextest-deny-canary-extra "5 passed 1 failed exit 100" "$(cd inline/deny-extra-canary && pfexit cargo nextest run --no-fail-fast)"
+(cd inline/deny-lib-canary && fails inline-cargo-test-deny-canary-lib.txt cargo test)
+(cd inline/deny-lib-canary && fails inline-nextest-deny-canary-lib.txt cargo nextest run --no-fail-fast)
+(cd inline/deny-extra-canary && fails inline-cargo-test-deny-canary-extra.txt cargo test)
+(cd inline/deny-extra-canary && fails inline-nextest-deny-canary-extra.txt cargo nextest run --no-fail-fast)
+# Without the allow the same file does not build: the glob alone breaks it.
+cp -r inline/deny-lib-canary inline/deny-no-allow && sed -i '/^#\[allow(unused_imports)\]$/d' inline/deny-no-allow/src/lib.rs
+want inline-cargo-test-deny-without-allow "error: unused import: \`super::*\`" "$(cd inline/deny-no-allow && cargo test 2>&1 | grep -m1 -o 'error: unused import: .*')"
 
 # --- package scripts: how each launcher hands extra arguments to the script --
 # (internal/lang/invocation.go's launcher table; keep the separators equal)

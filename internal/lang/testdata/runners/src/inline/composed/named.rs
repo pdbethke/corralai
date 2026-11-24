@@ -17,6 +17,7 @@ mod corral_tests {
 }
 #[cfg(test)]
 mod corral_tests_2 {
+#[allow(unused_imports)]
 use super::*;
 
 // corral's authored test for src/named.rs.

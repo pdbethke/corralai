@@ -1028,30 +1028,103 @@ func (s JailScorer) authoredWorkspace(codePath, content string) adequacy.Overlay
 // AuthoredTestUnreached could never fire. So the control is instead the
 // language's always-failing test (lang.ReachCanaryBlock: the TestLander's
 // ReachCanaryTest, landed where the authored block lands), appended to code
-// through the same Compose (AuthoredLanding.authored). The outcomes keep
-// their meaning: the run fails, so the command RAN the block (reached); it
-// passes, so the block's tests never ran (unreached). code is read only
-// then; a landing with a file of its own leaves codePath as the workspace
-// already has it, as it always did.
+// through the same Compose (AuthoredLanding.authored), and the run's own
+// failure reader must NAME that canary failing for the block to count as
+// reached (inlineCanaryReached). A failure is not enough: a build error (a
+// crate under `#![deny(warnings)]` once rejected the canary block's unused
+// glob, measured on cargo 1.90.0), another test's failure or a timeout says
+// nothing about whether the block's tests ran, and each is unreached, which
+// can only lower a proven count. A run that passes never ran the block:
+// unreached. code is read only then; a landing with a file of its own
+// leaves codePath as the workspace already has it, as it always did.
 func (s JailScorer) verifyAuthoredTestReaches(ctx context.Context, codePath, code string, cmd []string) (bool, error) {
-	var ws map[string]string
 	if s.Landing.Inline(codePath) {
-		block, err := golang.ReachCanaryBlock(s.Landing.Landing, code)
-		if err != nil {
-			return false, err
-		}
-		ws = s.authoredWorkspace(codePath, block).With(code)
-	} else {
-		ws = s.authoredWorkspace(codePath, adequacy.CanaryCode).Base
+		return s.inlineCanaryReached(ctx, codePath, code, cmd)
 	}
+	ws := s.authoredWorkspace(codePath, adequacy.CanaryCode).Base
 	passed, err := s.Jail.RunTest(ctx, ws, rewriteCmd(s.CommandRewrite, cmd))
 	if err != nil {
 		if errors.Is(err, adequacy.ErrTestTimeout) {
-			return true, nil // hung on the planted canary (invalid source, or the inline reach test) -> it reacted
+			return true, nil // hung on the planted canary (invalid source) -> it reacted
 		}
 		return false, err
 	}
 	return !passed, nil
+}
+
+// inlineCanaryReached is the inline positive control: code with the reach
+// canary block appended, run under cmd on a jail that returns the run's
+// output (adequacy.DetailedJail, the tail the scorer names a killing test
+// from), and reached only when the run failed AND cmd's runner, reading
+// that output (lang.DeselectorFor's failure list), names the canary's test
+// among the failures. The canary is matched by its path within the source
+// (`corral_tests::corral_reach_canary`, from the plugin's own reading of
+// the block): equal to a failing id, or its last segments, since the id
+// carries the module path of the file (and nextest's the binary before it).
+// Every other outcome is unreached, and the log says why. A jail that
+// cannot return output is an error: this control has nothing to read.
+func (s JailScorer) inlineCanaryReached(ctx context.Context, codePath, code string, cmd []string) (bool, error) {
+	dj, ok := s.Jail.(adequacy.DetailedJail)
+	if !ok {
+		return false, fmt.Errorf("advpool: the positive control for the test landed in %s reads which tests failed from the run's output, and this jail cannot return it", codePath)
+	}
+	block, err := golang.ReachCanaryBlock(s.Landing.Landing, code)
+	if err != nil {
+		return false, err
+	}
+	p, err := pluginFor(codePath)
+	if err != nil {
+		return false, err
+	}
+	canary := p.TestNamesInSource(codePath, block)
+	unreached := func(why string) (bool, error) {
+		log.Printf("advpool: %s: positive control: the authored block counts as unreached: %s", codePath, why)
+		return false, nil
+	}
+	if len(canary) == 0 {
+		return unreached("no test can be named in the reach canary's block")
+	}
+	failed, ok := golang.DeselectorFor(p, golang.Cmd(cmd))
+	if !ok {
+		return unreached(fmt.Sprintf("the runner of %v names no failing test, so the reach canary cannot be seen failing", cmd))
+	}
+	passed, out, err := dj.RunTestDetailed(ctx, s.authoredWorkspace(codePath, block).With(code), rewriteCmd(s.CommandRewrite, cmd))
+	if err != nil {
+		if errors.Is(err, adequacy.ErrTestTimeout) {
+			return unreached("the run timed out, which does not show the reach canary ran")
+		}
+		return false, err
+	}
+	if passed {
+		return unreached("the run passed, so the reach canary never ran")
+	}
+	for _, id := range failed(string(out)) {
+		if i := strings.LastIndexByte(id, ' '); i >= 0 {
+			id = id[i+1:] // nextest's `<binary> <path>`
+		}
+		for _, c := range canary {
+			if id == c || strings.HasSuffix(id, "::"+c) {
+				return true, nil
+			}
+		}
+	}
+	return unreached("the run failed without the reach canary failing: " + failureReason(string(out)))
+}
+
+// failureReason is the line of a failed run's output that says why: the
+// first that starts with "error" (cargo's build failure, after its
+// Compiling lines), else the first meaningful line (firstLine); "(no
+// output)" when there is none.
+func failureReason(out string) string {
+	for l := range strings.Lines(out) {
+		if t := strings.TrimSpace(l); strings.HasPrefix(t, "error") {
+			return t
+		}
+	}
+	if l := firstLine(out); l != "" {
+		return l
+	}
+	return "(no output)"
 }
 
 // AuthoredTestPathFor is the path the pool-authored test is written to, for

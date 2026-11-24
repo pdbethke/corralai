@@ -25,6 +25,10 @@ var (
 	// rustAncestorGlobRe is a glob import of an ancestor module — the line
 	// the landing itself supplies, at the depth the landing knows.
 	rustAncestorGlobRe = regexp.MustCompile(`^\s*use\s+(?:super::)+\*\s*;\s*$`)
+	// rustAllowAttrRe is an `#[allow(...)]` attribute on a line of its own:
+	// the landing's own (rustGlobAllow) or a writer's, before an ancestor
+	// glob, which goes with the glob it is on.
+	rustAllowAttrRe = regexp.MustCompile(`^\s*#\[allow\([^\]]*\)\]\s*$`)
 	// rustLiterals is Rust's string and comment syntax for the brace scan
 	// and the merge's renames. The single quote is NOT a quote here: it
 	// opens a lifetime ('a) as often as a char literal, and a char literal
@@ -32,9 +36,19 @@ var (
 	rustLiterals = literalSyntax{quotes: `"`, lineComments: []string{"//"}, blockComment: [2]string{"/*", "*/"}}
 )
 
-// LandTest wraps body as `#[cfg(test)] mod corral_tests { use <ancestor>::*;
-// … }`, the block appended to target. The use line is DATA from the landing:
-// depth 1 (a file the source declares as its child module) reaches the code
+// rustGlobAllow is the attribute on the landing's ancestor glob. A block
+// that uses no item of the code under test (the reach canary always; a
+// writer's test that names everything by path) leaves the glob unused, and
+// a crate built with `#![deny(warnings)]`, `#![deny(unused_imports)]` or
+// RUSTFLAGS=-Dwarnings then fails to compile on that line alone: measured on
+// cargo 1.90.0 (capture script, inline section), where the canary's build
+// error was read by the positive control as the canary having run.
+const rustGlobAllow = "#[allow(unused_imports)]"
+
+// LandTest wraps body as `#[cfg(test)] mod corral_tests {
+// #[allow(unused_imports)] use <ancestor>::*; … }`, the block appended to
+// target. The use line carries rustGlobAllow on every block alike, and it is
+// DATA from the landing: depth 1 (a file the source declares as its child module) reaches the code
 // under test with super::super, depth 0 (the source itself) with super — the
 // same scope the developer's own tests module sees, so private items are in
 // reach either way.
@@ -45,8 +59,9 @@ var (
 //   - a body that is wholly one wrapper module (`#[cfg(test)] mod x { … }`,
 //     what the plugin's prompt used to ask for) is unwrapped, and its lines
 //     de-indented by their common indentation;
-//   - a leading ancestor glob (`use super::*;`) is dropped — the landing's
-//     own line is the one that is right for this file.
+//   - a leading ancestor glob (`use super::*;`) is dropped, with an
+//     `#[allow(...)]` the writer put on it — the landing's own line is the
+//     one that is right for this file.
 //
 // The block is not indented: Rust does not care, and indenting would change
 // any string literal that continues across lines. The module is named
@@ -60,6 +75,7 @@ func (rustPlugin) LandTest(body string, depth int, target string) string {
 	inner := strings.Trim(rustDropAncestorGlobs(rustUnwrapWholeModule(body)), "\n")
 	var b strings.Builder
 	b.WriteString("#[cfg(test)]\nmod " + name + " {\n")
+	b.WriteString(rustGlobAllow + "\n")
 	b.WriteString("use " + strings.Repeat("super::", depth+1) + "*;\n")
 	if inner != "" {
 		b.WriteString("\n" + inner + "\n")
@@ -70,8 +86,10 @@ func (rustPlugin) LandTest(body string, depth int, target string) string {
 
 // ReachCanaryTest is a libtest test that panics, so it fails whenever it is
 // run, and only then: it compiles in any crate (no imports, no items of the
-// code under test), so a failure means the command RAN the landed block, not
-// that the block broke the build. See TestLander.ReachCanaryTest.
+// code under test, and the landing's glob carries rustGlobAllow, so a crate
+// that denies warnings builds it too). A failure that names it means the
+// command RAN the landed block; the positive control requires that name,
+// never a failure alone. See TestLander.ReachCanaryTest.
 func (rustPlugin) ReachCanaryTest() string {
 	return "#[test]\nfn corral_reach_canary() {\n    panic!(\"corral positive control: this test must fail when it runs\");\n}"
 }
@@ -265,17 +283,31 @@ func dedent(lines []string) string {
 }
 
 // rustDropAncestorGlobs drops the ancestor glob imports in body's LEADING
-// block of use lines (blank lines and comments may sit between them). A
-// nested module's own `use super::*` is past that block and is kept.
+// block of use lines (blank lines and comments may sit between them), each
+// with the `#[allow(...)]` lines directly on it: an attribute left behind
+// would attach to whatever item follows. An allow on anything else ends the
+// leading block and is kept. A nested module's own `use super::*` is past
+// that block and is kept.
 func rustDropAncestorGlobs(body string) string {
 	lines := strings.Split(body, "\n")
 	out := lines[:0:0]
 	leading := true
-	for _, l := range lines {
+	for i := 0; i < len(lines); i++ {
+		l := lines[i]
 		t := strings.TrimSpace(l)
 		if leading {
 			if rustAncestorGlobRe.MatchString(l) {
 				continue
+			}
+			if rustAllowAttrRe.MatchString(l) {
+				j := i
+				for j < len(lines) && rustAllowAttrRe.MatchString(lines[j]) {
+					j++
+				}
+				if j < len(lines) && rustAncestorGlobRe.MatchString(lines[j]) {
+					i = j
+					continue
+				}
 			}
 			if t != "" && !strings.HasPrefix(t, "//") && !strings.HasPrefix(t, "use ") {
 				leading = false
@@ -293,16 +325,16 @@ var (
 	rustMacroRe = regexp.MustCompile(`^macro_rules!\s*([A-Za-z_]\w*)`)
 )
 
-// rustLandedHeader splits a block LandTest produced into its three header
-// lines and its body. ok=false for anything else: a part this merge cannot
+// rustLandedHeader splits a block LandTest produced into its four header
+// lines (cfg, module, rustGlobAllow, use) and its body. ok=false for anything else: a part this merge cannot
 // read as corral's own block is refused, never re-wrapped by guess.
 func rustLandedHeader(part string) (header, body string, ok bool) {
 	lines := strings.Split(strings.TrimRight(part, "\n"), "\n")
-	if len(lines) < 4 || lines[0] != "#[cfg(test)]" || !rustModDeclRe.MatchString(lines[1]) ||
-		!strings.HasSuffix(lines[1], " {") || !rustAncestorGlobRe.MatchString(lines[2]) || lines[len(lines)-1] != "}" {
+	if len(lines) < 5 || lines[0] != "#[cfg(test)]" || !rustModDeclRe.MatchString(lines[1]) ||
+		!strings.HasSuffix(lines[1], " {") || lines[2] != rustGlobAllow || !rustAncestorGlobRe.MatchString(lines[3]) || lines[len(lines)-1] != "}" {
 		return "", "", false
 	}
-	return strings.Join(lines[:3], "\n"), strings.Join(lines[3:len(lines)-1], "\n"), true
+	return strings.Join(lines[:4], "\n"), strings.Join(lines[4:len(lines)-1], "\n"), true
 }
 
 // ConcatTests folds several proven landed blocks — each one LandTest wrapped

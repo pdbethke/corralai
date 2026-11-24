@@ -1,21 +1,21 @@
    Compiling inline-cargo v0.1.0 ($DIR/inline/lib-kill)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
      Running unittests src/lib.rs (target/debug/deps/inline_cargo-995b603fb05bc563)
 
 running 7 tests
 test corral_tests::unit_is_reached ... ok
-test named::corral_tests::zero_is_zero ... ok
 test corral_tests::zero_is_zero ... FAILED
-test extra::tests::inside ... ok
+test named::corral_tests::zero_is_zero ... ok
 test extra::tests::below ... ok
-test tests::positive ... ok
 test tests::negative ... ok
+test extra::tests::inside ... ok
+test tests::positive ... ok
 
 failures:
 
 ---- corral_tests::zero_is_zero stdout ----
 
-thread 'corral_tests::zero_is_zero' panicked at src/lib.rs:43:5:
+thread 'corral_tests::zero_is_zero' panicked at src/lib.rs:44:5:
 assertion `left == right` failed
   left: 1
  right: 0

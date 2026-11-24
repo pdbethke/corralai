@@ -425,9 +425,15 @@ and its authored test is appended to it (the scan says "authored test is
 appended to the file itself", not "beside" `tests/quick.rs`). Its
 developer's test is the file itself when it has an inline test module, and
 none when it has none. Only a test module declared outside the repository,
-and a build without cgo, are still refused. What ran for this change is
-unit tests and fixtures; the numbers above are from before it, and a dry run
-of indexmap with it has not been recorded here.
+and a build without cgo, are still refused. The numbers above are from
+before it. A free dry run of indexmap at 41a8708 with it (2026-11-24, cargo
+1.90.0, `corral certify --repo . --substrate workspace --dry-run --evidence
+-- cargo test`, no model call) ran 5 units with 0 failed, widened the audit
+by evidence from 7 to 19 candidates, and printed `src/inner/extract.rs
+paired by evidence: 1 covering test unit(s), authored test is appended to
+the file itself`. The appended block was run by the real `cargo test` and
+`cargo nextest` on fixtures only (`scripts/capture-runner-fixtures.sh`, the
+inline section); no audit with models has been run on such a file.
 
 ## Swift: taplin/Lariat
 

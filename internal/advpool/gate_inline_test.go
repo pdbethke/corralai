@@ -22,7 +22,7 @@ import (
 // (what ParseTest hands every door: lang.LandBody at depth 0).
 const (
 	inlineSrc   = "pub fn double(x: i32) -> i32 { x * 2 }\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n    #[test]\n    fn own() { assert_eq!(double(2), 4); }\n}\n"
-	inlineBlock = "\n#[cfg(test)]\nmod corral_tests {\nuse super::*;\n#[test]\nfn kills() { assert_eq!(double(3), 6); }\n}\n"
+	inlineBlock = "\n#[cfg(test)]\nmod corral_tests {\n#[allow(unused_imports)]\nuse super::*;\n#[test]\nfn kills() { assert_eq!(double(3), 6); }\n}\n"
 )
 
 // inlineLanding is the landing whose Path IS the audited source, as
@@ -90,6 +90,25 @@ func (j *doorJail) RunTest(_ context.Context, files map[string]string, cmd []str
 
 func (j *doorJail) RunTestVerbose(_ context.Context, files map[string]string, cmd []string) (bool, string, error) {
 	return j.run(files, cmd), "", nil
+}
+
+// RunTestDetailed returns what libtest prints when the reach canary is the
+// run's one failure (canaryFailed), and nothing for any other run.
+func (j *doorJail) RunTestDetailed(_ context.Context, files map[string]string, cmd []string) (bool, []byte, error) {
+	ok := j.run(files, cmd)
+	return ok, canaryFailed(ok, files["src/lib.rs"]), nil
+}
+
+// canaryFailed is libtest's output for a failed run whose source holds the
+// reach canary, naming it as the failure (the shape of the real capture
+// internal/lang/testdata/runners/inline-cargo-test-deny-canary-lib.txt);
+// nil for a run that passed or holds no canary.
+func canaryFailed(passed bool, src string) []byte {
+	if passed || !strings.Contains(src, "fn corral_reach_canary()") {
+		return nil
+	}
+	const id = "corral_tests::corral_reach_canary"
+	return []byte("running 2 tests\ntest tests::own ... ok\ntest " + id + " ... FAILED\n\nfailures:\n\n---- " + id + " stdout ----\n\nthread '" + id + "' panicked at src/lib.rs:12:5:\ncorral positive control: this test must fail when it runs\n\n\nfailures:\n    " + id + "\n\ntest result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\nerror: test failed, to rerun pass `--lib`\n")
 }
 
 func (j *doorJail) take() []doorRun {
@@ -210,9 +229,21 @@ func TestWorkspaceRestoresTheSourceAfterAnInlineAuthoredRun(t *testing.T) {
 	before := listing()
 
 	s := JailScorer{Jail: adequacy.NewWorkspaceRunner(root, 30*time.Second), BaseFiles: map[string]string{}, DevTestPath: "src/lib.rs", Landing: inlineLanding()}
-	// "Runs" the block: fails on its always-failing reach canary, as a
-	// runner that executes corral_tests would.
-	cmd := `sh -c 'if grep -q "corral canary" src/lib.rs || grep -q KILL src/lib.rs || grep -q "fn corral_reach_canary" src/lib.rs; then exit 1; fi; grep -q corral_tests src/lib.rs'`
+	// "Runs" the block, as a cargo on PATH: fails on its always-failing
+	// reach canary and prints libtest's report naming it (canaryFailed, which
+	// the positive control requires), fails on the canary and a KILL mutant,
+	// and passes only when the block is present.
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "canary.txt"), canaryFailed(false, "fn corral_reach_canary()"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fake := "#!/bin/sh\nif grep -q 'fn corral_reach_canary' src/lib.rs; then cat '" + filepath.Join(bin, "canary.txt") + "'; exit 101; fi\n" +
+		"if grep -q 'corral canary' src/lib.rs || grep -q KILL src/lib.rs; then exit 101; fi\ngrep -q corral_tests src/lib.rs\n"
+	if err := os.WriteFile(filepath.Join(bin, "cargo"), []byte(fake), 0o755); err != nil { // #nosec G306 -- an executable test double
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cmd := "cargo test"
 	mutants := []adequacy.Mutant{
 		{ID: "m1", Search: "x * 2", Replace: "x * 2 /* KILL */"},
 		{ID: "m2", Search: "x * 2", Replace: "x + x"},
@@ -289,6 +320,81 @@ func TestInlinePositiveControlSeesWhetherTheBlockRuns(t *testing.T) {
 	}
 }
 
+// scriptedDetailJail answers every run with one scripted outcome: pass or
+// fail, the output a DetailedJail hands back, or an error.
+type scriptedDetailJail struct {
+	passed bool
+	out    string
+	err    error
+	runs   int
+}
+
+func (j *scriptedDetailJail) RunTest(context.Context, map[string]string, []string) (bool, error) {
+	j.runs++
+	return j.passed, j.err
+}
+
+func (j *scriptedDetailJail) RunTestDetailed(context.Context, map[string]string, []string) (bool, []byte, error) {
+	j.runs++
+	return j.passed, []byte(j.out), j.err
+}
+
+// bareJail returns no output: RunTest only.
+type bareJail struct{}
+
+func (bareJail) RunTest(context.Context, map[string]string, []string) (bool, error) {
+	return false, nil
+}
+
+// TestInlinePositiveControlNeedsTheCanaryNamedFailing: the inline control
+// counts the block reached only when the run failed AND the runner's
+// failure reader names the reach canary among the failures. A build error
+// (what a crate under #![deny(warnings)] printed for the canary's unused glob
+// before the landing allowed it, cargo 1.90.0), another test's failure and a
+// timeout are not evidence the block ran: unreached, which can only lower a
+// proven count. A jail that returns no output cannot answer: an error, never
+// a guess.
+func TestInlinePositiveControlNeedsTheCanaryNamedFailing(t *testing.T) {
+	ctx := context.Background()
+	base := map[string]string{"Cargo.toml": "[package]\n", "src/lib.rs": inlineSrc}
+	buildError := "   Compiling inline-cargo v0.1.0 ($DIR/inline/deny-no-allow)\nerror: unused import: `super::*`\n  --> src/lib.rs:49:5\n   |\n49 | use super::*;\n   |     ^^^^^^^^\n\nerror: could not compile `inline-cargo` (lib test) due to 1 previous error\n"
+	otherFailed := "running 2 tests\ntest corral_tests::corral_reach_canary ... ok\ntest tests::own ... FAILED\n\nfailures:\n\n---- tests::own stdout ----\n\nthread 'tests::own' panicked at src/lib.rs:7:5:\nboom\n\n\nfailures:\n    tests::own\n\ntest result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n"
+	nextestNamed := "        FAIL [   0.003s] (2/2) units-b extra::corral_tests::corral_reach_canary\n────────────\n     Summary [   0.004s] 2 tests run: 1 passed, 1 failed, 0 skipped\n        FAIL [   0.003s] (2/2) units-b extra::corral_tests::corral_reach_canary\nerror: test run failed\n"
+	for _, tc := range []struct {
+		name    string
+		jail    *scriptedDetailJail
+		cmd     []string
+		reached bool
+	}{
+		{"canary named failing (cargo test)", &scriptedDetailJail{out: string(canaryFailed(false, "fn corral_reach_canary()"))}, []string{"cargo", "test"}, true},
+		{"canary named failing under a module path (nextest)", &scriptedDetailJail{out: nextestNamed}, []string{"cargo", "nextest", "run"}, true},
+		{"build error", &scriptedDetailJail{out: buildError}, []string{"cargo", "test"}, false},
+		{"another test failed", &scriptedDetailJail{out: otherFailed}, []string{"cargo", "test"}, false},
+		{"passed", &scriptedDetailJail{passed: true}, []string{"cargo", "test"}, false},
+		{"timed out", &scriptedDetailJail{err: adequacy.ErrTestTimeout}, []string{"cargo", "test"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := JailScorer{Jail: tc.jail, BaseFiles: base, DevTestPath: "src/lib.rs", Landing: inlineLanding()}
+			reached, err := s.AuthoredTestWouldBeCollected(ctx, "src/lib.rs", inlineSrc, tc.cmd)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reached != tc.reached {
+				t.Errorf("reached = %v, want %v", reached, tc.reached)
+			}
+		})
+	}
+	s := JailScorer{Jail: bareJail{}, BaseFiles: base, DevTestPath: "src/lib.rs", Landing: inlineLanding()}
+	if _, err := s.AuthoredTestWouldBeCollected(ctx, "src/lib.rs", inlineSrc, []string{"cargo", "test"}); err == nil {
+		t.Error("a jail that returns no output answered the inline control; want an error")
+	}
+	// The first line of the reason, for the note: cargo's error, not its
+	// Compiling line.
+	if got := failureReason(buildError); got != "error: unused import: `super::*`" {
+		t.Errorf("failureReason = %q", got)
+	}
+}
+
 // inlineUnitJail is a jail over a source the library unit compiles: it
 // records every command and fails a run whose source holds the canary, a
 // KILL mutant, or the reach canary (a command that selects the block runs
@@ -305,6 +411,11 @@ func (j *inlineUnitJail) RunTest(_ context.Context, files map[string]string, cmd
 	j.cmds = append(j.cmds, slices.Clone(cmd))
 	src := files[j.codePath]
 	return !strings.Contains(src, adequacy.CanaryCode) && !strings.Contains(src, "KILL") && !strings.Contains(src, "fn corral_reach_canary()"), nil
+}
+
+func (j *inlineUnitJail) RunTestDetailed(ctx context.Context, files map[string]string, cmd []string) (bool, []byte, error) {
+	ok, err := j.RunTest(ctx, files, cmd)
+	return ok, canaryFailed(ok, files[j.codePath]), err
 }
 
 // TestInlineAuthoredAloneRunsOnlyCorralsTests is ruling 1 of the inline

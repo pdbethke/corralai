@@ -93,7 +93,7 @@ func TestTheWritePathIsTheAdmittedLanding(t *testing.T) {
 
 	v := JailValidator{Jail: &recordingJail{}, BaseFiles: base, DevTestPath: "src/foo_tests.rs", Landing: l}
 	test := v.ParseTest("#[test]\nfn kills() { assert_eq!(private_double(2), 4); }")
-	if !strings.HasPrefix(test, "#[cfg(test)]\nmod corral_tests {\nuse super::super::*;") {
+	if !strings.HasPrefix(test, "#[cfg(test)]\nmod corral_tests {\n#[allow(unused_imports)]\nuse super::super::*;") {
 		t.Fatalf("ParseTest did not land the body for the declared file:\n%s", test)
 	}
 	jail := v.Jail.(*recordingJail)

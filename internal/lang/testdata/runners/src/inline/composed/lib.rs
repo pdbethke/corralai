@@ -35,6 +35,7 @@ mod tests {
 }
 #[cfg(test)]
 mod corral_tests {
+#[allow(unused_imports)]
 use super::*;
 
 // corral's authored test for src/lib.rs: the zero branch, and the private helper.

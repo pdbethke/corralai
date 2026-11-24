@@ -30,6 +30,7 @@ mod tests {
 }
 #[cfg(test)]
 mod corral_tests {
+#[allow(unused_imports)]
 use super::*;
 
 // corral's authored test for src/extra.rs, wrapped as a writer may wrap

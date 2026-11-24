@@ -204,11 +204,11 @@ func TestEveryIntoLandingLanguageCanCompose(t *testing.T) {
 func TestRustLandsUnderTheDeclaredModuleWithItsUseLine(t *testing.T) {
 	body := "#[test]\nfn kills_it() {\n    assert_eq!(private_double(2), 4);\n}"
 	got := rustPlugin{}.LandTest(body, 1, "use super::*;\n\n#[test]\nfn mine() {}\n")
-	want := "#[cfg(test)]\nmod corral_tests {\nuse super::super::*;\n\n" + body + "\n}\n"
+	want := "#[cfg(test)]\nmod corral_tests {\n#[allow(unused_imports)]\nuse super::super::*;\n\n" + body + "\n}\n"
 	if got != want {
 		t.Errorf("depth 1:\n%s\nwant:\n%s", got, want)
 	}
-	if got := (rustPlugin{}).LandTest(body, 0, ""); !strings.Contains(got, "\nuse super::*;\n") {
+	if got := (rustPlugin{}).LandTest(body, 0, ""); !strings.Contains(got, "\n#[allow(unused_imports)]\nuse super::*;\n") {
 		t.Errorf("depth 0 must reach the source with super:\n%s", got)
 	}
 
@@ -216,6 +216,24 @@ func TestRustLandsUnderTheDeclaredModuleWithItsUseLine(t *testing.T) {
 	got = rustPlugin{}.LandTest(wrapped, 1, "")
 	if strings.Count(got, "mod corral_tests") != 1 || strings.Contains(got, "\nuse super::*;") || !strings.Contains(got, "\n#[test]\nfn kills_it() {") {
 		t.Errorf("a writer's own wrapper must be folded, not nested:\n%s", got)
+	}
+
+	// A writer's own allow on its glob goes with the glob: left behind, it
+	// would attach to the test after it. Any number of allows on the glob,
+	// wrapped or not; an allow on anything else is the writer's and stays.
+	for _, b := range []string{
+		"#[allow(unused_imports)]\nuse super::*;\n\n#[test]\nfn kills_it() {}",
+		"#[cfg(test)]\nmod corral_tests {\n    #[allow(unused_imports)]\n    #[allow(dead_code)]\n    use super::*;\n\n    #[test]\n    fn kills_it() {}\n}\n",
+	} {
+		got := rustPlugin{}.LandTest(b, 0, "")
+		want := "#[cfg(test)]\nmod corral_tests {\n#[allow(unused_imports)]\nuse super::*;\n\n#[test]\nfn kills_it() {}\n}\n"
+		if got != want {
+			t.Errorf("a writer's allowed glob must be dropped with its allows:\n%s\nwant:\n%s", got, want)
+		}
+	}
+	kept := "#[allow(dead_code)]\nfn helper() -> i32 { 1 }\n#[test]\nfn t() { assert_eq!(helper(), 1); }"
+	if got := (rustPlugin{}).LandTest(kept, 0, ""); !strings.Contains(got, "\n#[allow(dead_code)]\nfn helper()") {
+		t.Errorf("an allow on the writer's own item was dropped:\n%s", got)
 	}
 
 	// A wrapper that is not the whole body (a helper module beside a test)
@@ -242,7 +260,7 @@ func TestRustConcatMergesLandedModulesUnderOneHeader(t *testing.T) {
 	c := r.LandTest("fn helper() -> i32 { 1 }\n#[test]\nfn test_other() { assert_eq!(helper(), 1); }", 1, "")
 	d := r.LandTest("fn helper() -> i32 { 2 }\n#[test]\nfn test_more() { assert_eq!(helper(), 2); }", 1, "")
 	merged, extra := ConcatAuthored(r, []AuthoredPart{{MutantID: "s0/m1", Source: a}, {MutantID: "s0/m2", Source: b}, {MutantID: "s0/m3", Source: c}, {MutantID: "s0/m4", Source: d}})
-	if strings.Count(merged, "mod corral_tests {") != 1 || strings.Count(merged, "use super::super::*;") != 1 || strings.Count(merged, "use std::cmp::max;") != 1 {
+	if strings.Count(merged, "mod corral_tests {") != 1 || strings.Count(merged, "#[allow(unused_imports)]\nuse super::super::*;") != 1 || strings.Count(merged, "use std::cmp::max;") != 1 {
 		t.Errorf("want one module, one use line, one hoisted import:\n%s", merged)
 	}
 	if !strings.Contains(merged, "fn test_kills_s0_m1()") || !strings.Contains(merged, "fn test_kills_s0_m2()") {

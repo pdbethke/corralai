@@ -30,6 +30,7 @@ mod tests {
 }
 #[cfg(test)]
 mod corral_tests {
+#[allow(unused_imports)]
 use super::*;
 
 #[test]

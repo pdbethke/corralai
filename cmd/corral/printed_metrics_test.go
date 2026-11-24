@@ -623,6 +623,7 @@ var printedMetrics = map[string]printedRow{
 	"internal/advpool/gate.go:Error":                                     {Exempt: "status text: names, paths, hashes and passthrough strings printed via %v or a string operand; no measured number"},
 	"internal/advpool/gate.go:SignVerdict":                               {Fields: []string{"SeatRow.ShadowDrawn", "ScanRow.ShadowDraw"}},
 	"internal/advpool/gate.go:inlineAlone":                               {Exempt: "error message: names the file, the runner, the command and the test ids via %v; no measured number"},
+	"internal/advpool/gate.go:inlineCanaryReached":                       {Exempt: "log and error text: names the file and why the positive control counts the block unreached (the runner's command via %v); no measured number"},
 	"internal/advpool/gate.go:exclude":                                   {Exempt: "error message: names the runner and the command it could not exclude from via %v; no measured number"},
 	"internal/advpool/gate.go:authoredTestPath":                          {Exempt: "file name suffix for an authored test, an index not a measurement"},
 	"internal/advpool/gate.go:selectionDisclosure":                       {Exempt: "status text: names, paths, hashes and passthrough strings printed via %v or a string operand; no measured number"},

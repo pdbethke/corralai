@@ -26,7 +26,7 @@ func TestReachCanaryBlockIsALandedTestThatFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(block, "#[cfg(test)]\nmod corral_tests {\nuse super::*;\n") || !strings.Contains(block, "#[test]") || !strings.Contains(block, "panic!(") {
+	if !strings.HasPrefix(block, "#[cfg(test)]\nmod corral_tests {\n#[allow(unused_imports)]\nuse super::*;\n") || !strings.Contains(block, "#[test]") || !strings.Contains(block, "panic!(") {
 		t.Fatalf("not a landed, always-failing test block:\n%s", block)
 	}
 	if _, err := ReachCanaryBlock(pairing.Landing{Path: "a.txt", Into: true}, ""); err == nil {

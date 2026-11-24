@@ -15,7 +15,7 @@ import (
 	"strings"
 	"testing"
 
-	_ "github.com/marcboeker/go-duckdb/v2"
+	_ "github.com/duckdb/duckdb-go/v2"
 )
 
 // TestHelperHoldDuckDB is not a test: the parent re-execs the test binary

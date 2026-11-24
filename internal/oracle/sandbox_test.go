@@ -15,7 +15,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/sqlguard"
 
-	_ "github.com/marcboeker/go-duckdb/v2"
+	_ "github.com/duckdb/duckdb-go/v2"
 )
 
 // lockedConn opens a fresh in-mem DuckDB, seeds an in-MEMORY fleet_* table (NOT a file — a

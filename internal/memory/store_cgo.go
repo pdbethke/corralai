@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	_ "github.com/marcboeker/go-duckdb/v2"
+	_ "github.com/duckdb/duckdb-go/v2"
 
 	"github.com/pdbethke/corralai/internal/annindex"
 	"github.com/pdbethke/corralai/internal/embed"
@@ -210,7 +210,13 @@ func (s *Store) searchKeyword(query, scope, typ string, limit int, sharedOnly bo
 	var args []any
 	sel := "SELECT slug, name, project, type, description, shared, author, 0.0 AS score FROM mem"
 	if s.fts {
-		sel = "SELECT slug, name, project, type, description, shared, author, fts_main_mem.match_bm25(path, ?) AS score FROM mem"
+		// The score is computed in a subquery so the outer WHERE and ORDER BY
+		// read a plain column: DuckDB 2.0 refuses to reference an alias whose
+		// expression it treats as having side effects, which match_bm25 is
+		// ("Binder Error: Alias "score" referenced - but the expression has
+		// side effects"); 1.4 accepted the alias.
+		sel = "SELECT slug, name, project, type, description, shared, author, score FROM (" +
+			"SELECT slug, name, project, type, description, shared, author, fts_main_mem.match_bm25(path, ?) AS score FROM mem)"
 		args = append(args, query)
 		where = append(where, "score IS NOT NULL")
 	} else {

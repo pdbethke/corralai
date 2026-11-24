@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/marcboeker/go-duckdb/v2"
+	_ "github.com/duckdb/duckdb-go/v2"
 )
 
 // Sentinel timestamps used across all retention tests.

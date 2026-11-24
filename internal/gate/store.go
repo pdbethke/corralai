@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"strings"
 
-	_ "github.com/marcboeker/go-duckdb/v2"
+	_ "github.com/duckdb/duckdb-go/v2"
 )
 
 // Store is a DuckDB-backed table of gate_runs dedupe/index rows.

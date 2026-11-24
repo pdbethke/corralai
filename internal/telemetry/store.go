@@ -17,7 +17,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/sqlguard"
 
-	_ "github.com/marcboeker/go-duckdb/v2"
+	_ "github.com/duckdb/duckdb-go/v2"
 )
 
 var now = func() float64 { return float64(time.Now().UnixNano()) / 1e9 }

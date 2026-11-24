@@ -15,11 +15,17 @@ func (s *Store) searchKeyword(missionID int64, query string, k int) ([]Hit, erro
 	var rows *sql.Rows
 	var err error
 	if s.fts {
+		// The score is computed in a subquery so the outer WHERE and ORDER BY
+		// read a plain column: DuckDB 2.0 refuses to reference an alias whose
+		// expression it treats as having side effects, which match_bm25 is.
+		// 1.4 accepted the alias.
 		rows, err = s.db.Query(`
-			SELECT path, start_line, end_line, text,
-				fts_main_chunks.match_bm25(id, ?) AS score,
-				COALESCE(symbol,'') AS symbol, COALESCE(kind,'') AS kind, COALESCE(lang,'') AS lang
-			FROM chunks WHERE mission_id=? AND score IS NOT NULL
+			SELECT path, start_line, end_line, text, score, symbol, kind, lang FROM (
+				SELECT path, start_line, end_line, text,
+					fts_main_chunks.match_bm25(id, ?) AS score,
+					COALESCE(symbol,'') AS symbol, COALESCE(kind,'') AS kind, COALESCE(lang,'') AS lang
+				FROM chunks WHERE mission_id=?)
+			WHERE score IS NOT NULL
 			ORDER BY score DESC LIMIT ?`, query, missionID, k)
 	} else {
 		escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(query)

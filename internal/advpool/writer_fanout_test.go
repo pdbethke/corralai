@@ -4,6 +4,8 @@ package advpool
 
 import (
 	"context"
+	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -34,6 +36,10 @@ type fanoutScorer struct {
 	// confirmDuration is what the dev pass's report says its
 	// kill-confirmation pass took.
 	confirmDuration time.Duration
+	// unnameable is the test sources whose authored pass the real scorer
+	// refuses to run (errAuthoredUnnameable: an inline block whose tests
+	// have no exact id).
+	unnameable map[string]bool
 }
 
 func (f *fanoutScorer) Score(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (float64, []adequacy.Mutant, error) {
@@ -66,6 +72,9 @@ func (f *fanoutScorer) ScoreAuthoredReport(ctx context.Context, codePath, code, 
 		ids = append(ids, m.ID)
 	}
 	f.authored = append(f.authored, authoredCall{test: test, mutants: ids})
+	if f.unnameable[test] {
+		return adequacy.Report{}, fmt.Errorf("%w: lang: a test in the block carries a case-generating attribute", errAuthoredUnnameable)
+	}
 
 	rep := adequacy.Report{
 		CompliantPass: true, CanaryKilled: true, Total: len(mutants),
@@ -1161,5 +1170,74 @@ func TestAuthoredRecordFallsBackToHashForAnUnregisteredLanguage(t *testing.T) {
 	v := Verdict{Lang: "cobol", AuthoredTest: "a", AuthoredExtra: []golang.AuthoredPart{{MutantID: "m2", Source: "b"}}}
 	if rec := v.AuthoredRecord(); !strings.Contains(rec, "# --- corral: separate test file (unmergeable) — m2 ---") {
 		t.Errorf("unregistered language did not fall back to #:\n%s", rec)
+	}
+}
+
+// TestAnUnnameableSeatIsUnmeasuredAndItsSiblingsFinish: a seat whose authored
+// test cannot be run apart from the file's own tests (errAuthoredUnnameable:
+// an inline block holding a case-generating #[rstest]) is one seat's fact. It
+// used to come back from every Tick as an error, the seat never finished, and
+// after localTickMaxErrors the whole file's audit gave up, losing the proofs
+// its siblings had made. Now the seat ends compiled and unmeasured — never a
+// "tried and missed" — no Tick errors, and the siblings' proofs stand.
+func TestAnUnnameableSeatIsUnmeasuredAndItsSiblingsFinish(t *testing.T) {
+	const (
+		testA = "package target\n\nimport \"testing\"\n\nfunc TestKillsA(t *testing.T) {}\n"
+		testB = "package target\n\nimport \"testing\"\n\nfunc TestCasesB(t *testing.T) {}\n"
+		testC = "package target\n\nimport \"testing\"\n\nfunc TestKillsC(t *testing.T) {}\n"
+	)
+	d, missionID, scorer := fanoutRun(t, WriterModePerSurvivor, map[string]string{testA: "m1", testB: "m2", testC: "m3"}, nil)
+	scorer.unnameable = map[string]bool{testB: true}
+	devTick(t, d, missionID)
+	results := map[string]string{"test-writer/m1": testA, "test-writer/m2": testB, "test-writer/m3": testC}
+	var v *Verdict
+	for i := 0; i < 40 && v == nil; i++ {
+		var err error
+		if v, err = d.Tick(context.Background(), missionID); err != nil {
+			t.Fatalf("Tick %d: %v — one seat's unnameable test must not error the run", i, err)
+		}
+		for key, task := range claimAllReady(t, d.Q) {
+			result, ok := results[seatKeyBase(key)]
+			if !ok {
+				result = "raw"
+			}
+			mustComplete(t, d.Q, task.ID, result)
+		}
+	}
+	if v == nil {
+		t.Fatal("the run did not converge in 40 ticks")
+	}
+	if v.ProvenMissed != 2 || slices.Contains(v.ProvenMutantIDs, "m2") {
+		t.Errorf("ProvenMissed = %d %v; want m1 and m3, never m2", v.ProvenMissed, v.ProvenMutantIDs)
+	}
+	run := d.runs[missionID]
+	if a := run.writerAttempts["m2"]; a == nil || !a.done || a.measured || a.proven || !a.compiled {
+		t.Errorf("seat m2 = %+v; want done, compiled, unmeasured", a)
+	}
+}
+
+// TestAnUnnameableBatchedPassConvergesUnsound: the batched writer's authored
+// pass refused the same way converges with the pool test unsound (compiled,
+// never graded), not a Tick error and not a "killed none".
+func TestAnUnnameableBatchedPassConvergesUnsound(t *testing.T) {
+	const testAll = "package target\n\nimport \"testing\"\n\nfunc TestCases(t *testing.T) {}\n"
+	d, missionID, scorer := fanoutRun(t, WriterModeBatched, nil, nil)
+	scorer.unnameable = map[string]bool{testAll: true}
+	devTick(t, d, missionID)
+	var v *Verdict
+	for i := 0; i < 40 && v == nil; i++ {
+		var err error
+		if v, err = d.Tick(context.Background(), missionID); err != nil {
+			t.Fatalf("Tick %d: %v — an unnameable authored test must not error the run", i, err)
+		}
+		for _, task := range claimAllReady(t, d.Q) {
+			mustComplete(t, d.Q, task.ID, testAll)
+		}
+	}
+	if v == nil {
+		t.Fatal("the run did not converge in 40 ticks")
+	}
+	if !v.PoolTestUnsound || v.ProvenMissed != 0 {
+		t.Errorf("PoolTestUnsound = %v, ProvenMissed = %d; want unsound and 0", v.PoolTestUnsound, v.ProvenMissed)
 	}
 }

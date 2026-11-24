@@ -5,6 +5,7 @@
 package repoindex
 
 import (
+	plugins "github.com/pdbethke/corralai/internal/lang"
 	sitter "github.com/smacker/go-tree-sitter"
 	"github.com/smacker/go-tree-sitter/bash"
 	"github.com/smacker/go-tree-sitter/c"
@@ -94,6 +95,11 @@ type langSpec struct {
 	// `#[cfg(test)] mod tests`). nil → TestModules answers nil: the language
 	// pairs by filename alone.
 	modules func(root *sitter.Node, src []byte) []pairing.TestModule
+
+	// ownTests reads the line spans of a source file's own test code, at
+	// any nesting level, for the same languages as modules (OwnTestLines).
+	// nil → OwnTestLines answers none.
+	ownTests func(root *sitter.Node, src []byte) []plugins.LineRange
 }
 
 // langSpecs holds one row per language repoindex can parse. It is filled in
@@ -194,8 +200,9 @@ func init() {
 				"for_expression":   true,
 				"match_arm":        true,
 			},
-			boolOp:  "binary_expression",
-			modules: rustTestModules,
+			boolOp:   "binary_expression",
+			modules:  rustTestModules,
+			ownTests: rustOwnTestLines,
 		},
 		"java": {
 			grammar: java.GetLanguage,

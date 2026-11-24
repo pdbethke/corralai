@@ -54,6 +54,14 @@ type Landing struct {
 	// RefusedOutsideRoot is every path a declaration named outside
 	// Sources.Root, never read and never landed in (see Resolution's).
 	RefusedOutsideRoot []string
+	// OwnModule is true when Path was found from a test module the source
+	// itself declares — its inline `mod tests { … }`, or the file its `mod`
+	// declaration loads — and false for the Primary answer. The two can name
+	// the same file with the same Shape: a Rust source with an inline test
+	// module and one that declares no test module both land on the source
+	// at Inline. Only OwnModule says whether that file holds the
+	// developer's own tests (lang.DevTestOf).
+	OwnModule bool
 }
 
 // Land answers where an authored test for codePath is written, from the SAME
@@ -95,6 +103,7 @@ func Land(rules []Rule, codePath string, src Sources) (Landing, error) {
 		if res.Found {
 			l.Path, l.Shape, l.Label = res.Path, res.Shape, res.Label
 			l.Into, l.Depth = true, traitsOf(res.Shape).moduleDepth
+			l.OwnModule = true
 			return l, nil
 		}
 	}

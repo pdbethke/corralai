@@ -26,8 +26,10 @@ func declaredLanding(existing string) AuthoredLanding {
 // first store a run writes), so no seat is ever claimed:
 //   - no landing at all (a caller that computed none) refuses a Rust source
 //     — fail closed, since Primary is the source;
-//   - an inline landing (the source itself) refuses;
-//   - a Declared landing (the separate test file) is admitted;
+//   - an inline landing whose declarations were read but name a test module
+//     outside the repository refuses;
+//   - a Declared landing (the separate test file) and an Inline one (the
+//     source itself, admitted since 2026-11-24) are admitted;
 //   - a Go run on the same driver still starts.
 func TestStartRunRefusesAFileWhoseTestWouldOverwriteIt(t *testing.T) {
 	q := newTestQueue(t)
@@ -41,12 +43,14 @@ func TestStartRunRefusesAFileWhoseTestWouldOverwriteIt(t *testing.T) {
 		return rs
 	}
 	inline := AuthoredLanding{Landing: pairing.Landing{Path: "src/foo.rs", Shape: pairing.Inline, Label: "inline", Into: true, DeclarationsRead: true}}
+	outside := inline
+	outside.RefusedOutsideRoot = []string{"../elsewhere_tests.rs"}
 	for id, tc := range map[int64]struct {
 		l    AuthoredLanding
 		says string
 	}{
 		41: {AuthoredLanding{}, "--repo-dir"},
-		43: {inline, "not built yet"},
+		43: {outside, "outside the audited repository"},
 	} {
 		err := d.StartRun(id, rust(tc.l), nil)
 		if err == nil || !strings.Contains(err.Error(), tc.says) || !strings.Contains(err.Error(), "test landing is not built") {
@@ -58,6 +62,9 @@ func TestStartRunRefusesAFileWhoseTestWouldOverwriteIt(t *testing.T) {
 	}
 	if err := d.StartRun(44, rust(declaredLanding("")), nil); err != nil {
 		t.Fatalf("a Declared landing was refused: %v", err)
+	}
+	if err := d.StartRun(45, rust(inline), nil); err != nil {
+		t.Fatalf("an Inline landing was refused: %v", err)
 	}
 	if err := d.StartRun(42, testRunSpec(), nil); err != nil {
 		t.Fatalf("a Go run was refused: %v", err)
@@ -86,7 +93,7 @@ func TestTheWritePathIsTheAdmittedLanding(t *testing.T) {
 
 	v := JailValidator{Jail: &recordingJail{}, BaseFiles: base, DevTestPath: "src/foo_tests.rs", Landing: l}
 	test := v.ParseTest("#[test]\nfn kills() { assert_eq!(private_double(2), 4); }")
-	if !strings.HasPrefix(test, "#[cfg(test)]\nmod corral_tests {\nuse super::super::*;") {
+	if !strings.HasPrefix(test, "#[cfg(test)]\nmod corral_tests {\n#[allow(unused_imports)]\nuse super::super::*;") {
 		t.Fatalf("ParseTest did not land the body for the declared file:\n%s", test)
 	}
 	jail := v.Jail.(*recordingJail)
@@ -103,7 +110,7 @@ func TestTheWritePathIsTheAdmittedLanding(t *testing.T) {
 
 	// The workspace substrate's BaseFiles is EMPTY: the composition must
 	// still keep the project's tests, from the carried Existing.
-	ws := JailScorer{BaseFiles: map[string]string{}, DevTestPath: "src/foo_tests.rs", Landing: l}.authoredWorkspace("src/foo.rs", test)
+	ws := JailScorer{BaseFiles: map[string]string{}, DevTestPath: "src/foo_tests.rs", Landing: l}.authoredWorkspace("src/foo.rs", test).Base
 	if !strings.HasPrefix(ws["src/foo_tests.rs"], existing) {
 		t.Fatalf("on an empty base the landing dropped the project's tests:\n%s", ws["src/foo_tests.rs"])
 	}

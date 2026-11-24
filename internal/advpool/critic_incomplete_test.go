@@ -4,6 +4,7 @@ package advpool
 
 import (
 	"bytes"
+	"context"
 	"log"
 	"strings"
 	"testing"
@@ -49,15 +50,61 @@ func TestAConvergedVerdictSaysTheCriticWasCutShort(t *testing.T) {
 
 // The timed-out path never reads the critic's findings, so with a critic
 // seated its review did not reach the verdict at all: incomplete. With no
-// critic seated there is nothing to be incomplete.
+// critic seated there is nothing to be incomplete — whether the operator
+// turned it off or the run had no developer test for it to judge, which the
+// verdict says (CriticNotRun) where the operator's choice needs no word.
 func TestATimedOutVerdictSaysTheCriticsReviewDidNotReachIt(t *testing.T) {
-	seated := (&Driver{Assign: RoleAssignment{RoleTestCritic: "critic"}}).timeoutVerdict(&runState{rs: RunSpec{Repo: "r", Commit: "c", Lang: "go"}})
-	if !seated.CriticIncomplete {
-		t.Error("a timed-out verdict with a seated critic must say its review is incomplete")
+	withTest := RunSpec{Repo: "r", Commit: "c", Lang: "go", DevTestPath: "a_test.go", DevTestCode: "package a\n"}
+	seated := (&Driver{Assign: RoleAssignment{RoleTestCritic: "critic"}}).timeoutVerdict(&runState{rs: withTest})
+	if !seated.CriticIncomplete || seated.CriticNotRun != "" {
+		t.Errorf("a timed-out verdict with a seated critic must say its review is incomplete: %+v", seated)
 	}
-	off := (&Driver{Assign: RoleAssignment{}}).timeoutVerdict(&runState{rs: RunSpec{Repo: "r", Commit: "c", Lang: "go"}})
-	if off.CriticIncomplete {
-		t.Error("no critic was seated, so nothing is incomplete")
+	off := (&Driver{Assign: RoleAssignment{}}).timeoutVerdict(&runState{rs: withTest})
+	if off.CriticIncomplete || off.CriticNotRun != "" {
+		t.Error("no critic was seated, so nothing is incomplete and no reason is owed")
+	}
+	none := (&Driver{Assign: RoleAssignment{RoleTestCritic: "critic"}}).timeoutVerdict(&runState{rs: RunSpec{Repo: "r", Commit: "c", Lang: "rust", CodePath: "src/a.rs"}})
+	if none.CriticIncomplete || !strings.Contains(none.CriticNotRun, "no developer test to judge") || none.ModelsByRole[RoleTestCritic] != "" {
+		t.Errorf("a run with no developer test seats no critic, and says why: %+v", none)
+	}
+}
+
+// The converged path (tickAggregate) reads the same answer as the timed-out
+// one: a run with no developer test seeds no critic task, so the run does not
+// wait on one, and its verdict carries no critic in the roster and the reason
+// instead of an empty review that reads as "found nothing".
+func TestACriticWithNoDeveloperTestIsNotRun(t *testing.T) {
+	rs := testRunSpec()
+	rs.DevTestPath, rs.DevTestCode = "", ""
+	for _, spec := range BuildDAG(rs, decorrelatedAssign(), nil) {
+		if spec.Key == RoleTestCritic {
+			t.Fatalf("BuildDAG seeded a critic task with no developer test to judge: %+v", spec)
+		}
+	}
+	survivors := []adequacy.Mutant{{ID: "m1", Replace: "c1"}}
+	scorer := &fakeScorer{devKillRate: 0.9, devSurvivors: survivors}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Replace: "c0"}, survivors[0]}}
+	d := newTestDriverWithSpec(t, 7, scorer, validator, 0.5, rs)
+	ctx := context.Background()
+	ready := claimAllReady(t, d.Q)
+	if ready[RoleTestCritic] != nil {
+		t.Fatal("a critic task is ready with no developer test to judge")
+	}
+	mustComplete(t, d.Q, ready[RoleMutantGenerator].ID, "raw mutants")
+	if _, err := d.Tick(ctx, 7); err != nil {
+		t.Fatal(err)
+	}
+	tw := claimTaskByID(t, d.Q, d.runs[7].testWriterTaskID)
+	mustComplete(t, d.Q, tw.ID, "pool test source")
+	v, err := d.Tick(ctx, 7)
+	if err != nil || v == nil {
+		t.Fatalf("the run must converge without a critic: v=%v err=%v", v, err)
+	}
+	if v.CriticIncomplete || !strings.Contains(v.CriticNotRun, "no developer test to judge") {
+		t.Errorf("CriticIncomplete=%v CriticNotRun=%q, want the reason and no incomplete review", v.CriticIncomplete, v.CriticNotRun)
+	}
+	if _, seated := v.ModelsByRole[RoleTestCritic]; seated {
+		t.Errorf("the roster names a critic that never ran: %v", v.ModelsByRole)
 	}
 }
 
@@ -104,5 +151,19 @@ func TestCriticSummaryIsOneBoundedLine(t *testing.T) {
 	}
 	if got := criticSummary("typed critic judged 14 test(s), 0 flagged"); got != "typed critic judged 14 test(s), 0 flagged" {
 		t.Errorf("a complete typed result changed: %q", got)
+	}
+}
+
+// TestCriticNotRunReasonClaimsOnlyWhatItChecked: the reason is decided by an
+// empty developer test in ANY language, so it says only that; it used to
+// add "so it is graded by the tests that execute it", which is the Rust
+// no-test-module case and nothing the check looked at.
+func TestCriticNotRunReasonClaimsOnlyWhatItChecked(t *testing.T) {
+	assign := RoleAssignment{RoleTestCritic: "google/gemini-3.6-flash"}
+	for _, l := range []string{"go", "python", "rust"} {
+		got := CriticNotRunReason(RunSpec{Lang: l, CodePath: "x"}, assign)
+		if !strings.HasPrefix(got, "no developer test to judge") || strings.Contains(got, "execute") {
+			t.Errorf("%s: reason %q", l, got)
+		}
 	}
 }

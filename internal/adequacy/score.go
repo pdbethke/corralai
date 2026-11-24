@@ -112,6 +112,8 @@ func mutantTimeoutCap(baseDur, warmDur, floor time.Duration) time.Duration {
 type ScoreOption func(*scoreConfig)
 
 type scoreConfig struct {
+	// evidenceLines: see WithEvidenceLines.
+	evidenceLines []lang.LineRange
 	// warmBaseline routes the baseline through RunCacheJail.WarmRun, the one
 	// run that may write the jail's shared cache. Off by default: see
 	// WithWarmBaseline.
@@ -153,6 +155,9 @@ type scoreConfig struct {
 	// rewrite, when set, is applied to a COPY of every command Score hands
 	// the jail, at the one point it does so (see toJail in Score).
 	rewrite func(cmd []string) []string
+	// compose, when set, is the Overlay.Compose every run of this Score
+	// writes its code through (WithInlineTest). nil writes the code as is.
+	compose func(code string) string
 }
 
 // The values of MutantGrading.KillConfirmation: what the confirmation of a
@@ -232,6 +237,17 @@ type CommandFor func(m Mutant) MutantCommand
 // The baseline and the compile gate are unaffected — they run with testCmd.
 func WithCommandFor(f CommandFor) ScoreOption {
 	return func(c *scoreConfig) { c.commandFor = f }
+}
+
+// WithInlineTest appends block to the code at codePath on every run of this
+// Score (baseline, canary, mutants, fail-fast probe, kill confirmation), by
+// AppendBlock through the one Overlay every run is built with. It is how an
+// authored test that lands IN the audited file is graded: every run rewrites
+// that file with the code it is asking about, so a test written there once
+// would be overwritten by the first mutant, and the block must instead ride
+// the code into each run.
+func WithInlineTest(block string) ScoreOption {
+	return func(c *scoreConfig) { c.compose = AppendBlock(block) }
 }
 
 // WithMutantTimeout overrides the auto-derived per-mutant timeout with an
@@ -343,6 +359,37 @@ func WithFailureParser(p lang.FailureParser) ScoreOption {
 // proportional to the mutant count.
 func WithMutantFailFast(f FailFastFor) ScoreOption {
 	return func(c *scoreConfig) { c.failFast = f }
+}
+
+// WithEvidenceLines names lines of the audited source that are the audit's own
+// EVIDENCE, an inline test module such as Rust's `#[cfg(test)] mod tests`. A
+// mutant whose edit touches them would mutate the developer's test: the
+// mutated assertion fails and the mutant "kills" itself, a fabricated kill.
+// Such a mutant is invalid, counted in MutantsInvalid and never graded.
+//
+// FAIL CLOSED: a mutant whose Span is unknown (zero) cannot be shown to leave
+// the tests alone, so with evidence lines set it is invalid too. With none set
+// (every language that reports no inline module) nothing changes, and
+// zero-span mutants grade as before.
+func WithEvidenceLines(r []lang.LineRange) ScoreOption {
+	return func(c *scoreConfig) { c.evidenceLines = r }
+}
+
+// evidenceInvalidReason is why m is invalid against cfg's evidence lines, or
+// "" when it may be graded.
+func (c *scoreConfig) evidenceInvalidReason(m Mutant) string {
+	if len(c.evidenceLines) == 0 {
+		return ""
+	}
+	if m.Span.IsZero() {
+		return "its edited lines are unknown, so it cannot be shown to leave the source's own tests alone"
+	}
+	for _, e := range c.evidenceLines {
+		if m.Span.Overlaps(e) {
+			return fmt.Sprintf("edits the source's own tests (lines %d-%d), which are the audit's evidence", e.Start, e.End)
+		}
+	}
+	return ""
 }
 
 // WithCommandRewrite rewrites EVERY command Score hands the jail: the
@@ -934,12 +981,13 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 		return cfg.rewrite(append([]string(nil), cmd...))
 	}
 
+	// ov is every run's workspace: base, with the code in place at codePath
+	// through cfg.compose (WithInlineTest). Built once, so no run below can
+	// be the one that forgot the block.
+	ov := Overlay{Base: base, CodePath: codePath, Compose: cfg.compose}
+
 	runCmd := func(rctx context.Context, code string, cmd []string) (bool, error) {
-		files := make(map[string]string, len(base)+1)
-		for k, v := range base {
-			files[k] = v
-		}
-		files[codePath] = code
+		files := ov.With(code)
 		return j.RunTest(rctx, files, toJail(cmd))
 	}
 
@@ -954,11 +1002,7 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 	dj, detailed := j.(DetailedJail)
 	nameKiller := cfg.failureParser != nil && detailed
 	runCmdDetailed := func(rctx context.Context, code string, cmd []string) (bool, []byte, error) {
-		files := make(map[string]string, len(base)+1)
-		for k, v := range base {
-			files[k] = v
-		}
-		files[codePath] = code
+		files := ov.With(code)
 		return dj.RunTestDetailed(rctx, files, toJail(cmd))
 	}
 
@@ -972,11 +1016,7 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 			pass, err := runCmd(rctx, code, cmd)
 			return pass, "", err
 		}
-		files := make(map[string]string, len(base)+1)
-		for k, v := range base {
-			files[k] = v
-		}
-		files[codePath] = code
+		files := ov.With(code)
 		return vj.RunTestVerbose(rctx, files, toJail(cmd))
 	}
 
@@ -991,11 +1031,7 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 	// sixth run (2026-10-30) failed its baseline and printed 64 KiB of
 	// passing acceptance tests, cut off before vitest's failure summary.
 	baselineRun := func(rctx context.Context, code string) (bool, string, error) {
-		files := make(map[string]string, len(base)+1)
-		for k, v := range base {
-			files[k] = v
-		}
-		files[codePath] = code
+		files := ov.With(code)
 		// WARM THE RUN CACHE with this run, only when the caller asked
 		// (WithWarmBaseline): the warming run writes what every later run
 		// reads, so it must be a run of the project's own code and tests. A
@@ -1397,6 +1433,10 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 		// against these exact bytes; it CAN happen for a replayed set whose
 		// parent hash was somehow satisfied by different source, and that is
 		// precisely the case that must not quietly become a number.
+		if r := cfg.evidenceInvalidReason(m); r != "" {
+			outcomes[i] = outcome{invalid: true, invalidReason: r}
+			return
+		}
 		mutantCode, aerr := m.Apply(compliantCode)
 		if aerr != nil {
 			outcomes[i] = outcome{invalid: true, invalidReason: invalidReasonAnchor + ": " + aerr.Error()}

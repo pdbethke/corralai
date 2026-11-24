@@ -114,21 +114,69 @@ func TestEvidencePromotionDeclarationMatchesTheLandingCode(t *testing.T) {
 	}
 }
 
-// Each language lacking promotion lacks it for the reason its exemption on
-// the support page states, not because its sample is broken: Rust's unit
-// landing exists and only the source landing is refused.
-func TestPromotionGapsAreWhereTheExemptionsSay(t *testing.T) {
-	for _, tc := range []struct {
-		lang                     string
-		sourceAdmitted, unitLand bool
-	}{
-		{"rust", false, true},
-	} {
-		p, _ := lang.ByName(tc.lang)
-		admitted, lands := unitSamplePromotes(t, p)
-		if admitted != tc.sourceAdmitted || lands != tc.unitLand {
-			t.Errorf("%s: source landing admitted %v (want %v), unit lands %v (want %v)", tc.lang, admitted, tc.sourceAdmitted, lands, tc.unitLand)
+// TestRustEvidencePromotesAnInlineTestedFile: a Rust source with no separate
+// test file is no longer excluded before pairing. One whose tests are inline
+// pairs to itself by name; one that declares no test module is a
+// no-paired-test exclusion, and the library unit that executed it adds it to
+// the audit. Either way its authored test lands in the source itself
+// (lang.TestLanding), and the door admits it (lang.CheckTestLanding) — the
+// indexmap shape (src/inner/extract.rs, executed in full by the library's
+// tests) that the evidence-promotion exemption used to describe.
+func TestRustEvidencePromotesAnInlineTestedFile(t *testing.T) {
+	files := map[string]string{
+		"Cargo.toml":           "[package]\nname = \"a\"\nversion = \"0.1.0\"\n",
+		"src/lib.rs":           "pub mod inner;\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {}\n}\n",
+		"src/inner/mod.rs":     "pub mod extract;\n",
+		"src/inner/extract.rs": "pub fn extract() -> i32 { 1 }\n",
+	}
+	root := writeTree(t, files)
+	cands, excl, err := Enumerate(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paired := map[string]string{}
+	for _, c := range cands {
+		paired[c.Path] = c.TestPath
+	}
+	if paired["src/lib.rs"] != "src/lib.rs" {
+		t.Errorf("src/lib.rs (inline tests) pairs to %q, want itself; cands %+v", paired["src/lib.rs"], cands)
+	}
+	reasons := map[string]string{}
+	for _, e := range excl {
+		reasons[e.Path] = e.Reason
+	}
+	if reasons["src/inner/extract.rs"] != ReasonNoPairedTest {
+		t.Fatalf("src/inner/extract.rs excluded as %q, want %q before the evidence", reasons["src/inner/extract.rs"], ReasonNoPairedTest)
+	}
+
+	rust, _ := lang.ByName("rust")
+	ev := UnitEvidence{Ran: true, Units: []UnitResult{{Unit: "a/lib", Counts: map[string]lang.LineCounts{
+		"src/lib.rs":           {Executed: 1, Executable: 1},
+		"src/inner/extract.rs": {Executed: 1, Executable: 1},
+	}}}}
+	idx, ok := IndexFromUnits(ev, UnitFilesFor(rust, files))
+	got, kept, promoted := WidenCandidacyByEvidence(cands, excl, idx, ok)
+	if promoted != 1 {
+		t.Fatalf("promoted %d, want src/inner/extract.rs added; kept %+v", promoted, kept)
+	}
+	var c Candidate
+	for _, x := range got {
+		if x.Path == "src/inner/extract.rs" {
+			c = x
 		}
+	}
+	if c.Path == "" || c.TestPath != "" || c.CoveringTestPath != "src/inner/extract.rs" {
+		t.Fatalf("promoted candidate = %+v, want an evidence-only candidate whose unit lands on the source", c)
+	}
+	l, err := lang.TestLanding(c.Path, DiskSources(rust, root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l.Path != c.Path || !l.Into || l.OwnModule {
+		t.Errorf("landing = %+v, want the source itself, declaring no test module of its own", l)
+	}
+	if err := lang.CheckTestLanding(c.Path, l); err != nil {
+		t.Errorf("the door refuses the promoted file: %v", err)
 	}
 }
 
@@ -137,8 +185,7 @@ func TestPromotionGapsAreWhereTheExemptionsSay(t *testing.T) {
 // excluded as evidence-pairing-not-built before. A language that promotes
 // keeps no-paired-test for a file it could not land (a Go file run only by
 // another package's tests). No shipped language now reaches
-// evidence-pairing-not-built: Rust, the one that does not promote, excludes
-// such a source before pairing (test-landing-not-built).
+// evidence-pairing-not-built: every shipped language promotes.
 func TestAnExecutedFileIsAddedWhereEvidencePromotes(t *testing.T) {
 	swift, _ := lang.ByName("swift")
 	files := map[string]string{

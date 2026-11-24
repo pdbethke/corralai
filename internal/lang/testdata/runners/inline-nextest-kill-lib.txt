@@ -1,0 +1,34 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s
+────────────
+    Starting 7 tests across 1 binary
+        PASS [   0.002s] (1/7) inline-cargo tests::negative
+        PASS [   0.002s] (2/7) inline-cargo named::corral_tests::zero_is_zero
+        PASS [   0.003s] (3/7) inline-cargo tests::positive
+        PASS [   0.003s] (4/7) inline-cargo extra::tests::below
+        FAIL [   0.003s] (5/7) inline-cargo corral_tests::zero_is_zero
+  stdout ───
+
+    running 1 test
+    test corral_tests::zero_is_zero ... FAILED
+
+    failures:
+
+    failures:
+        corral_tests::zero_is_zero
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+  stderr ───
+
+    thread 'corral_tests::zero_is_zero' panicked at src/lib.rs:44:5:
+    assertion `left == right` failed
+      left: 1
+     right: 0
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        PASS [   0.004s] (6/7) inline-cargo corral_tests::unit_is_reached
+        PASS [   0.004s] (7/7) inline-cargo extra::tests::inside
+────────────
+     Summary [   0.004s] 7 tests run: 6 passed, 1 failed, 0 skipped
+        FAIL [   0.003s] (5/7) inline-cargo corral_tests::zero_is_zero
+error: test run failed

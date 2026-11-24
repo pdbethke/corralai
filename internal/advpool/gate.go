@@ -51,12 +51,14 @@ func pluginFor(codePath string) (golang.Plugin, error) {
 // For a language with an Inline rule (Rust) Primary IS the source, so this
 // returns codePath itself, and a workspace built from it would overwrite the
 // code under test. Nothing here prevents that; lang.CheckTestLanding does,
-// refusing such a file at every entry that can start a run (Driver.StartRun,
-// the brain's AdvPoolRuntime.StartRun, certify --local's resolveAuditPlugin)
-// before this is ever called — see that function's doc for the list and why
-// the condition is derived from the landing rather than a language name. A
-// Rust file those doors admit has a Declared landing, and its authored test
-// never comes here: authoredTestPath answers it from the AuthoredLanding.
+// refusing such a file at every entry with no repository to read its
+// landing from (the brain's AdvPoolRuntime.StartRun, certify --adversarial,
+// single-file certify --local) before this is ever called — see that
+// function's doc for the list and why the condition is derived from the
+// landing rather than a language name. A Rust file the repository doors
+// admit has a Declared or an Inline landing, and its authored test never
+// comes here: authoredTestPath answers it from the AuthoredLanding, and an
+// Inline one rides the code itself (AuthoredLanding.authored).
 func advPoolTestPath(codePath string) string {
 	if p, err := pluginFor(codePath); err == nil {
 		if c, ok := pairing.Primary(p.TestRules(), codePath); ok {
@@ -117,14 +119,40 @@ func (l AuthoredLanding) AppendTo() string {
 	return l.Path
 }
 
-// overlay writes an authored test (content, as ParseTest landed it) at its
-// path in ws: ComposeLanding — the landing file's existing bytes with the
-// block appended, for an Into landing; the test alone, as a file of its own,
-// otherwise. The one overlay rule for an authored test, shared by
-// CompileTest and authoredWorkspace so the file compiled and the file graded
-// are composed the same way.
-func (l AuthoredLanding) overlay(ws map[string]string, path, content string) {
-	ws[path] = golang.ComposeLanding(l.Landing, l.Existing, content)
+// Inline reports whether the authored test lands in the code file itself: a
+// landing Into the audited source (Rust's inline `mod tests`, the block
+// reaching the code with `use super::*` at depth 0). Such a test cannot be
+// written once at its path, because every grading run writes the code it is
+// asking about (original, mutant or canary) at that very path; it must ride
+// the code into each run instead (authored).
+func (l AuthoredLanding) Inline(codePath string) bool {
+	return l.Into && l.Path != "" && filepath.Clean(filepath.FromSlash(l.Path)) == filepath.Clean(filepath.FromSlash(codePath))
+}
+
+// authored is the workspace a run of the authored test (content, as
+// ParseTest landed it) sees, as the Overlay its code is written through: base
+// with the test landed at testPath — ComposeLanding, the landing file's
+// existing bytes with the block appended, for an Into landing; the test
+// alone, as a file of its own, otherwise — or, for an Inline landing, base
+// untouched and the block appended to whatever code the run writes at
+// codePath (adequacy.AppendBlock). Nothing is ever written at testPath for an
+// inline landing: that path IS codePath, and a write there would be
+// overwritten by the code, or would overwrite it.
+//
+// The one rule for where an authored test goes in a workspace, shared by
+// CompileTest, the authored pass, the clean-code failure run and the
+// positive control, so the file compiled and the file graded are composed
+// the same way. base is never modified.
+func (l AuthoredLanding) authored(base map[string]string, codePath, testPath, content string) adequacy.Overlay {
+	ws := maps.Clone(base)
+	if ws == nil {
+		ws = map[string]string{}
+	}
+	if l.Inline(codePath) {
+		return adequacy.Overlay{Base: ws, CodePath: codePath, Compose: adequacy.AppendBlock(content)}
+	}
+	ws[testPath] = golang.ComposeLanding(l.Landing, l.Existing, content)
+	return adequacy.Overlay{Base: ws, CodePath: codePath}
 }
 
 // authoredTestPath derives the path the POOL-AUTHORED test is written to in
@@ -337,6 +365,11 @@ type JailScorer struct {
 	// test is written and what is already there. MUST equal the
 	// JailValidator's and the RunSpec's — one value, set by the caller.
 	Landing AuthoredLanding
+	// EvidenceLines are the audited source's own test-module lines (an inline
+	// Rust `#[cfg(test)] mod`), read through repoindex. Every Score call this
+	// scorer makes refuses a mutant that edits them (adequacy.WithEvidenceLines).
+	// Empty for a language whose source declares none.
+	EvidenceLines []golang.LineRange
 	// Lang, Selection and SelectionMap shape the AUTHORED pass's command
 	// (authoredCmd); the DEV pass's is built by its callers, from the same
 	// fields on the RunSpec, via DevCommand. The selection engine
@@ -474,6 +507,7 @@ func (s JailScorer) baseScoreOpts() []adequacy.ScoreOption {
 		adequacy.WithKillConfirmer(s.KillerCmd),
 		adequacy.WithMutantFailFast(s.FailFast),
 		adequacy.WithCommandRewrite(s.CommandRewrite),
+		adequacy.WithEvidenceLines(s.EvidenceLines),
 	}
 }
 
@@ -733,6 +767,15 @@ func (s JailScorer) exclude(argv []string, built bool, x *exclusion) ([]string, 
 	return out, nil
 }
 
+// errAuthoredUnnameable marks an authored pass that was not run because the
+// authored test cannot be run apart from the file's own tests: an inline
+// block whose tests have no exact id (inlineAlone). It is a fact about that
+// one test, not about the run: the driver records the seat (or the batched
+// pass) as unmeasured — compiled, never graded — and the file's other seats
+// go on. Returned as an error rather than a Report because no field of a
+// Report could say it without claiming a run that never happened.
+var errAuthoredUnnameable = errors.New("advpool: the authored test cannot be run apart from the file's own tests, so it was not graded")
+
 func (s JailScorer) scoreAuthoredReport(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string, x *exclusion) (adequacy.Report, error) {
 	scoreBase, base := s.scoreWorkspace(codePath, test, testCmd)
 	cmd, built := s.authoredCmdBuilt(codePath, base)
@@ -740,8 +783,16 @@ func (s JailScorer) scoreAuthoredReport(ctx context.Context, codePath, code, tes
 	if err != nil {
 		return adequacy.Report{}, err
 	}
+	opts := s.baseScoreOpts()
 	if s.BaseFiles != nil {
-		scoreBase = s.authoredWorkspace(codePath, test)
+		ov := s.authoredWorkspace(codePath, test)
+		scoreBase = ov.Base
+		if s.Landing.Inline(codePath) {
+			// The block rides every run of the Score — baseline, canary,
+			// each survivor, its confirmation — appended to the code each
+			// one writes (see AuthoredLanding.authored).
+			opts = append(opts, adequacy.WithInlineTest(test))
+		}
 	}
 
 	// The mutants here are SURVIVORS of the dev pass: no selected dev test
@@ -761,10 +812,41 @@ func (s JailScorer) scoreAuthoredReport(ctx context.Context, codePath, code, tes
 	// satisfied it for free, whether or not the authored test ever read the
 	// file. It is also more honest on the kill: a dev test that flaked
 	// during this pass used to count as the authored test proving a gap.
-	opts := s.baseScoreOpts()
 	if r, ok := s.selectionRow(); ok {
 		path := authoredTestPath(s.Landing, codePath, s.DevTestPath, s.BaseFiles)
-		if alone, aerr := testmap.AuthoredTestCmd(s.SelectionMap, golang.Selection{Base: s.Selection.Base}, r, base, s.RepoDir, path); aerr == nil {
+		alone, aerr := testmap.AuthoredTestCmd(s.SelectionMap, golang.Selection{Base: s.Selection.Base}, r, base, s.RepoDir, path)
+		if aerr == nil && s.Landing.Inline(codePath) {
+			// The unit holding an inline block also holds the file's own
+			// tests: alone only once narrowed to the block's (inlineAlone).
+			// The verdict asks the same question with the canary alone
+			// (selectionDisclosure); a block whose own tests then cannot be
+			// named is an error, never a wider run under the narrower claim.
+			// A salvage's failing examples are left out of the narrowed id
+			// list (inlineAlone's drop), never deselected afterwards.
+			if _, aerr = inlineAlone(s.Landing, r, s.RepoDir, codePath, code, alone, nil); aerr == nil {
+				if s.KillerCmd != nil {
+					// The narrowed command already names its tests, so
+					// the row's KillerCmd refuses it and every kill would
+					// be confirmed by repeating the run; the killing test
+					// is selected alone from the unit instead.
+					opts = append(opts, adequacy.WithKillConfirmer(inlineKiller(r, alone)))
+				}
+				var drop []string
+				if x != nil {
+					drop = x.ids
+				}
+				if alone, err = inlineAlone(s.Landing, r, s.RepoDir, codePath, code, alone, drop, test); err != nil {
+					// The unit can be narrowed, but not to THIS block's
+					// tests (a case-generating test, no test listed, every
+					// test failing on a salvage): nothing is run, and the
+					// seat is unmeasured, never a Tick error that ends the
+					// file's other seats (errAuthoredUnnameable).
+					return adequacy.Report{}, fmt.Errorf("%w: %w", errAuthoredUnnameable, err)
+				}
+				x = nil
+			}
+		}
+		if aerr == nil {
 			if alone, err = s.exclude(alone, true, x); err != nil {
 				return adequacy.Report{}, err
 			}
@@ -795,7 +877,7 @@ func (s JailScorer) scoreAuthoredReport(ctx context.Context, codePath, code, tes
 	// unsound via the existing checks below, with no need to spend another
 	// jail run proving it twice.
 	if s.BaseFiles != nil && rep.Total > 0 {
-		reaches, verr := s.verifyAuthoredTestReaches(ctx, codePath, cmd)
+		reaches, verr := s.verifyAuthoredTestReaches(ctx, codePath, code, cmd)
 		if verr != nil {
 			return adequacy.Report{}, fmt.Errorf("advpool: positive-control authored test: %w", verr)
 		}
@@ -902,12 +984,14 @@ func (s JailScorer) CompliantRun(ctx context.Context, codePath, code, test, test
 	// auto-discover, and this is feedback text rather than a measured number,
 	// which is why it is a one-line fix and not an incident. (2026-09-08.)
 	cmd := s.authoredCmd(codePath, base)
+	ov := adequacy.Overlay{Base: ws, CodePath: codePath}
 	if s.BaseFiles != nil {
-		ws = s.authoredWorkspace(codePath, test)
+		ov = s.authoredWorkspace(codePath, test)
 	}
 	// The UNMUTATED code: this asks "why does your test fail on software that
-	// is correct", which is the only question worth feeding back.
-	ws[codePath] = code
+	// is correct", which is the only question worth feeding back. For an
+	// inline landing the test rides it (ov.Compose).
+	ws = ov.With(code)
 	if ends {
 		return ej.RunTestEnds(ctx, ws, rewriteCmd(s.CommandRewrite, cmd))
 	}
@@ -915,19 +999,19 @@ func (s JailScorer) CompliantRun(ctx context.Context, codePath, code, test, test
 }
 
 // authoredWorkspace builds the repo-aware scoring workspace with `content`
-// overlaid at the authored test's own path — the SAME overlay
-// ScoreAuthoredReport itself needs (a brand-new file the repo does not
-// already contain, so there is nothing to shadow; see the method's own doc)
-// and the positive control below needs too, just with the canary in place
-// of the real test. Extracted so both call sites build the identical
-// workspace shape.
-func (s JailScorer) authoredWorkspace(codePath, content string) map[string]string {
-	ws := make(map[string]string, len(s.BaseFiles)+1)
-	for k, v := range s.BaseFiles {
-		ws[k] = v
-	}
-	s.Landing.overlay(ws, authoredTestPath(s.Landing, codePath, s.DevTestPath, s.BaseFiles), content)
-	return ws
+// placed where the landing puts the authored test — the SAME overlay
+// ScoreAuthoredReport itself needs and the positive control below needs
+// too, just with the canary in place of the real test. Where it goes
+// depends on the landing (AuthoredLanding.authored): a file of its own is a
+// new file at a path no file of the workspace holds (authoredTestPath
+// renames past one), so nothing is shadowed; an Into landing appends it to
+// the existing test file it names, which that file's own tests still sit
+// in; and an inline landing appends it as a block to the code each run
+// writes, so it is not a file of the workspace at all. Extracted so every
+// call site builds the identical workspace shape, and returned as the
+// Overlay the run's code goes through for the inline case.
+func (s JailScorer) authoredWorkspace(codePath, content string) adequacy.Overlay {
+	return s.Landing.authored(s.BaseFiles, codePath, authoredTestPath(s.Landing, codePath, s.DevTestPath, s.BaseFiles), content)
 }
 
 // verifyAuthoredTestReaches is corral's POSITIVE CONTROL for a pool-authored
@@ -960,16 +1044,157 @@ func (s JailScorer) authoredWorkspace(codePath, content string) map[string]strin
 //     exists for) or something else masks it. Either way the authored
 //     test's own verdict from the real scoring run is worthless.
 //     reaches=false.
-func (s JailScorer) verifyAuthoredTestReaches(ctx context.Context, codePath string, cmd []string) (bool, error) {
-	ws := s.authoredWorkspace(codePath, adequacy.CanaryCode)
+//
+// For an INLINE landing the authored test's own file is codePath, and invalid
+// source there would ask only what adequacy.Score's own canary already asked
+// (does the command compile this file?): a command that compiles it but
+// whose filter never runs the appended block would pass as "reached", and
+// AuthoredTestUnreached could never fire. So the control is instead the
+// language's always-failing test (lang.ReachCanaryBlock: the TestLander's
+// ReachCanaryTest, landed where the authored block lands), appended to code
+// through the same Compose (AuthoredLanding.authored), and the run's own
+// failure reader must NAME that canary failing for the block to count as
+// reached (inlineCanaryReach). A failure is not enough: a build error (a
+// crate under `#![deny(warnings)]` once rejected the canary block's unused
+// glob, measured on cargo 1.90.0), another test's failure or a timeout says
+// nothing about whether the block's tests ran, and each is unreached, which
+// can only lower a proven count. A run that passes never ran the block:
+// unreached. code is read only then; a landing with a file of its own
+// leaves codePath as the workspace already has it, as it always did.
+func (s JailScorer) verifyAuthoredTestReaches(ctx context.Context, codePath, code string, cmd []string) (bool, error) {
+	r, err := s.AuthoredTestReach(ctx, codePath, code, cmd)
+	return r.Outcome == ReachReached, err
+}
+
+// ReachOutcome is what the positive control saw (AuthoredTestReach). Only
+// ReachReached counts the authored test reached; every other outcome is
+// unreached for the score, and they are told apart because a caller acting
+// on one before the run (the pre-flight) must say a different thing for
+// each: only a run that PASSED shows the command does not run the test.
+type ReachOutcome string
+
+const (
+	// ReachReached: the run failed on the control (for an inline landing,
+	// the runner named the reach canary failing; otherwise any failure or
+	// a timeout on the planted invalid source).
+	ReachReached ReachOutcome = "reached"
+	// ReachRunPassed: the run passed, so the control never ran.
+	ReachRunPassed ReachOutcome = "run-passed"
+	// ReachRunnerUnreadable: an inline landing under a command whose
+	// runner names no failing test corral can read (`make test`, `sh -c
+	// …`), so the canary cannot be seen failing; nothing is run.
+	ReachRunnerUnreadable ReachOutcome = "runner-unreadable"
+	// ReachTimedOut: an inline landing's control run timed out, which does
+	// not show the canary ran.
+	ReachTimedOut ReachOutcome = "timed-out"
+	// ReachFailedWithoutCanary: an inline landing's control run failed
+	// without naming the canary (a build error, another test's failure),
+	// or no test could be named in the canary's block.
+	ReachFailedWithoutCanary ReachOutcome = "failed-without-canary"
+)
+
+// Reach is the positive control's outcome and, for every outcome but
+// ReachReached, what it saw: the line a failed run's output says why, the
+// command that cannot be read.
+type Reach struct {
+	Outcome ReachOutcome
+	Detail  string
+}
+
+// AuthoredTestReach runs the positive control (verifyAuthoredTestReaches'
+// doc) and says what it saw.
+func (s JailScorer) AuthoredTestReach(ctx context.Context, codePath, code string, cmd []string) (Reach, error) {
+	if s.Landing.Inline(codePath) {
+		return s.inlineCanaryReach(ctx, codePath, code, cmd)
+	}
+	ws := s.authoredWorkspace(codePath, adequacy.CanaryCode).Base
 	passed, err := s.Jail.RunTest(ctx, ws, rewriteCmd(s.CommandRewrite, cmd))
 	if err != nil {
 		if errors.Is(err, adequacy.ErrTestTimeout) {
-			return true, nil // hung on invalid source at the authored test's path -> it reacted
+			return Reach{Outcome: ReachReached}, nil // hung on the planted canary (invalid source) -> it reacted
 		}
-		return false, err
+		return Reach{}, err
 	}
-	return !passed, nil
+	if passed {
+		return Reach{Outcome: ReachRunPassed, Detail: "the run passed with invalid source at the authored test's path"}, nil
+	}
+	return Reach{Outcome: ReachReached}, nil
+}
+
+// inlineCanaryReach is the inline positive control: code with the reach
+// canary block appended, run under cmd on a jail that returns the run's
+// output (adequacy.DetailedJail, the tail the scorer names a killing test
+// from), and reached only when the run failed AND cmd's runner, reading
+// that output (lang.DeselectorFor's failure list), names the canary's test
+// among the failures. The canary is matched by its path within the source
+// (`corral_tests::corral_reach_canary`, from the plugin's own reading of
+// the block): equal to a failing id, or its last segments, since the id
+// carries the module path of the file (and nextest's the binary before it).
+// Every other outcome is unreached, its own ReachOutcome, and the log says
+// why. A jail that cannot return output is an error: this control has
+// nothing to read.
+func (s JailScorer) inlineCanaryReach(ctx context.Context, codePath, code string, cmd []string) (Reach, error) {
+	dj, ok := s.Jail.(adequacy.DetailedJail)
+	if !ok {
+		return Reach{}, fmt.Errorf("advpool: the positive control for the test landed in %s reads which tests failed from the run's output, and this jail cannot return it", codePath)
+	}
+	block, err := golang.ReachCanaryBlock(s.Landing.Landing, code)
+	if err != nil {
+		return Reach{}, err
+	}
+	p, err := pluginFor(codePath)
+	if err != nil {
+		return Reach{}, err
+	}
+	canary := p.TestNamesInSource(codePath, block)
+	unreached := func(o ReachOutcome, why string) (Reach, error) {
+		log.Printf("advpool: %s: positive control: the authored block counts as unreached: %s", codePath, why)
+		return Reach{Outcome: o, Detail: why}, nil
+	}
+	if len(canary) == 0 {
+		return unreached(ReachFailedWithoutCanary, "no test can be named in the reach canary's block")
+	}
+	failed, ok := golang.DeselectorFor(p, golang.Cmd(cmd))
+	if !ok {
+		return unreached(ReachRunnerUnreadable, fmt.Sprintf("the runner of %v names no failing test, so the reach canary cannot be seen failing", cmd))
+	}
+	passed, out, err := dj.RunTestDetailed(ctx, s.authoredWorkspace(codePath, block).With(code), rewriteCmd(s.CommandRewrite, cmd))
+	if err != nil {
+		if errors.Is(err, adequacy.ErrTestTimeout) {
+			return unreached(ReachTimedOut, "the run timed out, which does not show the reach canary ran")
+		}
+		return Reach{}, err
+	}
+	if passed {
+		return unreached(ReachRunPassed, "the run passed, so the reach canary never ran")
+	}
+	for _, id := range failed(string(out)) {
+		if i := strings.LastIndexByte(id, ' '); i >= 0 {
+			id = id[i+1:] // nextest's `<binary> <path>`
+		}
+		for _, c := range canary {
+			if id == c || strings.HasSuffix(id, "::"+c) {
+				return Reach{Outcome: ReachReached}, nil
+			}
+		}
+	}
+	return unreached(ReachFailedWithoutCanary, "the run failed without the reach canary failing: "+failureReason(string(out)))
+}
+
+// failureReason is the line of a failed run's output that says why: the
+// first that starts with "error" (cargo's build failure, after its
+// Compiling lines), else the first meaningful line (firstLine); "(no
+// output)" when there is none.
+func failureReason(out string) string {
+	for l := range strings.Lines(out) {
+		if t := strings.TrimSpace(l); strings.HasPrefix(t, "error") {
+			return t
+		}
+	}
+	if l := firstLine(out); l != "" {
+		return l
+	}
+	return "(no output)"
 }
 
 // AuthoredTestPathFor is the path the pool-authored test is written to, for
@@ -997,14 +1222,15 @@ func AuthoredTestPathFor(l AuthoredLanding, codePath, devTestPath string) string
 // — which is an ordinary way to invoke a suite, not an exotic one.
 //
 // Returns (true, nil) when the authored test would be collected. Costs one
-// jail run and nothing else.
-func (s JailScorer) AuthoredTestWouldBeCollected(ctx context.Context, codePath string, cmd []string) (bool, error) {
+// jail run and nothing else. code is the unmutated source, which an inline
+// landing's reach canary is appended to (see verifyAuthoredTestReaches).
+func (s JailScorer) AuthoredTestWouldBeCollected(ctx context.Context, codePath, code string, cmd []string) (bool, error) {
 	if s.BaseFiles == nil {
 		// Single-file mode overlays the test at the plugin's own synthetic
 		// path and supplies the command, so collection is not in question.
 		return true, nil
 	}
-	return s.verifyAuthoredTestReaches(ctx, codePath, cmd)
+	return s.verifyAuthoredTestReaches(ctx, codePath, code, cmd)
 }
 
 // selectionRow is the runner row the engine builds this scorer's authored
@@ -1225,7 +1451,12 @@ func selectionDisclosure(rs RunSpec) (dev, authored string, alone bool) {
 		// this rule with no files to collide with.
 		path = authoredTestPath(rs.Landing, rs.CodePath, rs.DevTestPath, nil)
 	}
-	_, aloneErr := testmap.AuthoredTestCmd(rs.SelectionMap, golang.Selection{Base: sel.Base}, r, base, rs.RepoDir, path)
+	aloneCmd, aloneErr := testmap.AuthoredTestCmd(rs.SelectionMap, golang.Selection{Base: sel.Base}, r, base, rs.RepoDir, path)
+	if aloneErr == nil && rs.Landing.Inline(rs.CodePath) {
+		// What the authored pass narrows to (inlineAlone), asked with the
+		// positive control's block, which is all the spec holds.
+		_, aloneErr = inlineAlone(rs.Landing, r, rs.RepoDir, rs.CodePath, rs.Landing.Existing, aloneCmd, nil)
+	}
 	if aloneErr == nil {
 		return dev, "", true
 	}
@@ -1233,6 +1464,102 @@ func selectionDisclosure(rs RunSpec) (dev, authored string, alone bool) {
 		authored = fmt.Sprintf("advpool: the authored test %s could not run alone or beside the selection (%v), so the authored pass runs the whole command", path, err)
 	}
 	return dev, authored, false
+}
+
+// inlineAlone narrows alone — the command the engine built to run the unit
+// that holds an inline landing's authored test — to that test's own tests:
+// those of each block in blocks (as landed) and of the positive control's
+// reach canary, landed on target as verifyAuthoredTestReaches lands it, each
+// by its exact id (lang.InlineTestIDs) through the row's SelectCmd.
+//
+// It exists because an inline block shares its test binary with the
+// source's own tests (a Rust library unit runs every `mod tests` of the
+// crate), so the unit alone is not "the authored test alone": a kill there
+// could be the developer's test, credited to corral's. Narrowed, the claim
+// is true again. A row with no SelectCmd, or ids that cannot be named (a
+// file no module path names, a block whose tests cannot be listed), is an
+// error: the pass is then not recorded alone.
+//
+// drop is a salvage's failing examples (exclusion.ids): they are left out of
+// the id list rather than excluded afterwards, because the row's DeselectCmd
+// refuses a command that already names its tests (cargo test's would carry
+// `--exact <ids>`), which dropped every partly failing inline test under
+// cargo test, Rust's default runner. A failing id is matched by its test
+// path: libtest names a failure by it (`extra::corral_tests::kills`, the
+// InlineTestIDs form), and nextest as `<binary> <path>`, whose binary is the
+// one unit this command already runs. A block left with no test to run is
+// an error — nothing is left to salvage — and never an empty selection,
+// which `--exact` with no name would turn into the whole unit.
+func inlineAlone(l AuthoredLanding, r golang.Runner, repoDir, codePath, target string, alone, drop []string, blocks ...string) ([]string, error) {
+	if r.SelectCmd == nil {
+		return nil, fmt.Errorf("advpool: the authored test lands in %s itself, whose unit also runs the file's own tests, and the %s runner cannot run tests by name, so the authored test cannot run alone", codePath, r.ID)
+	}
+	canary, err := golang.ReachCanaryBlock(l.Landing, target)
+	if err != nil {
+		return nil, err
+	}
+	failing := make(map[string]bool, len(drop))
+	for _, id := range drop {
+		if i := strings.LastIndexByte(id, ' '); i >= 0 {
+			id = id[i+1:]
+		}
+		failing[id] = true
+	}
+	var ids []string
+	add := func(b string, salvaged bool) (int, error) {
+		got, err := golang.InlineTestIDs(repoDir, codePath, b)
+		if err != nil {
+			return 0, fmt.Errorf("advpool: the authored test lands in %s itself, whose unit also runs the file's own tests, and its tests cannot be named apart from them: %w", codePath, err)
+		}
+		n := 0
+		for _, id := range got {
+			if salvaged && failing[id] {
+				continue
+			}
+			n++
+			if !slices.Contains(ids, id) {
+				ids = append(ids, id)
+			}
+		}
+		return n, nil
+	}
+	for _, b := range blocks {
+		n, err := add(b, true)
+		if err != nil {
+			return nil, err
+		}
+		if n == 0 {
+			return nil, fmt.Errorf("advpool: every test of the authored block in %s failed on the unmutated code (%v), so nothing is left to salvage", codePath, drop)
+		}
+	}
+	if _, err := add(canary, false); err != nil {
+		return nil, err
+	}
+	out, ok := r.SelectCmd(alone, ids)
+	if !ok {
+		return nil, fmt.Errorf("advpool: the authored test lands in %s itself, whose unit also runs the file's own tests, and the %s runner cannot narrow %v to its tests %v", codePath, r.ID, alone, ids)
+	}
+	return out, nil
+}
+
+// inlineKiller is the kill confirmer of an inline landing's authored pass:
+// the test the failing run blamed, selected alone from unit (the command
+// running the unit that holds the block, before inlineAlone narrowed it)
+// through the row's SelectCmd, by its test path (libtest names a failure
+// by it; nextest as `<binary> <path>`, whose binary is the unit's). The
+// row's own KillerCmd refuses the narrowed command, which already names
+// its tests (`--exact …`, a test(=…) filterset), so without this every
+// inline kill was confirmed by repeating the whole grading run.
+func inlineKiller(r golang.Runner, unit []string) adequacy.KillerCmdFor {
+	return func(_ []string, killedBy string) ([]string, bool) {
+		if i := strings.LastIndexByte(killedBy, ' '); i >= 0 {
+			killedBy = killedBy[i+1:]
+		}
+		if killedBy == "" {
+			return nil, false
+		}
+		return r.SelectCmd(unit, []string{killedBy})
+	}
 }
 
 // AuthoredTestPath is where this scorer writes the authored test for
@@ -1338,11 +1665,7 @@ type JailEnumerator struct {
 // stdout-capturing jail.
 func (e JailEnumerator) Enumerate(ctx context.Context, codePath, code, test string, listCmd []string) (string, error) {
 	scoreBase, _ := (JailScorer{BaseFiles: e.BaseFiles}).scoreWorkspace(codePath, test, "")
-	files := make(map[string]string, len(scoreBase)+1)
-	for k, v := range scoreBase {
-		files[k] = v
-	}
-	files[codePath] = code
+	files := adequacy.Overlay{Base: scoreBase, CodePath: codePath}.With(code)
 	return e.Jail.Enumerate(ctx, files, listCmd)
 }
 
@@ -1433,16 +1756,11 @@ func (v JailValidator) CompileTest(ctx context.Context, codePath, code, test str
 	if v.BaseFiles != nil {
 		base = v.BaseFiles
 	}
-	ws := make(map[string]string, len(base)+2)
-	for k, val := range base {
-		ws[k] = val
-	}
-	ws[codePath] = code
 	// The workspace as it stands WITHOUT the authored test, kept to ask one
 	// question of a failing check: does it fail here too? See below.
-	unmodified := maps.Clone(ws)
+	unmodified := adequacy.Overlay{Base: base, CodePath: codePath}.With(code)
 	testPath := authoredTestPath(v.Landing, codePath, v.DevTestPath, v.BaseFiles)
-	v.Landing.overlay(ws, testPath, test)
+	ws := v.Landing.authored(base, codePath, testPath, test).With(code)
 
 	// CompileCheck returns a SEQUENCE of commands (see lang.Plugin.CompileCheck's
 	// doc comment): most plugins yield exactly one, but a plugin whose checker

@@ -843,41 +843,52 @@ func TestWidenNeverPromotesTestSupport(t *testing.T) {
 }
 
 // TestEnumerateClassifiesALandingRefusedFileBeforePairing: a file whose
-// landing is the source itself (lang.CheckTestLanding — a .rs source whose
-// tests are inline, or that declares no separate test module, so its test
-// would be written over the file itself) is excluded by
-// Enumerate as test-landing-not-built, paired or not, and is never a
-// candidate. Classified here, once, because every scan-wide decision
-// downstream reads cands: --top ranking, the selection and pre-flight source
-// list, the "auditing N of M" count. A refused file that stayed a candidate
-// took a --top slot from an auditable Python file and made a Python+Rust repo
-// "span two languages", switching Python's selection off (final review I1/I2).
+// landing corral cannot admit (lang.CheckTestLanding) is excluded by
+// Enumerate before pairing and is never a candidate. Classified here, once,
+// because every scan-wide decision downstream reads cands: --top ranking, the
+// selection and pre-flight source list, the "auditing N of M" count. A
+// refused file that stayed a candidate took a --top slot from an auditable
+// Python file and made a Python+Rust repo "span two languages", switching
+// Python's selection off (final review I1/I2).
+//
+// What is refused is now only what corral cannot read: here, a test module
+// the source declares outside the repository (test-landing-not-built). A Rust
+// source whose tests are inline pairs to itself and is a candidate, and one
+// that declares no test module is an ordinary no-paired-test exclusion the
+// evidence can promote (TestRustEvidencePromotesAnInlineTestedFile); before
+// the inline landing (2026-11-24) both were test-landing-not-built.
 func TestEnumerateClassifiesALandingRefusedFileBeforePairing(t *testing.T) {
 	root := writeTree(t, map[string]string{
 		"calc.py":      "def add(a, b):\n    return a + b\n",
 		"test_calc.py": "from calc import add\n\ndef test_add():\n    assert add(1, 2) == 3\n",
 		"src/lib.rs":   "pub fn f() {}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {}\n}\n",
 		"src/plain.rs": "pub fn p() {}\n",
+		"src/far.rs":   "pub fn far() {}\n\n#[cfg(test)]\n#[path = \"../../elsewhere_tests.rs\"]\nmod tests;\n",
 		"tests/it.rs":  "#[test]\nfn it() {}\n",
 	})
 	cands, excl, err := Enumerate(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cands) != 1 || cands[0].Path != "calc.py" {
-		t.Fatalf("candidates = %+v, want only calc.py", cands)
+	paired := map[string]string{}
+	for _, c := range cands {
+		paired[c.Path] = c.TestPath
+	}
+	if len(cands) != 2 || paired["calc.py"] != "test_calc.py" || paired["src/lib.rs"] != "src/lib.rs" {
+		t.Fatalf("candidates = %+v, want calc.py and src/lib.rs (paired to its own inline tests)", cands)
 	}
 	reasons := map[string]string{}
 	for _, e := range excl {
 		reasons[e.Path] = e.Reason
 	}
-	for _, p := range []string{"src/lib.rs", "src/plain.rs"} {
-		if reasons[p] != ReasonTestLandingNotBuilt {
-			t.Errorf("%s excluded as %q, want %q", p, reasons[p], ReasonTestLandingNotBuilt)
+	for p, want := range map[string]string{
+		"src/far.rs":   ReasonTestLandingNotBuilt,
+		"src/plain.rs": ReasonNoPairedTest,
+		"tests/it.rs":  ReasonIsTest,
+	} {
+		if reasons[p] != want {
+			t.Errorf("%s excluded as %q, want %q", p, reasons[p], want)
 		}
-	}
-	if reasons["tests/it.rs"] != ReasonIsTest {
-		t.Errorf("tests/it.rs excluded as %q, want %q (a test file is still a test file)", reasons["tests/it.rs"], ReasonIsTest)
 	}
 
 	var rust LanguageStat
@@ -886,8 +897,8 @@ func TestEnumerateClassifiesALandingRefusedFileBeforePairing(t *testing.T) {
 			rust = s
 		}
 	}
-	if rust.LandingNotBuilt != 2 || rust.Auditable != 0 || rust.NoPairedTest != 0 {
-		t.Errorf("rust profile = %+v, want 2 landing-not-built, 0 auditable, 0 no-paired-test", rust)
+	if rust.LandingNotBuilt != 1 || rust.Auditable != 1 || rust.NoPairedTest != 1 {
+		t.Errorf("rust profile = %+v, want 1 landing-not-built, 1 auditable, 1 no-paired-test", rust)
 	}
 }
 

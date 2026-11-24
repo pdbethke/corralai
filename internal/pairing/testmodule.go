@@ -28,4 +28,10 @@ type TestModule struct {
 	PathAttr string
 	// CfgTest is true when the module carries `#[cfg(test)]`.
 	CfgTest bool
+	// StartLine and EndLine are the 1-based, inclusive lines the module
+	// occupies in this file, from its first attribute to its closing brace.
+	// Set only when Inline: a bare `mod x;` has no body here, so both are 0.
+	// They let a caller keep a mutant out of the source's own tests, which are
+	// the audit's evidence and never its target.
+	StartLine, EndLine int
 }

@@ -98,18 +98,38 @@ What each part is for, and the limits that apply:
   `RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo rustup-init
   --no-modify-path --default-toolchain <version>`, with `/usr/local/cargo/bin`
   on `PATH`.
-- **Only sources whose tests live in a separate file can be audited.** That
-  means a file declaring `#[cfg(test)] #[path = "foo_tests.rs"] mod tests;` or
-  a bare `mod tests;`. corral appends its test to that file as a
-  `mod corral_tests { use super::super::*; … }` block. A file whose tests are
-  inline (`mod tests { … }`) is listed as `test-landing-not-built`. It is never
-  audited, because the test would have to be written into the source under
-  audit. `certify --local` refuses a `.rs` file unless you pass `--repo-dir`.
-- **What Rust does not have yet:** a coverage pre-flight, a verified fail-fast
-  flag, salvage of a partly failing authored test, and `--matrix`. The critic
-  is still given every test name, and each of its "this test can never fail"
-  claims is checked by running that test alone (`-- --exact`). See
-  [docs/corral/language-support.md](docs/corral/language-support.md).
+- **Where corral's test goes.** For a source whose tests live in a separate
+  file (`#[cfg(test)] #[path = "foo_tests.rs"] mod tests;` or a bare
+  `mod tests;`), corral appends its test to that file as a
+  `#[cfg(test)] mod corral_tests { #[allow(unused_imports)] use super::super::*; … }`
+  block. For a source whose tests are inline (`mod tests { … }`), or that has
+  no test module, it appends a
+  `#[cfg(test)] mod corral_tests { #[allow(unused_imports)] use super::*; … }`
+  block to the source itself, in the code each run writes (the `allow` line
+  keeps a crate that denies warnings building a block that uses nothing from
+  the file). A mutant that edits the file's own test code (a test module or
+  test item at any depth) is not graded. A file where the parser set code
+  aside where tests could sit is not audited at all: it is refused before
+  any goal or mutant, as `own-tests-unreadable`, naming the lines. A survivor is proven
+  "by the authored test alone" only when the run selects corral's tests by
+  exact name (`-- --exact …`, or a nextest `test(=…)` filterset). The inline
+  landing has run on cargo 1.90.0 and cargo-nextest 0.9.148 against a
+  fixture crate (a crate root, a module, and a file that already declares
+  `corral_tests`): each composition builds and passes, the block kills a
+  mutant the file's own tests miss, and the exact-name command runs the
+  block's tests and nothing else. A free dry run on indexmap-rs/indexmap
+  added `src/inner/extract.rs`, which has no test module, to the audit by
+  evidence. No audit with models has run on such a file yet. A test module
+  declared outside the repository is listed as `test-landing-not-built` and
+  not audited. `certify --local` refuses a `.rs` file unless you pass
+  `--repo-dir`.
+- **What Rust has and does not have** is the Rust column of
+  [docs/corral/language-support.md](docs/corral/language-support.md),
+  generated from the runner table: a partly failing authored test is
+  salvaged under `cargo test` and `cargo nextest`, and stopping at the first
+  failure is built only for nextest. The critic is still given every test
+  name, and each of its "this test can never fail" claims is checked by
+  running that test alone (`-- --exact`).
 - **What it found on Warp.** The first run was on `crates/fuzzy_match` at
   `714c51f1`, with the critic on the Codex CLI on a subscription. Of 34 planted
   faults, the crate's 33 tests caught 11 (0.32). corral wrote and ran tests

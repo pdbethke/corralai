@@ -12,6 +12,7 @@ import (
 
 	sitter "github.com/smacker/go-tree-sitter"
 
+	plugins "github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/pairing"
 )
 
@@ -114,6 +115,61 @@ func testModules(lang string, src []byte) []pairing.TestModule {
 	}
 	defer tree.Close()
 	return spec.modules(tree.RootNode(), src)
+}
+
+// ownTestLines dispatches to the ownTests reader in lang's langSpecs row,
+// and fails closed on a parse that set code aside where tests could hide
+// (setAsideOutside).
+func ownTestLines(lang string, src []byte) ([]plugins.LineRange, string) {
+	spec, ok := langSpecs[lang]
+	if !ok || spec.ownTests == nil {
+		return nil, ""
+	}
+	tree, _, err := parseTS(string(src), lang)
+	if err != nil {
+		return nil, "the file could not be parsed: " + err.Error()
+	}
+	defer tree.Close()
+	root := tree.RootNode()
+	lines := spec.ownTests(root, src)
+	return lines, setAsideOutside(root, lines)
+}
+
+// setAsideOutside is why the parse under root cannot say where its tests
+// are, or "": the first ERROR or MISSING node that lies outside every span
+// in lines and outside every function the grammar placed. An error inside a
+// function body is kept, as unreadSpan keeps one inside a symbol: libtest
+// collects no test from a function body.
+func setAsideOutside(root *sitter.Node, lines []plugins.LineRange) string {
+	if !root.HasError() {
+		return ""
+	}
+	why := ""
+	var find func(n *sitter.Node, inFn bool)
+	find = func(n *sitter.Node, inFn bool) {
+		if why != "" || n == nil || !n.HasError() {
+			return
+		}
+		inFn = inFn || n.Type() == "function_item"
+		if n.IsError() || n.IsMissing() {
+			r := plugins.LineRange{Start: int(n.StartPoint().Row) + 1, End: int(n.EndPoint().Row) + 1}
+			if inFn {
+				return
+			}
+			for _, l := range lines {
+				if l.Start <= r.Start && r.End <= l.End {
+					return
+				}
+			}
+			why = fmt.Sprintf("the grammar set aside lines %d-%d, which could hold the source's own tests", r.Start, r.End)
+			return
+		}
+		for i := 0; i < int(n.ChildCount()); i++ {
+			find(n.Child(i), inFn)
+		}
+	}
+	find(root, false)
+	return why
 }
 
 func parseTS(text, lang string) (*sitter.Tree, []byte, error) {

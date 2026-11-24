@@ -823,8 +823,9 @@ func UnitFilesFor(p lang.Plugin, files map[string]string) UnitFiles {
 //     external (`package p_test`) alike.
 //   - Rust: `<pkg>/test:<name>` (nextest `<pkg>::<name>`) is the target's
 //     tests/<name>.rs or tests/<name>/main.rs. A lib or bin unit's tests are
-//     in-file modules of its sources, which Landing already names; Rust
-//     evidence promotes nothing yet (ruling R23).
+//     in-file modules of its sources, which Landing already names (the
+//     source itself, where an authored test is appended since the inline
+//     landing).
 //
 // Every other language names nothing.
 func UnitTestFiles(p lang.Plugin, files map[string]string) func(unit string) []string {

@@ -545,7 +545,31 @@ package reposcan
 // whole, so its passing cases proved nothing; now they can prove a survivor.
 // Given its own generation because "52" may reach main before it. Behaviour
 // bump; the shape is unchanged.
-const VerdictGeneration = "53"
+// "54" (2026-11-24): a Rust source whose tests are inline, or that declares
+// no test module, is audited: its authored test is appended to the code each
+// grading run writes (adequacy.WithInlineTest), lang.CheckTestLanding admits
+// that landing, and Rust's unit evidence adds such a file to the audit when
+// a unit executes it. A "53" scan refused every such file before pairing
+// (test-landing-not-built), so no earlier verdict exists for one: a "53"
+// record says nothing about it, and it is not a cache entry to reuse. A Rust
+// file "53" did audit (one whose `mod` declaration loads a separate test
+// file) may sit a different exam too: a mutant whose edit overlaps the
+// source's own test code (repoindex.OwnTestLines: any test module, or item
+// carrying a test attribute or a cfg holding `test`, at any nesting level)
+// is invalid (adequacy.WithEvidenceLines), where "53" graded it, and a
+// file whose parse set code aside outside those spans and outside every
+// function body is not audited at all (ReasonOwnTestsUnreadable: excluded
+// by Enumerate and refused at every audit door, before any spend). For the newly audited
+// files, the inline positive control appends a landed test that always
+// fails, and an authored pass recorded alone runs only corral's block, by
+// exact test name (lang.Runner.SelectCmd), where the library unit would
+// also run the file's own tests. Such a file with no test module of its
+// own has no developer test, so its assigned critic is not run, and the
+// Verdict gained CriticNotRun saying why (where a run would otherwise have
+// recorded a critic that judged an empty file and found nothing). Behaviour
+// and shape bump, both in this one generation since neither has reached
+// main.
+const VerdictGeneration = "54"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.
@@ -567,4 +591,4 @@ const VerdictGeneration = "53"
 // Verdict's own FIELDS") and nothing wider. Nor can any fingerprint catch the
 // behaviour half: a scorer that computes a DIFFERENT number into the SAME
 // field is invisible here, and remains a review responsibility.
-const VerdictShapeSHA256 = "865ab8f5b25f36561eb7ce28d58891d6d5f39ae20a2f9cb768aa6f59bc4ed49e"
+const VerdictShapeSHA256 = "b62aeaae10c01511dd39f2ede16b20a600e3308c65e28b1e7cb57379a2c9c402"

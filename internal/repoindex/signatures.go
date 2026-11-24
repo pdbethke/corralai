@@ -5,6 +5,7 @@ package repoindex
 import (
 	"errors"
 
+	plugins "github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/pairing"
 )
 
@@ -77,4 +78,23 @@ func ReadsTestModules(lang string) bool { return readsTestModules(lang) }
 // no-cgo build answers nil.
 func TestModules(lang string, src []byte) []pairing.TestModule {
 	return testModules(lang, src)
+}
+
+// OwnTestLines returns the 1-based line spans of src that hold its OWN test
+// code, for a language whose tests can live in the source (Rust): every test
+// module and every test-only item the grammar placed, at any nesting level
+// (TestModules reads only the top level, which is what pairing needs and
+// not what a guard over the file's lines needs). They are the audit's
+// evidence, so a grading run refuses a mutant that edits them
+// (adequacy.WithEvidenceLines).
+//
+// unread is non-empty when the parse set code aside (an ERROR or MISSING
+// node) outside every span it found and every function it placed: test code
+// there is invisible to the walk, so the spans are no reading of where the
+// tests are. Such a file is refused before any spend
+// (reposcan.ReasonOwnTestsUnreadable), never graded on these spans. A
+// language with no reader, and every language in a no-cgo build, answers
+// none.
+func OwnTestLines(lang string, src []byte) (lines []plugins.LineRange, unread string) {
+	return ownTestLines(lang, src)
 }

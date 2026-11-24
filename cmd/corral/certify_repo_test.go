@@ -4791,10 +4791,11 @@ func TestDocsNeverDescribeCorralAsAnOlderSeries(t *testing.T) {
 // case is a #[path] target with no test marker at all, which the old
 // MightBeTest pre-filter would also have discarded.
 //
-// The exclusions are the scan's own (Enumerate). With the Rust landing, a
-// source whose declared test file is gone lands on itself and is excluded as
-// test-landing-not-built — the deletion is why — so the check must ask those
-// sources too, or the PR above would again drop app_id.rs silently.
+// The exclusions are the scan's own (Enumerate). A source whose declared test
+// file is gone lands on itself; it was excluded as test-landing-not-built
+// until the inline landing (2026-11-24) and is a no-paired-test exclusion
+// now — the deletion is why either way — so the check must ask those sources
+// too, or the PR above would again drop app_id.rs silently.
 func TestOrphanCheckSeesDeletedRustTests(t *testing.T) {
 	root := t.TempDir()
 	mustWrite(t, filepath.Join(root, "crates", "warp_core", "src", "app_id.rs"),
@@ -4818,17 +4819,22 @@ func TestOrphanCheckSeesDeletedRustTests(t *testing.T) {
 }
 
 // pyRustRepo is a Python package with one paired test beside a Rust crate
-// whose lib.rs carries an inline test module — the mixed shape (pydantic,
-// aisuite) the landing refusal must not degrade for the Python half.
+// whose lib.rs declares its test module outside the repository — a landing
+// corral refuses — in the mixed shape (pydantic, aisuite) the landing
+// refusal must not degrade for the Python half. Until the inline landing
+// (2026-11-24) the crate's lib.rs carried an inline test module, which was
+// then refused and is now admitted; the properties below are about the
+// refusal, so they keep a source that is still refused.
 func pyRustRepo(t *testing.T, root string) {
 	t.Helper()
 	mustWrite(t, filepath.Join(root, "calc.py"), "def add(a, b):\n    return a + b\n")
 	mustWrite(t, filepath.Join(root, "test_calc.py"), "from calc import add\n\ndef test_add():\n    assert add(1, 2) == 3\n")
-	mustWrite(t, filepath.Join(root, "native", "src", "lib.rs"), "pub fn f() {}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {}\n}\n")
+	mustWrite(t, filepath.Join(root, "native", "src", "lib.rs"), "pub fn f() {}\n\n#[cfg(test)]\n#[path = \"../../../outside_tests.rs\"]\nmod tests;\n")
 }
 
 // TestCertifyRepoTopNeverSpendsASlotOnALandingRefusedFile: a Rust source
-// (its test would be written over it — no test landing yet) is classified
+// whose landing is refused (its test module is declared outside the
+// repository) is classified
 // by Enumerate, before ranking, so --top 1 audits the Python file it can
 // grade instead of choosing the Rust file and then refusing it (final
 // review I2a: "auditing 1 of 2", 0 jobs). It is accounted with its reason,
@@ -4939,7 +4945,7 @@ func TestScanPassesPrepareNoJailForALanguageThatCannotBeInstrumented(t *testing.
 // never reaches the seed (which is where `cargo vendor` runs).
 func TestCertifyRepoRustOnlyRepoPreparesNoJail(t *testing.T) {
 	root := t.TempDir()
-	mustWrite(t, filepath.Join(root, "src", "lib.rs"), "pub fn f() {}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {}\n}\n")
+	mustWrite(t, filepath.Join(root, "src", "lib.rs"), "pub fn f() {}\n\n#[cfg(test)]\n#[path = \"../../outside_tests.rs\"]\nmod tests;\n")
 	cands, excl, err := reposcan.Enumerate(root)
 	if err != nil {
 		t.Fatal(err)
@@ -4969,7 +4975,7 @@ func TestCertifyRepoDiffTouchingOnlyARefusedFileStaysGreenAndSaysSo(t *testing.T
 	gitRun("add", ".")
 	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
 	base := gitRevParseHead(t, root)
-	mustWrite(t, filepath.Join(root, "native", "src", "lib.rs"), "pub fn f() { let _ = 1; }\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {}\n}\n")
+	mustWrite(t, filepath.Join(root, "native", "src", "lib.rs"), "pub fn f() { let _ = 1; }\n\n#[cfg(test)]\n#[path = \"../../../outside_tests.rs\"]\nmod tests;\n")
 	gitRun("add", ".")
 	gitRun("commit", "-q", "-m", "touch rust", "--no-gpg-sign")
 	goals := filepath.Join(root, "goals.json")
@@ -5009,7 +5015,7 @@ func TestCertifyRepoDiffMixedRefusedAndAuditableAuditsTheAuditable(t *testing.T)
 	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
 	base := gitRevParseHead(t, root)
 	mustWrite(t, filepath.Join(root, "calc.py"), "def add(a, b):\n    return b + a\n")
-	mustWrite(t, filepath.Join(root, "native", "src", "lib.rs"), "pub fn f() { let _ = 1; }\n")
+	mustWrite(t, filepath.Join(root, "native", "src", "lib.rs"), "pub fn f() { let _ = 1; }\n\n#[cfg(test)]\n#[path = \"../../../outside_tests.rs\"]\nmod tests;\n")
 	gitRun("add", ".")
 	gitRun("commit", "-q", "-m", "touch both", "--no-gpg-sign")
 	goals := filepath.Join(root, "goals.json")

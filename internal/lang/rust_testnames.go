@@ -31,9 +31,18 @@ import (
 // unbalanced braces, lists NOTHING rather than the tests before it lost its
 // place.
 func (rustPlugin) TestNamesInSource(_, src string) []string {
+	names, _ := rustTestScan(src)
+	return names
+}
+
+// rustTestScan is TestNamesInSource's scan, and also reports whether any
+// test attribute it read is case-generating (rustCaseAttr): libtest then
+// names each case below the function (`m::f::case_1`), so the listed name
+// is a substring selector only, never an exact id (see InlineTestIDs).
+func rustTestScan(src string) (names []string, caseGen bool) {
 	code, ok := rustCode(src)
 	if !ok {
-		return nil
+		return nil, false
 	}
 	toks := rustTokens(code)
 
@@ -64,7 +73,7 @@ func (rustPlugin) TestNamesInSource(_, src string) []string {
 			continue
 		case "}":
 			if len(scopes) == 1 {
-				return nil
+				return nil, false
 			}
 			scopes = scopes[:len(scopes)-1]
 			reset()
@@ -98,10 +107,11 @@ func (rustPlugin) TestNamesInSource(_, src string) []string {
 				}
 			}
 			if depth > 0 {
-				return nil
+				return nil, false
 			}
 			if j == i+1 && rustTestAttr(attrPath) {
 				marked = true
+				caseGen = caseGen || rustCaseAttr(attrPath)
 			}
 			i = k - 1
 			continue
@@ -134,9 +144,9 @@ func (rustPlugin) TestNamesInSource(_, src string) []string {
 		}
 	}
 	if len(scopes) != 1 {
-		return nil
+		return nil, false
 	}
-	return out
+	return out, caseGen
 }
 
 // rustTestAttr reports whether an attribute path marks a test function.
@@ -146,6 +156,21 @@ func rustTestAttr(path []string) bool {
 	}
 	switch path[len(path)-1] {
 	case "test", "rstest", "test_case", "wasm_bindgen_test":
+		return true
+	}
+	return false
+}
+
+// rustCaseAttr reports whether a test attribute path is a framework that
+// may generate one libtest test per case below the function's name
+// (#[rstest] with #[case]/#[values], #[test_case]), so the function's own
+// path is not the id of any test that runs.
+func rustCaseAttr(path []string) bool {
+	if len(path) == 0 {
+		return false
+	}
+	switch path[len(path)-1] {
+	case "rstest", "test_case":
 		return true
 	}
 	return false

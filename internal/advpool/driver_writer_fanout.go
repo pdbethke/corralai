@@ -4,6 +4,7 @@ package advpool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sort"
@@ -201,6 +202,17 @@ func (d *Driver) advanceWriterAttempt(ctx context.Context, missionID int64, run 
 	// proof name a survivor rather than being attributed to one after a
 	// whole-file re-score.
 	rep, serr := scoreAuthored(ctx, d.Scorer, run.rs.CodePath, run.rs.Code, test, only, run.rs.TestCmd)
+	if errors.Is(serr, errAuthoredUnnameable) {
+		// This seat's test cannot be run apart from the file's own tests,
+		// so it was never run: compiled, unmeasured, done. Returned as an
+		// error it errored every Tick, never finished, and after
+		// localTickMaxErrors the file's audit gave up with its siblings'
+		// proofs.
+		log.Printf("advpool: %s: the authored test for survivor %s was not graded — that survivor is unproven, not disproven: %v",
+			run.rs.CodePath, a.mutant.ID, serr)
+		a.done = true
+		return true, nil
+	}
 	if serr != nil {
 		return true, fmt.Errorf("advpool: score the authored test for survivor %s: %w", a.mutant.ID, serr)
 	}

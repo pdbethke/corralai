@@ -10,12 +10,13 @@ import (
 	"github.com/pdbethke/corralai/internal/lang"
 )
 
-// TestEnumerateAdmitsADeclaredRustSource is 7a at the scan's door: a Rust
-// source whose own declaration loads a separate test file is a candidate,
-// paired to that file — the file its authored test will land in — while an
-// inline-tested one and one whose declaration leaves the repository are still
+// TestEnumerateAdmitsADeclaredRustSource is 7a and 7b at the scan's door: a
+// Rust source whose own declaration loads a separate test file is a
+// candidate, paired to that file — the file its authored test will land in —
+// and an inline-tested one is a candidate paired to itself, where its
+// authored test lands; one whose declaration leaves the repository is still
 // excluded as test-landing-not-built. The landing and the pairing read the
-// same walk, so the candidate's TestPath IS its landing.
+// same walk, so each candidate's TestPath IS its landing.
 func TestEnumerateAdmitsADeclaredRustSource(t *testing.T) {
 	root := writeTree(t, map[string]string{
 		"src/foo.rs":       "fn private_double(x: i32) -> i32 { x * 2 }\n\n#[cfg(test)]\n#[path = \"foo_tests.rs\"]\nmod tests;\n",
@@ -27,22 +28,26 @@ func TestEnumerateAdmitsADeclaredRustSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cands) != 1 || cands[0].Path != "src/foo.rs" || cands[0].TestPath != "src/foo_tests.rs" {
-		t.Fatalf("candidates = %+v, want only src/foo.rs paired to src/foo_tests.rs", cands)
+	want := map[string]string{"src/bar.rs": "src/bar.rs", "src/foo.rs": "src/foo_tests.rs"}
+	if len(cands) != len(want) {
+		t.Fatalf("candidates = %+v, want %v", cands, want)
 	}
 	p, _ := lang.ByName("rust")
-	l, err := lang.TestLanding("src/foo.rs", DiskSources(p, root))
-	if err != nil || l.Path != cands[0].TestPath {
-		t.Fatalf("landing %+v (err %v) is not the pairing %s", l, err, cands[0].TestPath)
+	for _, c := range cands {
+		if want[c.Path] != c.TestPath {
+			t.Errorf("%s paired to %q, want %q", c.Path, c.TestPath, want[c.Path])
+		}
+		l, err := lang.TestLanding(c.Path, DiskSources(p, root))
+		if err != nil || l.Path != c.TestPath {
+			t.Errorf("%s: landing %+v (err %v) is not the pairing %s", c.Path, l, err, c.TestPath)
+		}
 	}
 	reasons := map[string]string{}
 	for _, e := range excl {
 		reasons[e.Path] = e.Reason
 	}
-	for _, p := range []string{"src/bar.rs", "src/out.rs"} {
-		if reasons[p] != ReasonTestLandingNotBuilt {
-			t.Errorf("%s excluded as %q, want %q", p, reasons[p], ReasonTestLandingNotBuilt)
-		}
+	if reasons["src/out.rs"] != ReasonTestLandingNotBuilt {
+		t.Errorf("src/out.rs excluded as %q, want %q", reasons["src/out.rs"], ReasonTestLandingNotBuilt)
 	}
 }
 
@@ -86,5 +91,35 @@ func TestAnUnreadableDeclarationIsAnExclusionNeverAnError(t *testing.T) {
 	}
 	if _, err := ResolutionPaths(p, root, "src/foo.rs"); err != nil {
 		t.Errorf("ResolutionPaths errored: %v", err)
+	}
+}
+
+// TestEnumerateExcludesARustFileWhoseOwnTestsCannotBeLocated: a Rust source
+// whose parse set code aside outside every test span and function body
+// (repoindex.OwnTestLines' unread) cannot be shown to keep its own tests out
+// of the exam, so it is excluded HERE, before pairing, ranking and goal
+// derivation spend anything on it, with its own reason. It used to be
+// audited, paid for, and then had every mutant discarded, which the readouts
+// rendered as a compile-check rejection and a 0.00.
+func TestEnumerateExcludesARustFileWhoseOwnTestsCannotBeLocated(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"src/bad.rs": "pub fn f() -> i32 { 1 }\n@@@\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {}\n}\n",
+		"src/ok.rs":  "pub fn g() {}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {}\n}\n",
+	})
+	cands, excl, err := Enumerate(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cands) != 1 || cands[0].Path != "src/ok.rs" {
+		t.Errorf("candidates = %+v, want only src/ok.rs", cands)
+	}
+	got := ""
+	for _, e := range excl {
+		if e.Path == "src/bad.rs" {
+			got = e.Reason
+		}
+	}
+	if got != ReasonOwnTestsUnreadable {
+		t.Errorf("src/bad.rs excluded as %q, want %q", got, ReasonOwnTestsUnreadable)
 	}
 }

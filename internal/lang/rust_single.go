@@ -165,18 +165,9 @@ func cargoDeselectCmd(argv, ids []string) ([]string, bool) {
 // one filterset that excludes each failing test by its binary and its name:
 // `not ((binary_id(=<b>) & test(=<t>)) | …)`. nextest names a failure
 // `<binary id> <test>`, so a test of the same name in another binary still
-// runs.
-//
-// nextest unions the filtersets it is given, so the exclusion cannot sit
-// beside the command's own: their tests would come back. The command's
-// `-E <expr>` filtersets, the form the unit command writes (nextestUnitsCmd),
-// are taken out and folded into the one filterset, `((e1) | (e2)) & not (…)`,
-// which runs what they ran less the failing tests. Without this a unit-graded
-// run could never be salvaged. Any other spelling of a filterset, and any
-// command nextestRunSplit refuses for another reason, is not rerun. A name
-// filter of the operator's still applies, intersected with the filterset. An
-// id with no binary, or with a character that would end a matcher early, is
-// refused.
+// runs. The command's own `-E` filtersets are folded in (nextestFold), so a
+// unit-graded run can be salvaged. An id with no binary, or with a character
+// that would end a matcher early, is refused.
 func nextestDeselectCmd(argv, ids []string) ([]string, bool) {
 	if len(ids) == 0 {
 		return nil, false
@@ -189,6 +180,40 @@ func nextestDeselectCmd(argv, ids []string) ([]string, bool) {
 		}
 		terms = append(terms, "(binary_id(="+bin+") & test(="+test+"))")
 	}
+	return nextestFold(argv, "not ("+strings.Join(terms, " | ")+")")
+}
+
+// nextestSelectCmd reruns a `cargo nextest run` with only the tests ids, by
+// exact name within the binaries the command already selects:
+// `(<its filtersets>) & (test(=<a>) | test(=<b>) …)`. The ids are test
+// names without a binary (libtest paths, lang.InlineTestIDs): the command's
+// own unit filterset names the binary. An id with a space or a character
+// that would end a matcher early is refused.
+func nextestSelectCmd(argv, ids []string) ([]string, bool) {
+	if len(ids) == 0 {
+		return nil, false
+	}
+	terms := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id == "" || strings.ContainsAny(id, " ()|&,\t\"'\\") {
+			return nil, false
+		}
+		terms = append(terms, "test(="+id+")")
+	}
+	return nextestFold(argv, "("+strings.Join(terms, " | ")+")")
+}
+
+// nextestFold reruns a `cargo nextest run` under ONE filterset: expr,
+// intersected with the command's own.
+//
+// nextest unions the filtersets it is given, so expr cannot sit beside the
+// command's own: their tests would come back. The command's `-E <expr>`
+// filtersets, the form the unit command writes (nextestUnitsCmd), are taken
+// out and folded in, `((e1) | (e2)) & expr`, which runs what they ran
+// narrowed by expr. Any other spelling of a filterset, and any command
+// nextestRunSplit refuses for another reason, is refused. A name filter of
+// the operator's still applies, intersected with the filterset.
+func nextestFold(argv []string, expr string) ([]string, bool) {
 	head, rest := splitAtDashDash(argv)
 	var kept, sets []string
 	for i := 0; i < len(head); i++ {
@@ -206,7 +231,6 @@ func nextestDeselectCmd(argv, ids []string) ([]string, bool) {
 	if !ok {
 		return nil, false
 	}
-	expr := "not (" + strings.Join(terms, " | ") + ")"
 	if len(sets) > 0 {
 		expr = "(" + strings.Join(sets, " | ") + ") & " + expr
 	}
@@ -214,6 +238,30 @@ func nextestDeselectCmd(argv, ids []string) ([]string, bool) {
 	cmd = append(cmd, opts...)
 	cmd = append(cmd, "-E", expr)
 	return append(cmd, tail...), true
+}
+
+// cargoSelectCmd reruns a `cargo test` command with only the tests ids:
+// `--exact` and one filter per id among the test binaries' arguments.
+// libtest ORs its filters, and --exact makes each match one test path
+// rather than every path it is a substring of (several exact filters
+// checked by hand on cargo 1.90). Only a command cargoTestSplit reads is
+// rerun (no name filter, --skip, --ignored or --list of its own), and only
+// libtest ids: one with a space is a nextest name. A test of the same path
+// in another of the run's test binaries runs too, since libtest's filter
+// names no binary; a one-unit command runs one binary.
+func cargoSelectCmd(argv, ids []string) ([]string, bool) {
+	if len(ids) == 0 || slices.ContainsFunc(ids, func(id string) bool { return id == "" || strings.ContainsAny(id, " \t") || strings.HasPrefix(id, "-") }) {
+		return nil, false
+	}
+	_, _, tail, ok := cargoTestSplit(argv)
+	if !ok {
+		return nil, false
+	}
+	var args []string
+	if !slices.Contains(tail, "--exact") {
+		args = append(args, "--exact")
+	}
+	return withTestBinaryArgs(argv, append(args, ids...)...), true
 }
 
 func isNextest(testCmd []string) bool {

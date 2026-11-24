@@ -167,3 +167,20 @@ cargo 1.90.0, cargo-nextest 0.9.148): src/report/<runner>, whose config hides
 the lines corral reads, run as the project runs it (-hidden) and with the
 runner row's ReportArgs appended (-shown), agent variables unset; captured with
 the script's report section run alone.
+inline-cargo-test-kill-<file>.txt and inline-nextest-kill-<file>.txt (added
+2026-11-24; cargo 1.90.0, cargo-nextest 0.9.148): `cargo test` and `cargo
+nextest run --no-fail-fast` on a copy of src/inline/cargo with
+src/inline/composed/<file>.mutant.rs at src/<file>.rs (the mutant with
+corral's block appended, as a grading run writes it), stdout+stderr, agent
+variables unset, the capture directory written as $DIR; captured with the
+script's inline section run alone, which also ran that section's `want`
+checks on the same toolchains, all ok.
+inline-cargo-test-deny-canary-<file>.txt and inline-nextest-deny-canary-<file>.txt
+(added 2026-11-24, same toolchains): `cargo test` and `cargo nextest run
+--no-fail-fast` on a copy of src/inline/cargo whose src/lib.rs is
+src/inline/deny/lib.rs (the crate root under #![deny(warnings)]), with
+src/inline/composed/deny.canary.rs at src/lib.rs (lib) or
+src/inline/composed/extra.canary.rs at src/extra.rs (extra): the reach
+canary builds and fails as a test. The four inline-*-kill-*.txt files were
+re-captured in the same run, after the landing's glob gained
+#[allow(unused_imports)] (their line numbers moved by one).

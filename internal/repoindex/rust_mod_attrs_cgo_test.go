@@ -28,7 +28,7 @@ func TestRustModFormsAreAllRead(t *testing.T) {
 	got := TestModules("rust", []byte(rustFixture(t)))
 	want := []pairing.TestModule{
 		{Name: "tests", Inline: false, PathAttr: "focus_env_tests.rs", CfgTest: true},
-		{Name: "tests", Inline: true, CfgTest: true},
+		{Name: "tests", Inline: true, CfgTest: true, StartLine: 158, EndLine: 166},
 		{Name: "tests", Inline: false},
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -193,5 +193,20 @@ func TestRustBoolOpsAndLoopsCount(t *testing.T) {
 func TestReadsTestModulesNamesTheLanguagesWithAReader(t *testing.T) {
 	if !ReadsTestModules("rust") || ReadsTestModules("python") {
 		t.Errorf("ReadsTestModules rust=%v python=%v", ReadsTestModules("rust"), ReadsTestModules("python"))
+	}
+}
+
+// TestRustTestModulesCarryTheirLines: an inline module reports the lines it
+// occupies, so a mutant anchored inside it can be refused; a bare `mod
+// tests;` has no lines in this file.
+func TestRustTestModulesCarryTheirLines(t *testing.T) {
+	src := "pub fn f() {}\n\n\n\n\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n    #[test]\n    fn t() {\n        f();\n    }\n}\n"
+	got := TestModules("rust", []byte(src))
+	if len(got) != 1 || got[0].StartLine != 7 || got[0].EndLine != 14 {
+		t.Fatalf("inline module = %+v, want lines 7-14 (the attribute line through the closing brace)", got)
+	}
+	bare := TestModules("rust", []byte("#[cfg(test)]\nmod tests;\n"))
+	if len(bare) != 1 || bare[0].StartLine != 0 || bare[0].EndLine != 0 {
+		t.Fatalf("bare module = %+v, want 0,0", bare)
 	}
 }

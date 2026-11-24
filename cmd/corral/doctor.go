@@ -660,7 +660,7 @@ func checkPairing(code, test string) checkResult {
 	// and without it (single-file). A file only the first admits — a Rust
 	// file whose test lands in the test file it declares — is [ok], and the
 	// detail says the bare form refuses it and why.
-	_, landing := auditLanding(localAuditInput{codePath: code, repoDir: "."})
+	readLanding, landing := auditLanding(localAuditInput{codePath: code, repoDir: "."})
 	needsRepoDir := ""
 	if landing == nil {
 		if _, bare := auditLanding(localAuditInput{codePath: code}); bare != nil {
@@ -679,6 +679,15 @@ func checkPairing(code, test string) checkResult {
 			return paired(t + " (--test)")
 		}
 		return checkResult{name: name, ok: true, detail: strings.TrimPrefix(needsRepoDir, " — ")}
+	}
+	// A source whose authored test lands in itself and that declares no
+	// test module corral could resolve (none at all, a declared `mod tests;`
+	// whose file is missing, or a form the reader does not parse) has no
+	// test file of its own, and certify --local grades
+	// it anyway, by the tests that execute it (lang.DevTestOf): "no test
+	// found" would refuse here what the audit admits.
+	if own, decided := lang.DevTestOf(code, readLanding); landing == nil && decided && own == "" {
+		return checkResult{name: name, ok: true, detail: "declares no test module corral could resolve: graded by the tests that execute it, and its authored test is appended to the file itself" + needsRepoDir}
 	}
 	// Rooted at the working directory, as certify --local and
 	// --adversarial resolve an operator's --code: that is also the root a

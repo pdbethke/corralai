@@ -40,11 +40,7 @@ func compileVerify(ctx context.Context, jail adequacy.Jail, base map[string]stri
 			// producing broken code.
 			return nil, nil, fmt.Errorf("authoring: mutant %s does not apply to %s: %w", mut.ID, codePath, aerr)
 		}
-		ws := make(map[string]string, len(base)+1)
-		for k, v := range base {
-			ws[k] = v
-		}
-		ws[codePath] = code
+		ws := adequacy.Overlay{Base: base, CodePath: codePath}.With(code)
 
 		compiles, err := jail.RunTest(ctx, ws, buildCmd)
 		if err != nil {

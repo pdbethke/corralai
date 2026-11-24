@@ -1,0 +1,26 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s
+     Running unittests src/lib.rs (target/debug/deps/inline_cargo-995b603fb05bc563)
+
+running 6 tests
+test extra::tests::below ... ok
+test extra::corral_tests::corral_reach_canary ... FAILED
+test tests::positive ... ok
+test named::corral_tests::zero_is_zero ... ok
+test extra::tests::inside ... ok
+test tests::negative ... ok
+
+failures:
+
+---- extra::corral_tests::corral_reach_canary stdout ----
+
+thread 'extra::corral_tests::corral_reach_canary' panicked at src/extra.rs:38:5:
+corral positive control: this test must fail when it runs
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    extra::corral_tests::corral_reach_canary
+
+test result: FAILED. 5 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`

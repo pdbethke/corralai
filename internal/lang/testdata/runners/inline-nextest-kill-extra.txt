@@ -1,0 +1,34 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s
+────────────
+    Starting 7 tests across 1 binary
+        PASS [   0.002s] (1/7) inline-cargo tests::negative
+        PASS [   0.002s] (2/7) inline-cargo extra::tests::inside
+        PASS [   0.002s] (3/7) inline-cargo tests::positive
+        PASS [   0.002s] (4/7) inline-cargo extra::tests::below
+        PASS [   0.002s] (5/7) inline-cargo named::corral_tests::zero_is_zero
+        PASS [   0.003s] (6/7) inline-cargo extra::corral_tests::within_is_identity
+        FAIL [   0.003s] (7/7) inline-cargo extra::corral_tests::above
+  stdout ───
+
+    running 1 test
+    test extra::corral_tests::above ... FAILED
+
+    failures:
+
+    failures:
+        extra::corral_tests::above
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+  stderr ───
+
+    thread 'extra::corral_tests::above' panicked at src/extra.rs:41:5:
+    assertion `left == right` failed
+      left: 30
+     right: 10
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+────────────
+     Summary [   0.004s] 7 tests run: 6 passed, 1 failed, 0 skipped
+        FAIL [   0.003s] (7/7) inline-cargo extra::corral_tests::above
+error: test run failed

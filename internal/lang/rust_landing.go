@@ -4,6 +4,7 @@ package lang
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -24,6 +25,10 @@ var (
 	// rustAncestorGlobRe is a glob import of an ancestor module — the line
 	// the landing itself supplies, at the depth the landing knows.
 	rustAncestorGlobRe = regexp.MustCompile(`^\s*use\s+(?:super::)+\*\s*;\s*$`)
+	// rustAllowAttrRe is an `#[allow(...)]` attribute on a line of its own:
+	// the landing's own (rustGlobAllow) or a writer's, before an ancestor
+	// glob, which goes with the glob it is on.
+	rustAllowAttrRe = regexp.MustCompile(`^\s*#\[allow\([^\]]*\)\]\s*$`)
 	// rustLiterals is Rust's string and comment syntax for the brace scan
 	// and the merge's renames. The single quote is NOT a quote here: it
 	// opens a lifetime ('a) as often as a char literal, and a char literal
@@ -31,9 +36,19 @@ var (
 	rustLiterals = literalSyntax{quotes: `"`, lineComments: []string{"//"}, blockComment: [2]string{"/*", "*/"}}
 )
 
-// LandTest wraps body as `#[cfg(test)] mod corral_tests { use <ancestor>::*;
-// … }`, the block appended to target. The use line is DATA from the landing:
-// depth 1 (a file the source declares as its child module) reaches the code
+// rustGlobAllow is the attribute on the landing's ancestor glob. A block
+// that uses no item of the code under test (the reach canary always; a
+// writer's test that names everything by path) leaves the glob unused, and
+// a crate built with `#![deny(warnings)]`, `#![deny(unused_imports)]` or
+// RUSTFLAGS=-Dwarnings then fails to compile on that line alone: measured on
+// cargo 1.90.0 (capture script, inline section), where the canary's build
+// error was read by the positive control as the canary having run.
+const rustGlobAllow = "#[allow(unused_imports)]"
+
+// LandTest wraps body as `#[cfg(test)] mod corral_tests {
+// #[allow(unused_imports)] use <ancestor>::*; … }`, the block appended to
+// target. The use line carries rustGlobAllow on every block alike, and it is
+// DATA from the landing: depth 1 (a file the source declares as its child module) reaches the code
 // under test with super::super, depth 0 (the source itself) with super — the
 // same scope the developer's own tests module sees, so private items are in
 // reach either way.
@@ -44,8 +59,9 @@ var (
 //   - a body that is wholly one wrapper module (`#[cfg(test)] mod x { … }`,
 //     what the plugin's prompt used to ask for) is unwrapped, and its lines
 //     de-indented by their common indentation;
-//   - a leading ancestor glob (`use super::*;`) is dropped — the landing's
-//     own line is the one that is right for this file.
+//   - a leading ancestor glob (`use super::*;`) is dropped, with an
+//     `#[allow(...)]` the writer put on it — the landing's own line is the
+//     one that is right for this file.
 //
 // The block is not indented: Rust does not care, and indenting would change
 // any string literal that continues across lines. The module is named
@@ -59,12 +75,116 @@ func (rustPlugin) LandTest(body string, depth int, target string) string {
 	inner := strings.Trim(rustDropAncestorGlobs(rustUnwrapWholeModule(body)), "\n")
 	var b strings.Builder
 	b.WriteString("#[cfg(test)]\nmod " + name + " {\n")
+	b.WriteString(rustGlobAllow + "\n")
 	b.WriteString("use " + strings.Repeat("super::", depth+1) + "*;\n")
 	if inner != "" {
 		b.WriteString("\n" + inner + "\n")
 	}
 	b.WriteString("}\n")
 	return b.String()
+}
+
+// ReachCanaryTest is a libtest test that panics, so it fails whenever it is
+// run, and only then: it compiles in any crate (no imports, no items of the
+// code under test, and the landing's glob carries rustGlobAllow, so a crate
+// that denies warnings builds it too). A failure that names it means the
+// command RAN the landed block; the positive control requires that name,
+// never a failure alone. See TestLander.ReachCanaryTest.
+func (rustPlugin) ReachCanaryTest() string {
+	return "#[test]\nfn corral_reach_canary() {\n    panic!(\"corral positive control: this test must fail when it runs\");\n}"
+}
+
+// InlineTestIDs is the libtest ids of landed's tests once the block is
+// appended to codePath: the module path the library gives codePath, the
+// block's own module and each test, joined with "::" (`inner::extract::
+// corral_tests::kills`). They are exact, which is the point: libtest's name
+// filter without --exact matches a substring, so the module path alone
+// (`corral_tests::`) would also select a corral_tests module another file
+// of the crate already holds, and the authored pass would not be alone.
+//
+// The module path is read from the file's place, as cargo's default module
+// layout gives it (src/lib.rs is the crate root; src/a/b.rs and
+// src/a/b/mod.rs are a::b), for a file the library compiles
+// (rustUnitTarget's lib case, the same place the authored pass's unit is
+// named from). A file mounted elsewhere by a `#[path]` attribute has a
+// different path; its ids then select nothing, the reach canary is not run
+// either, and the positive control reports the authored test unreached
+// rather than crediting it. A file outside the library (a binary's), a
+// name that is no Rust identifier, or a block whose tests cannot be listed
+// (TestNamesInSource) has no ids. Nor has a block holding a case-generating
+// test (rustCaseAttr): libtest names its cases `…::kills::case_1`, so the
+// exact id `…::kills` would select nothing, and a run of zero tests passes
+// its baseline and kills no survivor — read as "tried and missed" over a
+// run that executed nothing.
+func (rustPlugin) InlineTestIDs(repoRoot, codePath, landed string) ([]string, error) {
+	mod, err := rustLibModulePath(repoRoot, codePath)
+	if err != nil {
+		return nil, err
+	}
+	names, caseGen := rustTestScan(landed)
+	if caseGen {
+		return nil, fmt.Errorf("lang: a test in the block landed in %s carries a case-generating attribute (#[rstest], #[test_case]), whose cases libtest names below the function, so no exact id names them and selecting the function's would run no test", codePath)
+	}
+	if len(names) == 0 {
+		return nil, fmt.Errorf("lang: no test can be named in the block landed in %s, so its tests cannot be run apart from the file's own", codePath)
+	}
+	ids := make([]string, len(names))
+	for i, n := range names {
+		ids[i] = rustJoin(mod, n)
+	}
+	return ids, nil
+}
+
+// rustLibModulePath is the module path the library gives codePath, from its
+// place under the package's src/ (see InlineTestIDs).
+func rustLibModulePath(repoRoot, codePath string) (string, error) {
+	f, ok := repoRelative(codePath)
+	_, kind, _, unit := rustUnitTarget(repoRoot, codePath)
+	if !ok || !unit || kind != "lib" {
+		return "", fmt.Errorf("lang: %s is not a file the library of its Cargo package compiles, so no module path names it", codePath)
+	}
+	_, dir, err := owningCrateDir(repoRoot, f)
+	if err != nil {
+		return "", err
+	}
+	root, err := filepath.Abs(repoRoot)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(filepath.Join(dir, "src"), filepath.Join(root, filepath.FromSlash(f)))
+	if err != nil {
+		return "", err
+	}
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	last := len(parts) - 1
+	switch {
+	case len(parts) == 1 && parts[0] == "lib.rs":
+		return "", nil
+	case parts[last] == "mod.rs":
+		parts = parts[:last]
+	default:
+		parts[last] = strings.TrimSuffix(parts[last], ".rs")
+	}
+	for _, p := range parts {
+		if !rustIdentifier(p) {
+			return "", fmt.Errorf("lang: %s is not a module name, so no module path names %s", p, codePath)
+		}
+	}
+	return strings.Join(parts, "::"), nil
+}
+
+// rustIdentifier reports whether s is a Rust identifier as a module file's
+// name can spell one: identifier bytes throughout, not starting with a digit.
+func rustIdentifier(s string) bool {
+	if !isIdent(s) {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if !identByte(s[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 // rustFreeModuleName is corral_tests, or the first corral_tests_N (N ≥ 2)
@@ -170,17 +290,31 @@ func dedent(lines []string) string {
 }
 
 // rustDropAncestorGlobs drops the ancestor glob imports in body's LEADING
-// block of use lines (blank lines and comments may sit between them). A
-// nested module's own `use super::*` is past that block and is kept.
+// block of use lines (blank lines and comments may sit between them), each
+// with the `#[allow(...)]` lines directly on it: an attribute left behind
+// would attach to whatever item follows. An allow on anything else ends the
+// leading block and is kept. A nested module's own `use super::*` is past
+// that block and is kept.
 func rustDropAncestorGlobs(body string) string {
 	lines := strings.Split(body, "\n")
 	out := lines[:0:0]
 	leading := true
-	for _, l := range lines {
+	for i := 0; i < len(lines); i++ {
+		l := lines[i]
 		t := strings.TrimSpace(l)
 		if leading {
 			if rustAncestorGlobRe.MatchString(l) {
 				continue
+			}
+			if rustAllowAttrRe.MatchString(l) {
+				j := i
+				for j < len(lines) && rustAllowAttrRe.MatchString(lines[j]) {
+					j++
+				}
+				if j < len(lines) && rustAncestorGlobRe.MatchString(lines[j]) {
+					i = j
+					continue
+				}
 			}
 			if t != "" && !strings.HasPrefix(t, "//") && !strings.HasPrefix(t, "use ") {
 				leading = false
@@ -198,16 +332,16 @@ var (
 	rustMacroRe = regexp.MustCompile(`^macro_rules!\s*([A-Za-z_]\w*)`)
 )
 
-// rustLandedHeader splits a block LandTest produced into its three header
-// lines and its body. ok=false for anything else: a part this merge cannot
+// rustLandedHeader splits a block LandTest produced into its four header
+// lines (cfg, module, rustGlobAllow, use) and its body. ok=false for anything else: a part this merge cannot
 // read as corral's own block is refused, never re-wrapped by guess.
 func rustLandedHeader(part string) (header, body string, ok bool) {
 	lines := strings.Split(strings.TrimRight(part, "\n"), "\n")
-	if len(lines) < 4 || lines[0] != "#[cfg(test)]" || !rustModDeclRe.MatchString(lines[1]) ||
-		!strings.HasSuffix(lines[1], " {") || !rustAncestorGlobRe.MatchString(lines[2]) || lines[len(lines)-1] != "}" {
+	if len(lines) < 5 || lines[0] != "#[cfg(test)]" || !rustModDeclRe.MatchString(lines[1]) ||
+		!strings.HasSuffix(lines[1], " {") || lines[2] != rustGlobAllow || !rustAncestorGlobRe.MatchString(lines[3]) || lines[len(lines)-1] != "}" {
 		return "", "", false
 	}
-	return strings.Join(lines[:3], "\n"), strings.Join(lines[3:len(lines)-1], "\n"), true
+	return strings.Join(lines[:4], "\n"), strings.Join(lines[4:len(lines)-1], "\n"), true
 }
 
 // ConcatTests folds several proven landed blocks — each one LandTest wrapped

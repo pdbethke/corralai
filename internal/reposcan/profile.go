@@ -40,12 +40,14 @@ type LanguageStat struct {
 	// in this repository this week.
 	OtherExcluded int
 	// LandingNotBuilt is source files this language recognises that corral
-	// cannot audit YET: a test for them would be written over the file
-	// itself, because their landing is the source (a Rust file whose tests
-	// are inline, or that declares no separate test module) and that landing
-	// is not built (ReasonTestLandingNotBuilt, lang.CheckTestLanding). Its own bucket,
-	// never folded into NoPairedTest or Auditable: such a file may well have
-	// a test, and calling it either would be a false statement about it.
+	// cannot audit because their authored test's landing cannot be admitted
+	// (IsLandingRefusal: a Rust test module declared outside the repository,
+	// or declarations this build cannot read; lang.CheckTestLanding). Until
+	// 2026-11-24 it also counted Rust files whose tests are inline or that
+	// declare no test module, which the inline landing now admits. Its own
+	// bucket, never folded into NoPairedTest or Auditable: such a file may
+	// well have a test, and calling it either would be a false statement
+	// about it.
 	LandingNotBuilt int
 }
 

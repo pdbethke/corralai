@@ -1,0 +1,715 @@
+// SPDX-License-Identifier: Elastic-2.0
+
+package advpool
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/pdbethke/corralai/internal/adequacy"
+	golang "github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/pairing"
+	"github.com/pdbethke/corralai/internal/testmap"
+)
+
+// The audited Rust source, whose tests are inline, and the landed block
+// (what ParseTest hands every door: lang.LandBody at depth 0).
+const (
+	inlineSrc   = "pub fn double(x: i32) -> i32 { x * 2 }\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n    #[test]\n    fn own() { assert_eq!(double(2), 4); }\n}\n"
+	inlineBlock = "\n#[cfg(test)]\nmod corral_tests {\n#[allow(unused_imports)]\nuse super::*;\n#[test]\nfn kills() { assert_eq!(double(3), 6); }\n}\n"
+)
+
+// inlineLanding is the landing whose Path IS the audited source, as
+// lang.TestLanding computes it for a source with its own inline tests.
+func inlineLanding() AuthoredLanding {
+	return AuthoredLanding{
+		Landing:  pairing.Landing{Path: "src/lib.rs", Shape: pairing.Inline, Label: "inline", Into: true, Depth: 0, DeclarationsRead: true, OwnModule: true},
+		Existing: inlineSrc,
+	}
+}
+
+func TestAuthoredLandingInline(t *testing.T) {
+	if !inlineLanding().Inline("src/lib.rs") {
+		t.Error("a landing at the source itself is not inline")
+	}
+	if inlineLanding().Inline("src/other.rs") {
+		t.Error("a landing at another file is inline")
+	}
+	if declaredLanding("").Inline("src/foo.rs") {
+		t.Error("a Declared landing is inline")
+	}
+	if (AuthoredLanding{}).Inline("src/lib.rs") {
+		t.Error("the zero landing is inline")
+	}
+	// The merged block for an inline landing (lang's
+	// TestInlineProvenTestsMergeIntoOneBlock) is handed back to append to
+	// the source itself.
+	if got := inlineLanding().AppendTo(); got != "src/lib.rs" {
+		t.Errorf("an inline landing's proven tests are appended to %q, want the source", got)
+	}
+}
+
+// doorJail records, for every run any door hands it, the command and every
+// file in the workspace. A run fails when src/lib.rs holds the canary or the
+// token KILL (a compiler refusing invalid source, a test catching a mutant).
+// With runsBlock it is a command that also RUNS the appended block's tests,
+// so it fails on the reach canary (the always-failing landed test); without
+// it, it is a command that compiles the file but whose filter never runs the
+// block — the case the inline positive control must call unreached.
+type doorJail struct {
+	mu        sync.Mutex
+	runs      []doorRun
+	runsBlock bool
+}
+
+type doorRun struct {
+	cmd   []string
+	files map[string]string
+}
+
+func (j *doorJail) run(files map[string]string, cmd []string) bool {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.runs = append(j.runs, doorRun{cmd: slices.Clone(cmd), files: files})
+	src := files["src/lib.rs"]
+	if j.runsBlock && strings.Contains(src, "fn corral_reach_canary()") {
+		return false
+	}
+	return !strings.Contains(src, adequacy.CanaryCode) && !strings.Contains(src, "KILL")
+}
+
+func (j *doorJail) RunTest(_ context.Context, files map[string]string, cmd []string) (bool, error) {
+	return j.run(files, cmd), nil
+}
+
+func (j *doorJail) RunTestVerbose(_ context.Context, files map[string]string, cmd []string) (bool, string, error) {
+	return j.run(files, cmd), "", nil
+}
+
+// RunTestDetailed returns what libtest prints when the reach canary is the
+// run's one failure (canaryFailed), and nothing for any other run.
+func (j *doorJail) RunTestDetailed(_ context.Context, files map[string]string, cmd []string) (bool, []byte, error) {
+	ok := j.run(files, cmd)
+	return ok, canaryFailed(ok, files["src/lib.rs"]), nil
+}
+
+// canaryFailed is libtest's output for a failed run whose source holds the
+// reach canary, naming it as the failure (the shape of the real capture
+// internal/lang/testdata/runners/inline-cargo-test-deny-canary-lib.txt);
+// nil for a run that passed or holds no canary.
+func canaryFailed(passed bool, src string) []byte {
+	if passed || !strings.Contains(src, "fn corral_reach_canary()") {
+		return nil
+	}
+	const id = "corral_tests::corral_reach_canary"
+	return []byte("running 2 tests\ntest tests::own ... ok\ntest " + id + " ... FAILED\n\nfailures:\n\n---- " + id + " stdout ----\n\nthread '" + id + "' panicked at src/lib.rs:12:5:\ncorral positive control: this test must fail when it runs\n\n\nfailures:\n    " + id + "\n\ntest result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\nerror: test failed, to rerun pass `--lib`\n")
+}
+
+func (j *doorJail) take() []doorRun {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	r := j.runs
+	j.runs = nil
+	return r
+}
+
+// TestInlineAuthoredDoorsComposeTheSameFile: every door that runs the
+// authored test — the compile check, the clean-code failure run, the authored
+// pass and its positive control, and the collection preflight — writes the
+// block INTO the source, appended to the code in place, and writes nothing at
+// any other path. The compile check, the failure run and the authored pass's
+// baseline write identical bytes for the original code, so the file compiled
+// is the file graded; the positive control writes the canary in the block's
+// place: the TestLander's always-failing test, landed as a block (there is
+// no separate file to plant a canary in, and invalid source would ask only
+// what Score's own canary already asked).
+func TestInlineAuthoredDoorsComposeTheSameFile(t *testing.T) {
+	ctx := context.Background()
+	base := map[string]string{"Cargo.toml": "[package]\n", "src/lib.rs": inlineSrc}
+	want := inlineSrc + inlineBlock
+	wantCanary := inlineSrc + reachBlock(t)
+	j := &doorJail{runsBlock: true}
+	l := inlineLanding()
+	v := JailValidator{Jail: j, BaseFiles: base, DevTestPath: "src/lib.rs", Landing: l}
+	s := JailScorer{Jail: j, BaseFiles: base, DevTestPath: "src/lib.rs", Landing: l}
+
+	onlyBaseKeys := func(who string, runs []doorRun) {
+		t.Helper()
+		for _, r := range runs {
+			for k := range r.files {
+				if _, ok := base[k]; !ok {
+					t.Errorf("%s wrote %s, a file the base does not hold", who, k)
+				}
+			}
+		}
+	}
+
+	if err := v.CompileTest(ctx, "src/lib.rs", inlineSrc, inlineBlock); err != nil {
+		t.Fatal(err)
+	}
+	runs := j.take()
+	onlyBaseKeys("CompileTest", runs)
+	if len(runs) == 0 || runs[0].files["src/lib.rs"] != want {
+		t.Fatalf("CompileTest did not compile the source with the block appended: %+v", runs)
+	}
+
+	_ = s.CompliantFailure(ctx, "src/lib.rs", inlineSrc, inlineBlock, "cargo test")
+	runs = j.take()
+	onlyBaseKeys("CompliantFailure", runs)
+	if len(runs) != 1 || runs[0].files["src/lib.rs"] != want {
+		t.Fatalf("CompliantFailure did not run the source with the block appended: %+v", runs)
+	}
+
+	mutants := []adequacy.Mutant{{ID: "m1", Search: "x * 2", Replace: "x * 2 /* KILL */"}}
+	rep, err := s.ScoreAuthoredReport(ctx, "src/lib.rs", inlineSrc, inlineBlock, mutants, "cargo test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs = j.take()
+	onlyBaseKeys("ScoreAuthoredReport", runs)
+	if !rep.CompliantPass || !rep.CanaryKilled || rep.AuthoredTestUnreached || !slices.Contains(rep.Killed, "m1") {
+		t.Fatalf("the inline authored pass did not grade: %+v", rep)
+	}
+	if got := runs[0].files["src/lib.rs"]; got != want {
+		t.Errorf("the authored pass's baseline wrote\n%s\nwant\n%s", got, want)
+	}
+	if got := runs[len(runs)-1].files["src/lib.rs"]; got != wantCanary {
+		t.Errorf("the positive control wrote\n%s\nwant the source with the reach canary appended", got)
+	}
+	for i, r := range runs {
+		src := r.files["src/lib.rs"]
+		if !strings.HasSuffix(src, inlineBlock) && src != wantCanary && !strings.HasSuffix(src, adequacy.CanaryCode+"\n"+inlineBlock) {
+			t.Errorf("authored-pass run %d dropped the block:\n%s", i, src)
+		}
+	}
+
+	ok, err := s.AuthoredTestWouldBeCollected(ctx, "src/lib.rs", inlineSrc, []string{"cargo", "test"})
+	if err != nil || !ok {
+		t.Fatalf("preflight: %v %v", ok, err)
+	}
+	runs = j.take()
+	onlyBaseKeys("AuthoredTestWouldBeCollected", runs)
+	if len(runs) != 1 || runs[0].files["src/lib.rs"] != wantCanary {
+		t.Fatalf("the preflight did not plant the reach canary in the source: %+v", runs)
+	}
+}
+
+// TestWorkspaceRestoresTheSourceAfterAnInlineAuthoredRun: on the workspace
+// substrate the inline block is written into the operator's own source file,
+// in the code each run writes there, so the substrate's journaled restore of
+// that one path must bring it back byte for byte, and no other file is left
+// behind. The command is a real process over a real checkout: it fails on
+// the canary or a KILL mutant, and passes only when the block is present, so
+// a pass proves the block was on disk for the run.
+func TestWorkspaceRestoresTheSourceAfterAnInlineAuthoredRun(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{"Cargo.toml": "[package]\n", "src/lib.rs": inlineSrc}
+	for k, v := range files {
+		if err := os.WriteFile(filepath.Join(root, k), []byte(v), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	listing := func() []string {
+		var out []string
+		_ = filepath.WalkDir(root, func(p string, _ os.DirEntry, _ error) error {
+			out = append(out, p)
+			return nil
+		})
+		return out
+	}
+	before := listing()
+
+	s := JailScorer{Jail: adequacy.NewWorkspaceRunner(root, 30*time.Second), BaseFiles: map[string]string{}, DevTestPath: "src/lib.rs", Landing: inlineLanding()}
+	// "Runs" the block, as a cargo on PATH: fails on its always-failing
+	// reach canary and prints libtest's report naming it (canaryFailed, which
+	// the positive control requires), fails on the canary and a KILL mutant,
+	// and passes only when the block is present.
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "canary.txt"), canaryFailed(false, "fn corral_reach_canary()"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fake := "#!/bin/sh\nif grep -q 'fn corral_reach_canary' src/lib.rs; then cat '" + filepath.Join(bin, "canary.txt") + "'; exit 101; fi\n" +
+		"if grep -q 'corral canary' src/lib.rs || grep -q KILL src/lib.rs; then exit 101; fi\ngrep -q corral_tests src/lib.rs\n"
+	if err := os.WriteFile(filepath.Join(bin, "cargo"), []byte(fake), 0o755); err != nil { // #nosec G306 -- an executable test double
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cmd := "cargo test"
+	mutants := []adequacy.Mutant{
+		{ID: "m1", Search: "x * 2", Replace: "x * 2 /* KILL */"},
+		{ID: "m2", Search: "x * 2", Replace: "x + x"},
+	}
+	rep, err := s.ScoreAuthoredReport(context.Background(), "src/lib.rs", inlineSrc, inlineBlock, mutants, cmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rep.CompliantPass || !rep.CanaryKilled || rep.AuthoredTestUnreached {
+		t.Fatalf("the inline run did not grade on the workspace substrate: %+v", rep)
+	}
+	if !slices.Contains(rep.Killed, "m1") || !slices.Contains(rep.Survived, "m2") {
+		t.Fatalf("killed %v survived %v", rep.Killed, rep.Survived)
+	}
+
+	got, err := os.ReadFile(filepath.Join(root, "src/lib.rs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != inlineSrc {
+		t.Fatalf("the source was not restored:\n%s", got)
+	}
+	if after := listing(); !slices.Equal(before, after) {
+		t.Fatalf("the checkout's files changed:\nbefore %v\nafter  %v", before, after)
+	}
+}
+
+// reachBlock is the inline positive control's block for inlineSrc.
+func reachBlock(t *testing.T) string {
+	t.Helper()
+	b, err := golang.ReachCanaryBlock(inlineLanding().Landing, inlineSrc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// TestInlinePositiveControlSeesWhetherTheBlockRuns: for an inline landing the
+// control appends a test that always fails, so it can tell a command that
+// RUNS the authored block (it fails: reached) from one that compiles the
+// source but never runs the block (it passes: unreached). Planting invalid
+// source instead would fail both, and a dropped block would pass both.
+func TestInlinePositiveControlSeesWhetherTheBlockRuns(t *testing.T) {
+	ctx := context.Background()
+	base := map[string]string{"Cargo.toml": "[package]\n", "src/lib.rs": inlineSrc}
+	mutants := []adequacy.Mutant{{ID: "m1", Search: "x * 2", Replace: "x * 2 /* KILL */"}}
+	for _, tc := range []struct {
+		name      string
+		runsBlock bool
+	}{{"never runs the block", false}, {"runs the block", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			j := &doorJail{runsBlock: tc.runsBlock}
+			s := JailScorer{Jail: j, BaseFiles: base, DevTestPath: "src/lib.rs", Landing: inlineLanding()}
+
+			reached, err := s.AuthoredTestWouldBeCollected(ctx, "src/lib.rs", inlineSrc, []string{"cargo", "test"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reached != tc.runsBlock {
+				t.Errorf("preflight reached=%v for a command that runsBlock=%v", reached, tc.runsBlock)
+			}
+			if got := j.take()[0].files["src/lib.rs"]; got != inlineSrc+reachBlock(t) {
+				t.Errorf("the control did not write the source with the reach canary appended:\n%s", got)
+			}
+
+			rep, err := s.ScoreAuthoredReport(ctx, "src/lib.rs", inlineSrc, inlineBlock, mutants, "cargo test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if rep.AuthoredTestUnreached == tc.runsBlock || rep.CanaryKilled != tc.runsBlock {
+				t.Errorf("runsBlock=%v: AuthoredTestUnreached=%v CanaryKilled=%v", tc.runsBlock, rep.AuthoredTestUnreached, rep.CanaryKilled)
+			}
+		})
+	}
+}
+
+// scriptedDetailJail answers every run with one scripted outcome: pass or
+// fail, the output a DetailedJail hands back, or an error.
+type scriptedDetailJail struct {
+	passed bool
+	out    string
+	err    error
+	runs   int
+}
+
+func (j *scriptedDetailJail) RunTest(context.Context, map[string]string, []string) (bool, error) {
+	j.runs++
+	return j.passed, j.err
+}
+
+func (j *scriptedDetailJail) RunTestDetailed(context.Context, map[string]string, []string) (bool, []byte, error) {
+	j.runs++
+	return j.passed, []byte(j.out), j.err
+}
+
+// bareJail returns no output: RunTest only.
+type bareJail struct{}
+
+func (bareJail) RunTest(context.Context, map[string]string, []string) (bool, error) {
+	return false, nil
+}
+
+// TestInlinePositiveControlNeedsTheCanaryNamedFailing: the inline control
+// counts the block reached only when the run failed AND the runner's
+// failure reader names the reach canary among the failures. A build error
+// (what a crate under #![deny(warnings)] printed for the canary's unused glob
+// before the landing allowed it, cargo 1.90.0), another test's failure and a
+// timeout are not evidence the block ran: unreached, which can only lower a
+// proven count. Each is told apart (AuthoredTestReach), because the
+// pre-flight refuses each for a different reason: only a run that PASSED
+// shows the command does not run the block. A command wrapping the runner
+// (`make test`, `sh -c "cargo test"`) is read as Rust's runner, so its own
+// output decides, as for any other command. A jail
+// that returns no output cannot answer: an error, never a guess. The real
+// captures of the canary failing under #![deny(warnings)] (cargo 1.90.0,
+// cargo-nextest 0.9.148) are read as reached by both runners.
+func TestInlinePositiveControlNeedsTheCanaryNamedFailing(t *testing.T) {
+	ctx := context.Background()
+	base := map[string]string{"Cargo.toml": "[package]\n", "src/lib.rs": inlineSrc}
+	buildError := "   Compiling inline-cargo v0.1.0 ($DIR/inline/deny-no-allow)\nerror: unused import: `super::*`\n  --> src/lib.rs:49:5\n   |\n49 | use super::*;\n   |     ^^^^^^^^\n\nerror: could not compile `inline-cargo` (lib test) due to 1 previous error\n"
+	otherFailed := "running 2 tests\ntest corral_tests::corral_reach_canary ... ok\ntest tests::own ... FAILED\n\nfailures:\n\n---- tests::own stdout ----\n\nthread 'tests::own' panicked at src/lib.rs:7:5:\nboom\n\n\nfailures:\n    tests::own\n\ntest result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n"
+	nextestNamed := "        FAIL [   0.003s] (2/2) units-b extra::corral_tests::corral_reach_canary\n────────────\n     Summary [   0.004s] 2 tests run: 1 passed, 1 failed, 0 skipped\n        FAIL [   0.003s] (2/2) units-b extra::corral_tests::corral_reach_canary\nerror: test run failed\n"
+	capture := func(name string) string {
+		b, err := os.ReadFile(filepath.Join("..", "lang", "testdata", "runners", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	cargoTest, nextest := []string{"cargo", "test"}, []string{"cargo", "nextest", "run"}
+	for _, tc := range []struct {
+		name string
+		jail *scriptedDetailJail
+		cmd  []string
+		want ReachOutcome
+	}{
+		{"canary named failing (cargo test)", &scriptedDetailJail{out: string(canaryFailed(false, "fn corral_reach_canary()"))}, cargoTest, ReachReached},
+		{"canary named failing under a module path (nextest)", &scriptedDetailJail{out: nextestNamed}, nextest, ReachReached},
+		{"real capture: cargo test, crate root", &scriptedDetailJail{out: capture("inline-cargo-test-deny-canary-lib.txt")}, cargoTest, ReachReached},
+		{"real capture: cargo test, module", &scriptedDetailJail{out: capture("inline-cargo-test-deny-canary-extra.txt")}, cargoTest, ReachReached},
+		{"real capture: nextest, crate root", &scriptedDetailJail{out: capture("inline-nextest-deny-canary-lib.txt")}, nextest, ReachReached},
+		{"real capture: nextest, module", &scriptedDetailJail{out: capture("inline-nextest-deny-canary-extra.txt")}, nextest, ReachReached},
+		{"build error", &scriptedDetailJail{out: buildError}, cargoTest, ReachFailedWithoutCanary},
+		{"another test failed", &scriptedDetailJail{out: otherFailed}, cargoTest, ReachFailedWithoutCanary},
+		{"passed", &scriptedDetailJail{passed: true}, cargoTest, ReachRunPassed},
+		{"timed out", &scriptedDetailJail{err: adequacy.ErrTestTimeout}, cargoTest, ReachTimedOut},
+		// A wrapped command is read as Rust's default runner's (`make`)
+		// or its script's (`sh -c`): what it printed decides, never the
+		// wrapper. cargo test's own output names the canary; a wrapper
+		// that prints something else failed without naming it.
+		{"make test running cargo test", &scriptedDetailJail{out: capture("inline-cargo-test-deny-canary-lib.txt")}, []string{"make", "test"}, ReachReached},
+		{"sh -c cargo test", &scriptedDetailJail{out: capture("inline-cargo-test-deny-canary-lib.txt")}, []string{"sh", "-c", "cargo test"}, ReachReached},
+		{"make test printing no cargo output", &scriptedDetailJail{out: "make: *** [Makefile:2: test] Error 2\n"}, []string{"make", "test"}, ReachFailedWithoutCanary},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := JailScorer{Jail: tc.jail, BaseFiles: base, DevTestPath: "src/lib.rs", Landing: inlineLanding()}
+			got, err := s.AuthoredTestReach(ctx, "src/lib.rs", inlineSrc, tc.cmd)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Outcome != tc.want {
+				t.Errorf("outcome = %q (%s), want %q", got.Outcome, got.Detail, tc.want)
+			}
+			reached, err := s.AuthoredTestWouldBeCollected(ctx, "src/lib.rs", inlineSrc, tc.cmd)
+			if err != nil || reached != (tc.want == ReachReached) {
+				t.Errorf("AuthoredTestWouldBeCollected = %v, %v; want %v", reached, err, tc.want == ReachReached)
+			}
+		})
+	}
+	s := JailScorer{Jail: bareJail{}, BaseFiles: base, DevTestPath: "src/lib.rs", Landing: inlineLanding()}
+	if _, err := s.AuthoredTestWouldBeCollected(ctx, "src/lib.rs", inlineSrc, cargoTest); err == nil {
+		t.Error("a jail that returns no output answered the inline control; want an error")
+	}
+	// The first line of the reason, for the note: cargo's error, not its
+	// Compiling line.
+	if got := failureReason(buildError); got != "error: unused import: `super::*`" {
+		t.Errorf("failureReason = %q", got)
+	}
+}
+
+// TestAFileOfItsOwnControlReachesOnAnyFailure: for a landing with a file of
+// its own the control plants invalid source there, and any failure or a
+// timeout is the command reacting to it; only a passing run is unreached.
+func TestAFileOfItsOwnControlReachesOnAnyFailure(t *testing.T) {
+	base := map[string]string{"package.json": "{}", "scripts/x.js": "// code", "scripts/x.test.js": "// dev"}
+	for _, tc := range []struct {
+		name string
+		jail *scriptedDetailJail
+		want ReachOutcome
+	}{
+		{"failed", &scriptedDetailJail{}, ReachReached},
+		{"timed out", &scriptedDetailJail{err: adequacy.ErrTestTimeout}, ReachReached},
+		{"passed", &scriptedDetailJail{passed: true}, ReachRunPassed},
+	} {
+		s := JailScorer{Jail: tc.jail, BaseFiles: base, DevTestPath: "scripts/x.test.js"}
+		got, err := s.AuthoredTestReach(context.Background(), "scripts/x.js", "// code", []string{"npx", "jest", "scripts/"})
+		if err != nil || got.Outcome != tc.want {
+			t.Errorf("%s: outcome = %q, %v; want %q", tc.name, got.Outcome, err, tc.want)
+		}
+	}
+}
+
+// inlineUnitJail is a jail over a source the library unit compiles: it
+// records every command and fails a run whose source holds the canary, a
+// KILL mutant, or the reach canary (a command that selects the block runs
+// it).
+type inlineUnitJail struct {
+	codePath string
+	cmds     [][]string
+}
+
+func (j *inlineUnitJail) RunTest(_ context.Context, files map[string]string, cmd []string) (bool, error) {
+	if !slices.Contains(cmd, "test") && !slices.Contains(cmd, "nextest") {
+		return true, nil // the compile gate
+	}
+	j.cmds = append(j.cmds, slices.Clone(cmd))
+	src := files[j.codePath]
+	return !strings.Contains(src, adequacy.CanaryCode) && !strings.Contains(src, "KILL") && !strings.Contains(src, "fn corral_reach_canary()"), nil
+}
+
+func (j *inlineUnitJail) RunTestDetailed(ctx context.Context, files map[string]string, cmd []string) (bool, []byte, error) {
+	ok, err := j.RunTest(ctx, files, cmd)
+	return ok, canaryFailed(ok, files[j.codePath]), err
+}
+
+// TestInlineAuthoredAloneRunsOnlyCorralsTests is ruling 1 of the inline
+// landing: "proven by the authored test alone" must never be a false claim.
+// An inline block shares its test binary with the source's own tests, so the
+// unit the engine names for the authored test (the library) also runs the
+// developer's tests. Each row that can select tests by exact name narrows the
+// authored pass to the block's own tests — plus the reach canary, which the
+// positive control lands under the same module — and only then is the pass
+// recorded alone; the command shape for each row is pinned here. A row that
+// cannot narrow the command runs the beside-the-selection command, and the
+// verdict does not say alone.
+func TestInlineAuthoredAloneRunsOnlyCorralsTests(t *testing.T) {
+	root, _ := filepath.Abs("../lang/testdata/runners/src/units/cargo")
+	src := "pub fn double(x: i32) -> i32 { x * 2 }\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n    #[test]\n    fn own() { assert_eq!(double(2), 4); }\n}\n"
+	mutants := []adequacy.Mutant{{ID: "m1", Search: "x * 2", Replace: "x * 2 /* KILL */", Span: golang.LineRange{Start: 1, End: 1}}}
+	ids := "extra::corral_tests::kills extra::corral_tests::corral_reach_canary"
+	for _, tc := range []struct {
+		row, base string
+		codePath  string
+		unit      string
+		want      string
+		alone     bool
+	}{
+		{"cargo-test", "cargo test", "b/src/extra.rs", "units-b/lib", "cargo test -p units-b --lib -- --exact " + ids, true},
+		{"cargo-nextest", "cargo nextest run", "b/src/extra.rs", "units-b", "cargo nextest run -E ((binary_id(=units-b))) & (test(=extra::corral_tests::kills) | test(=extra::corral_tests::corral_reach_canary))", true},
+		// The library compiles the file, but no module path names it (a
+		// file name that is no Rust identifier), so no test id can be
+		// written for the block: the pass is not alone.
+		{"cargo-test", "cargo test", "b/src/my-mod.rs", "units-b/lib", "", false},
+	} {
+		t.Run(tc.row+" "+tc.codePath, func(t *testing.T) {
+			codePath := tc.codePath
+			landing := AuthoredLanding{
+				Landing:  pairing.Landing{Path: codePath, Shape: pairing.Inline, Label: "inline", Into: true, DeclarationsRead: true, OwnModule: true},
+				Existing: src,
+			}
+			block := golang.LandBody(landing.Landing, src, "#[test]\nfn kills() { assert_eq!(double(3), 6); }")
+			sel := golang.Selection{Method: testmap.MethodUnitEvidence, Of: 1, Base: adequacy.ShellSplit(tc.base), Tests: []string{tc.unit}}
+			smap := testmap.Map{Method: testmap.MethodUnitEvidence, Runner: tc.row}
+			j := &inlineUnitJail{codePath: codePath}
+			s := JailScorer{Jail: j, Lang: "rust", RepoDir: root, Selection: sel, SelectionMap: smap, DevTestPath: codePath, Landing: landing,
+				BaseFiles: map[string]string{codePath: src, "b/Cargo.toml": "[package]\nname = \"units-b\"\n"}}
+			rs := RunSpec{Lang: "rust", CodePath: codePath, RepoDir: root, TestCmd: tc.base, Selection: sel, SelectionMap: smap, DevTestPath: codePath, Landing: landing, AuthoredTestPath: s.AuthoredTestPath(codePath)}
+			if got := AuthoredAlone(rs); got != tc.alone {
+				t.Fatalf("AuthoredAlone = %v, want %v", got, tc.alone)
+			}
+			rep, err := s.ScoreAuthoredReport(context.Background(), codePath, src, block, mutants, tc.base)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !tc.alone {
+				if got := rep.PerMutant["m1"]; got.Rule == RuleAuthoredAlone {
+					t.Errorf("a pass that cannot narrow recorded %+v as alone", got)
+				}
+				return
+			}
+			if len(j.cmds) == 0 {
+				t.Fatal("the authored pass ran nothing")
+			}
+			for i, c := range j.cmds {
+				if got := strings.Join(c, " "); got != tc.want {
+					t.Errorf("run %d: %s\nwant      %s", i, got, tc.want)
+				}
+			}
+			if got := rep.PerMutant["m1"]; got.Rule != RuleAuthoredAlone || !slices.Contains(rep.Killed, "m1") || rep.AuthoredTestUnreached {
+				t.Errorf("m1 grading %+v, killed %v, unreached %v: want killed by the authored test alone", got, rep.Killed, rep.AuthoredTestUnreached)
+			}
+		})
+	}
+}
+
+// TestInlineSalvageKeepsThePassingTestsAlone: a salvaged inline authored test
+// (some of its cases failed on the unmutated code) is run with the failing
+// ones left out of the exact-name list, not deselected afterwards: cargo
+// test's DeselectCmd refuses a command that already names its tests, which
+// dropped every partly failing inline test under Rust's default runner. The
+// passing case is kept, run alone, and still proves its survivor. nextest
+// names a failure `<binary> <path>`, matched by its path. A block whose every
+// test failed leaves nothing to salvage: an error, and nothing is run (an
+// empty `--exact` list would run the whole unit).
+func TestInlineSalvageKeepsThePassingTestsAlone(t *testing.T) {
+	root, _ := filepath.Abs("../lang/testdata/runners/src/units/cargo")
+	const codePath = "b/src/extra.rs"
+	src := "pub fn double(x: i32) -> i32 { x * 2 }\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n    #[test]\n    fn own() { assert_eq!(double(2), 4); }\n}\n"
+	landing := AuthoredLanding{
+		Landing:  pairing.Landing{Path: codePath, Shape: pairing.Inline, Label: "inline", Into: true, DeclarationsRead: true, OwnModule: true},
+		Existing: src,
+	}
+	block := golang.LandBody(landing.Landing, src, "#[test]\nfn kills() { assert_eq!(double(3), 6); }\n#[test]\nfn flaky() { assert!(false); }")
+	mutants := []adequacy.Mutant{{ID: "m1", Search: "x * 2", Replace: "x * 2 /* KILL */", Span: golang.LineRange{Start: 1, End: 1}}}
+	for _, tc := range []struct {
+		row, base, unit string
+		failing, all    []string
+		want            string
+	}{
+		{"cargo-test", "cargo test", "units-b/lib", []string{"extra::corral_tests::flaky"}, []string{"extra::corral_tests::kills", "extra::corral_tests::flaky"},
+			"cargo test -p units-b --lib -- --exact extra::corral_tests::kills extra::corral_tests::corral_reach_canary"},
+		{"cargo-nextest", "cargo nextest run", "units-b", []string{"units-b extra::corral_tests::flaky"}, []string{"units-b extra::corral_tests::kills", "units-b extra::corral_tests::flaky"},
+			"cargo nextest run -E ((binary_id(=units-b))) & (test(=extra::corral_tests::kills) | test(=extra::corral_tests::corral_reach_canary))"},
+	} {
+		t.Run(tc.row, func(t *testing.T) {
+			sel := golang.Selection{Method: testmap.MethodUnitEvidence, Of: 1, Base: adequacy.ShellSplit(tc.base), Tests: []string{tc.unit}}
+			newScorer := func(j *inlineUnitJail) JailScorer {
+				return JailScorer{Jail: j, Lang: "rust", RepoDir: root, Selection: sel, SelectionMap: testmap.Map{Method: testmap.MethodUnitEvidence, Runner: tc.row},
+					DevTestPath: codePath, Landing: landing, BaseFiles: map[string]string{codePath: src, "b/Cargo.toml": "[package]\nname = \"units-b\"\n"}}
+			}
+			j := &inlineUnitJail{codePath: codePath}
+			rep, err := newScorer(j).ScoreAuthoredDeselected(context.Background(), codePath, src, block, mutants, tc.base, tc.base, tc.failing)
+			if err != nil {
+				t.Fatalf("a partly failing inline test was not salvaged: %v", err)
+			}
+			if len(j.cmds) == 0 {
+				t.Fatal("the salvaged pass ran nothing")
+			}
+			for i, c := range j.cmds {
+				if got := strings.Join(c, " "); got != tc.want {
+					t.Errorf("run %d: %s\nwant      %s", i, got, tc.want)
+				}
+			}
+			if got := rep.PerMutant["m1"]; got.Rule != RuleAuthoredAlone || !slices.Contains(rep.Killed, "m1") {
+				t.Errorf("m1 grading %+v, killed %v: want killed by the kept test alone", got, rep.Killed)
+			}
+
+			all := &inlineUnitJail{codePath: codePath}
+			if _, err := newScorer(all).ScoreAuthoredDeselected(context.Background(), codePath, src, block, mutants, tc.base, tc.base, tc.all); err == nil || !strings.Contains(err.Error(), "nothing is left to salvage") {
+				t.Errorf("every test failing: err = %v, want nothing left to salvage", err)
+			}
+			if len(all.cmds) != 0 {
+				t.Errorf("an all-failing salvage ran %v; it must run nothing", all.cmds)
+			}
+		})
+	}
+}
+
+// TestAnInlineBlockWhoseTestsCannotBeNamedIsNotGraded: a block whose tests
+// have no exact id — a case-generating #[rstest], whose cases libtest names
+// `…::kills::case_1`, or a block no test can be listed from — cannot be run
+// apart from the file's own tests. Run anyway under `--exact …::kills` it
+// would execute no test: a baseline that passes, survivors that all survive,
+// and a seat recorded as "tried and missed" over nothing. The pass is not
+// run at all, and the error says the seat is unmeasurable
+// (errAuthoredUnnameable), which the driver turns into an unmeasured seat
+// rather than a Tick error.
+func TestAnInlineBlockWhoseTestsCannotBeNamedIsNotGraded(t *testing.T) {
+	root, _ := filepath.Abs("../lang/testdata/runners/src/units/cargo")
+	const codePath = "b/src/extra.rs"
+	src := "pub fn double(x: i32) -> i32 { x * 2 }\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n    #[test]\n    fn own() { assert_eq!(double(2), 4); }\n}\n"
+	landing := AuthoredLanding{
+		Landing:  pairing.Landing{Path: codePath, Shape: pairing.Inline, Label: "inline", Into: true, DeclarationsRead: true, OwnModule: true},
+		Existing: src,
+	}
+	mutants := []adequacy.Mutant{{ID: "m1", Search: "x * 2", Replace: "x * 2 /* KILL */", Span: golang.LineRange{Start: 1, End: 1}}}
+	for _, tc := range []struct{ name, block string }{
+		{"rstest cases", golang.LandBody(landing.Landing, src, "#[rstest]\n#[case(3)]\nfn kills(#[case] x: i32) { assert_eq!(double(x), 6); }")},
+		{"no test listed", golang.LandBody(landing.Landing, src, "fn helper() {}")},
+	} {
+		for _, row := range []struct{ id, base, unit string }{{"cargo-test", "cargo test", "units-b/lib"}, {"cargo-nextest", "cargo nextest run", "units-b"}} {
+			t.Run(tc.name+" "+row.id, func(t *testing.T) {
+				sel := golang.Selection{Method: testmap.MethodUnitEvidence, Of: 1, Base: adequacy.ShellSplit(row.base), Tests: []string{row.unit}}
+				j := &inlineUnitJail{codePath: codePath}
+				s := JailScorer{Jail: j, Lang: "rust", RepoDir: root, Selection: sel, SelectionMap: testmap.Map{Method: testmap.MethodUnitEvidence, Runner: row.id},
+					DevTestPath: codePath, Landing: landing, BaseFiles: map[string]string{codePath: src, "b/Cargo.toml": "[package]\nname = \"units-b\"\n"}}
+				rep, err := s.ScoreAuthoredReport(context.Background(), codePath, src, tc.block, mutants, row.base)
+				if !errors.Is(err, errAuthoredUnnameable) {
+					t.Fatalf("err = %v (report %+v); want errAuthoredUnnameable", err, rep)
+				}
+				if len(j.cmds) != 0 {
+					t.Errorf("a block whose tests cannot be named was run: %v", j.cmds)
+				}
+			})
+		}
+	}
+}
+
+// killNamingJail is inlineUnitJail whose failing run on a KILL mutant prints
+// the runner's own report naming the block's test as the failure, so the
+// scorer can name the killer and confirm the kill by it alone.
+type killNamingJail struct {
+	inlineUnitJail
+	nextest bool
+}
+
+func (j *killNamingJail) RunTestDetailed(ctx context.Context, files map[string]string, cmd []string) (bool, []byte, error) {
+	ok, err := j.RunTest(ctx, files, cmd)
+	if ok || !strings.Contains(files[j.codePath], "KILL") {
+		return ok, canaryFailed(ok, files[j.codePath]), err
+	}
+	const id = "extra::corral_tests::kills"
+	if j.nextest {
+		return ok, []byte("        FAIL [   0.003s] (1/1) units-b " + id + "\n────────────\n     Summary [   0.004s] 1 test run: 0 passed, 1 failed, 0 skipped\n        FAIL [   0.003s] (1/1) units-b " + id + "\nerror: test run failed\n"), err
+	}
+	return ok, []byte("running 1 test\ntest " + id + " ... FAILED\n\nfailures:\n\n---- " + id + " stdout ----\n\nthread '" + id + "' panicked at src/extra.rs:12:5:\nboom\n\n\nfailures:\n    " + id + "\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n"), err
+}
+
+// TestAnInlineKillIsConfirmedByTheKillingTestAlone: the narrowed authored
+// command already names its tests (`--exact …`, a test(=…) filterset), so
+// the runner row's KillerCmd refuses it and every inline kill used to fall
+// back to repeating the whole grading run (KillConfirmedRepeated). The
+// confirmer for an inline landing selects the killing test alone from the
+// unit command, through the row's own SelectCmd, so the kill is confirmed
+// by that test alone, on the mutant and on the unmutated code.
+func TestAnInlineKillIsConfirmedByTheKillingTestAlone(t *testing.T) {
+	root, _ := filepath.Abs("../lang/testdata/runners/src/units/cargo")
+	const codePath = "b/src/extra.rs"
+	src := "pub fn double(x: i32) -> i32 { x * 2 }\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n    #[test]\n    fn own() { assert_eq!(double(2), 4); }\n}\n"
+	landing := AuthoredLanding{
+		Landing:  pairing.Landing{Path: codePath, Shape: pairing.Inline, Label: "inline", Into: true, DeclarationsRead: true, OwnModule: true},
+		Existing: src,
+	}
+	block := golang.LandBody(landing.Landing, src, "#[test]\nfn kills() { assert_eq!(double(3), 6); }")
+	mutants := []adequacy.Mutant{{ID: "m1", Search: "x * 2", Replace: "x * 2 /* KILL */", Span: golang.LineRange{Start: 1, End: 1}}}
+	for _, tc := range []struct {
+		row, base, unit, confirm string
+		nextest                  bool
+	}{
+		{"cargo-test", "cargo test", "units-b/lib", "cargo test -p units-b --lib -- --exact extra::corral_tests::kills", false},
+		{"cargo-nextest", "cargo nextest run", "units-b", "cargo nextest run -E ((binary_id(=units-b))) & (test(=extra::corral_tests::kills))", true},
+	} {
+		t.Run(tc.row, func(t *testing.T) {
+			plug, _ := golang.ByName("rust")
+			inv := golang.Cmd(adequacy.ShellSplit(tc.base))
+			sel := golang.Selection{Method: testmap.MethodUnitEvidence, Of: 1, Base: inv.Argv, Tests: []string{tc.unit}}
+			j := &killNamingJail{inlineUnitJail: inlineUnitJail{codePath: codePath}, nextest: tc.nextest}
+			s := JailScorer{Jail: j, Lang: "rust", RepoDir: root, Selection: sel, SelectionMap: testmap.Map{Method: testmap.MethodUnitEvidence, Runner: tc.row},
+				DevTestPath: codePath, Landing: landing, BaseFiles: map[string]string{codePath: src, "b/Cargo.toml": "[package]\nname = \"units-b\"\n"},
+				FailureParser: golang.FailureParserFor(plug, inv), KillerCmd: adequacy.KillerCmdFor(golang.KillerCmdFor(plug, inv))}
+			rep, err := s.ScoreAuthoredReport(context.Background(), codePath, src, block, mutants, tc.base)
+			if err != nil {
+				t.Fatal(err)
+			}
+			g := rep.PerMutant["m1"]
+			if !slices.Contains(rep.Killed, "m1") || g.KillConfirmation != adequacy.KillConfirmedAlone {
+				t.Fatalf("m1 grading %+v, killed %v: want killed and confirmed alone", g, rep.Killed)
+			}
+			ran := false
+			for _, c := range j.cmds {
+				ran = ran || strings.Join(c, " ") == tc.confirm
+			}
+			if !ran {
+				t.Errorf("the confirmation never ran the killing test alone (%s); ran %v", tc.confirm, j.cmds)
+			}
+		})
+	}
+}

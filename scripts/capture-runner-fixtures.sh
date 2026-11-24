@@ -639,6 +639,109 @@ skipok composer-test composer test -- fail/tests/FTest.php --exclude-filter '/(?
 skipok cargo-test env -C fail/cargo cargo test -- --exact --skip tests::a_fails --skip tests::b_fails
 skipok cargo-nextest env -C fail/cargo cargo nextest run -E 'not ((binary_id(=fail-cargo) & test(=tests::a_fails)) | (binary_id(=fail-cargo) & test(=tests::b_fails)))'
 
+# --- inline landing (Rust): corral's authored test appended to the source
+# itself as `#[cfg(test)] mod corral_tests { #[allow(unused_imports)]
+# use super::*; … }` (LandTest at
+# depth 0, adequacy.AppendBlock). inline/cargo is one crate: src/lib.rs (the
+# crate root), src/extra.rs (a module, whose ids carry `extra::`) and
+# src/named.rs (already declaring corral_tests, so its block is
+# corral_tests_2). inline/composed holds each source as a grading run writes
+# it: the original, a mutant (inline/mutants) or, for the positive control,
+# the reach canary in place of the block, with the block appended.
+# TestRustInlineCapturesAreWhatCorralComposes holds those files equal to what
+# corral composes from inline/authored, the select lines equal to what the
+# rows' SelectCmd builds from InlineTestIDs, and the failing ids captured here
+# equal to the ids InlineTestIDs gives (a salvage drops failing tests by them).
+inline() { # inline <case> (<src file> <file under inline/>)...: inline/cargo copied to inline/<case>, each file at src/<src file>
+  local d="inline/$1"; shift
+  cp -r inline/cargo "$d"
+  while [ $# -gt 0 ]; do cp "inline/$2" "$d/src/$1"; shift 2; done
+}
+pf() { # "<passed> passed <failed> failed": libtest's result lines summed, or nextest's summary
+  sed 's/\x1b\[[0-9;]*m//g' | awk '/^test result: |^ *Summary / {
+    if (match($0, /[0-9]+ passed/)) p += substr($0, RSTART, RLENGTH) + 0
+    if (match($0, /[0-9]+ failed/)) f += substr($0, RSTART, RLENGTH) + 0
+  } END { print p + 0 " passed " f + 0 " failed" }'
+}
+inline lib-pass lib.rs composed/lib.rs
+inline lib-kill lib.rs composed/lib.mutant.rs
+inline lib-canary lib.rs composed/lib.canary.rs
+inline lib-dev lib.rs mutants/lib.rs
+inline extra-pass extra.rs composed/extra.rs
+inline extra-kill extra.rs composed/extra.mutant.rs
+inline extra-canary extra.rs composed/extra.canary.rs
+inline extra-dev extra.rs mutants/extra.rs
+inline named-pass named.rs composed/named.rs
+inline deny-lib-canary lib.rs composed/deny.canary.rs
+inline deny-extra-canary lib.rs deny/lib.rs extra.rs composed/extra.canary.rs
+# The mutant survives the file's own tests: only the landed block can kill it.
+want inline-cargo-test-dev-misses-lib "5 passed 0 failed" "$(cd inline/lib-dev && cargo test 2>&1 | pf)"
+want inline-cargo-test-dev-misses-extra "5 passed 0 failed" "$(cd inline/extra-dev && cargo test 2>&1 | pf)"
+want inline-nextest-dev-misses-lib "5 passed 0 failed" "$(cd inline/lib-dev && cargo nextest run 2>&1 | pf)"
+want inline-nextest-dev-misses-extra "5 passed 0 failed" "$(cd inline/extra-dev && cargo nextest run 2>&1 | pf)"
+# The composition builds and passes on the original, under the operator's
+# own command; named.rs's block composes as corral_tests_2 beside its own.
+want inline-cargo-test-passes-lib "7 passed 0 failed" "$(cd inline/lib-pass && cargo test 2>&1 | pf)"
+want inline-nextest-passes-lib "7 passed 0 failed" "$(cd inline/lib-pass && cargo nextest run 2>&1 | pf)"
+want inline-cargo-test-passes-extra "7 passed 0 failed" "$(cd inline/extra-pass && cargo test 2>&1 | pf)"
+want inline-nextest-passes-extra "7 passed 0 failed" "$(cd inline/extra-pass && cargo nextest run 2>&1 | pf)"
+want inline-cargo-test-passes-named "6 passed 0 failed" "$(cd inline/named-pass && cargo test 2>&1 | pf)"
+want inline-nextest-passes-named "6 passed 0 failed" "$(cd inline/named-pass && cargo nextest run 2>&1 | pf)"
+# With the mutant in place the block's test fails: it kills. The failing runs
+# are kept (nextest without fail-fast, so every test reports) for their ids.
+(cd inline/lib-kill && fails inline-cargo-test-kill-lib.txt cargo test)
+(cd inline/lib-kill && fails inline-nextest-kill-lib.txt cargo nextest run --no-fail-fast)
+(cd inline/extra-kill && fails inline-cargo-test-kill-extra.txt cargo test)
+(cd inline/extra-kill && fails inline-nextest-kill-extra.txt cargo nextest run --no-fail-fast)
+want inline-cargo-test-kills-lib "6 passed 1 failed" "$(pf < "$OUT/inline-cargo-test-kill-lib.txt")"
+want inline-nextest-kills-lib "6 passed 1 failed" "$(pf < "$OUT/inline-nextest-kill-lib.txt")"
+want inline-cargo-test-kills-extra "6 passed 1 failed" "$(pf < "$OUT/inline-cargo-test-kill-extra.txt")"
+want inline-nextest-kills-extra "6 passed 1 failed" "$(pf < "$OUT/inline-nextest-kill-extra.txt")"
+# SelectCmd: the unit command narrowed to the block's ids and the reach
+# canary's, by exact name, runs the block's tests and nothing else (not the
+# file's own, not named.rs's `named::corral_tests::zero_is_zero`, which
+# `corral_tests::zero_is_zero` is a substring of): on the original they pass,
+# on the mutant one fails, and with the canary in place of the block the
+# canary alone runs, and fails (the positive control reaches it).
+# Without --exact, libtest's filter is a substring: the same names run named.rs's test too.
+want inline-cargo-test-substring-collides "3 passed 0 failed" "$(cd inline/lib-pass && cargo test -p inline-cargo --lib -- corral_tests::zero_is_zero corral_tests::unit_is_reached 2>&1 | pf)"
+want inline-cargo-test-select-lib "2 passed 0 failed" "$(cd inline/lib-pass && cargo test -p inline-cargo --lib -- --exact corral_tests::zero_is_zero corral_tests::unit_is_reached corral_tests::corral_reach_canary 2>&1 | pf)"
+want inline-cargo-test-select-kills-lib "1 passed 1 failed" "$(cd inline/lib-kill && cargo test -p inline-cargo --lib -- --exact corral_tests::zero_is_zero corral_tests::unit_is_reached corral_tests::corral_reach_canary 2>&1 | pf)"
+want inline-cargo-test-select-canary-lib "0 passed 1 failed" "$(cd inline/lib-canary && cargo test -p inline-cargo --lib -- --exact corral_tests::zero_is_zero corral_tests::unit_is_reached corral_tests::corral_reach_canary 2>&1 | pf)"
+want inline-nextest-select-lib "2 passed 0 failed" "$(cd inline/lib-pass && cargo nextest run -E '((binary_id(=inline-cargo))) & (test(=corral_tests::zero_is_zero) | test(=corral_tests::unit_is_reached) | test(=corral_tests::corral_reach_canary))' 2>&1 | pf)"
+want inline-nextest-select-kills-lib "1 passed 1 failed" "$(cd inline/lib-kill && cargo nextest run -E '((binary_id(=inline-cargo))) & (test(=corral_tests::zero_is_zero) | test(=corral_tests::unit_is_reached) | test(=corral_tests::corral_reach_canary))' 2>&1 | pf)"
+want inline-nextest-select-canary-lib "0 passed 1 failed" "$(cd inline/lib-canary && cargo nextest run -E '((binary_id(=inline-cargo))) & (test(=corral_tests::zero_is_zero) | test(=corral_tests::unit_is_reached) | test(=corral_tests::corral_reach_canary))' 2>&1 | pf)"
+want inline-cargo-test-select-extra "2 passed 0 failed" "$(cd inline/extra-pass && cargo test -p inline-cargo --lib -- --exact extra::corral_tests::above extra::corral_tests::within_is_identity extra::corral_tests::corral_reach_canary 2>&1 | pf)"
+want inline-cargo-test-select-kills-extra "1 passed 1 failed" "$(cd inline/extra-kill && cargo test -p inline-cargo --lib -- --exact extra::corral_tests::above extra::corral_tests::within_is_identity extra::corral_tests::corral_reach_canary 2>&1 | pf)"
+want inline-cargo-test-select-canary-extra "0 passed 1 failed" "$(cd inline/extra-canary && cargo test -p inline-cargo --lib -- --exact extra::corral_tests::above extra::corral_tests::within_is_identity extra::corral_tests::corral_reach_canary 2>&1 | pf)"
+want inline-nextest-select-extra "2 passed 0 failed" "$(cd inline/extra-pass && cargo nextest run -E '((binary_id(=inline-cargo))) & (test(=extra::corral_tests::above) | test(=extra::corral_tests::within_is_identity) | test(=extra::corral_tests::corral_reach_canary))' 2>&1 | pf)"
+want inline-nextest-select-kills-extra "1 passed 1 failed" "$(cd inline/extra-kill && cargo nextest run -E '((binary_id(=inline-cargo))) & (test(=extra::corral_tests::above) | test(=extra::corral_tests::within_is_identity) | test(=extra::corral_tests::corral_reach_canary))' 2>&1 | pf)"
+want inline-nextest-select-canary-extra "0 passed 1 failed" "$(cd inline/extra-canary && cargo nextest run -E '((binary_id(=inline-cargo))) & (test(=extra::corral_tests::above) | test(=extra::corral_tests::within_is_identity) | test(=extra::corral_tests::corral_reach_canary))' 2>&1 | pf)"
+want inline-cargo-test-select-named "1 passed 0 failed" "$(cd inline/named-pass && cargo test -p inline-cargo --lib -- --exact named::corral_tests_2::doubles named::corral_tests_2::corral_reach_canary 2>&1 | pf)"
+want inline-nextest-select-named "1 passed 0 failed" "$(cd inline/named-pass && cargo nextest run -E '((binary_id(=inline-cargo))) & (test(=named::corral_tests_2::doubles) | test(=named::corral_tests_2::corral_reach_canary))' 2>&1 | pf)"
+# Under #![deny(warnings)] (inline/deny: src/lib.rs with that first line, as a
+# crate that denies warnings or builds with RUSTFLAGS=-Dwarnings) the
+# reach canary's block still builds, and the canary fails AS A TEST: the
+# landing's glob carries #[allow(unused_imports)] (rustGlobAllow), and the
+# canary uses nothing it imports. The failing runs are kept for the canary's
+# id, which the positive control requires the row's failure reader to name.
+pfexit() { # pfexit <cmd...>: pf of the command's output, then its exit status
+  local out rc
+  out="$("$@" 2>&1)" && rc=0 || rc=$?
+  echo "$(printf '%s\n' "$out" | pf) exit $rc"
+}
+want inline-cargo-test-deny-canary-lib "5 passed 1 failed exit 101" "$(cd inline/deny-lib-canary && pfexit cargo test)"
+want inline-nextest-deny-canary-lib "5 passed 1 failed exit 100" "$(cd inline/deny-lib-canary && pfexit cargo nextest run --no-fail-fast)"
+want inline-cargo-test-deny-canary-extra "5 passed 1 failed exit 101" "$(cd inline/deny-extra-canary && pfexit cargo test)"
+want inline-nextest-deny-canary-extra "5 passed 1 failed exit 100" "$(cd inline/deny-extra-canary && pfexit cargo nextest run --no-fail-fast)"
+(cd inline/deny-lib-canary && fails inline-cargo-test-deny-canary-lib.txt cargo test)
+(cd inline/deny-lib-canary && fails inline-nextest-deny-canary-lib.txt cargo nextest run --no-fail-fast)
+(cd inline/deny-extra-canary && fails inline-cargo-test-deny-canary-extra.txt cargo test)
+(cd inline/deny-extra-canary && fails inline-nextest-deny-canary-extra.txt cargo nextest run --no-fail-fast)
+# Without the allow the same file does not build: the glob alone breaks it.
+cp -r inline/deny-lib-canary inline/deny-no-allow && sed -i '/^#\[allow(unused_imports)\]$/d' inline/deny-no-allow/src/lib.rs
+want inline-cargo-test-deny-without-allow "error: unused import: \`super::*\`" "$(cd inline/deny-no-allow && cargo test 2>&1 | grep -m1 -o 'error: unused import: .*')"
+
 # --- package scripts: how each launcher hands extra arguments to the script --
 # (internal/lang/invocation.go's launcher table; keep the separators equal)
 export COREPACK_ENABLE_DOWNLOAD_PROMPT=0

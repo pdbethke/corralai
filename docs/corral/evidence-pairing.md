@@ -3,7 +3,8 @@
 Evidence pairing lists the test units the operator's command collects (a test
 file for JavaScript, TypeScript, Ruby and PHP; a package for Go; a Cargo target
 for Rust; a test target for Swift), runs each unit alone under coverage, and makes a candidate of any
-source file a green unit executed and can land a test beside. This page records
+source file a green unit executed and can land a test for (beside its tests,
+or for Rust in the source itself). This page records
 what that pass did on real third-party repositories. Every number below is what
 the run printed. Nothing here is an estimate.
 
@@ -411,6 +412,30 @@ evidence is not built. `certify --local --repo-dir . --code src/inner/extract.rs
 refuses the file before any spend, because the authored test's landing is
 derived from the source and lands on the source itself. A promoted file would
 therefore be listed by the scan and then refused by the audit.
+
+**Since 2026-11-24 (reposcan generation 54) this has changed, and this page
+has no run of it yet.** A Rust source whose tests are inline, or that
+declares no test module, is no longer excluded before pairing: corral's
+authored test is appended to the source itself, as a `corral_tests` module
+added to the code each run writes, and a mutant that edits the file's own
+test code (a test module or test item at any depth) is not graded; a file
+where the parse set code aside where tests could sit is refused before any
+spend (`own-tests-unreadable`). A source with an inline test module pairs to
+itself by name; one with no test module, such as `src/inner/extract.rs`
+above, is a no-paired-test file that a unit executing it adds to the audit,
+and its authored test is appended to it (the scan says "authored test is
+appended to the file itself", not "beside" `tests/quick.rs`). Its
+developer's test is the file itself when it has an inline test module, and
+none when it has none. Only a test module declared outside the repository,
+and a build without cgo, are still refused. The numbers above are from
+before it. A free dry run of indexmap at 41a8708 with it (2026-11-24, cargo
+1.90.0, `corral certify --repo . --substrate workspace --dry-run --evidence
+-- cargo test`, no model call) ran 5 units with 0 failed, widened the audit
+by evidence from 7 to 19 candidates, and printed `src/inner/extract.rs
+paired by evidence: 1 covering test unit(s), authored test is appended to
+the file itself`. The appended block was run by the real `cargo test` and
+`cargo nextest` on fixtures only (`scripts/capture-runner-fixtures.sh`, the
+inline section); no audit with models has been run on such a file.
 
 ## Swift: taplin/Lariat
 

@@ -342,24 +342,29 @@ func TestDoctorChecksTheChallengerWriterSeat(t *testing.T) {
 }
 
 // TestDoctorPairingReportsALandingRefusal: doctor printed `[ok] … found
-// src/lib.rs by convention (inline)` for a file every audit refuses (final
-// review I4). It pairs; it cannot be audited yet, and doctor says both.
+// src/lib.rs by convention (inline)` for a file every audit refused (final
+// review I4). A file that pairs but cannot be audited gets both said. Since
+// the inline landing (2026-11-24) an inline-tested file is admitted, so the
+// refusal left to report is a test module declared outside the repository.
 func TestDoctorPairingReportsALandingRefusal(t *testing.T) {
 	dir := t.TempDir()
-	src := filepath.Join(dir, "src", "lib.rs")
+	src := filepath.Join(dir, "repo", "src", "lib.rs")
 	if err := os.MkdirAll(filepath.Dir(src), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeFile(src, "pub fn f() {}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {}\n}\n"); err != nil {
+	if err := writeFile(src, "pub fn f() {}\n\n#[cfg(test)]\n#[path = \"../../outside_tests.rs\"]\nmod tests;\n"); err != nil {
 		t.Fatal(err)
 	}
-	t.Chdir(dir)
+	if err := writeFile(filepath.Join(dir, "outside_tests.rs"), "#[test]\nfn t() {}\n"); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(filepath.Join(dir, "repo"))
 	got := checkPairing("src/lib.rs", "")
 	if got.ok {
 		t.Fatalf("doctor passed a file every audit refuses: %+v", got)
 	}
-	if !strings.Contains(got.detail, "src/lib.rs (inline)") || !strings.Contains(got.detail, "test landing is not built") {
-		t.Fatalf("want 'pairs to src/lib.rs (inline), but …landing…', got: %s", got.detail)
+	if !strings.Contains(got.detail, "test landing is not built") || !strings.Contains(got.detail, "outside the audited repository") {
+		t.Fatalf("want the landing refusal naming the declaration outside the repository, got: %s", got.detail)
 	}
 }
 

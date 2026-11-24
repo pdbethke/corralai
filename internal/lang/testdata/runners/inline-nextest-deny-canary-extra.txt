@@ -1,0 +1,31 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s
+────────────
+    Starting 6 tests across 1 binary
+        PASS [   0.002s] (1/6) inline-cargo tests::negative
+        PASS [   0.002s] (2/6) inline-cargo tests::positive
+        PASS [   0.002s] (3/6) inline-cargo extra::tests::inside
+        PASS [   0.003s] (4/6) inline-cargo extra::tests::below
+        PASS [   0.003s] (5/6) inline-cargo named::corral_tests::zero_is_zero
+        FAIL [   0.003s] (6/6) inline-cargo extra::corral_tests::corral_reach_canary
+  stdout ───
+
+    running 1 test
+    test extra::corral_tests::corral_reach_canary ... FAILED
+
+    failures:
+
+    failures:
+        extra::corral_tests::corral_reach_canary
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+  stderr ───
+
+    thread 'extra::corral_tests::corral_reach_canary' panicked at src/extra.rs:38:5:
+    corral positive control: this test must fail when it runs
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+────────────
+     Summary [   0.004s] 6 tests run: 5 passed, 1 failed, 0 skipped
+        FAIL [   0.003s] (6/6) inline-cargo extra::corral_tests::corral_reach_canary
+error: test run failed

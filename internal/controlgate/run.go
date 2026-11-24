@@ -41,11 +41,7 @@ type ControlResult struct {
 func RunControlGate(ctx context.Context, jail adequacy.Jail, base map[string]string, checks []ControlCheck, testCmd []string) (ControlResult, error) {
 	res := ControlResult{Pass: true}
 	for _, c := range checks {
-		ws := make(map[string]string, len(base)+2)
-		for k, v := range base {
-			ws[k] = v
-		}
-		ws[c.CodePath] = c.HeadCode
+		ws := adequacy.Overlay{Base: base, CodePath: c.CodePath}.With(c.HeadCode)
 		ws[c.TestPath] = c.Test.Test
 		passed, err := jail.RunTest(ctx, ws, testCmd)
 		if err != nil {

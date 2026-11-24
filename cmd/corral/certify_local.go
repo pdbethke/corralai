@@ -1038,6 +1038,56 @@ const notCollectedAdvice = "your test command would not run the test this audit 
 	"  `-- npx jest tests/` rather than a single spec path.\n" +
 	"  This is checked before any mutant is planted or test written for this file."
 
+// notCollectedInlineAdvice is notCollectedAdvice for a test appended to the
+// source itself: there is no file beside the developer's to collect, and the
+// usual cause is a name filter that does not match corral's module.
+const notCollectedInlineAdvice = "your test command would not run the test this audit writes, so it could not prove a gap even if it found one.\n" +
+	"  corral's killing test is appended to %s itself, as a corral_tests module, and your command ran without running it.\n" +
+	"  A test name filter in the command is the usual cause: run the crate's tests without one (`-- cargo test`, `-- cargo nextest run`).\n" +
+	"  This is checked before any mutant is planted or test written for this file."
+
+// preflightRefusal is the pre-flight's refusal for what the positive control
+// saw (advpool.AuthoredTestReach), nil when it reached the authored test.
+//
+// Only a run that PASSED shows the command does not run the test: that is
+// the "not collected" refusal (test-cmd-cannot-collect), with advice for
+// where the test goes. A test appended to the source itself (an inline
+// landing) is checked by seeing corral's always-failing test fail by name,
+// so it has three more outcomes, each refused for what it is: a runner
+// whose failures corral cannot read, a timeout, and a failure that did not
+// name that test (a build error, another test's failure). They were all
+// refused as "not collected", with "corral writes its killing test beside
+// your own … `-- pytest tests/`" printed for a Rust file and
+// test-cmd-cannot-collect recorded in the signed rows.
+func preflightRefusal(r advpool.Reach, landing advpool.AuthoredLanding, codePath, devTestPath string) error {
+	switch r.Outcome {
+	case advpool.ReachReached:
+		return nil
+	case advpool.ReachRunPassed:
+		if landing.Inline(codePath) {
+			return auditNotCollectedErr(notCollectedInlineAdvice, codePath)
+		}
+		return auditNotCollectedErr(notCollectedAdvice, advpool.AuthoredTestPathFor(landing, codePath, devTestPath))
+	case advpool.ReachRunnerUnreadable:
+		return localAuditError{usage: true, scanReason: reposcan.ReasonTestCmdFailuresUnreadable, msg: fmt.Sprintf(
+			"corral's killing test is appended to %s itself, and to know your test command runs it corral must see its always-failing test fail by name: %s.\n"+
+				"  Give the runner itself (`-- cargo test`, `-- cargo nextest run`) rather than a wrapper.\n"+
+				"  This is checked before any mutant is planted or test written for this file.", codePath, r.Detail)}
+	case advpool.ReachTimedOut:
+		return localAuditError{usage: true, scanReason: reposcan.ReasonReachControlInconclusive, msg: fmt.Sprintf(
+			"corral's killing test is appended to %s itself, and the run that checks your test command runs it timed out (%s), which shows neither that it runs it nor that it does not.\n"+
+				"  Raise --timeout, or narrow what your command runs.\n"+
+				"  This is checked before any mutant is planted or test written for this file.", codePath, r.Detail)}
+	case advpool.ReachFailedWithoutCanary:
+		return localAuditError{usage: true, scanReason: reposcan.ReasonReachControlInconclusive, msg: fmt.Sprintf(
+			"corral's killing test is appended to %s itself, and the run that checks your test command runs it failed without corral's always-failing test failing: %s.\n"+
+				"  A build error with a test module appended, or a test of yours failing, is the usual cause; run your command on the file as it stands.\n"+
+				"  If your command wraps the runner (make, a script), corral reads its output as cargo test's; give `-- cargo test` or `-- cargo nextest run` itself.\n"+
+				"  This is checked before any mutant is planted or test written for this file.", codePath, r.Detail)}
+	}
+	return fmt.Errorf("corral: the positive control returned an outcome this pre-flight does not know (%q), so it cannot say whether your command runs the authored test", r.Outcome)
+}
+
 // auditNotCollectedErr is auditUsageErr for the ONE refusal a repo scan must
 // report distinctly: the caller's test command would not run the test this
 // audit writes. It is a fact about the invocation, not a corral failure.
@@ -1224,7 +1274,33 @@ func auditLanding(in localAuditInput) (pairing.Landing, error) {
 	if err := lang.CheckTestLanding(in.codePath, l); err != nil {
 		return l, auditUsageErr("%v", err)
 	}
+	// Asked at the same door, for the same reason: before any goal, jail,
+	// store or spend. Every mutant of a file whose own tests cannot be
+	// located would have to be discarded (see ownTestsRefusal).
+	if p, ok := lang.Detect(in.codePath); ok {
+		why, err := reposcan.OwnTestsUnread(p.Name(), strings.TrimSpace(in.repoDir), in.codePath)
+		if err != nil {
+			return l, auditErr("reading %s to locate its own tests: %v", in.codePath, err)
+		}
+		if why != "" {
+			return l, ownTestsRefusal(in.codePath, why)
+		}
+	}
 	return l, nil
+}
+
+// ownTestsRefusal refuses a source whose own tests could not be located
+// (reposcan.OwnTestsUnread: the parser set part of it aside where test code
+// could sit). A mutant there could edit a developer assertion and kill
+// itself, so no mutant of the file can be graded; refused before anything
+// is spent, under its own reason. It used to be audited, every mutant
+// discarded after the generator was paid, and the readouts said the
+// mutants were "rejected by the compile check" and printed a 0.00.
+func ownTestsRefusal(codePath, why string) error {
+	return localAuditError{usage: true, scanReason: reposcan.ReasonOwnTestsUnreadable, msg: fmt.Sprintf(
+		"corral cannot audit %s: the source's own tests could not be located, because %s.\n"+
+			"  A mutant there could edit one of them, so no mutant of this file can be graded.\n"+
+			"  Refused before any goal is derived or mutant generated.", codePath, why)}
 }
 
 // authoredLandingFor is the run's advpool.AuthoredLanding: the checked landing
@@ -1277,6 +1353,22 @@ func scopeAuditInput(in localAuditInput, plug lang.Plugin) (localAuditInput, err
 	return in, nil
 }
 
+// devTestKeyIn is the workspace key of the run's dev test: repo-relative and
+// slash-separated, as codeKey is. "" when the run has none — a source whose
+// authored test lands in itself and that declares no test module
+// (lang.DevTestOf) — and then no key is written into any workspace: a key
+// computed from "" would be the repository root itself.
+func devTestKeyIn(in jailWiringInput) (string, error) {
+	if strings.TrimSpace(in.testPath) == "" {
+		return "", nil
+	}
+	dk, err := filepath.Rel(in.repoDir, in.fsPath(in.testPath))
+	if err != nil || strings.HasPrefix(dk, "..") {
+		return "", fmt.Errorf("--test %s is not inside --repo-dir %s", in.testPath, in.repoDir)
+	}
+	return filepath.ToSlash(dk), nil
+}
+
 // auditJailPrep is the jail-side of one file's audit: the resolved test path,
 // the code + dev-test bytes, and the jail-backed scorer/validator/enumerator
 // wiring. cleanup releases any Go-vendor staging dir and is always non-nil.
@@ -1317,8 +1409,32 @@ func prepareAuditJail(ctx context.Context, in localAuditInput, plug lang.Plugin,
 	if err != nil {
 		return p, auditUsageErr("reading --code %s: %v", in.codePath, err)
 	}
+	// The landing the door admitted, re-derived by the same call and
+	// re-checked, so the wiring below writes exactly where the check looked.
+	// Asked before the dev test, because for a landing in the source itself
+	// the landing decides what the developer's test is (lang.DevTestOf).
+	landing, err := auditLanding(in)
+	if err != nil {
+		return p, err
+	}
 	tp := strings.TrimSpace(in.testPath)
-	if tp == "" {
+	if own, decided := lang.DevTestOf(in.codePath, landing); decided {
+		// The authored test lands in the source itself. The developer's test
+		// is the source when it declares its own inline test module, and
+		// there is none when it declares no test module: the file is graded
+		// by the tests the evidence (or the command) says execute it, and no
+		// other file is named its test. A path handed in (--test, or a scan's
+		// most-covering test file for an evidence-promoted file) is not used
+		// as one, and that is said rather than done silently.
+		if tp != "" && filepath.Clean(tp) != filepath.Clean(in.codePath) {
+			what := "none: it declares no test module, so it is graded by the tests that execute it"
+			if own != "" {
+				what = "its own inline test module"
+			}
+			fmt.Fprintf(stdout, "  dev test: %s (%s); %s is not used as its test file, because the authored test lands in %s itself\n", in.codePath, what, tp, in.codePath)
+		}
+		tp = own
+	} else if tp == "" {
 		// --test always overrides everything below it; only reached when the
 		// operator named no test at all. searchRoot is where FindTest resolves
 		// its candidates AND its recursive fallback against: repoDir in
@@ -1339,9 +1455,11 @@ func prepareAuditJail(ctx context.Context, in localAuditInput, plug lang.Plugin,
 		}
 		tp = found
 	}
-	devTest, err := os.ReadFile(fsPath(tp)) // #nosec G304 -- operator-supplied (or convention/search-derived) test path
-	if err != nil {
-		return p, auditUsageErr("reading test %s: %v (pass --test to override)", tp, err)
+	var devTest []byte
+	if tp != "" {
+		if devTest, err = os.ReadFile(fsPath(tp)); err != nil { // #nosec G304 -- operator-supplied (or convention/search-derived) test path
+			return p, auditUsageErr("reading test %s: %v (pass --test to override)", tp, err)
+		}
 	}
 
 	// Resolve the jail. NEVER fall back to unsandboxed — resolveLocalJail fails
@@ -1374,12 +1492,6 @@ func prepareAuditJail(ctx context.Context, in localAuditInput, plug lang.Plugin,
 		}
 	}
 
-	// The landing the door admitted, re-derived by the same call and
-	// re-checked, so the wiring below writes exactly where the check looked.
-	landing, err := auditLanding(in)
-	if err != nil {
-		return p, err
-	}
 	// The runner behind the command, resolved ONCE, here, where the
 	// repository is on disk: the package script `npm test` runs, and the
 	// operator's --runner. Everything downstream carries this answer.
@@ -1406,6 +1518,10 @@ func prepareAuditJail(ctx context.Context, in localAuditInput, plug lang.Plugin,
 		runCache: in.runCache, capFloor: in.capFloor,
 	})
 	if err != nil {
+		var refusal localAuditError
+		if errors.As(err, &refusal) && refusal.scanReason != "" {
+			return p, err // a refusal with its own scan reason keeps it
+		}
 		return p, auditUsageErr("%v", err)
 	}
 	if line := runCacheUnsharedLine(in.codePath, wiring.runCache); line != "" {
@@ -2434,9 +2550,16 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 	// path, so a project whose discovery config would never find it collects
 	// it anyway. Checking the base command refused those audits for a problem
 	// the run had already solved.
+	//
+	// Each unreached outcome is refused for what it is (preflightRefusal):
+	// only a control run that PASSED shows the command does not run the test.
 	authoredArgv := scorer.AuthoredCommand(rs.CodePath, adequacy.ShellSplit(rs.TestCmd))
-	if collected, cerr := scorer.AuthoredTestWouldBeCollected(ctx, rs.CodePath, authoredArgv); cerr == nil && !collected {
-		return zero, auditNotCollectedErr(notCollectedAdvice, advpool.AuthoredTestPathFor(rs.Landing, rs.CodePath, rs.DevTestPath))
+	if scorer.BaseFiles != nil {
+		if reach, cerr := scorer.AuthoredTestReach(ctx, rs.CodePath, rs.Code, authoredArgv); cerr == nil {
+			if rerr := preflightRefusal(reach, rs.Landing, rs.CodePath, rs.DevTestPath); rerr != nil {
+				return zero, rerr
+			}
+		}
 	}
 
 	verdict, err := driveLocalRun(ctx, d, q, localMissionID, chatterFor, poll, time.Sleep, stdout, rec, actorFor, swarm)
@@ -2780,6 +2903,11 @@ type jailWiring struct {
 // input error, never an internal one).
 func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err error) {
 	w.cleanup = func() {}
+	// The source's own tests, read once for all three scorer doors below.
+	evidence, err := inlineTestLines(in.codePath, in.langName, in.code)
+	if err != nil {
+		return w, err
+	}
 	// If wiring fails AFTER a vendor staging dir was created, release it here —
 	// the caller only defers cleanup on the success path.
 	defer func() {
@@ -2842,11 +2970,11 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		if rerr != nil || strings.HasPrefix(ck, "..") {
 			return w, fmt.Errorf("--code %s is not inside --repo-dir %s", in.codePath, in.repoDir)
 		}
-		dk, rerr := filepath.Rel(in.repoDir, in.fsPath(in.testPath))
-		if rerr != nil || strings.HasPrefix(dk, "..") {
-			return w, fmt.Errorf("--test %s is not inside --repo-dir %s", in.testPath, in.repoDir)
+		dk, derr := devTestKeyIn(in)
+		if derr != nil {
+			return w, derr
 		}
-		w.codeKey, w.devTestKey = filepath.ToSlash(ck), filepath.ToSlash(dk)
+		w.codeKey, w.devTestKey = filepath.ToSlash(ck), dk
 		if w.landing, err = authoredLandingFor(in.landing, in.repoDir, in.fsPath); err != nil {
 			return w, err
 		}
@@ -2972,7 +3100,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		// The workspace has no run cache; its one rewrite is the report flags,
 		// through the same door the jail's commands take.
 		rewrite := gradingRewrite(gradingPlugin(in.langName), in.inv, in.checkArgv, nil)
-		w.scorer = advpool.JailScorer{Jail: pool, RepoDir: in.repoDir, BaseFiles: base, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Landing: w.landing, Concurrency: pool.Trees(), Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, KillerCmd: killerCmd, FailFast: failFast, CommandRewrite: rewrite}
+		w.scorer = advpool.JailScorer{Jail: pool, RepoDir: in.repoDir, BaseFiles: base, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Landing: w.landing, Concurrency: pool.Trees(), Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, KillerCmd: killerCmd, FailFast: failFast, EvidenceLines: evidence, CommandRewrite: rewrite}
 		w.validator = advpool.JailValidator{Jail: pool, RepoDir: in.repoDir, BaseFiles: base, DevTestPath: w.devTestKey, Landing: w.landing, CommandRewrite: rewrite}
 		w.jailEnum = advpool.JailEnumerator{Jail: pool, BaseFiles: base}
 		// w.depBinds stays nil: there is nothing to bind read-only when the
@@ -3008,11 +3136,11 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		if rerr != nil || strings.HasPrefix(ck, "..") {
 			return w, fmt.Errorf("--code %s is not inside --repo-dir %s", in.codePath, in.repoDir)
 		}
-		dk, rerr := filepath.Rel(in.repoDir, in.fsPath(in.testPath))
-		if rerr != nil || strings.HasPrefix(dk, "..") {
-			return w, fmt.Errorf("--test %s is not inside --repo-dir %s", in.testPath, in.repoDir)
+		dk, derr := devTestKeyIn(in)
+		if derr != nil {
+			return w, derr
 		}
-		w.codeKey, w.devTestKey = filepath.ToSlash(ck), filepath.ToSlash(dk)
+		w.codeKey, w.devTestKey = filepath.ToSlash(ck), dk
 		if w.landing, err = authoredLandingFor(in.landing, in.repoDir, in.fsPath); err != nil {
 			return w, err
 		}
@@ -3020,10 +3148,11 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		// on-disk copy, but explicit so a mutant overlay targets the right key).
 		// A private copy: the seed may be SHARED across concurrent jobs and must
 		// never be mutated in place.
-		repoFiles := workspaceFromSeed(seed, map[string]string{
-			w.codeKey:    string(in.code),
-			w.devTestKey: string(in.devTest),
-		})
+		authoritative := map[string]string{w.codeKey: string(in.code)}
+		if w.devTestKey != "" {
+			authoritative[w.devTestKey] = string(in.devTest)
+		}
+		repoFiles := workspaceFromSeed(seed, authoritative)
 		jail, gc := newGradingJail(in.iso, in.timeout, depBinds, gradingPlugin(in.langName), in.inv.WithArgv(in.checkArgv), in.checkArgv)
 		w.closeWithCleanup(jail, in.runCache, in.capFloor, gc, in.testTimeout)
 		// enumerator backs the tests×mutants matrix's test-listing step
@@ -3034,7 +3163,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		// (the flag is the real gate).
 		enumerator := newRunEnumerator(in.iso, in.timeout, depBinds)
 		rewrite := gradingRewrite(gradingPlugin(in.langName), in.inv, in.checkArgv, gc.Rewrite)
-		w.scorer = advpool.JailScorer{Jail: jail, RepoDir: in.repoDir, BaseFiles: repoFiles, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Landing: w.landing, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, KillerCmd: killerCmd, FailFast: failFast, CommandRewrite: rewrite, WarmCheck: warmCheckFor(gradingPlugin(in.langName), in.inv, gc)}
+		w.scorer = advpool.JailScorer{Jail: jail, RepoDir: in.repoDir, BaseFiles: repoFiles, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Landing: w.landing, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, KillerCmd: killerCmd, FailFast: failFast, EvidenceLines: evidence, CommandRewrite: rewrite, WarmCheck: warmCheckFor(gradingPlugin(in.langName), in.inv, gc)}
 		w.validator = advpool.JailValidator{Jail: jail, RepoDir: in.repoDir, BaseFiles: repoFiles, DevTestPath: w.devTestKey, Landing: w.landing, CommandRewrite: rewrite}
 		w.jailEnum = advpool.JailEnumerator{Jail: enumerator, BaseFiles: repoFiles}
 		if len(depBinds) > 0 {
@@ -3055,7 +3184,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		w.closeWithCleanup(jail, in.runCache, in.capFloor, gc, in.testTimeout)
 		enumerator := newRunEnumerator(in.iso, in.timeout, nil)
 		rewrite := gradingRewrite(plug, in.inv, warm, gc.Rewrite)
-		w.scorer = advpool.JailScorer{Jail: jail, MutantTimeout: in.testTimeout, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, KillerCmd: killerCmd, FailFast: failFast, CommandRewrite: rewrite, WarmCheck: warmCheckFor(plug, in.inv, gc)}
+		w.scorer = advpool.JailScorer{Jail: jail, MutantTimeout: in.testTimeout, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, KillerCmd: killerCmd, FailFast: failFast, EvidenceLines: evidence, CommandRewrite: rewrite, WarmCheck: warmCheckFor(plug, in.inv, gc)}
 		w.validator = advpool.JailValidator{Jail: jail, CommandRewrite: rewrite}
 		w.jailEnum = advpool.JailEnumerator{Jail: enumerator}
 	}
@@ -3320,6 +3449,7 @@ func advVerdictFromPool(v advpool.Verdict) advVerdict {
 		ExamIndicative:           v.ExamIndicative,
 		IndicativeReason:         v.IndicativeReason,
 		CriticIncomplete:         v.CriticIncomplete,
+		CriticNotRun:             v.CriticNotRun,
 		AuthoredTogether:         v.AuthoredTogether,
 		AuthoredTogetherOutput:   v.AuthoredTogetherOutput,
 		DevKilledMutants:         v.DevKilledMutants,

@@ -1,0 +1,30 @@
+   Compiling inline-cargo v0.1.0 ($DIR/inline/extra-kill)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running unittests src/lib.rs (target/debug/deps/inline_cargo-995b603fb05bc563)
+
+running 7 tests
+test extra::corral_tests::within_is_identity ... ok
+test extra::corral_tests::above ... FAILED
+test named::corral_tests::zero_is_zero ... ok
+test tests::negative ... ok
+test extra::tests::inside ... ok
+test extra::tests::below ... ok
+test tests::positive ... ok
+
+failures:
+
+---- extra::corral_tests::above stdout ----
+
+thread 'extra::corral_tests::above' panicked at src/extra.rs:41:5:
+assertion `left == right` failed
+  left: 30
+ right: 10
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    extra::corral_tests::above
+
+test result: FAILED. 6 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`

@@ -4,7 +4,10 @@
 
 package repoindex
 
-import "github.com/pdbethke/corralai/internal/pairing"
+import (
+	plugins "github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/pairing"
+)
 
 func extractSignatures(_, _ string) ([]Signature, error) { return nil, ErrUnsupportedLang }
 
@@ -14,3 +17,7 @@ func readsTestModules(string) bool { return false }
 
 // testModules: no grammar without cgo, so no module is ever read.
 func testModules(_ string, _ []byte) []pairing.TestModule { return nil }
+
+// ownTestLines: no grammar without cgo, so nothing is read. Such a build
+// cannot read a Rust file at all and refuses it upstream.
+func ownTestLines(string, []byte) ([]plugins.LineRange, string) { return nil, "" }

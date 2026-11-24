@@ -50,7 +50,7 @@ func TestEveryDoorThatRunsACommandTakesTheRewrite(t *testing.T) {
 	if _, _, err := scorer.CompliantRun(ctx, "p.go", "package p\n", "package p\n", "go test ./..."); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := scorer.AuthoredTestWouldBeCollected(ctx, "p.go", []string{"go", "test", "./..."}); err != nil {
+	if _, err := scorer.AuthoredTestWouldBeCollected(ctx, "p.go", "package p\n", []string{"go", "test", "./..."}); err != nil {
 		t.Fatal(err)
 	}
 	if err := validator.CompileTest(ctx, "p.go", "package p\n", "package p\n"); err != nil {
@@ -75,7 +75,7 @@ func TestNoRewriteLeavesEveryDoorsCommandUntouched(t *testing.T) {
 	if _, _, err := scorer.CompliantRun(context.Background(), "p.go", "package p\n", "package p\n", "go test ./..."); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := scorer.AuthoredTestWouldBeCollected(context.Background(), "p.go", []string{"go", "test", "./..."}); err != nil {
+	if _, err := scorer.AuthoredTestWouldBeCollected(context.Background(), "p.go", "package p\n", []string{"go", "test", "./..."}); err != nil {
 		t.Fatal(err)
 	}
 	for _, c := range jail.cmds {

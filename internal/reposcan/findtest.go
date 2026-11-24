@@ -230,6 +230,23 @@ func diskTestModules(p lang.Plugin, root string) func(rel string) ([]pairing.Tes
 	}
 }
 
+// OwnTestsUnread is why the source at rel (under root) cannot have its own
+// tests located, "" when it can or its language has no reader for them:
+// repoindex.OwnTestLines' unread, the parse having set code aside outside
+// every test span and function body (ReasonOwnTestsUnreadable). The one
+// question Enumerate and every audit door ask, so they cannot disagree.
+func OwnTestsUnread(langName, root, rel string) (string, error) {
+	if !readsTestModules(langName) {
+		return "", nil
+	}
+	src, err := os.ReadFile(underRoot(root, rel)) // #nosec G304 -- a source file the scan itself enumerated (or the operator's own --code), under the operator's root
+	if err != nil {
+		return "", err
+	}
+	_, why := repoindex.OwnTestLines(langName, src)
+	return why, nil
+}
+
 // findInUniverse is Enumerate's own use of the same two-stage rule, over a
 // universe it has ALREADY computed (present, the whole-repo walk's
 // gitignore-and-skipDir-clean file set) rather than re-deriving one with a

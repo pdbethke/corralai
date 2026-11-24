@@ -935,11 +935,7 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 	}
 
 	runCmd := func(rctx context.Context, code string, cmd []string) (bool, error) {
-		files := make(map[string]string, len(base)+1)
-		for k, v := range base {
-			files[k] = v
-		}
-		files[codePath] = code
+		files := Overlay{Base: base, CodePath: codePath}.With(code)
 		return j.RunTest(rctx, files, toJail(cmd))
 	}
 
@@ -954,11 +950,7 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 	dj, detailed := j.(DetailedJail)
 	nameKiller := cfg.failureParser != nil && detailed
 	runCmdDetailed := func(rctx context.Context, code string, cmd []string) (bool, []byte, error) {
-		files := make(map[string]string, len(base)+1)
-		for k, v := range base {
-			files[k] = v
-		}
-		files[codePath] = code
+		files := Overlay{Base: base, CodePath: codePath}.With(code)
 		return dj.RunTestDetailed(rctx, files, toJail(cmd))
 	}
 
@@ -972,11 +964,7 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 			pass, err := runCmd(rctx, code, cmd)
 			return pass, "", err
 		}
-		files := make(map[string]string, len(base)+1)
-		for k, v := range base {
-			files[k] = v
-		}
-		files[codePath] = code
+		files := Overlay{Base: base, CodePath: codePath}.With(code)
 		return vj.RunTestVerbose(rctx, files, toJail(cmd))
 	}
 
@@ -991,11 +979,7 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 	// sixth run (2026-10-30) failed its baseline and printed 64 KiB of
 	// passing acceptance tests, cut off before vitest's failure summary.
 	baselineRun := func(rctx context.Context, code string) (bool, string, error) {
-		files := make(map[string]string, len(base)+1)
-		for k, v := range base {
-			files[k] = v
-		}
-		files[codePath] = code
+		files := Overlay{Base: base, CodePath: codePath}.With(code)
 		// WARM THE RUN CACHE with this run, only when the caller asked
 		// (WithWarmBaseline): the warming run writes what every later run
 		// reads, so it must be a run of the project's own code and tests. A

@@ -837,11 +837,7 @@ func rebuildFloorRefusal(took time.Duration) error {
 // took is the run's wall clock whatever the outcome, so the time it cost is
 // accounted even when it yields no floor.
 func (p *WorkspacePool) MeasureRebuild(ctx context.Context, base map[string]string, codePath, probed string, testCmd []string) (took time.Duration, err error) {
-	files := make(map[string]string, len(base)+1)
-	for k, v := range base {
-		files[k] = v
-	}
-	files[codePath] = probed
+	files := Overlay{Base: base, CodePath: codePath}.With(probed)
 	start := time.Now()
 	pass, err := p.RunTest(ctx, files, testCmd)
 	took = time.Since(start)
@@ -1004,11 +1000,7 @@ func (p *WorkspacePool) Probe(ctx context.Context, base map[string]string, codeP
 func (p *WorkspacePool) runEverywhere(ctx context.Context, base map[string]string, codePath, code string, testCmd []string) ([]bool, []string) {
 	oks := make([]bool, len(p.runners))
 	outs := make([]string, len(p.runners))
-	files := make(map[string]string, len(base)+1)
-	for k, v := range base {
-		files[k] = v
-	}
-	files[codePath] = code
+	files := Overlay{Base: base, CodePath: codePath}.With(code)
 
 	var wg sync.WaitGroup
 	for i, r := range p.runners {

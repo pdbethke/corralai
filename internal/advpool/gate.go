@@ -907,7 +907,7 @@ func (s JailScorer) CompliantRun(ctx context.Context, codePath, code, test, test
 	}
 	// The UNMUTATED code: this asks "why does your test fail on software that
 	// is correct", which is the only question worth feeding back.
-	ws[codePath] = code
+	ws = adequacy.Overlay{Base: ws, CodePath: codePath}.With(code)
 	if ends {
 		return ej.RunTestEnds(ctx, ws, rewriteCmd(s.CommandRewrite, cmd))
 	}
@@ -1338,11 +1338,7 @@ type JailEnumerator struct {
 // stdout-capturing jail.
 func (e JailEnumerator) Enumerate(ctx context.Context, codePath, code, test string, listCmd []string) (string, error) {
 	scoreBase, _ := (JailScorer{BaseFiles: e.BaseFiles}).scoreWorkspace(codePath, test, "")
-	files := make(map[string]string, len(scoreBase)+1)
-	for k, v := range scoreBase {
-		files[k] = v
-	}
-	files[codePath] = code
+	files := adequacy.Overlay{Base: scoreBase, CodePath: codePath}.With(code)
 	return e.Jail.Enumerate(ctx, files, listCmd)
 }
 
@@ -1433,11 +1429,7 @@ func (v JailValidator) CompileTest(ctx context.Context, codePath, code, test str
 	if v.BaseFiles != nil {
 		base = v.BaseFiles
 	}
-	ws := make(map[string]string, len(base)+2)
-	for k, val := range base {
-		ws[k] = val
-	}
-	ws[codePath] = code
+	ws := adequacy.Overlay{Base: base, CodePath: codePath}.With(code)
 	// The workspace as it stands WITHOUT the authored test, kept to ask one
 	// question of a failing check: does it fail here too? See below.
 	unmodified := maps.Clone(ws)

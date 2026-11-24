@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
+	golang "github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/pairing"
 )
 
@@ -49,11 +50,15 @@ func TestAuthoredLandingInline(t *testing.T) {
 
 // doorJail records, for every run any door hands it, the command and every
 // file in the workspace. A run fails when src/lib.rs holds the canary or the
-// token KILL (a compiler refusing invalid source, a test catching a mutant),
-// so the positive control reads "reached" and the canary is killed.
+// token KILL (a compiler refusing invalid source, a test catching a mutant).
+// With runsBlock it is a command that also RUNS the appended block's tests,
+// so it fails on the reach canary (the always-failing landed test); without
+// it, it is a command that compiles the file but whose filter never runs the
+// block — the case the inline positive control must call unreached.
 type doorJail struct {
-	mu   sync.Mutex
-	runs []doorRun
+	mu        sync.Mutex
+	runs      []doorRun
+	runsBlock bool
 }
 
 type doorRun struct {
@@ -66,6 +71,9 @@ func (j *doorJail) run(files map[string]string, cmd []string) bool {
 	defer j.mu.Unlock()
 	j.runs = append(j.runs, doorRun{cmd: slices.Clone(cmd), files: files})
 	src := files["src/lib.rs"]
+	if j.runsBlock && strings.Contains(src, "fn corral_reach_canary()") {
+		return false
+	}
 	return !strings.Contains(src, adequacy.CanaryCode) && !strings.Contains(src, "KILL")
 }
 
@@ -92,13 +100,15 @@ func (j *doorJail) take() []doorRun {
 // any other path. The compile check, the failure run and the authored pass's
 // baseline write identical bytes for the original code, so the file compiled
 // is the file graded; the positive control writes the canary in the block's
-// place (there is no separate file to plant it in).
+// place: the TestLander's always-failing test, landed as a block (there is
+// no separate file to plant a canary in, and invalid source would ask only
+// what Score's own canary already asked).
 func TestInlineAuthoredDoorsComposeTheSameFile(t *testing.T) {
 	ctx := context.Background()
 	base := map[string]string{"Cargo.toml": "[package]\n", "src/lib.rs": inlineSrc}
 	want := inlineSrc + inlineBlock
-	wantCanary := inlineSrc + adequacy.CanaryCode
-	j := &doorJail{}
+	wantCanary := inlineSrc + reachBlock(t)
+	j := &doorJail{runsBlock: true}
 	l := inlineLanding()
 	v := JailValidator{Jail: j, BaseFiles: base, DevTestPath: "src/lib.rs", Landing: l}
 	s := JailScorer{Jail: j, BaseFiles: base, DevTestPath: "src/lib.rs", Landing: l}
@@ -144,11 +154,11 @@ func TestInlineAuthoredDoorsComposeTheSameFile(t *testing.T) {
 		t.Errorf("the authored pass's baseline wrote\n%s\nwant\n%s", got, want)
 	}
 	if got := runs[len(runs)-1].files["src/lib.rs"]; got != wantCanary {
-		t.Errorf("the positive control wrote\n%s\nwant the source with the canary appended", got)
+		t.Errorf("the positive control wrote\n%s\nwant the source with the reach canary appended", got)
 	}
 	for i, r := range runs {
 		src := r.files["src/lib.rs"]
-		if !strings.HasSuffix(src, inlineBlock) && !strings.HasSuffix(src, adequacy.CanaryCode) {
+		if !strings.HasSuffix(src, inlineBlock) && src != wantCanary && !strings.HasSuffix(src, adequacy.CanaryCode+"\n"+inlineBlock) {
 			t.Errorf("authored-pass run %d dropped the block:\n%s", i, src)
 		}
 	}
@@ -160,7 +170,7 @@ func TestInlineAuthoredDoorsComposeTheSameFile(t *testing.T) {
 	runs = j.take()
 	onlyBaseKeys("AuthoredTestWouldBeCollected", runs)
 	if len(runs) != 1 || runs[0].files["src/lib.rs"] != wantCanary {
-		t.Fatalf("the preflight did not plant the canary in the source: %+v", runs)
+		t.Fatalf("the preflight did not plant the reach canary in the source: %+v", runs)
 	}
 }
 
@@ -193,7 +203,9 @@ func TestWorkspaceRestoresTheSourceAfterAnInlineAuthoredRun(t *testing.T) {
 	before := listing()
 
 	s := JailScorer{Jail: adequacy.NewWorkspaceRunner(root, 30*time.Second), BaseFiles: map[string]string{}, DevTestPath: "src/lib.rs", Landing: inlineLanding()}
-	cmd := `sh -c 'if grep -q "corral canary" src/lib.rs || grep -q KILL src/lib.rs; then exit 1; fi; grep -q corral_tests src/lib.rs'`
+	// "Runs" the block: fails on its always-failing reach canary, as a
+	// runner that executes corral_tests would.
+	cmd := `sh -c 'if grep -q "corral canary" src/lib.rs || grep -q KILL src/lib.rs || grep -q "fn corral_reach_canary" src/lib.rs; then exit 1; fi; grep -q corral_tests src/lib.rs'`
 	mutants := []adequacy.Mutant{
 		{ID: "m1", Search: "x * 2", Replace: "x * 2 /* KILL */"},
 		{ID: "m2", Search: "x * 2", Replace: "x + x"},
@@ -218,5 +230,54 @@ func TestWorkspaceRestoresTheSourceAfterAnInlineAuthoredRun(t *testing.T) {
 	}
 	if after := listing(); !slices.Equal(before, after) {
 		t.Fatalf("the checkout's files changed:\nbefore %v\nafter  %v", before, after)
+	}
+}
+
+// reachBlock is the inline positive control's block for inlineSrc.
+func reachBlock(t *testing.T) string {
+	t.Helper()
+	b, err := golang.ReachCanaryBlock(inlineLanding().Landing, inlineSrc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// TestInlinePositiveControlSeesWhetherTheBlockRuns: for an inline landing the
+// control appends a test that always fails, so it can tell a command that
+// RUNS the authored block (it fails: reached) from one that compiles the
+// source but never runs the block (it passes: unreached). Planting invalid
+// source instead would fail both, and a dropped block would pass both.
+func TestInlinePositiveControlSeesWhetherTheBlockRuns(t *testing.T) {
+	ctx := context.Background()
+	base := map[string]string{"Cargo.toml": "[package]\n", "src/lib.rs": inlineSrc}
+	mutants := []adequacy.Mutant{{ID: "m1", Search: "x * 2", Replace: "x * 2 /* KILL */"}}
+	for _, tc := range []struct {
+		name      string
+		runsBlock bool
+	}{{"never runs the block", false}, {"runs the block", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			j := &doorJail{runsBlock: tc.runsBlock}
+			s := JailScorer{Jail: j, BaseFiles: base, DevTestPath: "src/lib.rs", Landing: inlineLanding()}
+
+			reached, err := s.AuthoredTestWouldBeCollected(ctx, "src/lib.rs", inlineSrc, []string{"cargo", "test"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reached != tc.runsBlock {
+				t.Errorf("preflight reached=%v for a command that runsBlock=%v", reached, tc.runsBlock)
+			}
+			if got := j.take()[0].files["src/lib.rs"]; got != inlineSrc+reachBlock(t) {
+				t.Errorf("the control did not write the source with the reach canary appended:\n%s", got)
+			}
+
+			rep, err := s.ScoreAuthoredReport(ctx, "src/lib.rs", inlineSrc, inlineBlock, mutants, "cargo test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if rep.AuthoredTestUnreached == tc.runsBlock || rep.CanaryKilled != tc.runsBlock {
+				t.Errorf("runsBlock=%v: AuthoredTestUnreached=%v CanaryKilled=%v", tc.runsBlock, rep.AuthoredTestUnreached, rep.CanaryKilled)
+			}
+		})
 	}
 }

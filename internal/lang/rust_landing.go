@@ -67,6 +67,14 @@ func (rustPlugin) LandTest(body string, depth int, target string) string {
 	return b.String()
 }
 
+// ReachCanaryTest is a libtest test that panics, so it fails whenever it is
+// run, and only then: it compiles in any crate (no imports, no items of the
+// code under test), so a failure means the command RAN the landed block, not
+// that the block broke the build. See TestLander.ReachCanaryTest.
+func (rustPlugin) ReachCanaryTest() string {
+	return "#[test]\nfn corral_reach_canary() {\n    panic!(\"corral positive control: this test must fail when it runs\");\n}"
+}
+
 // rustFreeModuleName is corral_tests, or the first corral_tests_N (N ≥ 2)
 // target does not already declare.
 func rustFreeModuleName(target string) string {

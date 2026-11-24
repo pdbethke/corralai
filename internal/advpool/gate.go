@@ -993,22 +993,33 @@ func (s JailScorer) authoredWorkspace(codePath, content string) adequacy.Overlay
 //     test's own verdict from the real scoring run is worthless.
 //     reaches=false.
 //
-// For an INLINE landing the authored test's own file is codePath, so there is
-// no separate path to plant the canary at: it is appended to code as the
-// block (AuthoredLanding.authored), exactly where the real test rides, and
-// the question becomes whether the command reacts to invalid source after the
-// code in that file. code is read only then; a landing with a file of its own
-// leaves codePath as the workspace already has it, as it always did.
+// For an INLINE landing the authored test's own file is codePath, and invalid
+// source there would ask only what adequacy.Score's own canary already asked
+// (does the command compile this file?): a command that compiles it but
+// whose filter never runs the appended block would pass as "reached", and
+// AuthoredTestUnreached could never fire. So the control is instead the
+// language's always-failing test (lang.ReachCanaryBlock: the TestLander's
+// ReachCanaryTest, landed where the authored block lands), appended to code
+// through the same Compose (AuthoredLanding.authored). The outcomes keep
+// their meaning: the run fails, so the command RAN the block (reached); it
+// passes, so the block's tests never ran (unreached). code is read only
+// then; a landing with a file of its own leaves codePath as the workspace
+// already has it, as it always did.
 func (s JailScorer) verifyAuthoredTestReaches(ctx context.Context, codePath, code string, cmd []string) (bool, error) {
-	ov := s.authoredWorkspace(codePath, adequacy.CanaryCode)
-	ws := ov.Base
-	if ov.Compose != nil {
-		ws = ov.With(code)
+	var ws map[string]string
+	if s.Landing.Inline(codePath) {
+		block, err := golang.ReachCanaryBlock(s.Landing.Landing, code)
+		if err != nil {
+			return false, err
+		}
+		ws = s.authoredWorkspace(codePath, block).With(code)
+	} else {
+		ws = s.authoredWorkspace(codePath, adequacy.CanaryCode).Base
 	}
 	passed, err := s.Jail.RunTest(ctx, ws, rewriteCmd(s.CommandRewrite, cmd))
 	if err != nil {
 		if errors.Is(err, adequacy.ErrTestTimeout) {
-			return true, nil // hung on invalid source at the authored test's path -> it reacted
+			return true, nil // hung on the planted canary (invalid source, or the inline reach test) -> it reacted
 		}
 		return false, err
 	}
@@ -1041,7 +1052,7 @@ func AuthoredTestPathFor(l AuthoredLanding, codePath, devTestPath string) string
 //
 // Returns (true, nil) when the authored test would be collected. Costs one
 // jail run and nothing else. code is the unmutated source, which an inline
-// landing's canary is appended to (see verifyAuthoredTestReaches).
+// landing's reach canary is appended to (see verifyAuthoredTestReaches).
 func (s JailScorer) AuthoredTestWouldBeCollected(ctx context.Context, codePath, code string, cmd []string) (bool, error) {
 	if s.BaseFiles == nil {
 		// Single-file mode overlays the test at the plugin's own synthetic

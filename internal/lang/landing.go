@@ -26,6 +26,19 @@ type TestLander interface {
 	// across depth module levels (pairing.Landing.Depth). It must never
 	// declare a name target already declares.
 	LandTest(body string, depth int, target string) string
+	// ReachCanaryTest is a test body that ALWAYS FAILS when it runs, as the
+	// writer's body would be handed to LandTest. It is the positive control
+	// for a landing in the source itself (pairing.Inline): there the
+	// authored test has no file of its own to plant invalid source in, and
+	// invalid source appended to the source asks only what the run's own
+	// canary already asked — does the command compile this file? A command
+	// that compiles it but whose filter never runs the appended block passes
+	// that question, and the authored test would be credited with kills it
+	// never ran for. A test that always fails, landed where the authored one
+	// lands, fails the run exactly when the command RUNS the block. An
+	// interface method, not an optional one: a language whose landed tests
+	// could not be proven reached must not be able to land them at all.
+	ReachCanaryTest() string
 }
 
 // landingRules is the rules a landing for codePath is derived from: the
@@ -144,6 +157,23 @@ func LandBody(l pairing.Landing, target, body string) string {
 		return body
 	}
 	return lander.LandTest(body, l.Depth, target)
+}
+
+// ReachCanaryBlock is the positive control's block for landing l: the
+// TestLander's always-failing test (ReachCanaryTest), landed by LandTest at
+// l's depth onto target exactly as an authored test is, so the control runs
+// under the same module and filter the real block does. An error, never a
+// substitute, when no TestLander can compose l.Path.
+func ReachCanaryBlock(l pairing.Landing, target string) (string, error) {
+	p, ok := Detect(l.Path)
+	if !ok {
+		return "", fmt.Errorf("lang: no language plugin claims %s, so no reach canary can be landed there", l.Path)
+	}
+	lander, ok := p.(TestLander)
+	if !ok {
+		return "", fmt.Errorf("lang: corral's %s cannot land a test in %s, so no reach canary can be landed there", p.PromptLang(), l.Path)
+	}
+	return lander.LandTest(lander.ReachCanaryTest(), l.Depth, target), nil
 }
 
 // ComposeLanding is what a run writes at l.Path: for an Into landing, target

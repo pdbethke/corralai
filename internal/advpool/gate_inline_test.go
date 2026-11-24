@@ -15,6 +15,7 @@ import (
 	"github.com/pdbethke/corralai/internal/adequacy"
 	golang "github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/pairing"
+	"github.com/pdbethke/corralai/internal/testmap"
 )
 
 // The audited Rust source, whose tests are inline, and the landed block
@@ -24,11 +25,11 @@ const (
 	inlineBlock = "\n#[cfg(test)]\nmod corral_tests {\nuse super::*;\n#[test]\nfn kills() { assert_eq!(double(3), 6); }\n}\n"
 )
 
-// inlineLanding is the landing whose Path IS the audited source — below
-// lang.CheckTestLanding, which still refuses it; the doors are built first.
+// inlineLanding is the landing whose Path IS the audited source, as
+// lang.TestLanding computes it for a source with its own inline tests.
 func inlineLanding() AuthoredLanding {
 	return AuthoredLanding{
-		Landing:  pairing.Landing{Path: "src/lib.rs", Shape: pairing.Inline, Label: "inline", Into: true, Depth: 0, DeclarationsRead: true},
+		Landing:  pairing.Landing{Path: "src/lib.rs", Shape: pairing.Inline, Label: "inline", Into: true, Depth: 0, DeclarationsRead: true, OwnModule: true},
 		Existing: inlineSrc,
 	}
 }
@@ -45,6 +46,12 @@ func TestAuthoredLandingInline(t *testing.T) {
 	}
 	if (AuthoredLanding{}).Inline("src/lib.rs") {
 		t.Error("the zero landing is inline")
+	}
+	// The merged block for an inline landing (lang's
+	// TestInlineProvenTestsMergeIntoOneBlock) is handed back to append to
+	// the source itself.
+	if got := inlineLanding().AppendTo(); got != "src/lib.rs" {
+		t.Errorf("an inline landing's proven tests are appended to %q, want the source", got)
 	}
 }
 
@@ -277,6 +284,94 @@ func TestInlinePositiveControlSeesWhetherTheBlockRuns(t *testing.T) {
 			}
 			if rep.AuthoredTestUnreached == tc.runsBlock || rep.CanaryKilled != tc.runsBlock {
 				t.Errorf("runsBlock=%v: AuthoredTestUnreached=%v CanaryKilled=%v", tc.runsBlock, rep.AuthoredTestUnreached, rep.CanaryKilled)
+			}
+		})
+	}
+}
+
+// inlineUnitJail is a jail over a source the library unit compiles: it
+// records every command and fails a run whose source holds the canary, a
+// KILL mutant, or the reach canary (a command that selects the block runs
+// it).
+type inlineUnitJail struct {
+	codePath string
+	cmds     [][]string
+}
+
+func (j *inlineUnitJail) RunTest(_ context.Context, files map[string]string, cmd []string) (bool, error) {
+	if !slices.Contains(cmd, "test") && !slices.Contains(cmd, "nextest") {
+		return true, nil // the compile gate
+	}
+	j.cmds = append(j.cmds, slices.Clone(cmd))
+	src := files[j.codePath]
+	return !strings.Contains(src, adequacy.CanaryCode) && !strings.Contains(src, "KILL") && !strings.Contains(src, "fn corral_reach_canary()"), nil
+}
+
+// TestInlineAuthoredAloneRunsOnlyCorralsTests is ruling 1 of the inline
+// landing: "proven by the authored test alone" must never be a false claim.
+// An inline block shares its test binary with the source's own tests, so the
+// unit the engine names for the authored test (the library) also runs the
+// developer's tests. Each row that can select tests by exact name narrows the
+// authored pass to the block's own tests — plus the reach canary, which the
+// positive control lands under the same module — and only then is the pass
+// recorded alone; the command shape for each row is pinned here. A row that
+// cannot narrow the command runs the beside-the-selection command, and the
+// verdict does not say alone.
+func TestInlineAuthoredAloneRunsOnlyCorralsTests(t *testing.T) {
+	root, _ := filepath.Abs("../lang/testdata/runners/src/units/cargo")
+	src := "pub fn double(x: i32) -> i32 { x * 2 }\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n    #[test]\n    fn own() { assert_eq!(double(2), 4); }\n}\n"
+	mutants := []adequacy.Mutant{{ID: "m1", Search: "x * 2", Replace: "x * 2 /* KILL */", Span: golang.LineRange{Start: 1, End: 1}}}
+	ids := "extra::corral_tests::kills extra::corral_tests::corral_reach_canary"
+	for _, tc := range []struct {
+		row, base string
+		codePath  string
+		unit      string
+		want      string
+		alone     bool
+	}{
+		{"cargo-test", "cargo test", "b/src/extra.rs", "units-b/lib", "cargo test -p units-b --lib -- --exact " + ids, true},
+		{"cargo-nextest", "cargo nextest run", "b/src/extra.rs", "units-b", "cargo nextest run -E ((binary_id(=units-b))) & (test(=extra::corral_tests::kills) | test(=extra::corral_tests::corral_reach_canary))", true},
+		// The library compiles the file, but no module path names it (a
+		// file name that is no Rust identifier), so no test id can be
+		// written for the block: the pass is not alone.
+		{"cargo-test", "cargo test", "b/src/my-mod.rs", "units-b/lib", "", false},
+	} {
+		t.Run(tc.row+" "+tc.codePath, func(t *testing.T) {
+			codePath := tc.codePath
+			landing := AuthoredLanding{
+				Landing:  pairing.Landing{Path: codePath, Shape: pairing.Inline, Label: "inline", Into: true, DeclarationsRead: true, OwnModule: true},
+				Existing: src,
+			}
+			block := golang.LandBody(landing.Landing, src, "#[test]\nfn kills() { assert_eq!(double(3), 6); }")
+			sel := golang.Selection{Method: testmap.MethodUnitEvidence, Of: 1, Base: adequacy.ShellSplit(tc.base), Tests: []string{tc.unit}}
+			smap := testmap.Map{Method: testmap.MethodUnitEvidence, Runner: tc.row}
+			j := &inlineUnitJail{codePath: codePath}
+			s := JailScorer{Jail: j, Lang: "rust", RepoDir: root, Selection: sel, SelectionMap: smap, DevTestPath: codePath, Landing: landing,
+				BaseFiles: map[string]string{codePath: src, "b/Cargo.toml": "[package]\nname = \"units-b\"\n"}}
+			rs := RunSpec{Lang: "rust", CodePath: codePath, RepoDir: root, TestCmd: tc.base, Selection: sel, SelectionMap: smap, DevTestPath: codePath, Landing: landing, AuthoredTestPath: s.AuthoredTestPath(codePath)}
+			if got := AuthoredAlone(rs); got != tc.alone {
+				t.Fatalf("AuthoredAlone = %v, want %v", got, tc.alone)
+			}
+			rep, err := s.ScoreAuthoredReport(context.Background(), codePath, src, block, mutants, tc.base)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !tc.alone {
+				if got := rep.PerMutant["m1"]; got.Rule == RuleAuthoredAlone {
+					t.Errorf("a pass that cannot narrow recorded %+v as alone", got)
+				}
+				return
+			}
+			if len(j.cmds) == 0 {
+				t.Fatal("the authored pass ran nothing")
+			}
+			for i, c := range j.cmds {
+				if got := strings.Join(c, " "); got != tc.want {
+					t.Errorf("run %d: %s\nwant      %s", i, got, tc.want)
+				}
+			}
+			if got := rep.PerMutant["m1"]; got.Rule != RuleAuthoredAlone || !slices.Contains(rep.Killed, "m1") || rep.AuthoredTestUnreached {
+				t.Errorf("m1 grading %+v, killed %v, unreached %v: want killed by the authored test alone", got, rep.Killed, rep.AuthoredTestUnreached)
 			}
 		})
 	}

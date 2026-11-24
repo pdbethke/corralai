@@ -51,12 +51,14 @@ func pluginFor(codePath string) (golang.Plugin, error) {
 // For a language with an Inline rule (Rust) Primary IS the source, so this
 // returns codePath itself, and a workspace built from it would overwrite the
 // code under test. Nothing here prevents that; lang.CheckTestLanding does,
-// refusing such a file at every entry that can start a run (Driver.StartRun,
-// the brain's AdvPoolRuntime.StartRun, certify --local's resolveAuditPlugin)
-// before this is ever called — see that function's doc for the list and why
-// the condition is derived from the landing rather than a language name. A
-// Rust file those doors admit has a Declared landing, and its authored test
-// never comes here: authoredTestPath answers it from the AuthoredLanding.
+// refusing such a file at every entry with no repository to read its
+// landing from (the brain's AdvPoolRuntime.StartRun, certify --adversarial,
+// single-file certify --local) before this is ever called — see that
+// function's doc for the list and why the condition is derived from the
+// landing rather than a language name. A Rust file the repository doors
+// admit has a Declared or an Inline landing, and its authored test never
+// comes here: authoredTestPath answers it from the AuthoredLanding, and an
+// Inline one rides the code itself (AuthoredLanding.authored).
 func advPoolTestPath(codePath string) string {
 	if p, err := pluginFor(codePath); err == nil {
 		if c, ok := pairing.Primary(p.TestRules(), codePath); ok {
@@ -803,7 +805,20 @@ func (s JailScorer) scoreAuthoredReport(ctx context.Context, codePath, code, tes
 	// during this pass used to count as the authored test proving a gap.
 	if r, ok := s.selectionRow(); ok {
 		path := authoredTestPath(s.Landing, codePath, s.DevTestPath, s.BaseFiles)
-		if alone, aerr := testmap.AuthoredTestCmd(s.SelectionMap, golang.Selection{Base: s.Selection.Base}, r, base, s.RepoDir, path); aerr == nil {
+		alone, aerr := testmap.AuthoredTestCmd(s.SelectionMap, golang.Selection{Base: s.Selection.Base}, r, base, s.RepoDir, path)
+		if aerr == nil && s.Landing.Inline(codePath) {
+			// The unit holding an inline block also holds the file's own
+			// tests: alone only once narrowed to the block's (inlineAlone).
+			// The verdict asks the same question with the canary alone
+			// (selectionDisclosure); a block whose own tests then cannot be
+			// named is an error, never a wider run under the narrower claim.
+			if _, aerr = inlineAlone(s.Landing, r, s.RepoDir, codePath, code, alone); aerr == nil {
+				if alone, err = inlineAlone(s.Landing, r, s.RepoDir, codePath, code, alone, test); err != nil {
+					return adequacy.Report{}, err
+				}
+			}
+		}
+		if aerr == nil {
 			if alone, err = s.exclude(alone, true, x); err != nil {
 				return adequacy.Report{}, err
 			}
@@ -1286,7 +1301,12 @@ func selectionDisclosure(rs RunSpec) (dev, authored string, alone bool) {
 		// this rule with no files to collide with.
 		path = authoredTestPath(rs.Landing, rs.CodePath, rs.DevTestPath, nil)
 	}
-	_, aloneErr := testmap.AuthoredTestCmd(rs.SelectionMap, golang.Selection{Base: sel.Base}, r, base, rs.RepoDir, path)
+	aloneCmd, aloneErr := testmap.AuthoredTestCmd(rs.SelectionMap, golang.Selection{Base: sel.Base}, r, base, rs.RepoDir, path)
+	if aloneErr == nil && rs.Landing.Inline(rs.CodePath) {
+		// What the authored pass narrows to (inlineAlone), asked with the
+		// positive control's block, which is all the spec holds.
+		_, aloneErr = inlineAlone(rs.Landing, r, rs.RepoDir, rs.CodePath, rs.Landing.Existing, aloneCmd)
+	}
 	if aloneErr == nil {
 		return dev, "", true
 	}
@@ -1294,6 +1314,46 @@ func selectionDisclosure(rs RunSpec) (dev, authored string, alone bool) {
 		authored = fmt.Sprintf("advpool: the authored test %s could not run alone or beside the selection (%v), so the authored pass runs the whole command", path, err)
 	}
 	return dev, authored, false
+}
+
+// inlineAlone narrows alone — the command the engine built to run the unit
+// that holds an inline landing's authored test — to that test's own tests:
+// those of each block in blocks (as landed) and of the positive control's
+// reach canary, landed on target as verifyAuthoredTestReaches lands it, each
+// by its exact id (lang.InlineTestIDs) through the row's SelectCmd.
+//
+// It exists because an inline block shares its test binary with the
+// source's own tests (a Rust library unit runs every `mod tests` of the
+// crate), so the unit alone is not "the authored test alone": a kill there
+// could be the developer's test, credited to corral's. Narrowed, the claim
+// is true again. A row with no SelectCmd, or ids that cannot be named (a
+// file no module path names, a block whose tests cannot be listed), is an
+// error: the pass is then not recorded alone.
+func inlineAlone(l AuthoredLanding, r golang.Runner, repoDir, codePath, target string, alone []string, blocks ...string) ([]string, error) {
+	if r.SelectCmd == nil {
+		return nil, fmt.Errorf("advpool: the authored test lands in %s itself, whose unit also runs the file's own tests, and the %s runner cannot run tests by name, so the authored test cannot run alone", codePath, r.ID)
+	}
+	canary, err := golang.ReachCanaryBlock(l.Landing, target)
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for _, b := range append(slices.Clone(blocks), canary) {
+		got, err := golang.InlineTestIDs(repoDir, codePath, b)
+		if err != nil {
+			return nil, fmt.Errorf("advpool: the authored test lands in %s itself, whose unit also runs the file's own tests, and its tests cannot be named apart from them: %w", codePath, err)
+		}
+		for _, id := range got {
+			if !slices.Contains(ids, id) {
+				ids = append(ids, id)
+			}
+		}
+	}
+	out, ok := r.SelectCmd(alone, ids)
+	if !ok {
+		return nil, fmt.Errorf("advpool: the authored test lands in %s itself, whose unit also runs the file's own tests, and the %s runner cannot narrow %v to its tests %v", codePath, r.ID, alone, ids)
+	}
+	return out, nil
 }
 
 // AuthoredTestPath is where this scorer writes the authored test for

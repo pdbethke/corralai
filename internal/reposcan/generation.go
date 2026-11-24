@@ -545,7 +545,22 @@ package reposcan
 // whole, so its passing cases proved nothing; now they can prove a survivor.
 // Given its own generation because "52" may reach main before it. Behaviour
 // bump; the shape is unchanged.
-const VerdictGeneration = "53"
+// "54" (2026-11-24): a Rust source whose tests are inline, or that declares
+// no test module, is audited: its authored test is appended to the code each
+// grading run writes (adequacy.WithInlineTest), lang.CheckTestLanding admits
+// that landing, and Rust's unit evidence adds such a file to the audit when
+// a unit executes it. A "53" scan refused every such file before pairing
+// (test-landing-not-built), so no earlier verdict exists for one: a "53"
+// record says nothing about it, and it is not a cache entry to reuse. A Rust
+// file "53" did audit (one whose `mod` declaration loads a separate test
+// file) may sit a different exam too: a mutant whose edit overlaps an
+// inline test module the source also holds is invalid
+// (adequacy.WithEvidenceLines), where "53" graded it. For the newly audited
+// files, the inline positive control appends a landed test that always
+// fails, and an authored pass recorded alone runs only corral's block, by
+// exact test name (lang.Runner.SelectCmd), where the library unit would
+// also run the file's own tests. Behaviour bump; the shape is unchanged.
+const VerdictGeneration = "54"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

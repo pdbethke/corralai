@@ -195,15 +195,20 @@ const (
 	// never counted alongside ReasonUncovered/ReasonImportOnly, and never
 	// worded as though the tests failed at anything.
 	ReasonNoExecutableCode = "no executable code"
-	// ReasonTestLandingNotBuilt marks a source file corral cannot audit yet
-	// because a test for it would be written over the file itself: its
-	// landing is the source (a Rust file whose tests are inline, or that
-	// declares no separate test module), and the landing that composes an
-	// authored test INTO a source is not built. A Rust file whose own
-	// declaration loads a separate test file lands there and is NOT this.
-	// See lang.CheckTestLanding. Applied by Enumerate before pairing,
-	// so such a file is never a candidate — whether or not it has a test —
-	// and no ranking, --top slot, selection language or jail is spent on it.
+	// ReasonTestLandingNotBuilt marks a source file corral cannot audit
+	// because its authored test's landing cannot be admitted
+	// (lang.CheckTestLanding): today, only a Rust source whose test-module
+	// declaration names a file outside the repository, which corral never
+	// reads. Applied by Enumerate before pairing, so such a file is never a
+	// candidate — whether or not it has a test — and no ranking, --top
+	// slot, selection language or jail is spent on it.
+	//
+	// Until 2026-11-24 it also marked every Rust source whose tests are
+	// inline or that declares no separate test module, because a test for
+	// it would have been written over the file itself; the inline landing
+	// (the block appended to the code each run writes) admits those, and
+	// recorded entries from before carry this reason for them. The string
+	// is kept as it is for that reason.
 	ReasonTestLandingNotBuilt = "test-landing-not-built"
 	// ReasonDeclarationsUnreadable marks a source whose landing could not
 	// be found because THIS BUILD cannot read the test-module declarations
@@ -216,8 +221,8 @@ const (
 	// ReasonEvidencePairingNotBuilt marks a source no filename pairs that a
 	// green test unit EXECUTED, in a language whose evidence cannot add a
 	// file to the audit (lang.PromotesByEvidence false). No shipped language
-	// reaches it since Swift's evidence promotes: Rust, the one that does
-	// not, excludes such a source before pairing (test-landing-not-built).
+	// reaches it: Swift's evidence promotes since a test target has a
+	// landing, and Rust's since the inline landing (2026-11-24).
 	// It is ReasonNoPairedTest made truthful about the
 	// measurement: left as no-paired-test, the record and the --json output
 	// said nothing ran the file when the evidence had run it. Applied by
@@ -553,10 +558,10 @@ func EnumerateWithTests(root string, tests *TestMap) ([]Candidate, []Exclusion, 
 			excl = append(excl, Exclusion{Path: rel, Reason: ReasonTestSupport})
 			continue
 		}
-		// A file whose authored test corral would write over the file itself
-		// — its landing (lang.TestLanding) is the source: a Rust file whose
-		// tests are inline or that declares no separate test module — cannot
-		// be audited, paired or not. Classified HERE, before pairing, ranking
+		// A file whose authored test's landing cannot be admitted
+		// (lang.CheckTestLanding: a Rust test module declared outside the
+		// repository, or declarations this build cannot read) cannot be
+		// audited, paired or not. Classified HERE, before pairing, ranking
 		// and every scan-wide decision that reads the candidate list: left a
 		// candidate, it took --top slots from files corral can grade, made a
 		// mixed repository "span" a language nothing can instrument (which
@@ -565,7 +570,10 @@ func EnumerateWithTests(root string, tests *TestMap) ([]Candidate, []Exclusion, 
 		// a networked `cargo vendor` — for a language with nothing to audit.
 		// The landing reads the same walk and the same declarations the
 		// pairing below does (universeSources), so a file the scan admits is
-		// one whose landing every later door derives the same way. See
+		// one whose landing every later door derives the same way. A source
+		// whose tests are inline, or that declares no test module, lands in
+		// itself and is admitted (since 2026-11-24): it pairs to itself
+		// below, or is a no-paired-test file the evidence can promote. See
 		// lang.CheckTestLanding, the one place the question is answered.
 		landing, lerr := lang.TestLanding(rel, universeSources(root, present, presentList, diskTestModules(p, root)))
 		if lerr != nil {

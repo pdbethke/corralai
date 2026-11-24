@@ -4,6 +4,7 @@ package lang
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -73,6 +74,92 @@ func (rustPlugin) LandTest(body string, depth int, target string) string {
 // that the block broke the build. See TestLander.ReachCanaryTest.
 func (rustPlugin) ReachCanaryTest() string {
 	return "#[test]\nfn corral_reach_canary() {\n    panic!(\"corral positive control: this test must fail when it runs\");\n}"
+}
+
+// InlineTestIDs is the libtest ids of landed's tests once the block is
+// appended to codePath: the module path the library gives codePath, the
+// block's own module and each test, joined with "::" (`inner::extract::
+// corral_tests::kills`). They are exact, which is the point: libtest's name
+// filter without --exact matches a substring, so the module path alone
+// (`corral_tests::`) would also select a corral_tests module another file
+// of the crate already holds, and the authored pass would not be alone.
+//
+// The module path is read from the file's place, as cargo's default module
+// layout gives it (src/lib.rs is the crate root; src/a/b.rs and
+// src/a/b/mod.rs are a::b), for a file the library compiles
+// (rustUnitTarget's lib case, the same place the authored pass's unit is
+// named from). A file mounted elsewhere by a `#[path]` attribute has a
+// different path; its ids then select nothing, the reach canary is not run
+// either, and the positive control reports the authored test unreached
+// rather than crediting it. A file outside the library (a binary's), a
+// name that is no Rust identifier, or a block whose tests cannot be listed
+// (TestNamesInSource) has no ids.
+func (rustPlugin) InlineTestIDs(repoRoot, codePath, landed string) ([]string, error) {
+	mod, err := rustLibModulePath(repoRoot, codePath)
+	if err != nil {
+		return nil, err
+	}
+	names := rustPlugin{}.TestNamesInSource("", landed)
+	if len(names) == 0 {
+		return nil, fmt.Errorf("lang: no test can be named in the block landed in %s, so its tests cannot be run apart from the file's own", codePath)
+	}
+	ids := make([]string, len(names))
+	for i, n := range names {
+		ids[i] = rustJoin(mod, n)
+	}
+	return ids, nil
+}
+
+// rustLibModulePath is the module path the library gives codePath, from its
+// place under the package's src/ (see InlineTestIDs).
+func rustLibModulePath(repoRoot, codePath string) (string, error) {
+	f, ok := repoRelative(codePath)
+	_, kind, _, unit := rustUnitTarget(repoRoot, codePath)
+	if !ok || !unit || kind != "lib" {
+		return "", fmt.Errorf("lang: %s is not a file the library of its Cargo package compiles, so no module path names it", codePath)
+	}
+	_, dir, err := owningCrateDir(repoRoot, f)
+	if err != nil {
+		return "", err
+	}
+	root, err := filepath.Abs(repoRoot)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(filepath.Join(dir, "src"), filepath.Join(root, filepath.FromSlash(f)))
+	if err != nil {
+		return "", err
+	}
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	last := len(parts) - 1
+	switch {
+	case len(parts) == 1 && parts[0] == "lib.rs":
+		return "", nil
+	case parts[last] == "mod.rs":
+		parts = parts[:last]
+	default:
+		parts[last] = strings.TrimSuffix(parts[last], ".rs")
+	}
+	for _, p := range parts {
+		if !rustIdentifier(p) {
+			return "", fmt.Errorf("lang: %s is not a module name, so no module path names %s", p, codePath)
+		}
+	}
+	return strings.Join(parts, "::"), nil
+}
+
+// rustIdentifier reports whether s is a Rust identifier as a module file's
+// name can spell one: identifier bytes throughout, not starting with a digit.
+func rustIdentifier(s string) bool {
+	if !isIdent(s) {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if !identByte(s[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 // rustFreeModuleName is corral_tests, or the first corral_tests_N (N ≥ 2)

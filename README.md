@@ -98,13 +98,17 @@ What each part is for, and the limits that apply:
   `RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo rustup-init
   --no-modify-path --default-toolchain <version>`, with `/usr/local/cargo/bin`
   on `PATH`.
-- **Only sources whose tests live in a separate file can be audited.** That
-  means a file declaring `#[cfg(test)] #[path = "foo_tests.rs"] mod tests;` or
-  a bare `mod tests;`. corral appends its test to that file as a
-  `mod corral_tests { use super::super::*; … }` block. A file whose tests are
-  inline (`mod tests { … }`) is listed as `test-landing-not-built`. It is never
-  audited, because the test would have to be written into the source under
-  audit. `certify --local` refuses a `.rs` file unless you pass `--repo-dir`.
+- **Where corral's test goes.** For a source whose tests live in a separate
+  file (`#[cfg(test)] #[path = "foo_tests.rs"] mod tests;` or a bare
+  `mod tests;`), corral appends its test to that file as a
+  `mod corral_tests { use super::super::*; … }` block. For a source whose
+  tests are inline (`mod tests { … }`), or that has no test module, it appends
+  a `mod corral_tests { use super::*; … }` block to the source itself, in the
+  code each run writes; a mutant that edits the file's own tests is not
+  graded. This inline landing has so far run only in unit tests and
+  fixtures. A test module declared outside the repository is listed as
+  `test-landing-not-built` and not audited. `certify --local` refuses a `.rs`
+  file unless you pass `--repo-dir`.
 - **What Rust does not have yet:** a coverage pre-flight, a verified fail-fast
   flag, salvage of a partly failing authored test, and `--matrix`. The critic
   is still given every test name, and each of its "this test can never fail"

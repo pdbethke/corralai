@@ -118,3 +118,40 @@ func TestResolveListedTest(t *testing.T) {
 		t.Error("an id listed twice (two test binaries) must not resolve")
 	}
 }
+
+// SelectCmd narrows a one-unit command to exactly the named tests, by exact
+// name, so an inline block's tests run without the source's own tests that
+// share their binary: libtest takes `--exact` and one filter per id after
+// `--` (several filters are ORed; checked by hand on cargo 1.90), and nextest
+// folds the unit's own `-E` into one filterset intersected with the ids
+// (nextest unions separate filtersets). A command each row cannot read is
+// refused, as SingleCmd and DeselectCmd refuse it.
+func TestRustSelectCmdRunsExactlyTheNamedTests(t *testing.T) {
+	ids := []string{"inner::corral_tests::kills", "inner::corral_tests::corral_reach_canary"}
+	for _, c := range []struct {
+		row  string
+		argv []string
+		want []string
+		ok   bool
+	}{
+		{"cargo-test", []string{"cargo", "test", "-p", "units-b", "--lib"},
+			[]string{"cargo", "test", "-p", "units-b", "--lib", "--", "--exact", "inner::corral_tests::kills", "inner::corral_tests::corral_reach_canary"}, true},
+		{"cargo-test", []string{"cargo", "test", "-p", "units-b", "--lib", "--", "--test-threads", "1"},
+			[]string{"cargo", "test", "-p", "units-b", "--lib", "--", "--test-threads", "1", "--exact", "inner::corral_tests::kills", "inner::corral_tests::corral_reach_canary"}, true},
+		// A name filter of the operator's would be ORed with the ids.
+		{"cargo-test", []string{"cargo", "test", "-p", "units-b", "--lib", "--", "adds"}, nil, false},
+		{"cargo-nextest", []string{"cargo", "nextest", "run", "-E", "binary_id(=units-b)"},
+			[]string{"cargo", "nextest", "run", "-E", "((binary_id(=units-b))) & (test(=inner::corral_tests::kills) | test(=inner::corral_tests::corral_reach_canary))"}, true},
+		{"cargo-nextest", []string{"cargo", "nextest", "run", "--partition", "count:1/2", "-E", "binary_id(=units-b)"}, nil, false},
+	} {
+		got, ok := rowByID(t, c.row).SelectCmd(c.argv, ids)
+		if ok != c.ok || !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s %v: SelectCmd = %v, %v; want %v, %v", c.row, c.argv, got, ok, c.want, c.ok)
+		}
+	}
+	for _, row := range []string{"cargo-test", "cargo-nextest"} {
+		if _, ok := rowByID(t, row).SelectCmd([]string{"cargo", "test"}, nil); ok {
+			t.Errorf("%s: an empty id list selects nothing and must be refused", row)
+		}
+	}
+}

@@ -239,6 +239,12 @@ func userHomeRustupNeedsSystemToolchain(name string) error {
 // and their branches (SignatureReader).
 func (rustPlugin) ReadsSignatures() {}
 
+// EvidencePromotes: a Rust source no name pairs — one that declares no test
+// module — is added to the audit when a unit executes it, and its authored
+// test lands in the source itself (lang.CheckTestLanding admits the inline
+// landing since 2026-11-24).
+func (rustPlugin) EvidencePromotes() {}
+
 func (rustPlugin) PromptLang() string { return "Rust" }
 
 func (rustPlugin) TestWriterSystem() string {

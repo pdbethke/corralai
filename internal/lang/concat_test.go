@@ -505,3 +505,29 @@ func TestJavaScriptConcatUnifiesATypeAndAValueImportOfOneName(t *testing.T) {
 		t.Errorf("want %s (the value import wins):\n%s", want, merged)
 	}
 }
+
+// TestInlineProvenTestsMergeIntoOneBlock: several tests proven for one
+// inline-tested Rust source are each landed at depth 0 (`use super::*`) onto
+// the source; the operator is handed ONE corral_tests block to append to the
+// source, never several modules of the same name, which would not compile.
+func TestInlineProvenTestsMergeIntoOneBlock(t *testing.T) {
+	r := rustPlugin{}
+	source := "pub fn double(x: i32) -> i32 { x * 2 }\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n    #[test]\n    fn own() { assert_eq!(double(2), 4); }\n}\n"
+	a := r.LandTest("#[test]\nfn kills_three() { assert_eq!(double(3), 6); }", 0, source)
+	b := r.LandTest("#[test]\nfn kills_zero() { assert_eq!(double(0), 0); }", 0, source)
+	merged, extra := ConcatAuthored(r, []AuthoredPart{{MutantID: "s0/m1", Source: a}, {MutantID: "s0/m2", Source: b}})
+	if len(extra) != 0 {
+		t.Fatalf("both proven tests must merge, %d carried out: %+v", len(extra), extra)
+	}
+	if strings.Count(merged, "mod corral_tests {") != 1 || strings.Count(merged, "use super::*;") != 1 || strings.Count(merged, "#[cfg(test)]") != 1 {
+		t.Errorf("want one corral_tests block reaching the source with use super::*:\n%s", merged)
+	}
+	for _, fn := range []string{"fn kills_three()", "fn kills_zero()"} {
+		if !strings.Contains(merged, fn) {
+			t.Errorf("merged block lost %s:\n%s", fn, merged)
+		}
+	}
+	if strings.Contains(merged, "mod tests") || strings.Contains(merged, "fn own()") {
+		t.Errorf("the source's own tests are never part of the handed-back block:\n%s", merged)
+	}
+}

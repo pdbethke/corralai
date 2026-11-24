@@ -1277,6 +1277,22 @@ func scopeAuditInput(in localAuditInput, plug lang.Plugin) (localAuditInput, err
 	return in, nil
 }
 
+// devTestKeyIn is the workspace key of the run's dev test: repo-relative and
+// slash-separated, as codeKey is. "" when the run has none — a source whose
+// authored test lands in itself and that declares no test module
+// (lang.DevTestOf) — and then no key is written into any workspace: a key
+// computed from "" would be the repository root itself.
+func devTestKeyIn(in jailWiringInput) (string, error) {
+	if strings.TrimSpace(in.testPath) == "" {
+		return "", nil
+	}
+	dk, err := filepath.Rel(in.repoDir, in.fsPath(in.testPath))
+	if err != nil || strings.HasPrefix(dk, "..") {
+		return "", fmt.Errorf("--test %s is not inside --repo-dir %s", in.testPath, in.repoDir)
+	}
+	return filepath.ToSlash(dk), nil
+}
+
 // auditJailPrep is the jail-side of one file's audit: the resolved test path,
 // the code + dev-test bytes, and the jail-backed scorer/validator/enumerator
 // wiring. cleanup releases any Go-vendor staging dir and is always non-nil.
@@ -1317,8 +1333,32 @@ func prepareAuditJail(ctx context.Context, in localAuditInput, plug lang.Plugin,
 	if err != nil {
 		return p, auditUsageErr("reading --code %s: %v", in.codePath, err)
 	}
+	// The landing the door admitted, re-derived by the same call and
+	// re-checked, so the wiring below writes exactly where the check looked.
+	// Asked before the dev test, because for a landing in the source itself
+	// the landing decides what the developer's test is (lang.DevTestOf).
+	landing, err := auditLanding(in)
+	if err != nil {
+		return p, err
+	}
 	tp := strings.TrimSpace(in.testPath)
-	if tp == "" {
+	if own, decided := lang.DevTestOf(in.codePath, landing); decided {
+		// The authored test lands in the source itself. The developer's test
+		// is the source when it declares its own inline test module, and
+		// there is none when it declares no test module: the file is graded
+		// by the tests the evidence (or the command) says execute it, and no
+		// other file is named its test. A path handed in (--test, or a scan's
+		// most-covering test file for an evidence-promoted file) is not used
+		// as one, and that is said rather than done silently.
+		if tp != "" && filepath.Clean(tp) != filepath.Clean(in.codePath) {
+			what := "none: it declares no test module, so it is graded by the tests that execute it"
+			if own != "" {
+				what = "its own inline test module"
+			}
+			fmt.Fprintf(stdout, "  dev test: %s (%s); %s is not used as its test file, because the authored test lands in %s itself\n", in.codePath, what, tp, in.codePath)
+		}
+		tp = own
+	} else if tp == "" {
 		// --test always overrides everything below it; only reached when the
 		// operator named no test at all. searchRoot is where FindTest resolves
 		// its candidates AND its recursive fallback against: repoDir in
@@ -1339,9 +1379,11 @@ func prepareAuditJail(ctx context.Context, in localAuditInput, plug lang.Plugin,
 		}
 		tp = found
 	}
-	devTest, err := os.ReadFile(fsPath(tp)) // #nosec G304 -- operator-supplied (or convention/search-derived) test path
-	if err != nil {
-		return p, auditUsageErr("reading test %s: %v (pass --test to override)", tp, err)
+	var devTest []byte
+	if tp != "" {
+		if devTest, err = os.ReadFile(fsPath(tp)); err != nil { // #nosec G304 -- operator-supplied (or convention/search-derived) test path
+			return p, auditUsageErr("reading test %s: %v (pass --test to override)", tp, err)
+		}
 	}
 
 	// Resolve the jail. NEVER fall back to unsandboxed — resolveLocalJail fails
@@ -1374,12 +1416,6 @@ func prepareAuditJail(ctx context.Context, in localAuditInput, plug lang.Plugin,
 		}
 	}
 
-	// The landing the door admitted, re-derived by the same call and
-	// re-checked, so the wiring below writes exactly where the check looked.
-	landing, err := auditLanding(in)
-	if err != nil {
-		return p, err
-	}
 	// The runner behind the command, resolved ONCE, here, where the
 	// repository is on disk: the package script `npm test` runs, and the
 	// operator's --runner. Everything downstream carries this answer.
@@ -2842,11 +2878,11 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		if rerr != nil || strings.HasPrefix(ck, "..") {
 			return w, fmt.Errorf("--code %s is not inside --repo-dir %s", in.codePath, in.repoDir)
 		}
-		dk, rerr := filepath.Rel(in.repoDir, in.fsPath(in.testPath))
-		if rerr != nil || strings.HasPrefix(dk, "..") {
-			return w, fmt.Errorf("--test %s is not inside --repo-dir %s", in.testPath, in.repoDir)
+		dk, derr := devTestKeyIn(in)
+		if derr != nil {
+			return w, derr
 		}
-		w.codeKey, w.devTestKey = filepath.ToSlash(ck), filepath.ToSlash(dk)
+		w.codeKey, w.devTestKey = filepath.ToSlash(ck), dk
 		if w.landing, err = authoredLandingFor(in.landing, in.repoDir, in.fsPath); err != nil {
 			return w, err
 		}
@@ -3008,11 +3044,11 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		if rerr != nil || strings.HasPrefix(ck, "..") {
 			return w, fmt.Errorf("--code %s is not inside --repo-dir %s", in.codePath, in.repoDir)
 		}
-		dk, rerr := filepath.Rel(in.repoDir, in.fsPath(in.testPath))
-		if rerr != nil || strings.HasPrefix(dk, "..") {
-			return w, fmt.Errorf("--test %s is not inside --repo-dir %s", in.testPath, in.repoDir)
+		dk, derr := devTestKeyIn(in)
+		if derr != nil {
+			return w, derr
 		}
-		w.codeKey, w.devTestKey = filepath.ToSlash(ck), filepath.ToSlash(dk)
+		w.codeKey, w.devTestKey = filepath.ToSlash(ck), dk
 		if w.landing, err = authoredLandingFor(in.landing, in.repoDir, in.fsPath); err != nil {
 			return w, err
 		}
@@ -3020,10 +3056,11 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		// on-disk copy, but explicit so a mutant overlay targets the right key).
 		// A private copy: the seed may be SHARED across concurrent jobs and must
 		// never be mutated in place.
-		repoFiles := workspaceFromSeed(seed, map[string]string{
-			w.codeKey:    string(in.code),
-			w.devTestKey: string(in.devTest),
-		})
+		authoritative := map[string]string{w.codeKey: string(in.code)}
+		if w.devTestKey != "" {
+			authoritative[w.devTestKey] = string(in.devTest)
+		}
+		repoFiles := workspaceFromSeed(seed, authoritative)
 		jail, gc := newGradingJail(in.iso, in.timeout, depBinds, gradingPlugin(in.langName), in.inv.WithArgv(in.checkArgv), in.checkArgv)
 		w.closeWithCleanup(jail, in.runCache, in.capFloor, gc, in.testTimeout)
 		// enumerator backs the tests×mutants matrix's test-listing step

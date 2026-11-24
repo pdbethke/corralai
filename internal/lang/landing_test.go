@@ -64,12 +64,16 @@ func TestCheckTestLandingRefusesOnlyWhereTheTestWouldOverwriteTheSource(t *testi
 	}
 }
 
-// TestADeclaredRustSourceIsAdmittedAndAnInlineOneIsNot is 7a's line: a Rust
-// file whose test module is a separate file the source declares lands there
-// and is admitted; one whose tests are in the file itself, or that declares
-// none, still lands on itself and is refused as "not built yet"; one whose
-// declaration leaves the repository is refused naming that path.
-func TestADeclaredRustSourceIsAdmittedAndAnInlineOneIsNot(t *testing.T) {
+// TestInlineLandingIsAdmitted is 7b's line: a Rust file whose test module is
+// a separate file the source declares lands there; one whose tests are in
+// the file itself, or that declares none, lands on itself — and all three are
+// admitted, because the inline block rides every run of the code
+// (adequacy.WithInlineTest) and a mutant that edits the source's own tests is
+// invalid (adequacy.WithEvidenceLines). What stays refused is what corral
+// cannot read: a declaration that leaves the repository, a build that cannot
+// read declarations, and an entry with no repository to read them from.
+// OwnModule says which inline landings hold the developer's own tests.
+func TestInlineLandingIsAdmitted(t *testing.T) {
 	src := memSources(
 		[]string{"src/foo.rs", "src/foo_tests.rs", "src/bar.rs", "src/baz.rs"},
 		map[string][]pairing.TestModule{
@@ -78,26 +82,21 @@ func TestADeclaredRustSourceIsAdmittedAndAnInlineOneIsNot(t *testing.T) {
 		})
 	for _, tc := range []struct {
 		code, want string
-		admit      bool
-		says       string
+		own        bool
 	}{
-		{"src/foo.rs", "src/foo_tests.rs", true, ""},
-		{"src/bar.rs", "src/bar.rs", false, "not built yet"},
-		{"src/baz.rs", "src/baz.rs", false, "not built yet"},
+		{"src/foo.rs", "src/foo_tests.rs", true},
+		{"src/bar.rs", "src/bar.rs", true},
+		{"src/baz.rs", "src/baz.rs", false},
 	} {
 		l, err := TestLanding(tc.code, src)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if l.Path != tc.want {
-			t.Errorf("%s lands at %q, want %q", tc.code, l.Path, tc.want)
+		if l.Path != tc.want || l.OwnModule != tc.own {
+			t.Errorf("%s lands at %q (own module %v), want %q (%v)", tc.code, l.Path, l.OwnModule, tc.want, tc.own)
 		}
-		err = CheckTestLanding(tc.code, l)
-		if (err == nil) != tc.admit {
-			t.Errorf("%s: admitted=%v, want %v (%v)", tc.code, err == nil, tc.admit, err)
-		}
-		if err != nil && (!strings.Contains(err.Error(), tc.says) || !strings.Contains(err.Error(), "test landing is not built")) {
-			t.Errorf("%s: refusal %q does not say %q", tc.code, err, tc.says)
+		if err := CheckTestLanding(tc.code, l); err != nil {
+			t.Errorf("%s: refused: %v", tc.code, err)
 		}
 	}
 
@@ -105,6 +104,70 @@ func TestADeclaredRustSourceIsAdmittedAndAnInlineOneIsNot(t *testing.T) {
 	err := CheckTestLanding("src/qux.rs", out)
 	if err == nil || !strings.Contains(err.Error(), "../elsewhere_tests.rs") || !strings.Contains(err.Error(), "outside") {
 		t.Errorf("a declaration outside the root: err = %v, want it named", err)
+	}
+	unreadable := pairing.Landing{Path: "src/qux.rs", Into: true, DeclarationsUnreadable: true}
+	if err := CheckTestLanding("src/qux.rs", unreadable); err == nil || !strings.Contains(err.Error(), "cannot read") {
+		t.Errorf("declarations this build cannot read: err = %v, want refused saying so", err)
+	}
+	if err := CheckTestLanding("src/qux.rs", pairing.Landing{}); err == nil || !strings.Contains(err.Error(), "--repo-dir") {
+		t.Errorf("no repository to read declarations from: err = %v, want refused saying so", err)
+	}
+}
+
+// TestTheDevTestOfAnInlineLandingIsTheSourceOrNone: where the authored test
+// lands in the source, the developer's test is decided by the landing, never
+// by a language name or a guessed path: the source itself when it declares
+// its own inline test module, and none when it declares no test module.
+// Any other landing leaves the choice to pairing (decided false).
+func TestTheDevTestOfAnInlineLandingIsTheSourceOrNone(t *testing.T) {
+	for _, tc := range []struct {
+		name, code string
+		l          pairing.Landing
+		want       string
+		decided    bool
+	}{
+		{"inline module", "src/bar.rs", pairing.Landing{Path: "src/bar.rs", Into: true, DeclarationsRead: true, OwnModule: true}, "src/bar.rs", true},
+		{"no test module", "src/baz.rs", pairing.Landing{Path: "src/baz.rs", Into: true, DeclarationsRead: true}, "", true},
+		{"declared file", "src/foo.rs", pairing.Landing{Path: "src/foo_tests.rs", Into: true, DeclarationsRead: true, OwnModule: true, Depth: 1}, "", false},
+		{"path landing", "pkg/a.py", pairing.Landing{Path: "tests/test_a.py"}, "", false},
+	} {
+		got, decided := DevTestOf(tc.code, tc.l)
+		if got != tc.want || decided != tc.decided {
+			t.Errorf("%s: DevTestOf = %q, %v; want %q, %v", tc.name, got, decided, tc.want, tc.decided)
+		}
+	}
+}
+
+// TestInlineTestIDsAreTheLibtestPathsOfTheBlock: a block appended to a
+// library source is run under that source's module path, so its tests'
+// libtest ids are the module path, the block's module and the test name —
+// exact names the runner rows can select by. A source the library does not
+// compile (a binary's), or a block whose tests cannot be listed, has no ids.
+func TestInlineTestIDsAreTheLibtestPathsOfTheBlock(t *testing.T) {
+	cargo, _ := filepath.Abs("testdata/runners/src/units/cargo")
+	block := rustPlugin{}.LandTest("#[test]\nfn kills() {}\n#[test]\nfn more() {}", 0, "")
+	for _, tc := range []struct {
+		code string
+		want []string
+	}{
+		{"b/src/lib.rs", []string{"corral_tests::kills", "corral_tests::more"}},
+		{"b/src/extra.rs", []string{"extra::corral_tests::kills", "extra::corral_tests::more"}},
+		{"b/src/inner/extract.rs", []string{"inner::extract::corral_tests::kills", "inner::extract::corral_tests::more"}},
+		{"b/src/inner/mod.rs", []string{"inner::corral_tests::kills", "inner::corral_tests::more"}},
+	} {
+		got, err := InlineTestIDs(cargo, tc.code, block)
+		if err != nil || !slices.Equal(got, tc.want) {
+			t.Errorf("%s: ids %v (%v), want %v", tc.code, got, err, tc.want)
+		}
+	}
+	if got, err := InlineTestIDs(cargo, "a/src/main.rs", block); err == nil {
+		t.Errorf("a binary's source has no library module path, got %v", got)
+	}
+	if got, err := InlineTestIDs(cargo, "b/src/extra.rs", "#[cfg(test)]\nmod corral_tests {\n"); err == nil {
+		t.Errorf("an unreadable block has no ids, got %v", got)
+	}
+	if got, err := InlineTestIDs(cargo, "b/src/extra.rs", rustPlugin{}.LandTest("fn helper() {}", 0, "")); err == nil {
+		t.Errorf("a block with no test has no ids, got %v", got)
 	}
 }
 

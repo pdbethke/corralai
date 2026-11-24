@@ -1623,9 +1623,9 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	inventory.withUnsized(rankRan, rankedInfo)
 	printLanguageProfile(stdout, reposcan.BuildLanguageProfile(cands, excl))
 	printSearchPairings(stdout, cands)
-	printEvidencePairings(stdout, cands, evidenceIdx)
+	printEvidencePairings(stdout, *repoDir, cands, evidenceIdx)
 	if *dryRun {
-		printWouldAudit(stdout, jobs)
+		printWouldAudit(stdout, *repoDir, jobs)
 	}
 	printExclusions(stdout, excl)
 
@@ -4202,7 +4202,7 @@ func evidencePromotionNote(p lang.Plugin) string {
 // The covering count is the index's own unit: tests for a per-test index
 // (Candidate.CoveringTests), test UNITS for a unit-kind one (UnitsFor),
 // which leaves CoveringTests nil by design.
-func printEvidencePairings(w io.Writer, cands []reposcan.Candidate, idx reposcan.EvidenceIndex) {
+func printEvidencePairings(w io.Writer, repoDir string, cands []reposcan.Candidate, idx reposcan.EvidenceIndex) {
 	var evidenceOnly []reposcan.Candidate
 	for _, c := range cands {
 		if c.TestPath == "" {
@@ -4216,15 +4216,40 @@ func printEvidencePairings(w io.Writer, cands []reposcan.Candidate, idx reposcan
 		}
 		if idx.UnitKind() {
 			n, _ := idx.UnitsFor(c.Path)
-			fmt.Fprintf(w, "    %s paired by evidence: %d covering test unit(s), authored test lands beside %s\n", c.Path, n, c.CoveringTestPath)
+			fmt.Fprintf(w, "    %s paired by evidence: %d covering test unit(s), authored test %s\n", c.Path, n, writtenTestGoes(repoDir, c.Path, c.CoveringTestPath))
 			continue
 		}
 		n := 0
 		if c.CoveringTests != nil {
 			n = *c.CoveringTests
 		}
-		fmt.Fprintf(w, "    %s paired by evidence: %d covering test(s), authored test lands beside %s\n", c.Path, n, c.CoveringTestPath)
+		fmt.Fprintf(w, "    %s paired by evidence: %d covering test(s), authored test %s\n", c.Path, n, writtenTestGoes(repoDir, c.Path, c.CoveringTestPath))
 	}
+}
+
+// writtenTestGoes says where a test authored for an evidence-only candidate
+// is written: appended to the file its landing names (lang.TestLanding) for
+// a landing INTO an existing file — a Rust source that declares no test
+// module is appended to itself — and beside the covering test file
+// otherwise, where the scorer writes it (advpool's authoredTestPath). The
+// covering test of a Rust file can be an integration test the authored test
+// never goes near, so "beside" is said only where it is true. A landing that
+// cannot be read says so rather than falling back to "beside".
+func writtenTestGoes(repoDir, path, covering string) string {
+	p, ok := lang.Detect(path)
+	if !ok {
+		return "lands beside " + covering
+	}
+	l, err := lang.TestLanding(path, reposcan.DiskSources(p, repoDir))
+	switch {
+	case err != nil:
+		return fmt.Sprintf("lands where corral could not read (%v)", err)
+	case !l.Into:
+		return "lands beside " + covering
+	case filepath.Clean(l.Path) == filepath.Clean(path):
+		return "is appended to the file itself"
+	}
+	return "is appended to " + l.Path
 }
 
 func printSearchPairings(w io.Writer, cands []reposcan.Candidate) {
@@ -4309,7 +4334,7 @@ func inScanScope(scope, path string) bool {
 // "below" and listed the exclusions instead. Uncapped, unlike the exclusion
 // listing: the jobs are bounded by --top already, and a reader who asked
 // for --all asked to see every one.
-func printWouldAudit(w io.Writer, jobs []reposcan.Job) {
+func printWouldAudit(w io.Writer, repoDir string, jobs []reposcan.Job) {
 	if len(jobs) == 0 {
 		return
 	}
@@ -4319,7 +4344,7 @@ func printWouldAudit(w io.Writer, jobs []reposcan.Job) {
 		case j.TestPath != "":
 			fmt.Fprintf(w, "    %s (%s) — graded against %s\n", j.Path, j.Lang, j.TestPath)
 		case j.CoveringTestPath != "":
-			fmt.Fprintf(w, "    %s (%s) — graded by the tests that cover it; a written test lands beside %s\n", j.Path, j.Lang, j.CoveringTestPath)
+			fmt.Fprintf(w, "    %s (%s) — graded by the tests that cover it; a written test %s\n", j.Path, j.Lang, writtenTestGoes(repoDir, j.Path, j.CoveringTestPath))
 		default:
 			fmt.Fprintf(w, "    %s (%s)\n", j.Path, j.Lang)
 		}
@@ -4881,7 +4906,7 @@ func reasonGloss(reason string) string {
 	case reposcan.ReasonEvidencePairingNotBuilt:
 		return " — no test is paired with this file by name; a test unit executed it, but adding a file to the audit by that evidence is not built for its language"
 	case reposcan.ReasonTestLandingNotBuilt:
-		return " — corral cannot audit this file yet: its tests live in the file itself (or it declares no separate test module), and the landing that composes a test into its own source is not built, so a test for it would be written over the file itself"
+		return " — corral cannot audit this file: the test module it declares is outside the audited repository, which corral never reads, so where a test for it would go cannot be read"
 	}
 	return ""
 }

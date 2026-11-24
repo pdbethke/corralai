@@ -110,6 +110,15 @@ type Runner struct {
 	// program, or ORed with the operator's own filter, runs a set nobody chose.
 	FailedTests func(output string) []string
 	DeselectCmd func(argv, ids []string) ([]string, bool)
+	// SelectCmd is DeselectCmd's converse: argv — a command the selection
+	// engine built to run one unit — rerun with ONLY the tests ids, each by
+	// its exact name. It refuses as DeselectCmd does (a name filter already
+	// in argv, which the ids would be ORed with; a command it cannot read)
+	// and refuses an empty list. It is what keeps an authored test that
+	// shares its unit with the developer's own tests (an inline Rust block,
+	// lang.InlineTestIDs) running alone. nil on a row whose units hold only
+	// the authored file, where the unit alone already is.
+	SelectCmd func(argv, ids []string) ([]string, bool)
 	// FailedUnits names the units (UnitNoun) the runner's output reports
 	// failing, a file that failed to load included, in report order and each
 	// once, in the spelling ParseUnits gives them; nil when the output names
@@ -444,7 +453,7 @@ var runners = []Runner{
 		// stops at the first failing test binary unless told otherwise.
 		FailFast:     []string{"--fail-fast"},
 		FirstFailure: rustFirstFailure, Flaky: rustFlakyTests, KillerCmd: nextestKillerCmd,
-		FailedTests: rustFailedTests, DeselectCmd: nextestDeselectCmd,
+		FailedTests: rustFailedTests, DeselectCmd: nextestDeselectCmd, SelectCmd: nextestSelectCmd,
 		Disclose: nextestDisclose, PreflightBin: nextestPreflightBin,
 		ListUnits: nextestListUnits, ParseUnits: nextestParseUnits, UnitCmd: oneUnit(nextestUnitsCmd),
 		UnitsCmd: nextestUnitsCmd, UnitForFile: nextestUnitForFile, UnitNoun: "test targets",
@@ -454,7 +463,7 @@ var runners = []Runner{
 		Name: "cargo test", ID: "cargo-test", Languages: []string{"rust"}, Default: true, Words: []string{"cargo"},
 		ListCmd: libtestListCmd, ParseList: libtestParseList, SingleCmd: libtestSingleCmd, ResolveByList: true,
 		FirstFailure: rustFirstFailure, Flaky: rustFlakyTests, KillerCmd: cargoKillerCmd,
-		FailedTests: rustFailedTests, DeselectCmd: cargoDeselectCmd,
+		FailedTests: rustFailedTests, DeselectCmd: cargoDeselectCmd, SelectCmd: cargoSelectCmd,
 		Disclose: libtestDisclose, PreflightBin: libtestPreflightBin,
 		ListUnits: cargoListUnits, ParseUnits: cargoParseUnits, UnitCmd: oneUnit(cargoUnitsCmd),
 		UnitsCmd: cargoUnitsCmd, UnitsCoruns: cargoUnitsCoruns, UnitForFile: cargoUnitForFile, UnitNoun: "test targets",

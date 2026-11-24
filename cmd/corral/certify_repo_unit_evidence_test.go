@@ -511,15 +511,17 @@ func TestUnitPassCachesOnlyAFullyGreenPass(t *testing.T) {
 	})
 }
 
-// A crate whose every source is refused by the landing (inline tests only,
-// semver's shape, Task 11a) leaves the evidence passes no source to run for.
-// They do not run, and the summary says why: before this the scan printed
-// "pairing-only candidacy (no selection evidence)" with no reason at all and
-// no units line, a zero nobody explained.
+// A crate whose every source is refused by the landing leaves the evidence
+// passes no source to run for. They do not run, and the summary says why:
+// before this the scan printed "pairing-only candidacy (no selection
+// evidence)" with no reason at all and no units line, a zero nobody
+// explained. The crate was semver's shape (inline tests only, Task 11a)
+// until the inline landing admitted that (2026-11-24); the refusal left is a
+// test module declared outside the repository.
 func TestEvidencePassThatCannotRunSaysWhy(t *testing.T) {
 	root := t.TempDir()
 	mustWrite(t, filepath.Join(root, "Cargo.toml"), "[package]\nname = \"inl\"\nversion = \"0.1.0\"\nedition = \"2021\"\n")
-	mustWrite(t, filepath.Join(root, "src", "lib.rs"), "pub fn one() -> u8 { 1 }\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() { assert_eq!(super::one(), 1); }\n}\n")
+	mustWrite(t, filepath.Join(root, "src", "lib.rs"), "pub fn one() -> u8 { 1 }\n\n#[cfg(test)]\n#[path = \"../../outside_tests.rs\"]\nmod tests;\n")
 	fake := &fakeUnitPass{ev: reposcan.UnitEvidence{Note: "fake"}}
 	fake.install(t)
 
@@ -810,15 +812,41 @@ func TestUnitEvidencePromotesAnUnpairedSwiftFile(t *testing.T) {
 }
 
 // A language that promotes says nothing more on the count line: the
-// TypeScript promotion above prints its count bare.
+// TypeScript promotion above prints its count bare. Every shipped language
+// promotes since Rust's inline landing (2026-11-24); the note is kept for a
+// language added without it, derived from its declaration.
 func TestEvidencePromotionNoteIsEmptyForALanguageThatPromotes(t *testing.T) {
-	for _, n := range []string{"go", "python", "javascript", "typescript", "ruby", "php", "swift"} {
+	for _, n := range lang.Names() {
 		if got := evidencePromotionNote(mustPlugin(t, n)); got != "" {
 			t.Errorf("%s: evidencePromotionNote = %q, want empty", n, got)
 		}
 	}
-	if got := evidencePromotionNote(mustPlugin(t, "rust")); got == "" {
-		t.Errorf("rust: evidencePromotionNote is empty, but promotion is not built for it")
+}
+
+// Rust's evidence adds a source that declares no test module: the library
+// unit executed it, so it is audited, and the line says its authored test
+// is appended to the file itself — not "beside" a test file it never goes
+// near (an integration test can be the most-covering file of another).
+func TestUnitEvidencePromotesARustFileWithNoTestModule(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "Cargo.toml"), "[package]\nname = \"inl\"\nversion = \"0.1.0\"\nedition = \"2021\"\n")
+	mustWrite(t, filepath.Join(root, "src", "lib.rs"), "pub mod extract;\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() { assert_eq!(crate::extract::one(), 1); }\n}\n")
+	mustWrite(t, filepath.Join(root, "src", "extract.rs"), "pub fn one() -> u8 { 1 }\n")
+	fake := &fakeUnitPass{ev: reposcan.UnitEvidence{Ran: true, Units: []reposcan.UnitResult{
+		unitRun("inl/lib", map[string]lang.LineCounts{
+			"src/lib.rs":     {Executed: 1, Executable: 1},
+			"src/extract.rs": {Executed: 1, Executable: 1},
+		}),
+	}}}
+	fake.install(t)
+	s := runUnitEvidenceScan(t, root, "--dry-run", "--evidence", "--", "cargo", "test")
+	for _, want := range []string{
+		"evidence-paired 1 · name-paired 1 · uncovered 0 · import-only 0\n",
+		"src/extract.rs paired by evidence: 1 covering test unit(s), authored test is appended to the file itself",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("want %q in:\n%s", want, s)
+		}
 	}
 }
 

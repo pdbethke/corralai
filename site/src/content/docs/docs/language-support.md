@@ -26,9 +26,9 @@ This table is what the code can do. What has been executed, and on which reposit
 | Share a build cache between sandboxed runs | ✓ | — (14) | — (15) | — (16) | — (17) | — (18) | — (19) | — (20) |
 | Floor each mutant's time limit at three times a measured rebuild run (workspace substrate) | — (21) | — (22) | — (23) | — (24) | — (23) | — (25) | ✓ | — (26) |
 | Keep workspace trees on the checkout's locked dependency versions (one tree when they would not hold the lockfile) | — (27) | — (28) | — (29) | — (30) | — (31) | — (32) | ✓ | — (28) |
-| Add a file with no paired test to the audit when the evidence shows a test executes it | ✓ | ✓ | ✓ | ✓ | ✓ | — (33) | ✓ | ✓ |
+| Add a file with no paired test to the audit when the evidence shows a test executes it | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Read a file's functions and their branches (one mutant-generator seat per group of functions, a signature surface in the prompts, exam coverage) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Hand back the proven tests as one file | ✓ | ✓ | — (34) | ✓ | ✓ | ✓ | — (35) | ✓ |
+| Hand back the proven tests as one file | ✓ | ✓ | — (33) | ✓ | ✓ | ✓ | — (34) | ✓ |
 | Coverage pre-flight | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Grade only the tests that run the file | ✓ | ✓ | ✓ | ✓ | ✓ (rspec) | ✓ | ✓ | ✓ |
 
@@ -64,9 +64,8 @@ This table is what the code can do. What has been executed, and on which reposit
 30. not built: dependencies in .venv, venv or site-packages are linked into every tree, so the trees share one installed set and resolve none of it. A suite run through tox builds its own .tox in each tree; whether those resolve the same versions was not measured
 31. not measured: a tree without the checkout's Gemfile.lock lets bundler resolve the Gemfile again, and whether trees then build on different versions was not measured
 32. not built: cargo builds each tree's own target/, and a tree without the checkout's Cargo.lock resolves the dependencies afresh, so Rust needs this. But a cargo workspace keeps Cargo.lock at the workspace root, not beside a member crate's Cargo.toml, and finding that root is not built yet
-33. not built: a Rust source with no separate test file would have its authored test written into the source itself, which corral does not do yet, so the scan excludes it before pairing and the evidence never reaches it; a source with a separate test file is already paired by name. On indexmap-rs/indexmap at 41a8708 (workspace substrate) a unit executed src/inner/extract.rs in full and nothing was added. The line that counts evidence-paired files says this after the unit pass, and such a source is recorded as test-landing-not-built
-34. PHPUnit 10 and 11 load one class per file, the class named after the file, and a merged file of renamed classes ran no test on PHPUnit 11.5. So the first proven test is handed back as the file, and each other one as a file of its own, to be saved under its own class name
-35. not built: what one merged Swift file is has not been settled. Every top-level name in a test target is shared, and each proven test puts everything in one type named after the file it was written as, so all of a file's proven tests declare the same type. Each is handed back as a file of its own, with that reason, and only one of them can be added to the test target as it stands: rename the type in each of the others first
+33. PHPUnit 10 and 11 load one class per file, the class named after the file, and a merged file of renamed classes ran no test on PHPUnit 11.5. So the first proven test is handed back as the file, and each other one as a file of its own, to be saved under its own class name
+34. not built: what one merged Swift file is has not been settled. Every top-level name in a test target is shared, and each proven test puts everything in one type named after the file it was written as, so all of a file's proven tests declare the same type. Each is handed back as a file of its own, with that reason, and only one of them can be added to the test target as it stands: rename the type in each of the others first
 
 ## By runner
 

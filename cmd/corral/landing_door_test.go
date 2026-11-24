@@ -26,10 +26,11 @@ import (
 	"github.com/pdbethke/corralai/internal/scanstore"
 )
 
-// Every door that asks lang.CheckTestLanding, asked about the same three Rust
-// sources: one whose own declaration loads a separate test file (admitted
-// wherever the repository can be read), one whose tests are inline and one
-// that declares none (still refused: their landing is the source). cgo-only
+// Every door that asks lang.CheckTestLanding, asked about the same four Rust
+// sources: one whose own declaration loads a separate test file, one whose
+// tests are inline and one that declares none (all three admitted wherever
+// the repository can be read: the last two land in the source itself), and
+// one whose declaration leaves the repository (still refused). cgo-only
 // because the declaration is read with the tree-sitter grammar.
 
 const (
@@ -37,6 +38,7 @@ const (
 	declaredTst = "use super::*;\n\n#[test]\nfn t() { assert_eq!(private_double(1), 2); }\n"
 	inlineSrc   = "pub fn b() {}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {}\n}\n"
 	plainSrc    = "pub fn p() {}\n"
+	outsideSrc  = "pub fn o() {}\n\n#[cfg(test)]\n#[path = \"../../outside_tests.rs\"]\nmod tests;\n"
 )
 
 func landingRepo(t *testing.T) string {
@@ -48,12 +50,13 @@ func landingRepo(t *testing.T) string {
 	mustWrite(t, filepath.Join(root, "src", "foo_tests.rs"), declaredTst)
 	mustWrite(t, filepath.Join(root, "src", "bar.rs"), inlineSrc)
 	mustWrite(t, filepath.Join(root, "src", "plain.rs"), plainSrc)
+	mustWrite(t, filepath.Join(root, "src", "out.rs"), outsideSrc)
 	return root
 }
 
-// TestResolveAuditPluginAdmitsOnlyADeclaredLanding: certify --local's door,
+// TestResolveAuditPluginAdmitsEveryReadableLanding: certify --local's door,
 // which every certify --repo job also goes through.
-func TestResolveAuditPluginAdmitsOnlyADeclaredLanding(t *testing.T) {
+func TestResolveAuditPluginAdmitsEveryReadableLanding(t *testing.T) {
 	root := landingRepo(t)
 	// Every toolchain check satisfied — a stock ~/.cargo rustup install, and
 	// a system-wide toolchain for the jail — so the admit below is the
@@ -63,13 +66,13 @@ func TestResolveAuditPluginAdmitsOnlyADeclaredLanding(t *testing.T) {
 	in := func(code string) localAuditInput {
 		return localAuditInput{repoDir: root, codePath: code, goal: "g", checkArgv: []string{"cargo", "test"}}
 	}
-	if _, err := resolveAuditPlugin(in("src/foo.rs")); err != nil {
-		t.Fatalf("a declared Rust source with its toolchain in place must be admitted: %v", err)
-	}
-	for _, code := range []string{"src/bar.rs", "src/plain.rs"} {
-		if _, err := resolveAuditPlugin(in(code)); err == nil || !strings.Contains(err.Error(), "not built yet") {
-			t.Errorf("%s: err = %v, want the landing refusal", code, err)
+	for _, code := range []string{"src/foo.rs", "src/bar.rs", "src/plain.rs"} {
+		if _, err := resolveAuditPlugin(in(code)); err != nil {
+			t.Errorf("%s: a Rust source with a readable landing and its toolchain in place must be admitted: %v", code, err)
 		}
+	}
+	if _, err := resolveAuditPlugin(in("src/out.rs")); err == nil || !strings.Contains(err.Error(), "outside the audited repository") {
+		t.Errorf("src/out.rs: err = %v, want the refusal naming the declaration outside the repository", err)
 	}
 	// No --repo-dir: single-file mode cannot compose into a project file.
 	if _, err := resolveAuditPlugin(localAuditInput{codePath: filepath.Join(root, "src", "foo.rs"), goal: "g"}); err == nil || !strings.Contains(err.Error(), "--repo-dir") {
@@ -152,6 +155,49 @@ func TestTheWiringCarriesTheAdmittedLandingToEveryWriter(t *testing.T) {
 	}
 }
 
+// TestTheDevTestOfAnInlineSourceComesFromItsLanding is ruling 2 of the
+// inline landing at the wiring: the developer's test of a source whose
+// authored test lands in itself is the source when it declares its own
+// inline test module, and none when it declares no test module — no file is
+// invented, and none is keyed into the workspace. A test path handed in (a
+// scan hands the most-covering test file of an evidence-promoted file) is
+// not used as its test, and the run says so.
+func TestTheDevTestOfAnInlineSourceComesFromItsLanding(t *testing.T) {
+	root := landingRepo(t)
+	mustWrite(t, filepath.Join(root, "tests", "it.rs"), "#[test]\nfn it() {}\n")
+	plug, _ := lang.ByName("rust")
+	for _, tc := range []struct {
+		code, given, want string
+		devTest           string
+	}{
+		{"src/bar.rs", "", "src/bar.rs", inlineSrc},
+		{"src/bar.rs", "tests/it.rs", "src/bar.rs", inlineSrc},
+		{"src/plain.rs", "", "", ""},
+		{"src/plain.rs", "tests/it.rs", "", ""},
+	} {
+		var stdout bytes.Buffer
+		prep, err := prepareAuditJail(context.Background(), localAuditInput{
+			repoDir: root, codePath: tc.code, testPath: tc.given, lang: "rust", goal: "g",
+			checkArgv: []string{"cargo", "test"}, substrate: substrateWorkspace,
+		}, plug, time.Minute, &stdout)
+		if err != nil {
+			t.Fatalf("%s (given %q): prepareAuditJail: %v", tc.code, tc.given, err)
+		}
+		prep.cleanup()
+		if prep.testPath != tc.want || string(prep.devTest) != tc.devTest || prep.wiring.devTestKey != tc.want || prep.wiring.scorer.DevTestPath != tc.want {
+			t.Errorf("%s (given %q): dev test %q (key %q, scorer %q) holding %q; want %q holding %q",
+				tc.code, tc.given, prep.testPath, prep.wiring.devTestKey, prep.wiring.scorer.DevTestPath, prep.devTest, tc.want, tc.devTest)
+		}
+		if !prep.wiring.landing.Inline(prep.wiring.codeKey) {
+			t.Errorf("%s: landing %+v is not inline", tc.code, prep.wiring.landing)
+		}
+		said := strings.Contains(stdout.String(), "tests/it.rs is not used as its test file")
+		if said != (tc.given != "") {
+			t.Errorf("%s (given %q): disclosure said=%v:\n%s", tc.code, tc.given, said, stdout.String())
+		}
+	}
+}
+
 // TestDoctorAdmitsADeclaredRustSource: doctor reads the landing the same way
 // (rooted at the working directory, as its pairing is).
 func TestDoctorAdmitsADeclaredRustSource(t *testing.T) {
@@ -168,8 +214,16 @@ func TestDoctorAdmitsADeclaredRustSource(t *testing.T) {
 	if !strings.Contains(got.detail, "--repo-dir") || !strings.Contains(got.detail, "path-attr") {
 		t.Fatalf("doctor's [ok] does not say the file needs --repo-dir: %s", got.detail)
 	}
-	if got := checkPairing("src/bar.rs", ""); got.ok || !strings.Contains(got.detail, "not built yet") {
-		t.Fatalf("doctor passed an inline Rust source: %+v", got)
+	if got := checkPairing("src/bar.rs", ""); !got.ok || !strings.Contains(got.detail, "--repo-dir") {
+		t.Fatalf("doctor must pass an inline Rust source, saying it needs --repo-dir: %+v", got)
+	}
+	// One that declares no test module has no test file, and the audit
+	// grades it anyway: doctor says so rather than "no test found".
+	if got := checkPairing("src/plain.rs", ""); !got.ok || !strings.Contains(got.detail, "declares no test module") || !strings.Contains(got.detail, "--repo-dir") {
+		t.Fatalf("doctor must pass a Rust source with no test module, saying how it is graded: %+v", got)
+	}
+	if got := checkPairing("src/out.rs", ""); got.ok || !strings.Contains(got.detail, "outside the audited repository") {
+		t.Fatalf("doctor passed a source whose test module is outside the repository: %+v", got)
 	}
 }
 

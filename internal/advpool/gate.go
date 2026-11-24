@@ -363,6 +363,11 @@ type JailScorer struct {
 	// test is written and what is already there. MUST equal the
 	// JailValidator's and the RunSpec's — one value, set by the caller.
 	Landing AuthoredLanding
+	// EvidenceLines are the audited source's own test-module lines (an inline
+	// Rust `#[cfg(test)] mod`), read through repoindex. Every Score call this
+	// scorer makes refuses a mutant that edits them (adequacy.WithEvidenceLines).
+	// Empty for a language whose source declares none.
+	EvidenceLines []golang.LineRange
 	// Lang, Selection and SelectionMap shape the AUTHORED pass's command
 	// (authoredCmd); the DEV pass's is built by its callers, from the same
 	// fields on the RunSpec, via DevCommand. The selection engine
@@ -500,6 +505,7 @@ func (s JailScorer) baseScoreOpts() []adequacy.ScoreOption {
 		adequacy.WithKillConfirmer(s.KillerCmd),
 		adequacy.WithMutantFailFast(s.FailFast),
 		adequacy.WithCommandRewrite(s.CommandRewrite),
+		adequacy.WithEvidenceLines(s.EvidenceLines),
 	}
 }
 

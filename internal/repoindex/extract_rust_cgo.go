@@ -203,6 +203,23 @@ func rustAttrs(n *sitter.Node, src []byte) rustModAttrs {
 	return a
 }
 
+// rustAttrStartRow is the 0-based row where n's attribute run begins (n's own
+// row when it has none), walking back the same siblings rustAttrs reads.
+func rustAttrStartRow(n *sitter.Node) uint32 {
+	row := n.StartPoint().Row
+	for p := n.PrevNamedSibling(); p != nil; p = p.PrevNamedSibling() {
+		switch p.Type() {
+		case "attribute_item":
+			row = p.StartPoint().Row
+		case "line_comment", "block_comment":
+			continue
+		default:
+			return row
+		}
+	}
+	return row
+}
+
 func firstNamedOfType(n *sitter.Node, typ string) *sitter.Node {
 	for i := 0; i < int(n.NamedChildCount()); i++ {
 		if c := n.NamedChild(i); c != nil && c.Type() == typ {
@@ -230,12 +247,20 @@ func rustTestModules(root *sitter.Node, src []byte) []pairing.TestModule {
 		if !attrs.cfgTest && name != "tests" && name != "test" {
 			continue
 		}
-		out = append(out, pairing.TestModule{
+		tm := pairing.TestModule{
 			Name:     name,
 			Inline:   n.ChildByFieldName("body") != nil,
 			PathAttr: attrs.pathAttr,
 			CfgTest:  attrs.cfgTest,
-		})
+		}
+		if tm.Inline {
+			// 1-based inclusive. The span opens at the module's first
+			// attribute, because an edit to `#[cfg(test)]` changes the test
+			// module as surely as one inside its braces.
+			tm.StartLine = int(rustAttrStartRow(n)) + 1
+			tm.EndLine = int(n.EndPoint().Row) + 1
+		}
+		out = append(out, tm)
 	}
 	return out
 }

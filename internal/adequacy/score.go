@@ -112,6 +112,8 @@ func mutantTimeoutCap(baseDur, warmDur, floor time.Duration) time.Duration {
 type ScoreOption func(*scoreConfig)
 
 type scoreConfig struct {
+	// evidenceLines: see WithEvidenceLines.
+	evidenceLines []lang.LineRange
 	// warmBaseline routes the baseline through RunCacheJail.WarmRun, the one
 	// run that may write the jail's shared cache. Off by default: see
 	// WithWarmBaseline.
@@ -357,6 +359,37 @@ func WithFailureParser(p lang.FailureParser) ScoreOption {
 // proportional to the mutant count.
 func WithMutantFailFast(f FailFastFor) ScoreOption {
 	return func(c *scoreConfig) { c.failFast = f }
+}
+
+// WithEvidenceLines names lines of the audited source that are the audit's own
+// EVIDENCE, an inline test module such as Rust's `#[cfg(test)] mod tests`. A
+// mutant whose edit touches them would mutate the developer's test: the
+// mutated assertion fails and the mutant "kills" itself, a fabricated kill.
+// Such a mutant is invalid, counted in MutantsInvalid and never graded.
+//
+// FAIL CLOSED: a mutant whose Span is unknown (zero) cannot be shown to leave
+// the tests alone, so with evidence lines set it is invalid too. With none set
+// (every language that reports no inline module) nothing changes, and
+// zero-span mutants grade as before.
+func WithEvidenceLines(r []lang.LineRange) ScoreOption {
+	return func(c *scoreConfig) { c.evidenceLines = r }
+}
+
+// evidenceInvalidReason is why m is invalid against cfg's evidence lines, or
+// "" when it may be graded.
+func (c *scoreConfig) evidenceInvalidReason(m Mutant) string {
+	if len(c.evidenceLines) == 0 {
+		return ""
+	}
+	if m.Span.IsZero() {
+		return "its edited lines are unknown, so it cannot be shown to leave the source's own tests alone"
+	}
+	for _, e := range c.evidenceLines {
+		if m.Span.Overlaps(e) {
+			return fmt.Sprintf("edits the source's own tests (lines %d-%d), which are the audit's evidence", e.Start, e.End)
+		}
+	}
+	return ""
 }
 
 // WithCommandRewrite rewrites EVERY command Score hands the jail: the
@@ -1400,6 +1433,10 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 		// against these exact bytes; it CAN happen for a replayed set whose
 		// parent hash was somehow satisfied by different source, and that is
 		// precisely the case that must not quietly become a number.
+		if r := cfg.evidenceInvalidReason(m); r != "" {
+			outcomes[i] = outcome{invalid: true, invalidReason: r}
+			return
+		}
 		mutantCode, aerr := m.Apply(compliantCode)
 		if aerr != nil {
 			outcomes[i] = outcome{invalid: true, invalidReason: invalidReasonAnchor + ": " + aerr.Error()}

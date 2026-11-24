@@ -114,8 +114,6 @@ type ScoreOption func(*scoreConfig)
 type scoreConfig struct {
 	// evidenceLines: see WithEvidenceLines.
 	evidenceLines []lang.LineRange
-	// evidenceUnread: see WithEvidenceUnread.
-	evidenceUnread string
 	// warmBaseline routes the baseline through RunCacheJail.WarmRun, the one
 	// run that may write the jail's shared cache. Off by default: see
 	// WithWarmBaseline.
@@ -377,22 +375,9 @@ func WithEvidenceLines(r []lang.LineRange) ScoreOption {
 	return func(c *scoreConfig) { c.evidenceLines = r }
 }
 
-// WithEvidenceUnread says the audited source's own tests could not be
-// located (why: repoindex.OwnTestLines' unread, a parse that set code aside
-// where test code could hide). No mutant can then be shown to leave them
-// alone, so with why non-empty EVERY mutant is invalid, as a zero-span one
-// is under WithEvidenceLines: failing closed, never grading on a reading
-// that may have missed the tests. "" changes nothing.
-func WithEvidenceUnread(why string) ScoreOption {
-	return func(c *scoreConfig) { c.evidenceUnread = why }
-}
-
 // evidenceInvalidReason is why m is invalid against cfg's evidence lines, or
 // "" when it may be graded.
 func (c *scoreConfig) evidenceInvalidReason(m Mutant) string {
-	if c.evidenceUnread != "" {
-		return "the source's own tests could not be located (" + c.evidenceUnread + "), so no mutant can be shown to leave them alone"
-	}
 	if len(c.evidenceLines) == 0 {
 		return ""
 	}

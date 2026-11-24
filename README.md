@@ -108,8 +108,9 @@ What each part is for, and the limits that apply:
   block to the source itself, in the code each run writes (the `allow` line
   keeps a crate that denies warnings building a block that uses nothing from
   the file). A mutant that edits the file's own test code (a test module or
-  test item at any depth) is not graded, and when the parse set code aside
-  where tests could hide, no mutant of that file is. A survivor is proven
+  test item at any depth) is not graded. A file where the parser set code
+  aside where tests could sit is not audited at all: it is refused before
+  any goal or mutant, as `own-tests-unreadable`, naming the lines. A survivor is proven
   "by the authored test alone" only when the run selects corral's tests by
   exact name (`-- --exact …`, or a nextest `test(=…)` filterset). The inline
   landing has run on cargo 1.90.0 and cargo-nextest 0.9.148 against a

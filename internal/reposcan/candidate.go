@@ -218,6 +218,16 @@ const (
 	// a different, stated reason, and every reader treats the two alike
 	// through IsLandingRefusal.
 	ReasonDeclarationsUnreadable = "test-declarations-unreadable"
+	// ReasonOwnTestsUnreadable marks a source whose OWN tests could not be
+	// located because the parser set part of it aside (an ERROR or MISSING
+	// node outside every test span and function body:
+	// repoindex.OwnTestLines' unread). Test code could sit there, and a
+	// mutant editing it would kill itself on the developer's own assertion,
+	// so no mutant of the file can be shown to grade the tests rather than
+	// edit them. Applied by Enumerate before pairing, and by every audit
+	// door (certify --local, each certify --repo job, doctor), before any
+	// goal is derived or mutant generated. Since 2026-11-24.
+	ReasonOwnTestsUnreadable = "own-tests-unreadable"
 	// ReasonEvidencePairingNotBuilt marks a source no filename pairs that a
 	// green test unit EXECUTED, in a language whose evidence cannot add a
 	// file to the audit (lang.PromotesByEvidence false). No shipped language
@@ -279,7 +289,11 @@ func UnauditableChangedSource(reason string) bool {
 		// its test is claimed by another source, or it is not a file it can
 		// read. Each is "we could not look", not "nothing to look at".
 		return true
-	case reason == ReasonTestLandingNotBuilt, reason == ReasonDeclarationsUnreadable:
+	case reason == ReasonTestLandingNotBuilt, reason == ReasonDeclarationsUnreadable, reason == ReasonOwnTestsUnreadable:
+		// (ReasonOwnTestsUnreadable is the grammar's limit on one file, not
+		// the change's fault, and is treated as a landing refusal is: named
+		// by the diff scan, never failing the gate on its own.)
+		//
 		// A language corral cannot audit YET, ruled (Rust part 1) to be
 		// treated exactly as a language it does not audit at all
 		// (ReasonNoLanguage, the default below): the scan discloses the
@@ -585,6 +599,16 @@ func EnumerateWithTests(root string, tests *TestMap) ([]Candidate, []Exclusion, 
 				reason = ReasonDeclarationsUnreadable
 			}
 			excl = append(excl, Exclusion{Path: rel, Reason: reason})
+			continue
+		}
+		// A file whose own tests cannot be located (OwnTestsUnread) cannot
+		// be audited either, and is refused here for the same reasons: no
+		// goal, slot or jail is spent on a file every mutant of which would
+		// have to be discarded.
+		if why, uerr := OwnTestsUnread(p.Name(), root, rel); uerr != nil {
+			return nil, nil, fmt.Errorf("reading %s: %w", rel, uerr)
+		} else if why != "" {
+			excl = append(excl, Exclusion{Path: rel, Reason: ReasonOwnTestsUnreadable})
 			continue
 		}
 		// Walk the plugin's ordered candidates and pair with the first one

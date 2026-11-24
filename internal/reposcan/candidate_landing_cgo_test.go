@@ -93,3 +93,33 @@ func TestAnUnreadableDeclarationIsAnExclusionNeverAnError(t *testing.T) {
 		t.Errorf("ResolutionPaths errored: %v", err)
 	}
 }
+
+// TestEnumerateExcludesARustFileWhoseOwnTestsCannotBeLocated: a Rust source
+// whose parse set code aside outside every test span and function body
+// (repoindex.OwnTestLines' unread) cannot be shown to keep its own tests out
+// of the exam, so it is excluded HERE, before pairing, ranking and goal
+// derivation spend anything on it, with its own reason. It used to be
+// audited, paid for, and then had every mutant discarded, which the readouts
+// rendered as a compile-check rejection and a 0.00.
+func TestEnumerateExcludesARustFileWhoseOwnTestsCannotBeLocated(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"src/bad.rs": "pub fn f() -> i32 { 1 }\n@@@\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {}\n}\n",
+		"src/ok.rs":  "pub fn g() {}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {}\n}\n",
+	})
+	cands, excl, err := Enumerate(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cands) != 1 || cands[0].Path != "src/ok.rs" {
+		t.Errorf("candidates = %+v, want only src/ok.rs", cands)
+	}
+	got := ""
+	for _, e := range excl {
+		if e.Path == "src/bad.rs" {
+			got = e.Reason
+		}
+	}
+	if got != ReasonOwnTestsUnreadable {
+		t.Errorf("src/bad.rs excluded as %q, want %q", got, ReasonOwnTestsUnreadable)
+	}
+}

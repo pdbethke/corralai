@@ -91,9 +91,10 @@ func TestModules(lang string, src []byte) []pairing.TestModule {
 // unread is non-empty when the parse set code aside (an ERROR or MISSING
 // node) outside every span it found and every function it placed: test code
 // there is invisible to the walk, so the spans are no reading of where the
-// tests are, and the caller must invalidate every mutant
-// (adequacy.WithEvidenceUnread) rather than trust them. A language with no
-// reader, and every language in a no-cgo build, answers none.
+// tests are. Such a file is refused before any spend
+// (reposcan.ReasonOwnTestsUnreadable), never graded on these spans. A
+// language with no reader, and every language in a no-cgo build, answers
+// none.
 func OwnTestLines(lang string, src []byte) (lines []plugins.LineRange, unread string) {
 	return ownTestLines(lang, src)
 }

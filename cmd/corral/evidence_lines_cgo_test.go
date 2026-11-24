@@ -14,30 +14,40 @@ import (
 	"time"
 
 	"github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/reposcan"
 )
 
 func TestInlineTestLinesReadsTheInlineModuleOnly(t *testing.T) {
 	src := []byte("pub fn f() {}\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {}\n}\n")
-	got := inlineTestLines("rust", src)
-	if want := []lang.LineRange{{Start: 2, End: 6}}; !reflect.DeepEqual(got.lines, want) || got.unread != "" {
-		t.Fatalf("inlineTestLines = %+v, want %v", got, want)
+	read := func(langName string, code []byte) []lang.LineRange {
+		t.Helper()
+		got, err := inlineTestLines("x.rs", langName, code)
+		if err != nil {
+			t.Fatalf("inlineTestLines: %v", err)
+		}
+		return got
 	}
-	if got := inlineTestLines("rust", []byte("#[cfg(test)]\nmod tests;\n")); len(got.lines) != 0 {
+	if got, want := read("rust", src), []lang.LineRange{{Start: 2, End: 6}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("inlineTestLines = %v, want %v", got, want)
+	}
+	if got := read("rust", []byte("#[cfg(test)]\nmod tests;\n")); len(got) != 0 {
 		t.Fatalf("a bare mod has no lines in this file, got %v", got)
 	}
-	if got := inlineTestLines("go", src); len(got.lines) != 0 || got.unread != "" {
+	if got := read("go", src); len(got) != 0 {
 		t.Fatalf("a language with no reader passes nothing, got %v", got)
 	}
 	// Test code the old top-level reader could not see: a test module nested
 	// in an inline module, one gated on cfg(all(test, …)), and a #[test] fn
 	// outside any module.
 	nested := []byte("mod imp {\n    #[cfg(test)]\n    mod tests {\n        #[test]\n        fn t() {}\n    }\n}\n#[cfg(all(test, feature = \"std\"))]\nmod checks {\n}\n#[test]\nfn loose() {}\n")
-	if got, want := inlineTestLines("rust", nested), []lang.LineRange{{Start: 2, End: 6}, {Start: 8, End: 10}, {Start: 11, End: 12}}; !reflect.DeepEqual(got.lines, want) {
-		t.Fatalf("inlineTestLines = %v, want %v", got.lines, want)
+	if got, want := read("rust", nested), []lang.LineRange{{Start: 2, End: 6}, {Start: 8, End: 10}, {Start: 11, End: 12}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("inlineTestLines = %v, want %v", got, want)
 	}
-	// A parse that set code aside where tests could hide fails closed.
-	if got := inlineTestLines("rust", []byte("pub fn f() {}\n@@@\n#[cfg(test)]\nmod tests {\n}\n")); got.unread == "" {
-		t.Fatalf("a parse that set code aside answered as a complete reading: %+v", got)
+	// A parse that set code aside where tests could hide is refused, never
+	// handed to a scorer.
+	_, err := inlineTestLines("x.rs", "rust", []byte("pub fn f() {}\n@@@\n#[cfg(test)]\nmod tests {\n}\n"))
+	if rc, ok := err.(reposcan.ReasonCarrier); !ok || rc.ScanReason() != reposcan.ReasonOwnTestsUnreadable {
+		t.Fatalf("a parse that set code aside: err = %v, want the own-tests refusal", err)
 	}
 }
 
@@ -49,8 +59,8 @@ func TestInlineTestLinesReadsTheInlineModuleOnly(t *testing.T) {
 // lines, so a literal that drops EvidenceLines fails here.
 func TestBuildJailWiringHandsEveryScorerTheInlineTestLines(t *testing.T) {
 	// The second source's line 2 is set aside by the grammar: every door
-	// must carry the unread reason too, or one door grades on a reading
-	// that may have missed the tests.
+	// must refuse it, or one door grades on a reading that may have missed
+	// the tests.
 	for _, tc := range []struct {
 		src    string
 		want   []lang.LineRange
@@ -62,9 +72,25 @@ func TestBuildJailWiringHandsEveryScorerTheInlineTestLines(t *testing.T) {
 		src, want := tc.src, tc.want
 		check := func(t *testing.T, w jailWiring) {
 			t.Helper()
-			if !reflect.DeepEqual(w.scorer.EvidenceLines, want) || (w.scorer.EvidenceUnread != "") != tc.unread {
-				t.Fatalf("scorer.EvidenceLines = %v, EvidenceUnread = %q; want %v, unread %v", w.scorer.EvidenceLines, w.scorer.EvidenceUnread, want, tc.unread)
+			if !reflect.DeepEqual(w.scorer.EvidenceLines, want) {
+				t.Fatalf("scorer.EvidenceLines = %v, want %v", w.scorer.EvidenceLines, want)
 			}
+		}
+		done := func(t *testing.T, w jailWiring, err error) {
+			t.Helper()
+			if tc.unread {
+				// Refused at the door that builds every scorer, with its
+				// own reason, rather than handed lines that may miss tests.
+				if rc, ok := err.(reposcan.ReasonCarrier); !ok || rc.ScanReason() != reposcan.ReasonOwnTestsUnreadable {
+					t.Fatalf("buildJailWiring over a set-aside source: err = %v, want the own-tests refusal", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("buildJailWiring: %v", err)
+			}
+			defer w.cleanup()
+			check(t, w)
 		}
 
 		t.Run("workspace substrate", func(t *testing.T) {
@@ -85,11 +111,7 @@ func TestBuildJailWiringHandsEveryScorerTheInlineTestLines(t *testing.T) {
 				fsPath: func(q string) string { return filepath.Join(root, q) },
 				stdout: io.Discard,
 			})
-			if err != nil {
-				t.Fatalf("buildJailWiring: %v", err)
-			}
-			defer w.cleanup()
-			check(t, w)
+			done(t, w, err)
 		})
 
 		t.Run("repo-aware jail", func(t *testing.T) {
@@ -103,11 +125,7 @@ func TestBuildJailWiringHandsEveryScorerTheInlineTestLines(t *testing.T) {
 				fsPath: func(q string) string { return filepath.Join(root, q) },
 				stdout: io.Discard, seed: &seed,
 			})
-			if err != nil {
-				t.Fatalf("buildJailWiring: %v", err)
-			}
-			defer w.cleanup()
-			check(t, w)
+			done(t, w, err)
 		})
 
 		t.Run("single-file jail", func(t *testing.T) {
@@ -119,11 +137,7 @@ func TestBuildJailWiringHandsEveryScorerTheInlineTestLines(t *testing.T) {
 				fsPath: func(q string) string { return q },
 				stdout: io.Discard,
 			})
-			if err != nil {
-				t.Fatalf("buildJailWiring: %v", err)
-			}
-			defer w.cleanup()
-			check(t, w)
+			done(t, w, err)
 		})
 	}
 }

@@ -1274,7 +1274,33 @@ func auditLanding(in localAuditInput) (pairing.Landing, error) {
 	if err := lang.CheckTestLanding(in.codePath, l); err != nil {
 		return l, auditUsageErr("%v", err)
 	}
+	// Asked at the same door, for the same reason: before any goal, jail,
+	// store or spend. Every mutant of a file whose own tests cannot be
+	// located would have to be discarded (see ownTestsRefusal).
+	if p, ok := lang.Detect(in.codePath); ok {
+		why, err := reposcan.OwnTestsUnread(p.Name(), strings.TrimSpace(in.repoDir), in.codePath)
+		if err != nil {
+			return l, auditErr("reading %s to locate its own tests: %v", in.codePath, err)
+		}
+		if why != "" {
+			return l, ownTestsRefusal(in.codePath, why)
+		}
+	}
 	return l, nil
+}
+
+// ownTestsRefusal refuses a source whose own tests could not be located
+// (reposcan.OwnTestsUnread: the parser set part of it aside where test code
+// could sit). A mutant there could edit a developer assertion and kill
+// itself, so no mutant of the file can be graded; refused before anything
+// is spent, under its own reason. It used to be audited, every mutant
+// discarded after the generator was paid, and the readouts said the
+// mutants were "rejected by the compile check" and printed a 0.00.
+func ownTestsRefusal(codePath, why string) error {
+	return localAuditError{usage: true, scanReason: reposcan.ReasonOwnTestsUnreadable, msg: fmt.Sprintf(
+		"corral cannot audit %s: the source's own tests could not be located, because %s.\n"+
+			"  A mutant there could edit one of them, so no mutant of this file can be graded.\n"+
+			"  Refused before any goal is derived or mutant generated.", codePath, why)}
 }
 
 // authoredLandingFor is the run's advpool.AuthoredLanding: the checked landing
@@ -1492,6 +1518,10 @@ func prepareAuditJail(ctx context.Context, in localAuditInput, plug lang.Plugin,
 		runCache: in.runCache, capFloor: in.capFloor,
 	})
 	if err != nil {
+		var refusal localAuditError
+		if errors.As(err, &refusal) && refusal.scanReason != "" {
+			return p, err // a refusal with its own scan reason keeps it
+		}
 		return p, auditUsageErr("%v", err)
 	}
 	if line := runCacheUnsharedLine(in.codePath, wiring.runCache); line != "" {
@@ -2874,7 +2904,10 @@ type jailWiring struct {
 func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err error) {
 	w.cleanup = func() {}
 	// The source's own tests, read once for all three scorer doors below.
-	ev := inlineTestLines(in.langName, in.code)
+	evidence, err := inlineTestLines(in.codePath, in.langName, in.code)
+	if err != nil {
+		return w, err
+	}
 	// If wiring fails AFTER a vendor staging dir was created, release it here —
 	// the caller only defers cleanup on the success path.
 	defer func() {
@@ -3067,7 +3100,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		// The workspace has no run cache; its one rewrite is the report flags,
 		// through the same door the jail's commands take.
 		rewrite := gradingRewrite(gradingPlugin(in.langName), in.inv, in.checkArgv, nil)
-		w.scorer = advpool.JailScorer{Jail: pool, RepoDir: in.repoDir, BaseFiles: base, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Landing: w.landing, Concurrency: pool.Trees(), Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, KillerCmd: killerCmd, FailFast: failFast, EvidenceLines: ev.lines, EvidenceUnread: ev.unread, CommandRewrite: rewrite}
+		w.scorer = advpool.JailScorer{Jail: pool, RepoDir: in.repoDir, BaseFiles: base, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Landing: w.landing, Concurrency: pool.Trees(), Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, KillerCmd: killerCmd, FailFast: failFast, EvidenceLines: evidence, CommandRewrite: rewrite}
 		w.validator = advpool.JailValidator{Jail: pool, RepoDir: in.repoDir, BaseFiles: base, DevTestPath: w.devTestKey, Landing: w.landing, CommandRewrite: rewrite}
 		w.jailEnum = advpool.JailEnumerator{Jail: pool, BaseFiles: base}
 		// w.depBinds stays nil: there is nothing to bind read-only when the
@@ -3130,7 +3163,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		// (the flag is the real gate).
 		enumerator := newRunEnumerator(in.iso, in.timeout, depBinds)
 		rewrite := gradingRewrite(gradingPlugin(in.langName), in.inv, in.checkArgv, gc.Rewrite)
-		w.scorer = advpool.JailScorer{Jail: jail, RepoDir: in.repoDir, BaseFiles: repoFiles, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Landing: w.landing, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, KillerCmd: killerCmd, FailFast: failFast, EvidenceLines: ev.lines, EvidenceUnread: ev.unread, CommandRewrite: rewrite, WarmCheck: warmCheckFor(gradingPlugin(in.langName), in.inv, gc)}
+		w.scorer = advpool.JailScorer{Jail: jail, RepoDir: in.repoDir, BaseFiles: repoFiles, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Landing: w.landing, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, KillerCmd: killerCmd, FailFast: failFast, EvidenceLines: evidence, CommandRewrite: rewrite, WarmCheck: warmCheckFor(gradingPlugin(in.langName), in.inv, gc)}
 		w.validator = advpool.JailValidator{Jail: jail, RepoDir: in.repoDir, BaseFiles: repoFiles, DevTestPath: w.devTestKey, Landing: w.landing, CommandRewrite: rewrite}
 		w.jailEnum = advpool.JailEnumerator{Jail: enumerator, BaseFiles: repoFiles}
 		if len(depBinds) > 0 {
@@ -3151,7 +3184,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		w.closeWithCleanup(jail, in.runCache, in.capFloor, gc, in.testTimeout)
 		enumerator := newRunEnumerator(in.iso, in.timeout, nil)
 		rewrite := gradingRewrite(plug, in.inv, warm, gc.Rewrite)
-		w.scorer = advpool.JailScorer{Jail: jail, MutantTimeout: in.testTimeout, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, KillerCmd: killerCmd, FailFast: failFast, EvidenceLines: ev.lines, EvidenceUnread: ev.unread, CommandRewrite: rewrite, WarmCheck: warmCheckFor(plug, in.inv, gc)}
+		w.scorer = advpool.JailScorer{Jail: jail, MutantTimeout: in.testTimeout, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, KillerCmd: killerCmd, FailFast: failFast, EvidenceLines: evidence, CommandRewrite: rewrite, WarmCheck: warmCheckFor(plug, in.inv, gc)}
 		w.validator = advpool.JailValidator{Jail: jail, CommandRewrite: rewrite}
 		w.jailEnum = advpool.JailEnumerator{Jail: enumerator}
 	}

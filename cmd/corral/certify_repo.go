@@ -750,7 +750,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// the reader may expect to have been audited, so it is named, with
 		// the reason, rather than left to the exclusion list.
 		for _, e := range excl {
-			if reposcan.IsLandingRefusal(e.Reason) && changedSet[e.Path] {
+			if (reposcan.IsLandingRefusal(e.Reason) || e.Reason == reposcan.ReasonOwnTestsUnreadable) && changedSet[e.Path] {
 				fmt.Fprintf(stdout, "    changed but not audited: %s (%s%s)\n", e.Path, e.Reason, reasonGloss(e.Reason))
 			}
 		}
@@ -4911,6 +4911,8 @@ func reasonGloss(reason string) string {
 		return " — corral cannot audit this file in this build: it cannot read the file's test-module declarations (built without cgo, which the grammar needs), so where a test for it would go is unknown"
 	case reposcan.ReasonEvidencePairingNotBuilt:
 		return " — no test is paired with this file by name; a test unit executed it, but adding a file to the audit by that evidence is not built for its language"
+	case reposcan.ReasonOwnTestsUnreadable:
+		return " — the parser set part of this file aside, so where its own tests are could not be read and a mutant could edit one; refused before any goal or mutant (run `corral doctor --code <file>` for the lines). NOT a test-quality verdict"
 	case reposcan.ReasonTestLandingNotBuilt:
 		return " — corral cannot audit this file: the test module it declares is outside the audited repository, which corral never reads, so where a test for it would go cannot be read"
 	}

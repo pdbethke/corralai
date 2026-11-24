@@ -418,8 +418,9 @@ has no run of it yet.** A Rust source whose tests are inline, or that
 declares no test module, is no longer excluded before pairing: corral's
 authored test is appended to the source itself, as a `corral_tests` module
 added to the code each run writes, and a mutant that edits the file's own
-test code (a test module or test item at any depth) is not graded; when the
-parse set code aside where tests could hide, no mutant of the file is. A source with an inline test module pairs to
+test code (a test module or test item at any depth) is not graded; a file
+where the parse set code aside where tests could sit is refused before any
+spend (`own-tests-unreadable`). A source with an inline test module pairs to
 itself by name; one with no test module, such as `src/inner/extract.rs`
 above, is a no-paired-test file that a unit executing it adds to the audit,
 and its authored test is appended to it (the scan says "authored test is

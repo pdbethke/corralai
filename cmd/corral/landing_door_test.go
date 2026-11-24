@@ -219,7 +219,7 @@ func TestDoctorAdmitsADeclaredRustSource(t *testing.T) {
 	}
 	// One that declares no test module has no test file, and the audit
 	// grades it anyway: doctor says so rather than "no test found".
-	if got := checkPairing("src/plain.rs", ""); !got.ok || !strings.Contains(got.detail, "declares no test module") || !strings.Contains(got.detail, "--repo-dir") {
+	if got := checkPairing("src/plain.rs", ""); !got.ok || !strings.Contains(got.detail, "declares no test module corral could resolve") || !strings.Contains(got.detail, "--repo-dir") {
 		t.Fatalf("doctor must pass a Rust source with no test module, saying how it is graded: %+v", got)
 	}
 	if got := checkPairing("src/out.rs", ""); got.ok || !strings.Contains(got.detail, "outside the audited repository") {

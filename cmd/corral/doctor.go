@@ -681,11 +681,13 @@ func checkPairing(code, test string) checkResult {
 		return checkResult{name: name, ok: true, detail: strings.TrimPrefix(needsRepoDir, " — ")}
 	}
 	// A source whose authored test lands in itself and that declares no
-	// test module has no test file of its own, and certify --local grades
+	// test module corral could resolve (none at all, a declared `mod tests;`
+	// whose file is missing, or a form the reader does not parse) has no
+	// test file of its own, and certify --local grades
 	// it anyway, by the tests that execute it (lang.DevTestOf): "no test
 	// found" would refuse here what the audit admits.
 	if own, decided := lang.DevTestOf(code, readLanding); landing == nil && decided && own == "" {
-		return checkResult{name: name, ok: true, detail: "declares no test module of its own: graded by the tests that execute it, and its authored test is appended to the file itself" + needsRepoDir}
+		return checkResult{name: name, ok: true, detail: "declares no test module corral could resolve: graded by the tests that execute it, and its authored test is appended to the file itself" + needsRepoDir}
 	}
 	// Rooted at the working directory, as certify --local and
 	// --adversarial resolve an operator's --code: that is also the root a

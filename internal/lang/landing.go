@@ -158,13 +158,16 @@ func CheckTestLanding(codePath string, l pairing.Landing) error {
 // whether the landing decides it at all. For an Inline landing the answer
 // is the source, when it declares its own inline test module
 // (pairing.Landing.OwnModule), and none ("") when it declares no test
-// module: such a file is graded by the tests the evidence says execute it,
-// and no file is named its test that does not hold one. A test file a unit
-// covering the source happens to be (an integration test) is not the
-// developer's test FOR this file, and naming the source as its own test
-// when it holds none would show the writer and the critic a test file that
-// is not one. Any other landing is not decided here (decided false): the
-// door's pairing answers, as it always has.
+// module corral could resolve: none at all, a declared `mod tests;` whose
+// file is missing, or a declaration the reader does not parse. Such a file
+// is graded by the tests the evidence says execute it, and no file is named
+// its test that does not hold one. A test file a unit covering the source
+// happens to be (an integration test) is not the developer's test FOR this
+// file, and naming the source as its own test when it holds none would show
+// the writer and the critic a test file that is not one (an assigned critic
+// is then not run: advpool.CriticNotRunReason). Any other landing is not
+// decided here (decided false): the door's pairing answers, as it always
+// has.
 func DevTestOf(codePath string, l pairing.Landing) (path string, decided bool) {
 	if !l.Into || l.Path == "" || !sameFile(l.Path, codePath) {
 		return "", false

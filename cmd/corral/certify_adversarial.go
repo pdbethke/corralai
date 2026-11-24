@@ -81,6 +81,10 @@ type advVerdict struct {
 	// CriticIncomplete mirrors advpool.Verdict's: the critic's review was cut
 	// short, so VacuousFindings is a lower bound, not the whole list.
 	CriticIncomplete bool `json:"critic_incomplete,omitempty"`
+	// CriticNotRun mirrors advpool.Verdict's: why an assigned critic was not
+	// run (no developer test to judge), so the readout says so instead of
+	// "no test-critic was assigned".
+	CriticNotRun string `json:"critic_not_run,omitempty"`
 	// AuthoredTogether / AuthoredTogetherOutput mirror advpool.Verdict's: what
 	// running the proven tests whole, once, on the unmutated code showed.
 	AuthoredTogether       string            `json:"authored_together,omitempty"`
@@ -618,7 +622,11 @@ func renderAdvVerdict(w io.Writer, codePath string, v advVerdict) {
 	}
 	criticModel := strings.TrimSpace(v.ModelsByRole[advpool.RoleTestCritic])
 	criticOff := criticModel == "" || strings.EqualFold(criticModel, "off")
-	if v.TimedOut {
+	if v.CriticNotRun != "" {
+		// Assigned, and not run because there was nothing to judge: neither
+		// a clean review nor the operator's --critic-model off.
+		fmt.Fprintf(w, "  critic review: not run — %s\n", v.CriticNotRun)
+	} else if v.TimedOut {
 		fmt.Fprintln(w, "  critic review: not run — pool did not converge before the critic executed")
 	} else if criticOff {
 		// The same reasoning as the TIMED OUT branch above, for the seat the

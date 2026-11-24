@@ -3357,6 +3357,7 @@ func advVerdictFromPool(v advpool.Verdict) advVerdict {
 		ExamIndicative:           v.ExamIndicative,
 		IndicativeReason:         v.IndicativeReason,
 		CriticIncomplete:         v.CriticIncomplete,
+		CriticNotRun:             v.CriticNotRun,
 		AuthoredTogether:         v.AuthoredTogether,
 		AuthoredTogetherOutput:   v.AuthoredTogetherOutput,
 		DevKilledMutants:         v.DevKilledMutants,

@@ -85,3 +85,20 @@ func TestRunLineCountsKillConfirmations(t *testing.T) {
 		t.Errorf("no candidate, no line:\n%s", b.String())
 	}
 }
+
+// An assigned critic not run because the file has no developer test to
+// judge reaches the readout as that, never as "no vacuous tests flagged" (a
+// clean review nobody gave) nor as the operator's --critic-model off.
+func TestAdvVerdictSaysWhyTheCriticWasNotRun(t *testing.T) {
+	why := advpool.CriticNotRunReason(advpool.RunSpec{}, advpool.RoleAssignment{advpool.RoleTestCritic: "m"})
+	got := advVerdictFromPool(advpool.Verdict{CriticNotRun: why, Status: advpool.StatusCertified})
+	if got.CriticNotRun != why || why == "" {
+		t.Fatalf("the CLI mapping dropped CriticNotRun: %+v", got)
+	}
+	var b strings.Builder
+	renderAdvVerdict(&b, "src/a.rs", got)
+	s := b.String()
+	if !strings.Contains(s, "critic review: not run — no developer test to judge") || strings.Contains(s, "no vacuous tests flagged") || strings.Contains(s, "--critic-model off") {
+		t.Errorf("readout:\n%s", s)
+	}
+}

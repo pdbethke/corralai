@@ -3796,12 +3796,14 @@ func mightBeTestPredicate() func(path string) bool {
 // which the registry round trip already holds to be a possible test. The
 // error is a source that could not be read for its declarations.
 //
-// A test-landing-not-built source is asked too. Since the Rust landing, a
-// source whose declared test file the diff deleted no longer has that file
-// to land in, so it lands on itself and is excluded for its LANDING — not as
-// no-paired-test — while the deletion is what made it so. Asking only
-// no-paired-test sources would let that PR drop app_id.rs out of the audit
-// silently again.
+// A source whose declared test file the diff deleted no longer has that file
+// to pair or land in, so it lands on itself. Since the inline landing
+// (2026-11-24) that is an ordinary no-paired-test exclusion, asked above;
+// before it, the source was excluded for its LANDING (test-landing-not-built)
+// while the deletion was what made it so. Landing refusals are still asked
+// (IsLandingRefusal: a declaration outside the repository, or one this
+// build cannot read), so a deletion that leaves a source refused is not
+// dropped from the audit silently either.
 func sourcesOrphanedByDeletedTests(repoDir string, changed []string, excl []reposcan.Exclusion) ([]string, error) {
 	deleted := map[string]bool{}
 	for _, path := range changed {

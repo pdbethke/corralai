@@ -724,8 +724,17 @@ type Verdict struct {
 	// bound, never a complete count. False when no critic was seated. The
 	// critic stays advisory: this changes no status.
 	CriticIncomplete bool `json:"critic_incomplete,omitempty"`
-	ModelsByRole     map[string]string
-	Status           string // certified | needs-review
+	// CriticNotRun is why a test-critic that was assigned was not run, ""
+	// when it ran or none was assigned. Set when the run has no developer
+	// test to judge (CriticNotRunReason: a Rust source whose authored test
+	// lands in itself and that declares no test module corral could
+	// resolve). Such a run seats no critic: no task, no roster entry, no
+	// leaderboard row, exactly as `--critic-model off`; this field is what
+	// tells a reader it was not the operator's choice, so an empty
+	// VacuousFindings is never read as a critic that found nothing.
+	CriticNotRun string `json:"critic_not_run,omitempty"`
+	ModelsByRole map[string]string
+	Status       string // certified | needs-review
 	// TestWriterFailed is true when the pool exhausted MaxTestWriterAttempts
 	// without producing a compiling killing test. HONESTY NOTE: when this is
 	// true, ProvenMissed==0 does NOT mean "no real gaps" — it means "gaps
@@ -1837,6 +1846,13 @@ func (d *Driver) StartRun(missionID int64, rs RunSpec, sigs []repoindex.Signatur
 	}
 	// And a spec whose handed-in mutants and their sources disagree: see
 	// checkMutantSources.
+	// Said on the run's output before anything runs, as well as on the
+	// verdict (CriticNotRun): an assigned critic with nothing to judge is
+	// not seated (BuildDAG), and the run must not look like one that
+	// reviewed the tests and found nothing.
+	if why := CriticNotRunReason(rs, d.Assign); why != "" {
+		log.Printf("advpool: %s: test-critic not run — %s", rs.CodePath, why)
+	}
 	if err := checkMutantSources(rs); err != nil {
 		return fmt.Errorf("advpool: %w", err)
 	}
@@ -2118,7 +2134,7 @@ func (d *Driver) Tick(ctx context.Context, missionID int64) (*Verdict, error) {
 			// run with no critic assigned (`--critic-model off`) seeds no
 			// critic task, so the phase never starts and reads as absent
 			// rather than as a critic that answered instantly.
-			if strings.TrimSpace(d.Assign[RoleTestCritic]) != "" {
+			if CriticSeated(run.rs, d.Assign) {
 				d.beginPhase(run, phaseCritic)
 			}
 		}
@@ -3125,7 +3141,7 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	// Skip straight to aggregation with no advisory review, which is the honest
 	// representation: no critic ran, so there are no findings, as distinct from
 	// a critic that ran and found nothing.
-	criticEnabled := strings.TrimSpace(d.Assign[RoleTestCritic]) != ""
+	criticEnabled := CriticSeated(run.rs, d.Assign)
 
 	var criticFindings []queue.Finding
 	criticIncomplete := false
@@ -3173,6 +3189,7 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 		criticFindings, d.Threshold, d.CertifyIntervalWidth, run.examSample, false, run.testWriterFailed, run.poolTestUnsound)
 	seated.stamp(&v)
 	v.CriticIncomplete = criticIncomplete
+	v.CriticNotRun = CriticNotRunReason(run.rs, d.Assign)
 	v.RegionsTotal = run.regionsTotal
 	v.PromptShape = run.promptShape
 	v.MutantBudget = run.mutantBudget
@@ -3733,7 +3750,8 @@ func (d *Driver) timeoutVerdict(run *runState) Verdict {
 	// This path never reads the critic's findings, so with a critic seated
 	// its review did not reach this verdict: say so, rather than let an empty
 	// VacuousFindings read as a critic that found nothing.
-	v.CriticIncomplete = strings.TrimSpace(d.Assign[RoleTestCritic]) != ""
+	v.CriticIncomplete = CriticSeated(run.rs, d.Assign)
+	v.CriticNotRun = CriticNotRunReason(run.rs, d.Assign)
 	v.DevKillRate = run.devKillRate
 	v.BaselineDuration = run.baselineDuration
 	v.MutantsTotal = run.mutantsTotal
@@ -4016,7 +4034,36 @@ func (r *runState) modelsByRole(assign RoleAssignment) map[string]string {
 	if strings.TrimSpace(out[RoleMutantGeneratorShadow]) != "" && len(r.shadowStats) == 0 {
 		delete(out, RoleMutantGeneratorShadow)
 	}
+	// A critic with no developer test to judge was never asked (BuildDAG
+	// seeds no task for it), so it is not in the roster either.
+	if !CriticSeated(r.rs, assign) {
+		delete(out, RoleTestCritic)
+	}
 	return out
+}
+
+// CriticSeated reports whether this run runs its test-critic: one is
+// assigned AND the run has a developer test for it to judge. It is the one
+// answer BuildDAG (whether to seed the task), the critic's phase clock, both
+// verdict construction sites (tickAggregate and timeoutVerdict) and the
+// signed roster read, so none of them can disagree about whether a critic
+// ran.
+func CriticSeated(rs RunSpec, assign RoleAssignment) bool {
+	return strings.TrimSpace(assign[RoleTestCritic]) != "" && CriticNotRunReason(rs, assign) == ""
+}
+
+// CriticNotRunReason is why an assigned test-critic is not run for rs, ""
+// when it runs or none is assigned (`--critic-model off` is the operator's
+// own choice and needs no reason on the verdict). A run with no developer
+// test (lang.DevTestOf: a source whose authored test lands in itself and
+// that declares no test module corral could resolve) leaves the critic
+// nothing to read: run anyway, it spent tokens on an empty file and its
+// empty answer was recorded as a review that found nothing.
+func CriticNotRunReason(rs RunSpec, assign RoleAssignment) string {
+	if strings.TrimSpace(assign[RoleTestCritic]) == "" || strings.TrimSpace(rs.DevTestCode) != "" {
+		return ""
+	}
+	return "no developer test to judge: the file has no test of its own, so it is graded by the tests that execute it"
 }
 
 // isOperationalFinding reports whether f is an operational event (e.g. a

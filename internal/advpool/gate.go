@@ -812,10 +812,17 @@ func (s JailScorer) scoreAuthoredReport(ctx context.Context, codePath, code, tes
 			// The verdict asks the same question with the canary alone
 			// (selectionDisclosure); a block whose own tests then cannot be
 			// named is an error, never a wider run under the narrower claim.
-			if _, aerr = inlineAlone(s.Landing, r, s.RepoDir, codePath, code, alone); aerr == nil {
-				if alone, err = inlineAlone(s.Landing, r, s.RepoDir, codePath, code, alone, test); err != nil {
+			// A salvage's failing examples are left out of the narrowed id
+			// list (inlineAlone's drop), never deselected afterwards.
+			if _, aerr = inlineAlone(s.Landing, r, s.RepoDir, codePath, code, alone, nil); aerr == nil {
+				var drop []string
+				if x != nil {
+					drop = x.ids
+				}
+				if alone, err = inlineAlone(s.Landing, r, s.RepoDir, codePath, code, alone, drop, test); err != nil {
 					return adequacy.Report{}, err
 				}
+				x = nil
 			}
 		}
 		if aerr == nil {
@@ -1305,7 +1312,7 @@ func selectionDisclosure(rs RunSpec) (dev, authored string, alone bool) {
 	if aloneErr == nil && rs.Landing.Inline(rs.CodePath) {
 		// What the authored pass narrows to (inlineAlone), asked with the
 		// positive control's block, which is all the spec holds.
-		_, aloneErr = inlineAlone(rs.Landing, r, rs.RepoDir, rs.CodePath, rs.Landing.Existing, aloneCmd)
+		_, aloneErr = inlineAlone(rs.Landing, r, rs.RepoDir, rs.CodePath, rs.Landing.Existing, aloneCmd, nil)
 	}
 	if aloneErr == nil {
 		return dev, "", true
@@ -1329,7 +1336,18 @@ func selectionDisclosure(rs RunSpec) (dev, authored string, alone bool) {
 // is true again. A row with no SelectCmd, or ids that cannot be named (a
 // file no module path names, a block whose tests cannot be listed), is an
 // error: the pass is then not recorded alone.
-func inlineAlone(l AuthoredLanding, r golang.Runner, repoDir, codePath, target string, alone []string, blocks ...string) ([]string, error) {
+//
+// drop is a salvage's failing examples (exclusion.ids): they are left out of
+// the id list rather than excluded afterwards, because the row's DeselectCmd
+// refuses a command that already names its tests (cargo test's would carry
+// `--exact <ids>`), which dropped every partly failing inline test under
+// cargo test, Rust's default runner. A failing id is matched by its test
+// path: libtest names a failure by it (`extra::corral_tests::kills`, the
+// InlineTestIDs form), and nextest as `<binary> <path>`, whose binary is the
+// one unit this command already runs. A block left with no test to run is
+// an error — nothing is left to salvage — and never an empty selection,
+// which `--exact` with no name would turn into the whole unit.
+func inlineAlone(l AuthoredLanding, r golang.Runner, repoDir, codePath, target string, alone, drop []string, blocks ...string) ([]string, error) {
 	if r.SelectCmd == nil {
 		return nil, fmt.Errorf("advpool: the authored test lands in %s itself, whose unit also runs the file's own tests, and the %s runner cannot run tests by name, so the authored test cannot run alone", codePath, r.ID)
 	}
@@ -1337,17 +1355,42 @@ func inlineAlone(l AuthoredLanding, r golang.Runner, repoDir, codePath, target s
 	if err != nil {
 		return nil, err
 	}
+	failing := make(map[string]bool, len(drop))
+	for _, id := range drop {
+		if i := strings.LastIndexByte(id, ' '); i >= 0 {
+			id = id[i+1:]
+		}
+		failing[id] = true
+	}
 	var ids []string
-	for _, b := range append(slices.Clone(blocks), canary) {
+	add := func(b string, salvaged bool) (int, error) {
 		got, err := golang.InlineTestIDs(repoDir, codePath, b)
 		if err != nil {
-			return nil, fmt.Errorf("advpool: the authored test lands in %s itself, whose unit also runs the file's own tests, and its tests cannot be named apart from them: %w", codePath, err)
+			return 0, fmt.Errorf("advpool: the authored test lands in %s itself, whose unit also runs the file's own tests, and its tests cannot be named apart from them: %w", codePath, err)
 		}
+		n := 0
 		for _, id := range got {
+			if salvaged && failing[id] {
+				continue
+			}
+			n++
 			if !slices.Contains(ids, id) {
 				ids = append(ids, id)
 			}
 		}
+		return n, nil
+	}
+	for _, b := range blocks {
+		n, err := add(b, true)
+		if err != nil {
+			return nil, err
+		}
+		if n == 0 {
+			return nil, fmt.Errorf("advpool: every test of the authored block in %s failed on the unmutated code (%v), so nothing is left to salvage", codePath, drop)
+		}
+	}
+	if _, err := add(canary, false); err != nil {
+		return nil, err
 	}
 	out, ok := r.SelectCmd(alone, ids)
 	if !ok {

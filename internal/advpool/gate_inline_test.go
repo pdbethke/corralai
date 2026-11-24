@@ -376,3 +376,66 @@ func TestInlineAuthoredAloneRunsOnlyCorralsTests(t *testing.T) {
 		})
 	}
 }
+
+// TestInlineSalvageKeepsThePassingTestsAlone: a salvaged inline authored test
+// (some of its cases failed on the unmutated code) is run with the failing
+// ones left out of the exact-name list, not deselected afterwards: cargo
+// test's DeselectCmd refuses a command that already names its tests, which
+// dropped every partly failing inline test under Rust's default runner. The
+// passing case is kept, run alone, and still proves its survivor. nextest
+// names a failure `<binary> <path>`, matched by its path. A block whose every
+// test failed leaves nothing to salvage: an error, and nothing is run (an
+// empty `--exact` list would run the whole unit).
+func TestInlineSalvageKeepsThePassingTestsAlone(t *testing.T) {
+	root, _ := filepath.Abs("../lang/testdata/runners/src/units/cargo")
+	const codePath = "b/src/extra.rs"
+	src := "pub fn double(x: i32) -> i32 { x * 2 }\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n    #[test]\n    fn own() { assert_eq!(double(2), 4); }\n}\n"
+	landing := AuthoredLanding{
+		Landing:  pairing.Landing{Path: codePath, Shape: pairing.Inline, Label: "inline", Into: true, DeclarationsRead: true, OwnModule: true},
+		Existing: src,
+	}
+	block := golang.LandBody(landing.Landing, src, "#[test]\nfn kills() { assert_eq!(double(3), 6); }\n#[test]\nfn flaky() { assert!(false); }")
+	mutants := []adequacy.Mutant{{ID: "m1", Search: "x * 2", Replace: "x * 2 /* KILL */", Span: golang.LineRange{Start: 1, End: 1}}}
+	for _, tc := range []struct {
+		row, base, unit string
+		failing, all    []string
+		want            string
+	}{
+		{"cargo-test", "cargo test", "units-b/lib", []string{"extra::corral_tests::flaky"}, []string{"extra::corral_tests::kills", "extra::corral_tests::flaky"},
+			"cargo test -p units-b --lib -- --exact extra::corral_tests::kills extra::corral_tests::corral_reach_canary"},
+		{"cargo-nextest", "cargo nextest run", "units-b", []string{"units-b extra::corral_tests::flaky"}, []string{"units-b extra::corral_tests::kills", "units-b extra::corral_tests::flaky"},
+			"cargo nextest run -E ((binary_id(=units-b))) & (test(=extra::corral_tests::kills) | test(=extra::corral_tests::corral_reach_canary))"},
+	} {
+		t.Run(tc.row, func(t *testing.T) {
+			sel := golang.Selection{Method: testmap.MethodUnitEvidence, Of: 1, Base: adequacy.ShellSplit(tc.base), Tests: []string{tc.unit}}
+			newScorer := func(j *inlineUnitJail) JailScorer {
+				return JailScorer{Jail: j, Lang: "rust", RepoDir: root, Selection: sel, SelectionMap: testmap.Map{Method: testmap.MethodUnitEvidence, Runner: tc.row},
+					DevTestPath: codePath, Landing: landing, BaseFiles: map[string]string{codePath: src, "b/Cargo.toml": "[package]\nname = \"units-b\"\n"}}
+			}
+			j := &inlineUnitJail{codePath: codePath}
+			rep, err := newScorer(j).ScoreAuthoredDeselected(context.Background(), codePath, src, block, mutants, tc.base, tc.base, tc.failing)
+			if err != nil {
+				t.Fatalf("a partly failing inline test was not salvaged: %v", err)
+			}
+			if len(j.cmds) == 0 {
+				t.Fatal("the salvaged pass ran nothing")
+			}
+			for i, c := range j.cmds {
+				if got := strings.Join(c, " "); got != tc.want {
+					t.Errorf("run %d: %s\nwant      %s", i, got, tc.want)
+				}
+			}
+			if got := rep.PerMutant["m1"]; got.Rule != RuleAuthoredAlone || !slices.Contains(rep.Killed, "m1") {
+				t.Errorf("m1 grading %+v, killed %v: want killed by the kept test alone", got, rep.Killed)
+			}
+
+			all := &inlineUnitJail{codePath: codePath}
+			if _, err := newScorer(all).ScoreAuthoredDeselected(context.Background(), codePath, src, block, mutants, tc.base, tc.base, tc.all); err == nil || !strings.Contains(err.Error(), "nothing is left to salvage") {
+				t.Errorf("every test failing: err = %v, want nothing left to salvage", err)
+			}
+			if len(all.cmds) != 0 {
+				t.Errorf("an all-failing salvage ran %v; it must run nothing", all.cmds)
+			}
+		})
+	}
+}

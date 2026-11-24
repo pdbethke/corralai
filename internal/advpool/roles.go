@@ -786,7 +786,8 @@ func BuildDAG(rs RunSpec, assign RoleAssignment, sigs []repoindex.Signature) []q
 		// Only the critic is skippable. The mutant-generator and test-writer
 		// PRODUCE the execution-proven measurement; a run without them has
 		// nothing to certify.
-		if role.Name == RoleTestCritic && strings.TrimSpace(assign[RoleTestCritic]) == "" {
+		if role.Name == RoleTestCritic && !CriticSeated(rs, assign) {
+			// Unassigned, or nothing to judge (CriticNotRunReason).
 			continue
 		}
 		// A run handed a fixed mutant set generates NOTHING. Skipping the

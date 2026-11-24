@@ -553,9 +553,12 @@ package reposcan
 // (test-landing-not-built), so no earlier verdict exists for one: a "53"
 // record says nothing about it, and it is not a cache entry to reuse. A Rust
 // file "53" did audit (one whose `mod` declaration loads a separate test
-// file) may sit a different exam too: a mutant whose edit overlaps an
-// inline test module the source also holds is invalid
-// (adequacy.WithEvidenceLines), where "53" graded it. For the newly audited
+// file) may sit a different exam too: a mutant whose edit overlaps the
+// source's own test code (repoindex.OwnTestLines: any test module, or item
+// carrying a test attribute or a cfg holding `test`, at any nesting level)
+// is invalid (adequacy.WithEvidenceLines), where "53" graded it, and every
+// mutant of a file whose parse set code aside outside those spans and
+// outside every function body is invalid (adequacy.WithEvidenceUnread). For the newly audited
 // files, the inline positive control appends a landed test that always
 // fails, and an authored pass recorded alone runs only corral's block, by
 // exact test name (lang.Runner.SelectCmd), where the library unit would

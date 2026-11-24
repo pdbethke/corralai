@@ -4,6 +4,7 @@ package adequacy
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -73,5 +74,45 @@ func TestNoEvidenceLinesLeavesMutantsAlone(t *testing.T) {
 	}
 	if len(rep.Invalid) != 0 || rep.Total != 4 {
 		t.Fatalf("Invalid = %v, Total = %d; want none invalid, 4 graded", rep.Invalid, rep.Total)
+	}
+}
+
+// The exact boundaries: a mutant whose span ENDS on the module's first line
+// (its #[cfg(test)]) and one whose span STARTS on its last line (its closing
+// brace) each edit the module, and are invalid.
+func TestMutantOnAnInlineTestModulesBoundaryLineIsInvalid(t *testing.T) {
+	mutants := []Mutant{
+		{ID: "ends-on-first", Search: "c\nd\n", Replace: "C\nD\n", Span: lang.LineRange{Start: 3, End: 4}},
+		{ID: "starts-on-last", Search: "e\nf\n", Replace: "E\nF\n", Span: lang.LineRange{Start: 5, End: 6}},
+		{ID: "above", Search: "c\n", Replace: "C\n", Span: lang.LineRange{Start: 3, End: 3}},
+	}
+	j := &gateJail{baselineFiles: evidenceBase}
+	rep, err := Score(context.Background(), j, map[string]string{}, "x.go", evidenceBase,
+		mutants, []string{"TEST"}, WithEvidenceLines([]lang.LineRange{{Start: 4, End: 5}}))
+	if err != nil {
+		t.Fatalf("Score: %v", err)
+	}
+	if !slices.Contains(rep.Invalid, "ends-on-first") || !slices.Contains(rep.Invalid, "starts-on-last") || slices.Contains(rep.Invalid, "above") {
+		t.Errorf("Invalid = %v; want ends-on-first and starts-on-last, not above", rep.Invalid)
+	}
+}
+
+// When the source's own tests could not be located (the grammar set code
+// aside where they could hide: repoindex.OwnTestLines' unread), no mutant can
+// be shown to leave them alone, so every one is invalid and says why — never
+// graded on a reading that may have missed the tests.
+func TestEveryMutantIsInvalidWhenTheTestsCannotBeLocated(t *testing.T) {
+	j := &gateJail{baselineFiles: evidenceBase}
+	const why = "the grammar set aside lines 2-2, which could hold the source's own tests"
+	rep, err := Score(context.Background(), j, map[string]string{}, "x.go", evidenceBase,
+		evidenceMutants(), []string{"TEST"}, WithEvidenceUnread(why))
+	if err != nil {
+		t.Fatalf("Score: %v", err)
+	}
+	if len(rep.Invalid) != len(evidenceMutants()) || rep.Total != 0 {
+		t.Fatalf("Invalid = %v, Total = %d; want every mutant invalid, none graded", rep.Invalid, rep.Total)
+	}
+	if got := rep.InvalidReasons["above"]; got != "the source's own tests could not be located ("+why+"), so no mutant can be shown to leave them alone" {
+		t.Errorf("reason = %q", got)
 	}
 }

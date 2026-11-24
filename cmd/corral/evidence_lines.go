@@ -7,22 +7,28 @@ import (
 	"github.com/pdbethke/corralai/internal/repoindex"
 )
 
+// ownTestEvidence is what a grading scorer is told about the audited
+// source's own tests: their lines (advpool.JailScorer.EvidenceLines), and
+// why they could not be located when the parse cannot say
+// (JailScorer.EvidenceUnread, which invalidates every mutant).
+type ownTestEvidence struct {
+	lines  []lang.LineRange
+	unread string
+}
+
 // inlineTestLines are the lines of code that hold the source's OWN tests, for
 // a language whose source can declare them inline (Rust's `#[cfg(test)] mod
-// tests { ... }`). They are the audit's evidence, so every grading run of the
-// file refuses a mutant that edits them (adequacy.WithEvidenceLines).
+// tests { ... }`, a test module nested in another, a #[test] fn anywhere).
+// They are the audit's evidence, so every grading run of the file refuses a
+// mutant that edits them (adequacy.WithEvidenceLines), and every mutant when
+// the parse set code aside where tests could hide (adequacy.WithEvidenceUnread).
 //
-// repoindex owns the grammar, so this parses nothing: it keeps the inline
-// modules' line ranges from repoindex.TestModules. A language with no modules
-// reader answers none, and so does a build without cgo (no grammar). That
-// build cannot read a Rust file at all and refuses it upstream, so there is no
-// fallback here that would guess at test lines.
-func inlineTestLines(langName string, code []byte) []lang.LineRange {
-	var out []lang.LineRange
-	for _, m := range repoindex.TestModules(langName, code) {
-		if m.Inline && m.StartLine > 0 {
-			out = append(out, lang.LineRange{Start: m.StartLine, End: m.EndLine})
-		}
-	}
-	return out
+// repoindex owns the grammar, so this parses nothing: it is
+// repoindex.OwnTestLines. A language with no reader answers none, and so
+// does a build without cgo (no grammar). That build cannot read a Rust file
+// at all and refuses it upstream, so there is no fallback here that would
+// guess at test lines.
+func inlineTestLines(langName string, code []byte) ownTestEvidence {
+	lines, unread := repoindex.OwnTestLines(langName, code)
+	return ownTestEvidence{lines: lines, unread: unread}
 }

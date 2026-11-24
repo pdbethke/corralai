@@ -2816,6 +2816,8 @@ type jailWiring struct {
 // input error, never an internal one).
 func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err error) {
 	w.cleanup = func() {}
+	// The source's own tests, read once for all three scorer doors below.
+	ev := inlineTestLines(in.langName, in.code)
 	// If wiring fails AFTER a vendor staging dir was created, release it here —
 	// the caller only defers cleanup on the success path.
 	defer func() {
@@ -3008,7 +3010,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		// The workspace has no run cache; its one rewrite is the report flags,
 		// through the same door the jail's commands take.
 		rewrite := gradingRewrite(gradingPlugin(in.langName), in.inv, in.checkArgv, nil)
-		w.scorer = advpool.JailScorer{Jail: pool, RepoDir: in.repoDir, BaseFiles: base, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Landing: w.landing, Concurrency: pool.Trees(), Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, KillerCmd: killerCmd, FailFast: failFast, EvidenceLines: inlineTestLines(in.langName, in.code), CommandRewrite: rewrite}
+		w.scorer = advpool.JailScorer{Jail: pool, RepoDir: in.repoDir, BaseFiles: base, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Landing: w.landing, Concurrency: pool.Trees(), Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, KillerCmd: killerCmd, FailFast: failFast, EvidenceLines: ev.lines, EvidenceUnread: ev.unread, CommandRewrite: rewrite}
 		w.validator = advpool.JailValidator{Jail: pool, RepoDir: in.repoDir, BaseFiles: base, DevTestPath: w.devTestKey, Landing: w.landing, CommandRewrite: rewrite}
 		w.jailEnum = advpool.JailEnumerator{Jail: pool, BaseFiles: base}
 		// w.depBinds stays nil: there is nothing to bind read-only when the
@@ -3071,7 +3073,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		// (the flag is the real gate).
 		enumerator := newRunEnumerator(in.iso, in.timeout, depBinds)
 		rewrite := gradingRewrite(gradingPlugin(in.langName), in.inv, in.checkArgv, gc.Rewrite)
-		w.scorer = advpool.JailScorer{Jail: jail, RepoDir: in.repoDir, BaseFiles: repoFiles, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Landing: w.landing, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, KillerCmd: killerCmd, FailFast: failFast, EvidenceLines: inlineTestLines(in.langName, in.code), CommandRewrite: rewrite, WarmCheck: warmCheckFor(gradingPlugin(in.langName), in.inv, gc)}
+		w.scorer = advpool.JailScorer{Jail: jail, RepoDir: in.repoDir, BaseFiles: repoFiles, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Landing: w.landing, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, KillerCmd: killerCmd, FailFast: failFast, EvidenceLines: ev.lines, EvidenceUnread: ev.unread, CommandRewrite: rewrite, WarmCheck: warmCheckFor(gradingPlugin(in.langName), in.inv, gc)}
 		w.validator = advpool.JailValidator{Jail: jail, RepoDir: in.repoDir, BaseFiles: repoFiles, DevTestPath: w.devTestKey, Landing: w.landing, CommandRewrite: rewrite}
 		w.jailEnum = advpool.JailEnumerator{Jail: enumerator, BaseFiles: repoFiles}
 		if len(depBinds) > 0 {
@@ -3092,7 +3094,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		w.closeWithCleanup(jail, in.runCache, in.capFloor, gc, in.testTimeout)
 		enumerator := newRunEnumerator(in.iso, in.timeout, nil)
 		rewrite := gradingRewrite(plug, in.inv, warm, gc.Rewrite)
-		w.scorer = advpool.JailScorer{Jail: jail, MutantTimeout: in.testTimeout, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, KillerCmd: killerCmd, FailFast: failFast, EvidenceLines: inlineTestLines(in.langName, in.code), CommandRewrite: rewrite, WarmCheck: warmCheckFor(plug, in.inv, gc)}
+		w.scorer = advpool.JailScorer{Jail: jail, MutantTimeout: in.testTimeout, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, KillerCmd: killerCmd, FailFast: failFast, EvidenceLines: ev.lines, EvidenceUnread: ev.unread, CommandRewrite: rewrite, WarmCheck: warmCheckFor(plug, in.inv, gc)}
 		w.validator = advpool.JailValidator{Jail: jail, CommandRewrite: rewrite}
 		w.jailEnum = advpool.JailEnumerator{Jail: enumerator}
 	}

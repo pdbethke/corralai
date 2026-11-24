@@ -370,6 +370,11 @@ type JailScorer struct {
 	// scorer makes refuses a mutant that edits them (adequacy.WithEvidenceLines).
 	// Empty for a language whose source declares none.
 	EvidenceLines []golang.LineRange
+	// EvidenceUnread is why the source's own tests could not be located
+	// (repoindex.OwnTestLines' unread: the parse set code aside where test
+	// code could hide), "" when they were. Non-empty, every Score call
+	// refuses every mutant (adequacy.WithEvidenceUnread).
+	EvidenceUnread string
 	// Lang, Selection and SelectionMap shape the AUTHORED pass's command
 	// (authoredCmd); the DEV pass's is built by its callers, from the same
 	// fields on the RunSpec, via DevCommand. The selection engine
@@ -508,6 +513,7 @@ func (s JailScorer) baseScoreOpts() []adequacy.ScoreOption {
 		adequacy.WithMutantFailFast(s.FailFast),
 		adequacy.WithCommandRewrite(s.CommandRewrite),
 		adequacy.WithEvidenceLines(s.EvidenceLines),
+		adequacy.WithEvidenceUnread(s.EvidenceUnread),
 	}
 }
 

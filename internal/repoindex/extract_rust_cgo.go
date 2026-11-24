@@ -9,6 +9,7 @@ import (
 
 	sitter "github.com/smacker/go-tree-sitter"
 
+	plugins "github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/pairing"
 )
 
@@ -263,4 +264,137 @@ func rustTestModules(root *sitter.Node, src []byte) []pairing.TestModule {
 		out = append(out, tm)
 	}
 	return out
+}
+
+// rustOwnTestLines is Rust's OwnTestLines: the span, from its first
+// attribute to its end, of every item the grammar placed that is the
+// source's own test code, at ANY nesting level:
+//
+//   - a module that is test code: gated on a cfg whose predicate holds the
+//     `test` cfg outside a not(…) (cfg(test), cfg(all(test, feature =
+//     "std")), cfg(any(test, …))), or named tests/test, with a body in this
+//     file (a bare `mod tests;` holds no test line here);
+//   - any other item gated the same way (a #[cfg(test)] helper fn, use or
+//     impl), or carrying a test attribute (#[test], #[tokio::test],
+//     #[rstest], #[test_case], #[wasm_bindgen_test]: the attributes
+//     lang's TestNamesInSource reads as marking a test).
+//
+// Outermost spans only: a test fn inside a test module is already inside
+// its span. rustTestModules reads only top-level modules because pairing
+// resolves module FILES and a nested module's files resolve elsewhere; that
+// reader is unchanged, and this one exists because a guard over the file's
+// own lines must see a test module wherever it sits (a `#[cfg(test)] mod
+// tests` nested in an inline `mod imp { … }` was invisible to it).
+func rustOwnTestLines(root *sitter.Node, src []byte) []plugins.LineRange {
+	var out []plugins.LineRange
+	var walk func(n *sitter.Node)
+	walk = func(n *sitter.Node) {
+		for i := 0; i < int(n.NamedChildCount()); i++ {
+			c := n.NamedChild(i)
+			if c == nil || c.Type() == "attribute_item" || strings.HasSuffix(c.Type(), "comment") {
+				continue
+			}
+			if rustIsOwnTest(c, src) {
+				out = append(out, plugins.LineRange{Start: int(rustAttrStartRow(c)) + 1, End: int(c.EndPoint().Row) + 1})
+				continue
+			}
+			walk(c)
+		}
+	}
+	walk(root)
+	return out
+}
+
+// rustIsOwnTest reports whether item n (its attribute run read as rustAttrs
+// reads it) is test code with lines in this file (rustOwnTestLines).
+func rustIsOwnTest(n *sitter.Node, src []byte) bool {
+	cfgTest, testAttr := false, false
+	for p := n.PrevNamedSibling(); p != nil; p = p.PrevNamedSibling() {
+		if t := p.Type(); t == "line_comment" || t == "block_comment" {
+			continue
+		} else if t != "attribute_item" {
+			break
+		}
+		attr := firstNamedOfType(p, "attribute")
+		if attr == nil || attr.NamedChildCount() == 0 {
+			continue
+		}
+		path := strings.Split(strings.Join(strings.Fields(attr.NamedChild(0).Content(src)), ""), "::")
+		switch last := path[len(path)-1]; {
+		case len(path) == 1 && last == "cfg":
+			if args := attr.ChildByFieldName("arguments"); args != nil && rustCfgHoldsTest(args.Content(src)) {
+				cfgTest = true
+			}
+		case last == "test" || last == "rstest" || last == "test_case" || last == "wasm_bindgen_test":
+			testAttr = true
+		}
+	}
+	if n.Type() == "mod_item" {
+		if n.ChildByFieldName("body") == nil {
+			return false
+		}
+		name := fieldText(n, "name", src)
+		return cfgTest || name == "tests" || name == "test"
+	}
+	return cfgTest || testAttr
+}
+
+// rustCfgHoldsTest reports whether a cfg attribute's argument token tree
+// (`(all(test, feature = "std"))`) holds the `test` cfg outside every
+// not(…): code compiled when the tests are. String literals are skipped, so
+// `feature = "test"` is not it.
+func rustCfgHoldsTest(args string) bool {
+	type frame struct{ not bool }
+	stack := []frame{{}}
+	word := ""
+	negated := func() bool {
+		for _, f := range stack {
+			if f.not {
+				return true
+			}
+		}
+		return false
+	}
+	inStr := false
+	flush := func() bool {
+		w := word
+		word = ""
+		return w == "test" && !negated()
+	}
+	for i := 0; i < len(args); i++ {
+		c := args[i]
+		if inStr {
+			if c == '\\' {
+				i++
+			} else if c == '"' {
+				inStr = false
+			}
+			continue
+		}
+		switch {
+		case c == '"':
+			if flush() {
+				return true
+			}
+			inStr = true
+		case c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9':
+			word += string(c)
+		case c == '(':
+			opener := word
+			word = ""
+			stack = append(stack, frame{not: opener == "not"})
+		case c == ')':
+			if flush() {
+				return true
+			}
+			if len(stack) > 1 {
+				stack = stack[:len(stack)-1]
+			}
+		default:
+			if flush() {
+				return true
+			}
+		}
+	}
+	return flush()
 }

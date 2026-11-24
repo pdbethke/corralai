@@ -24,7 +24,12 @@ func assertBrowserSafe(t *testing.T, pkg string, allowInternal ...string) {
 		t.Fatalf("go list -deps %s: %v\n%s", pkg, err, out)
 	}
 	forbidden := []string{
+		// DuckDB's Go driver and the native library it links, wherever they
+		// are published (github.com/duckdb/duckdb-go/v2 since DuckDB 2.0,
+		// marcboeker/go-duckdb before it, go.duckdb.org for libduckdb).
 		"github.com/marcboeker/go-duckdb",
+		"github.com/duckdb/",
+		"go.duckdb.org/",
 		"github.com/zalando/go-keyring",
 		"filippo.io/age",
 		"os/exec",

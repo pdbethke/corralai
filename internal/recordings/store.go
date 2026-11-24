@@ -14,7 +14,7 @@ import (
 	"github.com/pdbethke/corralai/internal/sqlguard"
 	"github.com/pdbethke/corralai/internal/statedir"
 
-	_ "github.com/marcboeker/go-duckdb/v2"
+	_ "github.com/duckdb/duckdb-go/v2"
 )
 
 // DefaultDB is the recordings store's default path (statedir.RecordingsDB):

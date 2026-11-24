@@ -7,7 +7,7 @@ import (
 	"database/sql"
 	"testing"
 
-	_ "github.com/marcboeker/go-duckdb/v2"
+	_ "github.com/duckdb/duckdb-go/v2"
 )
 
 // TestApplyLockdown_BlocksFilesystem proves ApplyLockdown is the real wall: after

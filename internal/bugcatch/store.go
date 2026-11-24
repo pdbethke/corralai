@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/marcboeker/go-duckdb/v2"
+	_ "github.com/duckdb/duckdb-go/v2"
 )
 
 // bugcatchObservationsMigrationCols is the additive set of columns this

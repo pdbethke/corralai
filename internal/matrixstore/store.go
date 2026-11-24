@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"time"
 
-	_ "github.com/marcboeker/go-duckdb/v2"
+	_ "github.com/duckdb/duckdb-go/v2"
 )
 
 // matrixTestAdequacyMigrationCols is the additive set of columns this

@@ -22,7 +22,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/seatrecord"
 
-	_ "github.com/marcboeker/go-duckdb/v2"
+	_ "github.com/duckdb/duckdb-go/v2"
 )
 
 // nowUnix is the wall-clock time Adjudicate stamps onto adjudicated_ts.

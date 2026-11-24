@@ -576,6 +576,39 @@ FROM read_json_auto('scans/*.json.gz') AS e, unnest(e.bundle.Mutants) AS t(m)
 GROUP BY ALL ORDER BY entry, planted DESC;
 ```
 
+**Without a checkout.** A public branch can be read where it is, over
+HTTPS: GitHub's tree API lists the entries and DuckDB's `httpfs` extension
+reads them. Every audited file on corral's own branch, most proven missing
+tests first:
+
+```sql
+INSTALL httpfs; LOAD httpfs;
+SET VARIABLE files = (
+  SELECT list('https://raw.githubusercontent.com/pdbethke/corralai/corral/ledger/' || t.path)
+  FROM (SELECT unnest(tree) AS t FROM read_json(
+    'https://api.github.com/repos/pdbethke/corralai/git/trees/corral/ledger?recursive=1'))
+  WHERE t.path LIKE 'scans/%.json.gz');
+SELECT f->>'Repo' AS repo, f->>'Path' AS path,
+       round((f->>'KillRate')::DOUBLE, 2) AS kill_rate,
+       (f->>'ProvenMissed')::INT AS proven_missing_tests
+FROM (SELECT unnest(json_extract(json, '$.bundle.Files[*]')) AS f
+      FROM read_json_objects(getvariable('files'), maximum_object_size = 67108864))
+WHERE f->>'Disposition' = 'audited'
+ORDER BY proven_missing_tests DESC;
+```
+
+Put another branch's owner and repository in both URLs to read it, or pass
+`read_json` a list of tree URLs to read several at once. This reads the
+entries as written: it checks no hash, link or signature, and it does not
+apply a later `retract` entry or adjudication, so a finding that has since
+been refuted or retracted still appears. `corral verify --ledger <dir>` and
+`corral scans` on a checkout are what apply those rules. GitHub allows 60
+unauthenticated API requests an hour, one per listed branch. Measured
+2026-11-24 on one machine, before those branches were checkpointed the
+same day: reading the 18 entries of corral's and three campaign forks'
+branches (about 810 KB) took a median of 200 ms with DuckDB 2.0.1 and 242 ms
+with 1.4.1, over 15 interleaved runs each, the list fetched once beforehand.
+
 **Publish the root key on the branch.** An ed25519-signed ledger publishes
 its root public key as `LEDGER_PUBKEY` (the hex key, one line) at the
 branch root, beside `scans/`. Nothing that writes or reads entries looks

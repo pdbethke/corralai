@@ -642,3 +642,74 @@ func TestAnInlineBlockWhoseTestsCannotBeNamedIsNotGraded(t *testing.T) {
 		}
 	}
 }
+
+// killNamingJail is inlineUnitJail whose failing run on a KILL mutant prints
+// the runner's own report naming the block's test as the failure, so the
+// scorer can name the killer and confirm the kill by it alone.
+type killNamingJail struct {
+	inlineUnitJail
+	nextest bool
+}
+
+func (j *killNamingJail) RunTestDetailed(ctx context.Context, files map[string]string, cmd []string) (bool, []byte, error) {
+	ok, err := j.RunTest(ctx, files, cmd)
+	if ok || !strings.Contains(files[j.codePath], "KILL") {
+		return ok, canaryFailed(ok, files[j.codePath]), err
+	}
+	const id = "extra::corral_tests::kills"
+	if j.nextest {
+		return ok, []byte("        FAIL [   0.003s] (1/1) units-b " + id + "\n────────────\n     Summary [   0.004s] 1 test run: 0 passed, 1 failed, 0 skipped\n        FAIL [   0.003s] (1/1) units-b " + id + "\nerror: test run failed\n"), err
+	}
+	return ok, []byte("running 1 test\ntest " + id + " ... FAILED\n\nfailures:\n\n---- " + id + " stdout ----\n\nthread '" + id + "' panicked at src/extra.rs:12:5:\nboom\n\n\nfailures:\n    " + id + "\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n"), err
+}
+
+// TestAnInlineKillIsConfirmedByTheKillingTestAlone: the narrowed authored
+// command already names its tests (`--exact …`, a test(=…) filterset), so
+// the runner row's KillerCmd refuses it and every inline kill used to fall
+// back to repeating the whole grading run (KillConfirmedRepeated). The
+// confirmer for an inline landing selects the killing test alone from the
+// unit command, through the row's own SelectCmd, so the kill is confirmed
+// by that test alone, on the mutant and on the unmutated code.
+func TestAnInlineKillIsConfirmedByTheKillingTestAlone(t *testing.T) {
+	root, _ := filepath.Abs("../lang/testdata/runners/src/units/cargo")
+	const codePath = "b/src/extra.rs"
+	src := "pub fn double(x: i32) -> i32 { x * 2 }\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n    #[test]\n    fn own() { assert_eq!(double(2), 4); }\n}\n"
+	landing := AuthoredLanding{
+		Landing:  pairing.Landing{Path: codePath, Shape: pairing.Inline, Label: "inline", Into: true, DeclarationsRead: true, OwnModule: true},
+		Existing: src,
+	}
+	block := golang.LandBody(landing.Landing, src, "#[test]\nfn kills() { assert_eq!(double(3), 6); }")
+	mutants := []adequacy.Mutant{{ID: "m1", Search: "x * 2", Replace: "x * 2 /* KILL */", Span: golang.LineRange{Start: 1, End: 1}}}
+	for _, tc := range []struct {
+		row, base, unit, confirm string
+		nextest                  bool
+	}{
+		{"cargo-test", "cargo test", "units-b/lib", "cargo test -p units-b --lib -- --exact extra::corral_tests::kills", false},
+		{"cargo-nextest", "cargo nextest run", "units-b", "cargo nextest run -E ((binary_id(=units-b))) & (test(=extra::corral_tests::kills))", true},
+	} {
+		t.Run(tc.row, func(t *testing.T) {
+			plug, _ := golang.ByName("rust")
+			inv := golang.Cmd(adequacy.ShellSplit(tc.base))
+			sel := golang.Selection{Method: testmap.MethodUnitEvidence, Of: 1, Base: inv.Argv, Tests: []string{tc.unit}}
+			j := &killNamingJail{inlineUnitJail: inlineUnitJail{codePath: codePath}, nextest: tc.nextest}
+			s := JailScorer{Jail: j, Lang: "rust", RepoDir: root, Selection: sel, SelectionMap: testmap.Map{Method: testmap.MethodUnitEvidence, Runner: tc.row},
+				DevTestPath: codePath, Landing: landing, BaseFiles: map[string]string{codePath: src, "b/Cargo.toml": "[package]\nname = \"units-b\"\n"},
+				FailureParser: golang.FailureParserFor(plug, inv), KillerCmd: adequacy.KillerCmdFor(golang.KillerCmdFor(plug, inv))}
+			rep, err := s.ScoreAuthoredReport(context.Background(), codePath, src, block, mutants, tc.base)
+			if err != nil {
+				t.Fatal(err)
+			}
+			g := rep.PerMutant["m1"]
+			if !slices.Contains(rep.Killed, "m1") || g.KillConfirmation != adequacy.KillConfirmedAlone {
+				t.Fatalf("m1 grading %+v, killed %v: want killed and confirmed alone", g, rep.Killed)
+			}
+			ran := false
+			for _, c := range j.cmds {
+				ran = ran || strings.Join(c, " ") == tc.confirm
+			}
+			if !ran {
+				t.Errorf("the confirmation never ran the killing test alone (%s); ran %v", tc.confirm, j.cmds)
+			}
+		})
+	}
+}

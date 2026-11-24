@@ -830,6 +830,13 @@ func (s JailScorer) scoreAuthoredReport(ctx context.Context, codePath, code, tes
 			// A salvage's failing examples are left out of the narrowed id
 			// list (inlineAlone's drop), never deselected afterwards.
 			if _, aerr = inlineAlone(s.Landing, r, s.RepoDir, codePath, code, alone, nil); aerr == nil {
+				if s.KillerCmd != nil {
+					// The narrowed command already names its tests, so
+					// the row's KillerCmd refuses it and every kill would
+					// be confirmed by repeating the run; the killing test
+					// is selected alone from the unit instead.
+					opts = append(opts, adequacy.WithKillConfirmer(inlineKiller(r, alone)))
+				}
 				var drop []string
 				if x != nil {
 					drop = x.ids
@@ -998,14 +1005,17 @@ func (s JailScorer) CompliantRun(ctx context.Context, codePath, code, test, test
 }
 
 // authoredWorkspace builds the repo-aware scoring workspace with `content`
-// overlaid at the authored test's own path — the SAME overlay
-// ScoreAuthoredReport itself needs (a brand-new file the repo does not
-// already contain, so there is nothing to shadow; see the method's own doc)
-// and the positive control below needs too, just with the canary in place
-// of the real test. Extracted so both call sites build the identical
-// workspace shape. It is returned as the Overlay the run's code goes
-// through, because for an inline landing the test is not a file of the
-// workspace at all but a block appended to that code (AuthoredLanding.authored).
+// placed where the landing puts the authored test — the SAME overlay
+// ScoreAuthoredReport itself needs and the positive control below needs
+// too, just with the canary in place of the real test. Where it goes
+// depends on the landing (AuthoredLanding.authored): a file of its own is a
+// new file at a path no file of the workspace holds (authoredTestPath
+// renames past one), so nothing is shadowed; an Into landing appends it to
+// the existing test file it names, which that file's own tests still sit
+// in; and an inline landing appends it as a block to the code each run
+// writes, so it is not a file of the workspace at all. Extracted so every
+// call site builds the identical workspace shape, and returned as the
+// Overlay the run's code goes through for the inline case.
 func (s JailScorer) authoredWorkspace(codePath, content string) adequacy.Overlay {
 	return s.Landing.authored(s.BaseFiles, codePath, authoredTestPath(s.Landing, codePath, s.DevTestPath, s.BaseFiles), content)
 }
@@ -1536,6 +1546,26 @@ func inlineAlone(l AuthoredLanding, r golang.Runner, repoDir, codePath, target s
 		return nil, fmt.Errorf("advpool: the authored test lands in %s itself, whose unit also runs the file's own tests, and the %s runner cannot narrow %v to its tests %v", codePath, r.ID, alone, ids)
 	}
 	return out, nil
+}
+
+// inlineKiller is the kill confirmer of an inline landing's authored pass:
+// the test the failing run blamed, selected alone from unit (the command
+// running the unit that holds the block, before inlineAlone narrowed it)
+// through the row's SelectCmd, by its test path (libtest names a failure
+// by it; nextest as `<binary> <path>`, whose binary is the unit's). The
+// row's own KillerCmd refuses the narrowed command, which already names
+// its tests (`--exact …`, a test(=…) filterset), so without this every
+// inline kill was confirmed by repeating the whole grading run.
+func inlineKiller(r golang.Runner, unit []string) adequacy.KillerCmdFor {
+	return func(_ []string, killedBy string) ([]string, bool) {
+		if i := strings.LastIndexByte(killedBy, ' '); i >= 0 {
+			killedBy = killedBy[i+1:]
+		}
+		if killedBy == "" {
+			return nil, false
+		}
+		return r.SelectCmd(unit, []string{killedBy})
+	}
 }
 
 // AuthoredTestPath is where this scorer writes the authored test for

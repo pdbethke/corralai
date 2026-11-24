@@ -153,3 +153,17 @@ func TestCriticSummaryIsOneBoundedLine(t *testing.T) {
 		t.Errorf("a complete typed result changed: %q", got)
 	}
 }
+
+// TestCriticNotRunReasonClaimsOnlyWhatItChecked: the reason is decided by an
+// empty developer test in ANY language, so it says only that; it used to
+// add "so it is graded by the tests that execute it", which is the Rust
+// no-test-module case and nothing the check looked at.
+func TestCriticNotRunReasonClaimsOnlyWhatItChecked(t *testing.T) {
+	assign := RoleAssignment{RoleTestCritic: "google/gemini-3.6-flash"}
+	for _, l := range []string{"go", "python", "rust"} {
+		got := CriticNotRunReason(RunSpec{Lang: l, CodePath: "x"}, assign)
+		if !strings.HasPrefix(got, "no developer test to judge") || strings.Contains(got, "execute") {
+			t.Errorf("%s: reason %q", l, got)
+		}
+	}
+}

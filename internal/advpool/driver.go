@@ -4074,7 +4074,7 @@ func CriticNotRunReason(rs RunSpec, assign RoleAssignment) string {
 	if strings.TrimSpace(assign[RoleTestCritic]) == "" || strings.TrimSpace(rs.DevTestCode) != "" {
 		return ""
 	}
-	return "no developer test to judge: the file has no test of its own, so it is graded by the tests that execute it"
+	return "no developer test to judge: the run holds no developer test for this file, so a critic would read an empty file"
 }
 
 // isOperationalFinding reports whether f is an operational event (e.g. a

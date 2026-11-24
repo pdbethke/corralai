@@ -111,13 +111,20 @@ func (rustPlugin) ReachCanaryTest() string {
 // either, and the positive control reports the authored test unreached
 // rather than crediting it. A file outside the library (a binary's), a
 // name that is no Rust identifier, or a block whose tests cannot be listed
-// (TestNamesInSource) has no ids.
+// (TestNamesInSource) has no ids. Nor has a block holding a case-generating
+// test (rustCaseAttr): libtest names its cases `…::kills::case_1`, so the
+// exact id `…::kills` would select nothing, and a run of zero tests passes
+// its baseline and kills no survivor — read as "tried and missed" over a
+// run that executed nothing.
 func (rustPlugin) InlineTestIDs(repoRoot, codePath, landed string) ([]string, error) {
 	mod, err := rustLibModulePath(repoRoot, codePath)
 	if err != nil {
 		return nil, err
 	}
-	names := rustPlugin{}.TestNamesInSource("", landed)
+	names, caseGen := rustTestScan(landed)
+	if caseGen {
+		return nil, fmt.Errorf("lang: a test in the block landed in %s carries a case-generating attribute (#[rstest], #[test_case]), whose cases libtest names below the function, so no exact id names them and selecting the function's would run no test", codePath)
+	}
 	if len(names) == 0 {
 		return nil, fmt.Errorf("lang: no test can be named in the block landed in %s, so its tests cannot be run apart from the file's own", codePath)
 	}

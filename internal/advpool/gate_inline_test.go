@@ -4,6 +4,7 @@ package advpool
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -548,5 +549,45 @@ func TestInlineSalvageKeepsThePassingTestsAlone(t *testing.T) {
 				t.Errorf("an all-failing salvage ran %v; it must run nothing", all.cmds)
 			}
 		})
+	}
+}
+
+// TestAnInlineBlockWhoseTestsCannotBeNamedIsNotGraded: a block whose tests
+// have no exact id — a case-generating #[rstest], whose cases libtest names
+// `…::kills::case_1`, or a block no test can be listed from — cannot be run
+// apart from the file's own tests. Run anyway under `--exact …::kills` it
+// would execute no test: a baseline that passes, survivors that all survive,
+// and a seat recorded as "tried and missed" over nothing. The pass is not
+// run at all, and the error says the seat is unmeasurable
+// (errAuthoredUnnameable), which the driver turns into an unmeasured seat
+// rather than a Tick error.
+func TestAnInlineBlockWhoseTestsCannotBeNamedIsNotGraded(t *testing.T) {
+	root, _ := filepath.Abs("../lang/testdata/runners/src/units/cargo")
+	const codePath = "b/src/extra.rs"
+	src := "pub fn double(x: i32) -> i32 { x * 2 }\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n    #[test]\n    fn own() { assert_eq!(double(2), 4); }\n}\n"
+	landing := AuthoredLanding{
+		Landing:  pairing.Landing{Path: codePath, Shape: pairing.Inline, Label: "inline", Into: true, DeclarationsRead: true, OwnModule: true},
+		Existing: src,
+	}
+	mutants := []adequacy.Mutant{{ID: "m1", Search: "x * 2", Replace: "x * 2 /* KILL */", Span: golang.LineRange{Start: 1, End: 1}}}
+	for _, tc := range []struct{ name, block string }{
+		{"rstest cases", golang.LandBody(landing.Landing, src, "#[rstest]\n#[case(3)]\nfn kills(#[case] x: i32) { assert_eq!(double(x), 6); }")},
+		{"no test listed", golang.LandBody(landing.Landing, src, "fn helper() {}")},
+	} {
+		for _, row := range []struct{ id, base, unit string }{{"cargo-test", "cargo test", "units-b/lib"}, {"cargo-nextest", "cargo nextest run", "units-b"}} {
+			t.Run(tc.name+" "+row.id, func(t *testing.T) {
+				sel := golang.Selection{Method: testmap.MethodUnitEvidence, Of: 1, Base: adequacy.ShellSplit(row.base), Tests: []string{row.unit}}
+				j := &inlineUnitJail{codePath: codePath}
+				s := JailScorer{Jail: j, Lang: "rust", RepoDir: root, Selection: sel, SelectionMap: testmap.Map{Method: testmap.MethodUnitEvidence, Runner: row.id},
+					DevTestPath: codePath, Landing: landing, BaseFiles: map[string]string{codePath: src, "b/Cargo.toml": "[package]\nname = \"units-b\"\n"}}
+				rep, err := s.ScoreAuthoredReport(context.Background(), codePath, src, tc.block, mutants, row.base)
+				if !errors.Is(err, errAuthoredUnnameable) {
+					t.Fatalf("err = %v (report %+v); want errAuthoredUnnameable", err, rep)
+				}
+				if len(j.cmds) != 0 {
+					t.Errorf("a block whose tests cannot be named was run: %v", j.cmds)
+				}
+			})
+		}
 	}
 }

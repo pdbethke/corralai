@@ -767,6 +767,15 @@ func (s JailScorer) exclude(argv []string, built bool, x *exclusion) ([]string, 
 	return out, nil
 }
 
+// errAuthoredUnnameable marks an authored pass that was not run because the
+// authored test cannot be run apart from the file's own tests: an inline
+// block whose tests have no exact id (inlineAlone). It is a fact about that
+// one test, not about the run: the driver records the seat (or the batched
+// pass) as unmeasured — compiled, never graded — and the file's other seats
+// go on. Returned as an error rather than a Report because no field of a
+// Report could say it without claiming a run that never happened.
+var errAuthoredUnnameable = errors.New("advpool: the authored test cannot be run apart from the file's own tests, so it was not graded")
+
 func (s JailScorer) scoreAuthoredReport(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string, x *exclusion) (adequacy.Report, error) {
 	scoreBase, base := s.scoreWorkspace(codePath, test, testCmd)
 	cmd, built := s.authoredCmdBuilt(codePath, base)
@@ -820,7 +829,12 @@ func (s JailScorer) scoreAuthoredReport(ctx context.Context, codePath, code, tes
 					drop = x.ids
 				}
 				if alone, err = inlineAlone(s.Landing, r, s.RepoDir, codePath, code, alone, drop, test); err != nil {
-					return adequacy.Report{}, err
+					// The unit can be narrowed, but not to THIS block's
+					// tests (a case-generating test, no test listed, every
+					// test failing on a salvage): nothing is run, and the
+					// seat is unmeasured, never a Tick error that ends the
+					// file's other seats (errAuthoredUnnameable).
+					return adequacy.Report{}, fmt.Errorf("%w: %w", errAuthoredUnnameable, err)
 				}
 				x = nil
 			}

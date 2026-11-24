@@ -169,6 +169,21 @@ func TestInlineTestIDsAreTheLibtestPathsOfTheBlock(t *testing.T) {
 	if got, err := InlineTestIDs(cargo, "b/src/extra.rs", rustPlugin{}.LandTest("fn helper() {}", 0, "")); err == nil {
 		t.Errorf("a block with no test has no ids, got %v", got)
 	}
+	// A case-generating attribute makes libtest name each case below the
+	// function (`corral_tests::kills::case_1`), so the function's own id
+	// selects nothing under --exact (or nextest's test(=…)): a run that
+	// executes no test at all. Such a block has no ids, whichever of its
+	// tests carries the attribute.
+	for _, body := range []string{
+		"#[rstest]\n#[case(1)]\nfn kills(#[case] x: i32) { assert_eq!(x, 1); }",
+		"#[test]\nfn plain() {}\n#[test_case(1 ; \"one\")]\nfn kills(x: i32) { assert_eq!(x, 1); }",
+		"#[rstest::rstest]\nfn kills() {}",
+		"#[test_case::test_case(1)]\nfn kills(x: i32) {}",
+	} {
+		if got, err := InlineTestIDs(cargo, "b/src/extra.rs", rustPlugin{}.LandTest(body, 0, "")); err == nil {
+			t.Errorf("a block whose test generates cases got ids %v; want none:\n%s", got, body)
+		}
+	}
 }
 
 // TestEveryIntoLandingLanguageCanCompose: a landing that appends INTO an

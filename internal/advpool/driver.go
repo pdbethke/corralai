@@ -4,6 +4,7 @@ package advpool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/pdbethke/corralai/internal/shadowpool"
 	"log"
@@ -2988,6 +2989,16 @@ func (d *Driver) tickPoolAdequacy(ctx context.Context, missionID int64, run *run
 	// reporting EVERY survivor as execution-proven from a run in which no
 	// mutant ever executed — corral's strongest claim, fabricated.
 	rep, serr := scoreAuthored(ctx, d.Scorer, run.rs.CodePath, run.rs.Code, writerTest, run.devSurvivors, run.rs.TestCmd)
+	if errors.Is(serr, errAuthoredUnnameable) {
+		// Never run (see errAuthoredUnnameable): the same diagnosis as a
+		// compiling test that did not genuinely grade, never a Tick error
+		// and never a "killed none".
+		log.Printf("advpool: %s: the pool's authored test compiled but was not graded — converging with proven_missed=0, not a measurement: %v", run.rs.CodePath, serr)
+		run.poolScored = true
+		run.provenMissed = 0
+		run.poolTestUnsound = true
+		return nil
+	}
 	if serr != nil {
 		return fmt.Errorf("advpool: score pool test: %w", serr)
 	}

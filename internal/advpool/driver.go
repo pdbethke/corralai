@@ -625,9 +625,9 @@ type Verdict struct {
 	// earned before landings existed.
 	//
 	// It travels with AuthoredTest because, for such a landing, the test is
-	// a module (`mod corral_tests { use super::super::*; … }`) that compiles
-	// ONLY inside that one file — handed over without it, the proof cannot
-	// be used. Set from RunSpec.Landing in verdictFromSpec, the shared
+	// a module (`mod corral_tests { #[allow(unused_imports)] use
+	// super::super::*; … }`) that compiles ONLY inside that one file —
+	// handed over without it, the proof cannot be used. Set from RunSpec.Landing in verdictFromSpec, the shared
 	// literal, so the converged and the timed-out verdict both carry it.
 	AuthoredLanding string `json:"authored_landing,omitempty"`
 	// AuthoredTogether is what running AuthoredTest WHOLE, once, on the

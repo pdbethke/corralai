@@ -640,7 +640,8 @@ skipok cargo-test env -C fail/cargo cargo test -- --exact --skip tests::a_fails 
 skipok cargo-nextest env -C fail/cargo cargo nextest run -E 'not ((binary_id(=fail-cargo) & test(=tests::a_fails)) | (binary_id(=fail-cargo) & test(=tests::b_fails)))'
 
 # --- inline landing (Rust): corral's authored test appended to the source
-# itself as `#[cfg(test)] mod corral_tests { use super::*; … }` (LandTest at
+# itself as `#[cfg(test)] mod corral_tests { #[allow(unused_imports)]
+# use super::*; … }` (LandTest at
 # depth 0, adequacy.AppendBlock). inline/cargo is one crate: src/lib.rs (the
 # crate root), src/extra.rs (a module, whose ids carry `extra::`) and
 # src/named.rs (already declaring corral_tests, so its block is
@@ -676,6 +677,8 @@ inline deny-extra-canary lib.rs deny/lib.rs extra.rs composed/extra.canary.rs
 # The mutant survives the file's own tests: only the landed block can kill it.
 want inline-cargo-test-dev-misses-lib "5 passed 0 failed" "$(cd inline/lib-dev && cargo test 2>&1 | pf)"
 want inline-cargo-test-dev-misses-extra "5 passed 0 failed" "$(cd inline/extra-dev && cargo test 2>&1 | pf)"
+want inline-nextest-dev-misses-lib "5 passed 0 failed" "$(cd inline/lib-dev && cargo nextest run 2>&1 | pf)"
+want inline-nextest-dev-misses-extra "5 passed 0 failed" "$(cd inline/extra-dev && cargo nextest run 2>&1 | pf)"
 # The composition builds and passes on the original, under the operator's
 # own command; named.rs's block composes as corral_tests_2 beside its own.
 want inline-cargo-test-passes-lib "7 passed 0 failed" "$(cd inline/lib-pass && cargo test 2>&1 | pf)"

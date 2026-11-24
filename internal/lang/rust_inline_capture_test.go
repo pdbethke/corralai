@@ -102,11 +102,18 @@ func TestRustInlineCapturesAreWhatCorralComposes(t *testing.T) {
 			t.Errorf("the capture script has no line\n%s", line)
 		}
 	}
-	// The mutant runs without the block: the file's own tests miss it.
+	// The mutant runs without the block, under each runner's plain command:
+	// the file's own tests miss it.
 	for _, src := range []string{"lib.rs", "extra.rs"} {
-		dir := strings.TrimSuffix(src, ".rs") + "-dev"
-		if line := "inline " + dir + " " + src + " mutants/" + src; !slices.Contains(script, line) {
+		name := strings.TrimSuffix(src, ".rs")
+		if line := "inline " + name + "-dev " + src + " mutants/" + src; !slices.Contains(script, line) {
 			t.Errorf("the capture script has no line\n%s", line)
+		}
+		for row, cmd := range map[string]string{"cargo-test": "cargo test", "nextest": "cargo nextest run"} {
+			line := "want inline-" + row + "-dev-misses-" + name + " \"5 passed 0 failed\" \"$(cd inline/" + name + "-dev && " + cmd + " 2>&1 | pf)\""
+			if !slices.Contains(script, line) {
+				t.Errorf("the capture script has no line\n%s", line)
+			}
 		}
 	}
 	// The module's canary under a crate root that denies warnings.

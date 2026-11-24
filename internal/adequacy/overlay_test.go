@@ -29,29 +29,40 @@ func TestOverlayWritesCodeAtItsPathAndLeavesBaseAlone(t *testing.T) {
 }
 
 // TestNoWorkspaceMapIsAssembledOutsideOverlay is derived from the tree: any
-// non-test file under the packages that build run workspaces that writes the
-// audited code into a map by hand has bypassed Overlay, and a rule added to
+// non-test .go file under internal/ and cmd/ that writes code into a map at
+// the audited path by hand has bypassed Overlay, and a rule added to
 // Overlay.Compose would then miss that run.
 func TestNoWorkspaceMapIsAssembledOutsideOverlay(t *testing.T) {
-	pat := regexp.MustCompile(`\[(rs\.|cfg\.)?[cC]odePath\] = `)
-	for _, dir := range []string{".", "../advpool", "../authoring"} {
-		files, err := filepath.Glob(filepath.Join(dir, "*.go"))
-		if err != nil || len(files) == 0 {
-			t.Fatalf("no files under %s: %v", dir, err)
-		}
-		for _, f := range files {
-			if strings.HasSuffix(f, "_test.go") || filepath.Base(f) == "overlay.go" {
-				continue
+	pat := regexp.MustCompile(`\[([A-Za-z_]+\.)*[cC]odePath\] = `)
+	// The one exemption: mutantset.go's r.files is a record of
+	// MutantSetEntry values keyed by path, not a workspace of file contents.
+	exempt := filepath.Join("cmd", "corral", "mutantset.go")
+	seen := 0
+	for _, root := range []string{"../../internal", "../../cmd"} {
+		err := filepath.WalkDir(root, func(f string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() || !strings.HasSuffix(f, ".go") || strings.HasSuffix(f, "_test.go") {
+				return err
+			}
+			seen++
+			if filepath.Base(f) == "overlay.go" || strings.HasSuffix(f, exempt) {
+				return nil
 			}
 			b, err := os.ReadFile(f)
 			if err != nil {
-				t.Fatal(err)
+				return err
 			}
 			for i, line := range strings.Split(string(b), "\n") {
 				if pat.MatchString(line) {
 					t.Errorf("%s:%d assembles a workspace by hand, use Overlay: %s", f, i+1, strings.TrimSpace(line))
 				}
 			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
 		}
+	}
+	if seen < 50 {
+		t.Fatalf("walked only %d files; the tree walk is not finding the repo", seen)
 	}
 }

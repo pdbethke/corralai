@@ -4881,6 +4881,10 @@ func reasonGloss(reason string) string {
 	switch reason {
 	case reposcan.ReasonTestCmdCannotCollect:
 		return " — your test command would not run the test corral writes, so no gap could be proven; NOT a corral failure, and no mutant was planted or test written for it"
+	case reposcan.ReasonTestCmdFailuresUnreadable:
+		return " — corral's test is appended to this file, and your test command's runner names no failing test corral can read, so it could not check that the command runs it; give the runner itself (`-- cargo test`, `-- cargo nextest run`); no mutant was planted or test written for it"
+	case reposcan.ReasonReachControlInconclusive:
+		return " — corral's test is appended to this file, and the run that checks your command runs it timed out or failed for another reason (see the detail), so nothing could be proven; no mutant was planted or test written for it"
 	case reposcan.ReasonUngoaled:
 		return " — no testable property: the file is purely declarative (interfaces, constants, generated code), so there is nothing a mutant could violate"
 	case reposcan.ReasonBaselineFailed:

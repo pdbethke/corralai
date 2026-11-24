@@ -353,46 +353,97 @@ func (bareJail) RunTest(context.Context, map[string]string, []string) (bool, err
 // (what a crate under #![deny(warnings)] printed for the canary's unused glob
 // before the landing allowed it, cargo 1.90.0), another test's failure and a
 // timeout are not evidence the block ran: unreached, which can only lower a
-// proven count. A jail that returns no output cannot answer: an error, never
-// a guess.
+// proven count. Each is told apart (AuthoredTestReach), because the
+// pre-flight refuses each for a different reason: only a run that PASSED
+// shows the command does not run the block. A command wrapping the runner
+// (`make test`, `sh -c "cargo test"`) is read as Rust's runner, so its own
+// output decides, as for any other command. A jail
+// that returns no output cannot answer: an error, never a guess. The real
+// captures of the canary failing under #![deny(warnings)] (cargo 1.90.0,
+// cargo-nextest 0.9.148) are read as reached by both runners.
 func TestInlinePositiveControlNeedsTheCanaryNamedFailing(t *testing.T) {
 	ctx := context.Background()
 	base := map[string]string{"Cargo.toml": "[package]\n", "src/lib.rs": inlineSrc}
 	buildError := "   Compiling inline-cargo v0.1.0 ($DIR/inline/deny-no-allow)\nerror: unused import: `super::*`\n  --> src/lib.rs:49:5\n   |\n49 | use super::*;\n   |     ^^^^^^^^\n\nerror: could not compile `inline-cargo` (lib test) due to 1 previous error\n"
 	otherFailed := "running 2 tests\ntest corral_tests::corral_reach_canary ... ok\ntest tests::own ... FAILED\n\nfailures:\n\n---- tests::own stdout ----\n\nthread 'tests::own' panicked at src/lib.rs:7:5:\nboom\n\n\nfailures:\n    tests::own\n\ntest result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n"
 	nextestNamed := "        FAIL [   0.003s] (2/2) units-b extra::corral_tests::corral_reach_canary\n────────────\n     Summary [   0.004s] 2 tests run: 1 passed, 1 failed, 0 skipped\n        FAIL [   0.003s] (2/2) units-b extra::corral_tests::corral_reach_canary\nerror: test run failed\n"
+	capture := func(name string) string {
+		b, err := os.ReadFile(filepath.Join("..", "lang", "testdata", "runners", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	cargoTest, nextest := []string{"cargo", "test"}, []string{"cargo", "nextest", "run"}
 	for _, tc := range []struct {
-		name    string
-		jail    *scriptedDetailJail
-		cmd     []string
-		reached bool
+		name string
+		jail *scriptedDetailJail
+		cmd  []string
+		want ReachOutcome
 	}{
-		{"canary named failing (cargo test)", &scriptedDetailJail{out: string(canaryFailed(false, "fn corral_reach_canary()"))}, []string{"cargo", "test"}, true},
-		{"canary named failing under a module path (nextest)", &scriptedDetailJail{out: nextestNamed}, []string{"cargo", "nextest", "run"}, true},
-		{"build error", &scriptedDetailJail{out: buildError}, []string{"cargo", "test"}, false},
-		{"another test failed", &scriptedDetailJail{out: otherFailed}, []string{"cargo", "test"}, false},
-		{"passed", &scriptedDetailJail{passed: true}, []string{"cargo", "test"}, false},
-		{"timed out", &scriptedDetailJail{err: adequacy.ErrTestTimeout}, []string{"cargo", "test"}, false},
+		{"canary named failing (cargo test)", &scriptedDetailJail{out: string(canaryFailed(false, "fn corral_reach_canary()"))}, cargoTest, ReachReached},
+		{"canary named failing under a module path (nextest)", &scriptedDetailJail{out: nextestNamed}, nextest, ReachReached},
+		{"real capture: cargo test, crate root", &scriptedDetailJail{out: capture("inline-cargo-test-deny-canary-lib.txt")}, cargoTest, ReachReached},
+		{"real capture: cargo test, module", &scriptedDetailJail{out: capture("inline-cargo-test-deny-canary-extra.txt")}, cargoTest, ReachReached},
+		{"real capture: nextest, crate root", &scriptedDetailJail{out: capture("inline-nextest-deny-canary-lib.txt")}, nextest, ReachReached},
+		{"real capture: nextest, module", &scriptedDetailJail{out: capture("inline-nextest-deny-canary-extra.txt")}, nextest, ReachReached},
+		{"build error", &scriptedDetailJail{out: buildError}, cargoTest, ReachFailedWithoutCanary},
+		{"another test failed", &scriptedDetailJail{out: otherFailed}, cargoTest, ReachFailedWithoutCanary},
+		{"passed", &scriptedDetailJail{passed: true}, cargoTest, ReachRunPassed},
+		{"timed out", &scriptedDetailJail{err: adequacy.ErrTestTimeout}, cargoTest, ReachTimedOut},
+		// A wrapped command is read as Rust's default runner's (`make`)
+		// or its script's (`sh -c`): what it printed decides, never the
+		// wrapper. cargo test's own output names the canary; a wrapper
+		// that prints something else failed without naming it.
+		{"make test running cargo test", &scriptedDetailJail{out: capture("inline-cargo-test-deny-canary-lib.txt")}, []string{"make", "test"}, ReachReached},
+		{"sh -c cargo test", &scriptedDetailJail{out: capture("inline-cargo-test-deny-canary-lib.txt")}, []string{"sh", "-c", "cargo test"}, ReachReached},
+		{"make test printing no cargo output", &scriptedDetailJail{out: "make: *** [Makefile:2: test] Error 2\n"}, []string{"make", "test"}, ReachFailedWithoutCanary},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := JailScorer{Jail: tc.jail, BaseFiles: base, DevTestPath: "src/lib.rs", Landing: inlineLanding()}
-			reached, err := s.AuthoredTestWouldBeCollected(ctx, "src/lib.rs", inlineSrc, tc.cmd)
+			got, err := s.AuthoredTestReach(ctx, "src/lib.rs", inlineSrc, tc.cmd)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if reached != tc.reached {
-				t.Errorf("reached = %v, want %v", reached, tc.reached)
+			if got.Outcome != tc.want {
+				t.Errorf("outcome = %q (%s), want %q", got.Outcome, got.Detail, tc.want)
+			}
+			reached, err := s.AuthoredTestWouldBeCollected(ctx, "src/lib.rs", inlineSrc, tc.cmd)
+			if err != nil || reached != (tc.want == ReachReached) {
+				t.Errorf("AuthoredTestWouldBeCollected = %v, %v; want %v", reached, err, tc.want == ReachReached)
 			}
 		})
 	}
 	s := JailScorer{Jail: bareJail{}, BaseFiles: base, DevTestPath: "src/lib.rs", Landing: inlineLanding()}
-	if _, err := s.AuthoredTestWouldBeCollected(ctx, "src/lib.rs", inlineSrc, []string{"cargo", "test"}); err == nil {
+	if _, err := s.AuthoredTestWouldBeCollected(ctx, "src/lib.rs", inlineSrc, cargoTest); err == nil {
 		t.Error("a jail that returns no output answered the inline control; want an error")
 	}
 	// The first line of the reason, for the note: cargo's error, not its
 	// Compiling line.
 	if got := failureReason(buildError); got != "error: unused import: `super::*`" {
 		t.Errorf("failureReason = %q", got)
+	}
+}
+
+// TestAFileOfItsOwnControlReachesOnAnyFailure: for a landing with a file of
+// its own the control plants invalid source there, and any failure or a
+// timeout is the command reacting to it; only a passing run is unreached.
+func TestAFileOfItsOwnControlReachesOnAnyFailure(t *testing.T) {
+	base := map[string]string{"package.json": "{}", "scripts/x.js": "// code", "scripts/x.test.js": "// dev"}
+	for _, tc := range []struct {
+		name string
+		jail *scriptedDetailJail
+		want ReachOutcome
+	}{
+		{"failed", &scriptedDetailJail{}, ReachReached},
+		{"timed out", &scriptedDetailJail{err: adequacy.ErrTestTimeout}, ReachReached},
+		{"passed", &scriptedDetailJail{passed: true}, ReachRunPassed},
+	} {
+		s := JailScorer{Jail: tc.jail, BaseFiles: base, DevTestPath: "scripts/x.test.js"}
+		got, err := s.AuthoredTestReach(context.Background(), "scripts/x.js", "// code", []string{"npx", "jest", "scripts/"})
+		if err != nil || got.Outcome != tc.want {
+			t.Errorf("%s: outcome = %q, %v; want %q", tc.name, got.Outcome, err, tc.want)
+		}
 	}
 }
 

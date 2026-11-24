@@ -1038,6 +1038,56 @@ const notCollectedAdvice = "your test command would not run the test this audit 
 	"  `-- npx jest tests/` rather than a single spec path.\n" +
 	"  This is checked before any mutant is planted or test written for this file."
 
+// notCollectedInlineAdvice is notCollectedAdvice for a test appended to the
+// source itself: there is no file beside the developer's to collect, and the
+// usual cause is a name filter that does not match corral's module.
+const notCollectedInlineAdvice = "your test command would not run the test this audit writes, so it could not prove a gap even if it found one.\n" +
+	"  corral's killing test is appended to %s itself, as a corral_tests module, and your command ran without running it.\n" +
+	"  A test name filter in the command is the usual cause: run the crate's tests without one (`-- cargo test`, `-- cargo nextest run`).\n" +
+	"  This is checked before any mutant is planted or test written for this file."
+
+// preflightRefusal is the pre-flight's refusal for what the positive control
+// saw (advpool.AuthoredTestReach), nil when it reached the authored test.
+//
+// Only a run that PASSED shows the command does not run the test: that is
+// the "not collected" refusal (test-cmd-cannot-collect), with advice for
+// where the test goes. A test appended to the source itself (an inline
+// landing) is checked by seeing corral's always-failing test fail by name,
+// so it has three more outcomes, each refused for what it is: a runner
+// whose failures corral cannot read, a timeout, and a failure that did not
+// name that test (a build error, another test's failure). They were all
+// refused as "not collected", with "corral writes its killing test beside
+// your own … `-- pytest tests/`" printed for a Rust file and
+// test-cmd-cannot-collect recorded in the signed rows.
+func preflightRefusal(r advpool.Reach, landing advpool.AuthoredLanding, codePath, devTestPath string) error {
+	switch r.Outcome {
+	case advpool.ReachReached:
+		return nil
+	case advpool.ReachRunPassed:
+		if landing.Inline(codePath) {
+			return auditNotCollectedErr(notCollectedInlineAdvice, codePath)
+		}
+		return auditNotCollectedErr(notCollectedAdvice, advpool.AuthoredTestPathFor(landing, codePath, devTestPath))
+	case advpool.ReachRunnerUnreadable:
+		return localAuditError{usage: true, scanReason: reposcan.ReasonTestCmdFailuresUnreadable, msg: fmt.Sprintf(
+			"corral's killing test is appended to %s itself, and to know your test command runs it corral must see its always-failing test fail by name: %s.\n"+
+				"  Give the runner itself (`-- cargo test`, `-- cargo nextest run`) rather than a wrapper.\n"+
+				"  This is checked before any mutant is planted or test written for this file.", codePath, r.Detail)}
+	case advpool.ReachTimedOut:
+		return localAuditError{usage: true, scanReason: reposcan.ReasonReachControlInconclusive, msg: fmt.Sprintf(
+			"corral's killing test is appended to %s itself, and the run that checks your test command runs it timed out (%s), which shows neither that it runs it nor that it does not.\n"+
+				"  Raise --timeout, or narrow what your command runs.\n"+
+				"  This is checked before any mutant is planted or test written for this file.", codePath, r.Detail)}
+	case advpool.ReachFailedWithoutCanary:
+		return localAuditError{usage: true, scanReason: reposcan.ReasonReachControlInconclusive, msg: fmt.Sprintf(
+			"corral's killing test is appended to %s itself, and the run that checks your test command runs it failed without corral's always-failing test failing: %s.\n"+
+				"  A build error with a test module appended, or a test of yours failing, is the usual cause; run your command on the file as it stands.\n"+
+				"  If your command wraps the runner (make, a script), corral reads its output as cargo test's; give `-- cargo test` or `-- cargo nextest run` itself.\n"+
+				"  This is checked before any mutant is planted or test written for this file.", codePath, r.Detail)}
+	}
+	return fmt.Errorf("corral: the positive control returned an outcome this pre-flight does not know (%q), so it cannot say whether your command runs the authored test", r.Outcome)
+}
+
 // auditNotCollectedErr is auditUsageErr for the ONE refusal a repo scan must
 // report distinctly: the caller's test command would not run the test this
 // audit writes. It is a fact about the invocation, not a corral failure.
@@ -2470,9 +2520,16 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 	// path, so a project whose discovery config would never find it collects
 	// it anyway. Checking the base command refused those audits for a problem
 	// the run had already solved.
+	//
+	// Each unreached outcome is refused for what it is (preflightRefusal):
+	// only a control run that PASSED shows the command does not run the test.
 	authoredArgv := scorer.AuthoredCommand(rs.CodePath, adequacy.ShellSplit(rs.TestCmd))
-	if collected, cerr := scorer.AuthoredTestWouldBeCollected(ctx, rs.CodePath, rs.Code, authoredArgv); cerr == nil && !collected {
-		return zero, auditNotCollectedErr(notCollectedAdvice, advpool.AuthoredTestPathFor(rs.Landing, rs.CodePath, rs.DevTestPath))
+	if scorer.BaseFiles != nil {
+		if reach, cerr := scorer.AuthoredTestReach(ctx, rs.CodePath, rs.Code, authoredArgv); cerr == nil {
+			if rerr := preflightRefusal(reach, rs.Landing, rs.CodePath, rs.DevTestPath); rerr != nil {
+				return zero, rerr
+			}
+		}
 	}
 
 	verdict, err := driveLocalRun(ctx, d, q, localMissionID, chatterFor, poll, time.Sleep, stdout, rec, actorFor, swarm)

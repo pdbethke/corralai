@@ -29,7 +29,20 @@ const (
 	// invocation, not a corral failure, and flattening it into
 	// ReasonExecutorError made four correct refusals read as four crashes.
 	ReasonTestCmdCannotCollect = "test-cmd-cannot-collect"
-	ReasonCancelled            = "cancelled"
+	// ReasonTestCmdFailuresUnreadable: the authored test is appended to the
+	// source itself, so the pre-flight must see corral's always-failing
+	// test FAILING BY NAME to know the command runs it, and the command's
+	// runner names no failing test corral can read. Not a claim that the
+	// command would not run it, which ReasonTestCmdCannotCollect is.
+	ReasonTestCmdFailuresUnreadable = "test-cmd-failures-unreadable"
+	// ReasonReachControlInconclusive: the pre-flight's control run for a
+	// test appended to the source itself timed out, or failed without
+	// naming corral's always-failing test (a build error, another test's
+	// failure), so it shows neither that the command runs the test nor
+	// that it does not. Until 2026-11-24 such a run was recorded as
+	// ReasonTestCmdCannotCollect.
+	ReasonReachControlInconclusive = "reach-control-inconclusive"
+	ReasonCancelled                = "cancelled"
 	// ReasonPrepFailed marks a job whose language-wide jail preparation failed
 	// (e.g. `go mod vendor`). The failure is cached per language, so the WORK is
 	// attempted once per language rather than once per file — but every file of

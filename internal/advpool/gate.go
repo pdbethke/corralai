@@ -1050,7 +1050,7 @@ func (s JailScorer) authoredWorkspace(codePath, content string) adequacy.Overlay
 // ReachCanaryTest, landed where the authored block lands), appended to code
 // through the same Compose (AuthoredLanding.authored), and the run's own
 // failure reader must NAME that canary failing for the block to count as
-// reached (inlineCanaryReached). A failure is not enough: a build error (a
+// reached (inlineCanaryReach). A failure is not enough: a build error (a
 // crate under `#![deny(warnings)]` once rejected the canary block's unused
 // glob, measured on cargo 1.90.0), another test's failure or a timeout says
 // nothing about whether the block's tests ran, and each is unreached, which
@@ -1058,21 +1058,66 @@ func (s JailScorer) authoredWorkspace(codePath, content string) adequacy.Overlay
 // unreached. code is read only then; a landing with a file of its own
 // leaves codePath as the workspace already has it, as it always did.
 func (s JailScorer) verifyAuthoredTestReaches(ctx context.Context, codePath, code string, cmd []string) (bool, error) {
+	r, err := s.AuthoredTestReach(ctx, codePath, code, cmd)
+	return r.Outcome == ReachReached, err
+}
+
+// ReachOutcome is what the positive control saw (AuthoredTestReach). Only
+// ReachReached counts the authored test reached; every other outcome is
+// unreached for the score, and they are told apart because a caller acting
+// on one before the run (the pre-flight) must say a different thing for
+// each: only a run that PASSED shows the command does not run the test.
+type ReachOutcome string
+
+const (
+	// ReachReached: the run failed on the control (for an inline landing,
+	// the runner named the reach canary failing; otherwise any failure or
+	// a timeout on the planted invalid source).
+	ReachReached ReachOutcome = "reached"
+	// ReachRunPassed: the run passed, so the control never ran.
+	ReachRunPassed ReachOutcome = "run-passed"
+	// ReachRunnerUnreadable: an inline landing under a command whose
+	// runner names no failing test corral can read (`make test`, `sh -c
+	// …`), so the canary cannot be seen failing; nothing is run.
+	ReachRunnerUnreadable ReachOutcome = "runner-unreadable"
+	// ReachTimedOut: an inline landing's control run timed out, which does
+	// not show the canary ran.
+	ReachTimedOut ReachOutcome = "timed-out"
+	// ReachFailedWithoutCanary: an inline landing's control run failed
+	// without naming the canary (a build error, another test's failure),
+	// or no test could be named in the canary's block.
+	ReachFailedWithoutCanary ReachOutcome = "failed-without-canary"
+)
+
+// Reach is the positive control's outcome and, for every outcome but
+// ReachReached, what it saw: the line a failed run's output says why, the
+// command that cannot be read.
+type Reach struct {
+	Outcome ReachOutcome
+	Detail  string
+}
+
+// AuthoredTestReach runs the positive control (verifyAuthoredTestReaches'
+// doc) and says what it saw.
+func (s JailScorer) AuthoredTestReach(ctx context.Context, codePath, code string, cmd []string) (Reach, error) {
 	if s.Landing.Inline(codePath) {
-		return s.inlineCanaryReached(ctx, codePath, code, cmd)
+		return s.inlineCanaryReach(ctx, codePath, code, cmd)
 	}
 	ws := s.authoredWorkspace(codePath, adequacy.CanaryCode).Base
 	passed, err := s.Jail.RunTest(ctx, ws, rewriteCmd(s.CommandRewrite, cmd))
 	if err != nil {
 		if errors.Is(err, adequacy.ErrTestTimeout) {
-			return true, nil // hung on the planted canary (invalid source) -> it reacted
+			return Reach{Outcome: ReachReached}, nil // hung on the planted canary (invalid source) -> it reacted
 		}
-		return false, err
+		return Reach{}, err
 	}
-	return !passed, nil
+	if passed {
+		return Reach{Outcome: ReachRunPassed, Detail: "the run passed with invalid source at the authored test's path"}, nil
+	}
+	return Reach{Outcome: ReachReached}, nil
 }
 
-// inlineCanaryReached is the inline positive control: code with the reach
+// inlineCanaryReach is the inline positive control: code with the reach
 // canary block appended, run under cmd on a jail that returns the run's
 // output (adequacy.DetailedJail, the tail the scorer names a killing test
 // from), and reached only when the run failed AND cmd's runner, reading
@@ -1081,42 +1126,43 @@ func (s JailScorer) verifyAuthoredTestReaches(ctx context.Context, codePath, cod
 // (`corral_tests::corral_reach_canary`, from the plugin's own reading of
 // the block): equal to a failing id, or its last segments, since the id
 // carries the module path of the file (and nextest's the binary before it).
-// Every other outcome is unreached, and the log says why. A jail that
-// cannot return output is an error: this control has nothing to read.
-func (s JailScorer) inlineCanaryReached(ctx context.Context, codePath, code string, cmd []string) (bool, error) {
+// Every other outcome is unreached, its own ReachOutcome, and the log says
+// why. A jail that cannot return output is an error: this control has
+// nothing to read.
+func (s JailScorer) inlineCanaryReach(ctx context.Context, codePath, code string, cmd []string) (Reach, error) {
 	dj, ok := s.Jail.(adequacy.DetailedJail)
 	if !ok {
-		return false, fmt.Errorf("advpool: the positive control for the test landed in %s reads which tests failed from the run's output, and this jail cannot return it", codePath)
+		return Reach{}, fmt.Errorf("advpool: the positive control for the test landed in %s reads which tests failed from the run's output, and this jail cannot return it", codePath)
 	}
 	block, err := golang.ReachCanaryBlock(s.Landing.Landing, code)
 	if err != nil {
-		return false, err
+		return Reach{}, err
 	}
 	p, err := pluginFor(codePath)
 	if err != nil {
-		return false, err
+		return Reach{}, err
 	}
 	canary := p.TestNamesInSource(codePath, block)
-	unreached := func(why string) (bool, error) {
+	unreached := func(o ReachOutcome, why string) (Reach, error) {
 		log.Printf("advpool: %s: positive control: the authored block counts as unreached: %s", codePath, why)
-		return false, nil
+		return Reach{Outcome: o, Detail: why}, nil
 	}
 	if len(canary) == 0 {
-		return unreached("no test can be named in the reach canary's block")
+		return unreached(ReachFailedWithoutCanary, "no test can be named in the reach canary's block")
 	}
 	failed, ok := golang.DeselectorFor(p, golang.Cmd(cmd))
 	if !ok {
-		return unreached(fmt.Sprintf("the runner of %v names no failing test, so the reach canary cannot be seen failing", cmd))
+		return unreached(ReachRunnerUnreadable, fmt.Sprintf("the runner of %v names no failing test, so the reach canary cannot be seen failing", cmd))
 	}
 	passed, out, err := dj.RunTestDetailed(ctx, s.authoredWorkspace(codePath, block).With(code), rewriteCmd(s.CommandRewrite, cmd))
 	if err != nil {
 		if errors.Is(err, adequacy.ErrTestTimeout) {
-			return unreached("the run timed out, which does not show the reach canary ran")
+			return unreached(ReachTimedOut, "the run timed out, which does not show the reach canary ran")
 		}
-		return false, err
+		return Reach{}, err
 	}
 	if passed {
-		return unreached("the run passed, so the reach canary never ran")
+		return unreached(ReachRunPassed, "the run passed, so the reach canary never ran")
 	}
 	for _, id := range failed(string(out)) {
 		if i := strings.LastIndexByte(id, ' '); i >= 0 {
@@ -1124,11 +1170,11 @@ func (s JailScorer) inlineCanaryReached(ctx context.Context, codePath, code stri
 		}
 		for _, c := range canary {
 			if id == c || strings.HasSuffix(id, "::"+c) {
-				return true, nil
+				return Reach{Outcome: ReachReached}, nil
 			}
 		}
 	}
-	return unreached("the run failed without the reach canary failing: " + failureReason(string(out)))
+	return unreached(ReachFailedWithoutCanary, "the run failed without the reach canary failing: "+failureReason(string(out)))
 }
 
 // failureReason is the line of a failed run's output that says why: the

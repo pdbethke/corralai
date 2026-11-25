@@ -730,18 +730,41 @@ var (
 	goSkipFlags = []string{"-skip", "--skip", "-test.skip", "--test.skip"}
 )
 
+// goBinaryRunFlags and goBinarySkipFlags are the spellings the TEST BINARY
+// reads itself, after -args: only the `test.` ones. A plain `-run` there is
+// a flag the binary does not define ("flag provided but not defined"),
+// which filters nothing (go 1.26.7: after -args, `-test.run=TestB` and
+// `--test.run=TestB` ran TestB, overriding go's own `-run '^TestA$'`, and
+// `-run=TestB` and `--run=TestB` were refused; the same for -test.skip).
+var (
+	goBinaryRunFlags  = []string{"-test.run", "--test.run"}
+	goBinarySkipFlags = []string{"-test.skip", "--test.skip"}
+)
+
+// goFiltersByName reports whether argv, a go test command, already filters
+// by name with one of goFlags among go's own words (before
+// goTestOptionsEnd), or with one of binaryFlags among the words after them,
+// which the test binary reads itself.
+func goFiltersByName(argv, goFlags, binaryFlags []string) bool {
+	end := goTestOptionsEnd(argv, goTestAt(argv))
+	return hasFlag(argv[:end], goFlags...) || hasFlag(argv[end:], binaryFlags...)
+}
+
 // goKillerCmd is argv with `-run` for the one test the failing run named,
 // inserted right after the `test` word. Each `/`-separated part is anchored
 // on its own (`TestX/sub` is `^TestX$/^sub$`), because go test matches a
 // subtest pattern level by level.
 //
-// It declines a command that already filters by name among go's own words
-// (goRunFlags, before goTestOptionsEnd): go takes the last -run given, so an
-// operator's later `-test.run=X` would replace the killer's (go 1.26.7: `-run
-// '^TestB$' -test.run=TestA` ran TestA). A -run after -args is the test
-// binary's word and filters nothing, so it does not decline.
+// It declines a command that already filters by name (goFiltersByName):
+// among go's own words in any spelling (goRunFlags), since go takes the
+// last -run given, so an operator's later `-test.run=X` would replace the
+// killer's (go 1.26.7: `-run '^TestB$' -test.run=TestA` ran TestA); and
+// after -args in the spellings the test binary reads (goBinaryRunFlags),
+// which override go's own -run (go 1.26.7: `go test -run '^TestA$' . -args
+// -test.run=TestB` ran TestB). A plain `-run` after -args is a flag the
+// binary does not define, filters nothing, and does not decline.
 func goKillerCmd(argv []string, id string) ([]string, bool) {
-	if id == "" || !goTestCmd(argv) || hasFlag(argv[:goTestOptionsEnd(argv, goTestAt(argv))], goRunFlags...) {
+	if id == "" || !goTestCmd(argv) || goFiltersByName(argv, goRunFlags, goBinaryRunFlags) {
 		return nil, false
 	}
 	parts := strings.Split(id, "/")

@@ -142,10 +142,11 @@ func TestARecordFileHookNamesTheFailingTestThroughTheRealRunPath(t *testing.T) {
 					t.Fatalf("%s has no failed-tests reader", c.name)
 				}
 
+				// The jail case skips only where there is no bwrap backend
+				// (wireRecordRunner, sandbox.Resolve, as the other jail
+				// tests decide it); a clean run that fails in a jail that
+				// resolved is a failure of what this test checks.
 				if pass, out, err := w.scorer.CompliantRun(ctx, w.codeKey, c.code, c.test, cmd); err != nil || !pass {
-					if substrate == "jail" {
-						t.Skipf("SKIP: the jail did not pass the stand-in suite on unmutated code (jail unavailable): %v\n%s", err, out)
-					}
 					t.Fatalf("clean run: pass=%v err=%v\n%s", pass, err, out)
 				}
 				failing := strings.Replace(c.code, c.mutant.Search, c.mutant.Replace, 1)

@@ -633,9 +633,13 @@ package reposcan
 // t.Error line ending in that shape still names nothing. And go test's
 // killer command (lang.goKillerCmd) now declines a command that filters by
 // name in any spelling go reads (`-test.run=X`, `--run=X`), among go's own
-// words, where "54" built a killer the operator's later filter overrode, so
-// such a kill is now confirmed by repeating the run; a `-run` after -args no
-// longer declines it. Behaviour bump;
+// words, or with `-test.run` / `--test.run` after -args, which the test
+// binary reads and which overrides go's -run (go 1.26.7), where "54" built
+// a killer the operator's filter overrode, so such a kill is now confirmed
+// by repeating the run; a plain `-run` or `--run` after -args, which the
+// binary refuses and which filters nothing, no longer declines it. The
+// salvage -skip declines the same, and `-test.skip` / `--test.skip` after
+// -args. Behaviour bump;
 // the shape is unchanged.
 const VerdictGeneration = "55"
 

@@ -76,6 +76,19 @@ const (
 // or none. Bounded, a record that is printed leaves the printed lines the
 // rest of the tail, and one that is not leaves them all of it.
 //
+// WHAT IT STILL COSTS. A record that is printed takes its own size out of
+// the tail, so the printed lines keep at least 34 KiB of it, not 64. A
+// failure that only the printed lines name falls out of the tail when the
+// run printed more than that remainder after it. Examples are PHPUnit's
+// throwing setUpBeforeClass and data provider, which its JUnit record
+// leaves out, and swift-testing's XCTest failures and the tests of a
+// crashed test process. adequacy's
+// TestARecordUnderTheBoundCanCostPrintedOnlyFailures pins one such run:
+// PHPUnit's edge capture with 40 KiB of printed failure text and a record
+// just under the bound loses both PHPUnit errors that the run without the
+// hook names. Removing that cost needs a capture that keeps the record
+// apart from the printed tail, not a different bound.
+//
 // WHY THIS VALUE. It is the largest round size that, with the block's
 // marker lines, leaves at least half the 64 KiB tail (32 KiB) to the
 // printed lines (adequacy's TestRecordPrintMaxLeavesTheTailRoom pins that),

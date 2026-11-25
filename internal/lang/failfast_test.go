@@ -342,9 +342,13 @@ func TestGoDeselectBeforeArgsRuns(t *testing.T) {
 // -skip), and the last one given wins (go 1.26.7: `-run '^TestB$'
 // -test.run=TestA` ran TestA). So the killer, which inserts its own -run
 // before the operator's words, declines a command that already filters by
-// name in any spelling, among go's own words; one after -args is the test
-// binary's and does not filter (the killer is built). goDeselectCmd's -skip
-// declines the same spellings of -run and -skip.
+// name in any spelling, among go's own words. After -args the words are
+// the test binary's, which reads `-test.run` and `--test.run` (and
+// `-test.skip`, `--test.skip`) itself, the last one winning (go 1.26.7:
+// `go test -run '^TestA$' . -args -test.run=TestB` ran TestB), so those
+// decline too; a plain `-run` or `--run` there is a flag the binary does
+// not define, which filters nothing, and the killer is built.
+// goDeselectCmd's -skip declines the same spellings of -run and -skip.
 func TestGoNarrowingDeclinesEverySpellingOfANameFilter(t *testing.T) {
 	for _, f := range []string{"-run=X", "--run=X", "-test.run=X", "--test.run=X", "-run", "--test.run"} {
 		argv := []string{"go", "test", f, "./..."}
@@ -364,14 +368,29 @@ func TestGoNarrowingDeclinesEverySpellingOfANameFilter(t *testing.T) {
 			t.Errorf("goDeselectCmd(%q) = %q, want it declined", argv, got)
 		}
 	}
-	for _, f := range []string{"-run=X", "-test.run=X", "--run=X"} {
+	for _, f := range []string{"-run=X", "--run=X"} {
 		argv := []string{"go", "test", "./...", "-args", f}
 		got, ok := goKillerCmd(argv, "TestA")
 		if want := []string{"go", "test", "-run", "^TestA$", "./...", "-args", f}; !ok || !slices.Equal(got, want) {
-			t.Errorf("goKillerCmd(%q) = %q, %v, want %q: a -run after -args is the binary's", argv, got, ok, want)
+			t.Errorf("goKillerCmd(%q) = %q, %v, want %q: a plain -run after -args filters nothing", argv, got, ok, want)
 		}
 		if _, ok := goDeselectCmd(argv, []string{"TestA"}); !ok {
-			t.Errorf("goDeselectCmd(%q) declined over a word after -args", argv)
+			t.Errorf("goDeselectCmd(%q) declined over a plain -run after -args", argv)
+		}
+	}
+	for _, tail := range [][]string{{"-test.run=X"}, {"--test.run=X"}, {"-test.run", "X"}, {"--test.run", "X"}} {
+		argv := append([]string{"go", "test", "./...", "-args"}, tail...)
+		if got, ok := goKillerCmd(argv, "TestA"); ok {
+			t.Errorf("goKillerCmd(%q) = %q, want it declined: the test binary reads %s", argv, got, tail[0])
+		}
+		if got, ok := goDeselectCmd(argv, []string{"TestA"}); ok {
+			t.Errorf("goDeselectCmd(%q) = %q, want it declined", argv, got)
+		}
+	}
+	for _, tail := range [][]string{{"-test.skip=X"}, {"--test.skip=X"}, {"-test.skip", "X"}} {
+		argv := append([]string{"go", "test", "./...", "-args"}, tail...)
+		if got, ok := goDeselectCmd(argv, []string{"TestA"}); ok {
+			t.Errorf("goDeselectCmd(%q) = %q, want it declined: the test binary reads %s", argv, got, tail[0])
 		}
 	}
 }
@@ -385,5 +404,45 @@ func TestGoFailHeadingAfterALogShapedPrintNamesNothing(t *testing.T) {
 	}
 	if name, ok := goFailHeading("printed by fmt--- FAIL: TestX (0.00s)"); !ok || name != "TestX" {
 		t.Errorf("goFailHeading = %q, %v, want TestX (the control: no t.Log prefix)", name, ok)
+	}
+}
+
+// Why goKillerCmd declines a `-test.run` after -args, on a real go run: the
+// test binary reads it and it overrides the -run the killer would insert,
+// so the "killer" would run the operator's selection, not the killing
+// test. A plain `-run` there is refused by the binary instead.
+func TestGoBinaryReadsTestRunAfterArgs(t *testing.T) {
+	goBin, err := exec.LookPath("go")
+	if err != nil {
+		t.Skip("SKIP: no go on PATH")
+	}
+	dir := t.TempDir()
+	for name, body := range map[string]string{
+		"go.mod":    "module example.com/argsfixture\n\ngo 1.26\n",
+		"p_test.go": "package p\n\nimport \"testing\"\n\nfunc TestA(t *testing.T) { t.Log(\"ranA\") }\n\nfunc TestB(t *testing.T) { t.Log(\"ranB\") }\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run := func(argv []string) string {
+		c := exec.Command(goBin, argv[1:]...) // #nosec G204 -- go from PATH, words built by this test
+		c.Dir = dir
+		c.Env = append(os.Environ(), "GOTOOLCHAIN=local", "GOFLAGS=")
+		out, _ := c.CombinedOutput()
+		return string(out)
+	}
+	operator := []string{"go", "test", "-count=1", "-v", ".", "-args", "-test.run=TestB"}
+	if _, ok := goKillerCmd(operator, "TestA"); ok {
+		t.Errorf("goKillerCmd(%q) built a killer", operator)
+	}
+	// What the killer would have been: go's -run for TestA, overridden.
+	out := run([]string{"go", "test", "-run", "^TestA$", "-count=1", "-v", ".", "-args", "-test.run=TestB"})
+	if !strings.Contains(out, "ranB") || strings.Contains(out, "ranA") {
+		t.Errorf("want the binary's -test.run=TestB to win over go's -run:\n%s", out)
+	}
+	out = run([]string{"go", "test", "-run", "^TestA$", "-count=1", "-v", ".", "-args", "-run=TestB"})
+	if !strings.Contains(out, "not defined") {
+		t.Errorf("want the binary to refuse a plain -run after -args:\n%s", out)
 	}
 }

@@ -264,3 +264,57 @@ func TestARecordOverTheBoundCostsNoPrintedFailure(t *testing.T) {
 		})
 	}
 }
+
+// THE RESIDUAL, pinned so that a fix flips it deliberately. A record
+// printed under lang.RecordPrintMax still takes its own size out of the
+// tail adequacy keeps, so the printed lines keep only what is left (at
+// least half the tail). A failure that only the printed lines name can then
+// fall out of the kept tail when the printed output is longer than that
+// remainder. PHPUnit's throwing setUpBeforeClass and throwing data provider
+// are errors of that kind: the JUnit record leaves them out, and PHPUnit
+// prints them in its errors section, which comes before the failures. In
+// the edge capture, with 40 KiB of printed failure text and the record
+// padded to just under the bound, the run without the hook names both and
+// the hooked run names neither. Swift XCTest failures and the tests of a
+// crashed swift-testing process are the same kind. A capture that keeps the
+// record apart from the printed tail (the queued follow-up) would make the
+// hooked run name them, and this test then fails and must be inverted.
+func TestARecordUnderTheBoundCanCostPrintedOnlyFailures(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh to run the record wrapper")
+	}
+	c := recordBoundCase{lang: "php", capture: "phpunit-hook-edge.txt", argv: []string{"phpunit", "tests"}}
+	raw, err := os.ReadFile(filepath.Join("..", "lang", "testdata", "runners", c.capture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	format, record, ok := lang.RecordBlock(string(raw))
+	if !ok {
+		t.Fatal("no record block in the edge capture")
+	}
+	printed := lang.PrintedOutput(string(raw))
+	filler := strings.Repeat("     | some long assertion diff line, printed by PHPUnit for a failure\n", 600)
+	if !strings.Contains(printed, "There were 2 failures:") {
+		t.Fatal("the edge capture no longer has the failures heading the filler goes after")
+	}
+	printed = strings.Replace(printed, "There were 2 failures:", "There were 2 failures:\n"+filler, 1)
+	padded := padRecord(t, format, record, 29<<10)
+	if len(padded) > lang.RecordPrintMax {
+		t.Fatalf("padded record %d bytes, over the bound", len(padded))
+	}
+
+	unhooked := failingNames(t, c, string(tailBytes([]byte(printed), maxDetailedOutput)))
+	out := runHooked(t, c, printed, padded)
+	if _, _, ok := lang.RecordBlock(out); !ok {
+		t.Fatal("the record, under the bound, was not printed")
+	}
+	hooked := failingNames(t, c, out)
+	for _, lost := range []string{"ProviderTest::testP", "SetupTest"} {
+		if !slices.Contains(unhooked, lost) {
+			t.Fatalf("the run without the hook does not name %q (%q); the case shows nothing", lost, unhooked)
+		}
+		if slices.Contains(hooked, lost) {
+			t.Errorf("the hooked run names %q: the documented residual is gone; invert this test and correct the disclosures (RecordPrintMax, the hooked rows' Notes, the CHANGELOG)", lost)
+		}
+	}
+}

@@ -17,9 +17,11 @@ import (
 // --outputFile=): it prints every word it was given, one `arg:` line each,
 // and one `ran` line, writes `<xml/>` to the path after --log or after
 // --out=, and exits with the code its `exit=N` word names. `nl` makes the
-// record end with a newline, `empty` leaves the file empty.
+// record end with a newline, `empty` leaves the file empty, `unreadable`
+// takes every permission off it, and `env` prints the variables f, d, r, a,
+// b and rc as the runner inherited them.
 const fakeRecordRunner = `echo ran
-log= code=0 nl= empty=
+log= code=0 nl= empty= unreadable=
 while [ $# -gt 0 ]; do
   printf 'arg:%s\n' "$1"
   case $1 in
@@ -28,6 +30,8 @@ while [ $# -gt 0 ]; do
     exit=*) code=${1#exit=} ;;
     nl) nl=1 ;;
     empty) empty=1 ;;
+    unreadable) unreadable=1 ;;
+    env) printf 'env:%s|%s|%s|%s|%s|%s\n' "$f" "$d" "$r" "$a" "$b" "$rc" ;;
   esac
   shift
 done
@@ -36,6 +40,7 @@ if [ -n "$log" ]; then
   elif [ -n "$nl" ]; then printf '<xml/>\n' > "$log"
   else printf '<xml/>' > "$log"
   fi
+  [ -n "$unreadable" ] && chmod 000 "$log"
 fi
 exit "$code"
 `
@@ -315,5 +320,40 @@ func TestPytestBlockStillParses(t *testing.T) {
 	}
 	if body, ok := lastCompleteBlock(run, pyReportBegin, pyReportEnd); !ok || !strings.HasPrefix(body, "corral-report failed tests/test_x.py::test_bad\n") {
 		t.Errorf("lastCompleteBlock(run) = %q, %v", body, ok)
+	}
+}
+
+// A record the wrapper cannot read whole (here: one it may not read at all)
+// is not a complete block: the end marker is printed only when cat
+// succeeded, so a failed or partial read never passes for the runner's whole
+// account (an empty complete block would read as "no test failed").
+func TestFileRecordHookPrintsNoCompleteBlockForAnUnreadableRecord(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a file with no permissions")
+	}
+	dir := withFakeRecordRow(t, "--log", recordToken)
+	out, code := runIn(t, dir, graded(t, []string{"sh", "fakerunner", "unreadable", "exit=1"}))
+	if code != 1 {
+		t.Fatalf("exit %d, want the runner's 1:\n%s", code, out)
+	}
+	if strings.Contains(out, recordEnd) {
+		t.Errorf("an unreadable record was closed with an end marker:\n%s", out)
+	}
+	if format, body, ok := RecordBlock(out); ok {
+		t.Errorf("RecordBlock = %q, %q, true from an unreadable record, want no block:\n%s", format, body, out)
+	}
+}
+
+// The wrapper's own variables are not ones a project exports: a variable the
+// operator's environment exports reaches the runner with its own value.
+func TestFileRecordHookLeavesTheOperatorsVariablesAlone(t *testing.T) {
+	dir := withFakeRecordRow(t, "--log", recordToken)
+	out, code := runIn(t, dir, graded(t, []string{"sh", "fakerunner", "env"}),
+		"f=F", "d=D", "r=R", "a=A", "b=B", "rc=RC")
+	if code != 0 {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	if !strings.Contains(out, "env:F|D|R|A|B|RC\n") {
+		t.Errorf("the runner inherited changed variables:\n%s", out)
 	}
 }

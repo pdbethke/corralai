@@ -46,7 +46,11 @@ const recordArgv0 = "corral-record"
 // after the runner has exited, trusts none when the last begin has no end,
 // and the defence against a forged name is unchanged and elsewhere: a kill is
 // credited to a named test only when that test, run alone, fails on the fault
-// and passes on the clean code (adequacy's confirmation).
+// and passes on the clean code (adequacy's confirmation). In particular, when
+// the wrapper prints no block of its own (an empty or missing record, the
+// /dev/null fallback), a block a TEST printed is the last complete block and
+// is read as genuine: a body is never proof that corral wrote it, and nothing
+// that reads one may treat it as such.
 const (
 	recordBegin = "corral-record-begin"
 	recordEnd   = "corral-record-end"
@@ -93,38 +97,50 @@ const (
 // directory. `tail -c 1` decides whether the record ended with a newline; a
 // shell without it supplies none, the end marker then shares the record's
 // last line, and the block is incomplete, so it is not read: a missing tool
-// costs the record, never the run.
-const recordScript = `f=$1
+// costs the record, never the run. For the same reason the end marker is
+// printed only when cat succeeded: a record it could not read, or read only
+// part of (an I/O error mid-file), leaves a begin with no end, which the
+// reader does not trust, where a closed block would pass a truncated or empty
+// body for the runner's whole account (and an empty one reads as "no test
+// failed").
+//
+// Every variable the script sets is prefixed `__corral_`. POSIX sh keeps a
+// variable it imported from the environment exported, so assigning a plain
+// name (`d`, `rc`) the operator's environment happens to export would change
+// what the runner inherits; the prefix is a name no project plausibly
+// exports.
+const recordScript = `__corral_fmt=$1
 shift
-if d=$(mktemp -d 2>/dev/null) && [ -n "$d" ]; then
-  trap 'rm -rf "$d"' EXIT
-  r="$d/corral-record"
+if __corral_d=$(mktemp -d 2>/dev/null) && [ -n "$__corral_d" ]; then
+  trap 'rm -rf "$__corral_d"' EXIT
+  __corral_r="$__corral_d/corral-record"
 else
-  d=
-  r=/dev/null
+  __corral_d=
+  __corral_r=/dev/null
   echo 'corral: its record hook could not make a temporary directory, so the record goes to /dev/null and failures are read from what the runner printed' >&2
 fi
-for a do
+for __corral_a do
   shift
-  b=
+  __corral_b=
   while :; do
-    case $a in
-      *` + recordToken + `*) b="$b${a%%` + recordToken + `*}$r"; a=${a#*` + recordToken + `} ;;
+    case $__corral_a in
+      *` + recordToken + `*) __corral_b="$__corral_b${__corral_a%%` + recordToken + `*}$__corral_r"; __corral_a=${__corral_a#*` + recordToken + `} ;;
       *) break ;;
     esac
   done
-  set -- "$@" "$b$a"
+  set -- "$@" "$__corral_b$__corral_a"
 done
 "$@"
-rc=$?
-if [ -n "$d" ] && [ -s "$r" ]; then
+__corral_rc=$?
+if [ -n "$__corral_d" ] && [ -s "$__corral_r" ]; then
   echo
-  printf '%s %s\n' "` + recordBegin + `" "$f"
-  cat "$r"
-  [ -n "$(tail -c 1 "$r" 2>/dev/null)" ] && echo
-  echo "` + recordEnd + `"
+  printf '%s %s\n' "` + recordBegin + `" "$__corral_fmt"
+  if cat "$__corral_r"; then
+    [ -n "$(tail -c 1 "$__corral_r" 2>/dev/null)" ] && echo
+    echo "` + recordEnd + `"
+  fi
 fi
-exit "$rc"
+exit "$__corral_rc"
 `
 
 // FileRecordHook is the ReportHook of a runner that writes its own record

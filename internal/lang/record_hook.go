@@ -3,6 +3,8 @@
 package lang
 
 import (
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/pdbethke/corralai/internal/clip"
@@ -58,9 +60,10 @@ const (
 
 // recordScript is the wrapper a graded run of a record-file runner goes
 // through. Like pyReportScript it holds only corral's own text: its first
-// positional parameter is the record's format (corral's constant), the rest
-// is the command, run as `"$@"` and never spliced into the script, so the
-// shell never re-reads a word of it.
+// three positional parameters are corral's constants (the record's format,
+// the fallback, `null` or `drop`, and the record's suffixes joined by "/",
+// RecordFile), the rest is the command, run as `"$@"` and never spliced into
+// the script, so the shell never re-reads a word of it.
 //
 // The token is replaced word by word with the `for a do shift; …; set --
 // "$@" "$a"; done` rotation: `for` expands the word list once, before the
@@ -83,11 +86,17 @@ const (
 //     nothing keeps it, and its failures are read from what it printed, as
 //     they were before this hook existed. /dev/null and not the token's
 //     removal, because removing words would leave a flag with no argument
-//     (`--log-junit` would take the next word as its file).
-//   - The block is printed only when the record file exists and is not
-//     empty, after a blank line (which keeps the begin marker on a line of
-//     its own when the runner's last line had no newline), after the command
-//     has exited.
+//     (`--log-junit` would take the next word as its file). A hook whose
+//     RecordFile says DropWhenUnset instead leaves every word carrying the
+//     token out of the command, which then is the operator's own: its runner
+//     derives a file name from the path, and a name beside /dev/null is one
+//     it may not write (see RecordFile).
+//   - The block is printed only when a record file exists and is not empty,
+//     after a blank line (which keeps the begin marker on a line of its own
+//     when the runner's last line had no newline), after the command has
+//     exited. The record file is the record path plus the first of the
+//     RecordFile's suffixes that names such a file (the path itself when it
+//     has none).
 //
 // The record file is `corral-record` inside a directory made for this run
 // alone (mktemp -d), so it cannot collide with a file the project writes, and
@@ -110,17 +119,28 @@ const (
 // what the runner inherits; the prefix is a name no project plausibly
 // exports.
 const recordScript = `__corral_fmt=$1
-shift
+__corral_fb=$2
+__corral_sfx=$3
+shift 3
 if __corral_d=$(mktemp -d 2>/dev/null) && [ -n "$__corral_d" ]; then
   trap 'rm -rf "$__corral_d"' EXIT
   __corral_r="$__corral_d/corral-record"
 else
   __corral_d=
   __corral_r=/dev/null
-  echo 'corral: its record hook could not make a temporary directory, so the record goes to /dev/null and failures are read from what the runner printed' >&2
+  if [ "$__corral_fb" = drop ]; then
+    echo 'corral: its record hook could not make a temporary directory, so it leaves its record option out of the command and failures are read from what the runner printed' >&2
+  else
+    echo 'corral: its record hook could not make a temporary directory, so the record goes to /dev/null and failures are read from what the runner printed' >&2
+  fi
 fi
 for __corral_a do
   shift
+  if [ -z "$__corral_d" ] && [ "$__corral_fb" = drop ]; then
+    case $__corral_a in
+      *` + recordToken + `*) continue ;;
+    esac
+  fi
   __corral_b=
   while :; do
     case $__corral_a in
@@ -132,11 +152,26 @@ for __corral_a do
 done
 "$@"
 __corral_rc=$?
-if [ -n "$__corral_d" ] && [ -s "$__corral_r" ]; then
+__corral_f=
+if [ -n "$__corral_d" ]; then
+  __corral_l=$__corral_sfx
+  while :; do
+    __corral_s=${__corral_l%%/*}
+    if [ -s "$__corral_r$__corral_s" ]; then
+      __corral_f=$__corral_r$__corral_s
+      break
+    fi
+    case $__corral_l in
+      */*) __corral_l=${__corral_l#*/} ;;
+      *) break ;;
+    esac
+  done
+fi
+if [ -n "$__corral_f" ]; then
   echo
   printf '%s %s\n' "` + recordBegin + `" "$__corral_fmt"
-  if cat "$__corral_r"; then
-    [ -n "$(tail -c 1 "$__corral_r" 2>/dev/null)" ] && echo
+  if cat "$__corral_f"; then
+    [ -n "$(tail -c 1 "$__corral_f" 2>/dev/null)" ] && echo
     echo "` + recordEnd + `"
   fi
 fi
@@ -156,10 +191,70 @@ exit "$__corral_rc"
 // Windows, or a command its row declines) they are not added, since the
 // token would reach the runner as a file name.
 func FileRecordHook(args func() []string, format string, says string) *ReportHook {
+	return FileRecordHookAt(args, format, says, RecordFile{})
+}
+
+// RecordFile is where a record-file runner writes its record, relative to
+// the path its record args name, and what the wrapper does with those args
+// when it cannot make a directory for the record. The zero value is the
+// PHPUnit shape: the record is the path itself, and the fallback sends it
+// to /dev/null.
+//
+// Suffixes are for a runner that derives its record's name from the path it
+// is given. swift-testing is one, and not the same way in every release:
+// given `--xunit-output <p>.xml`, Swift 6.4.2 writes `<p>-swift-testing.xml`
+// and 6.3.2 writes `<p>.xml` (both measured, capture-runner-fixtures.sh
+// swift-xunit-files-*.txt). The record is the record path plus the first
+// suffix, in order, that names a file that is not empty, so one row reads
+// either release; an empty suffix is the path itself. A suffix is a file
+// name's tail: no "/" (the wrapper joins them with it), no space, and none
+// of the characters a shell pattern or quote gives meaning to.
+//
+// DropWhenUnset is for the same runners: a name derived from /dev/null is a
+// file beside it, which a runner may not write, and swift-testing 6.4.2 then
+// fails a run that passed ("error: invalid access to
+// /dev/null-swift-testing", exit 1), which the hook must never do. So the
+// wrapper leaves out every word carrying the token instead, and the command
+// is the operator's own. That is safe only when such a word is a whole
+// option, `--option=value`: dropping the token's word from `--option value`
+// would leave the option to take the operator's next word as its value, so
+// FileRecordHookAt refuses that.
+type RecordFile struct {
+	Suffixes      []string
+	DropWhenUnset bool
+}
+
+// recordSuffix is what a RecordFile suffix may hold.
+var recordSuffix = regexp.MustCompile(`^[A-Za-z0-9._-]*$`)
+
+// FileRecordHookAt is FileRecordHook for a runner whose record's file, or
+// whose fallback, is not the zero RecordFile's. It panics on a RecordFile
+// it cannot keep (a suffix recordSuffix refuses, or DropWhenUnset with the
+// token in a word that is not `-…=…`): every caller is a row of the runner
+// table, built when the package loads, so a bad one fails every test.
+func FileRecordHookAt(args func() []string, format, says string, f RecordFile) *ReportHook {
+	for _, sfx := range f.Suffixes {
+		if !recordSuffix.MatchString(sfx) {
+			panic("lang: record suffix " + strconv.Quote(sfx) + " is not a file name's tail")
+		}
+	}
+	fallback := "null"
+	if f.DropWhenUnset {
+		fallback = "drop"
+		for _, w := range args() {
+			if !strings.Contains(w, recordToken) {
+				continue
+			}
+			if opt, _, ok := strings.Cut(w, "="); !ok || !strings.HasPrefix(w, "-") || strings.Contains(opt, recordToken) {
+				panic("lang: a record word dropped on fallback must be one --option=value word, not " + strconv.Quote(w))
+			}
+		}
+	}
+	suffixes := strings.Join(f.Suffixes, "/")
 	return &ReportHook{
 		Args: args,
 		Wrap: func(cmd []string) []string {
-			return append([]string{"sh", "-c", recordScript, recordArgv0, format}, cmd...)
+			return append([]string{"sh", "-c", recordScript, recordArgv0, format, fallback, suffixes}, cmd...)
 		},
 		Says: says,
 	}

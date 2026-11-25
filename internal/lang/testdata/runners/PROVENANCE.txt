@@ -107,6 +107,25 @@ own script (above) instead of a copy of its steps, and the plugin to export
 over only the products whose build ID the run's profiles name; a
 --swift-coverage-only run through swift:6.3.2-noble with the network off
 then wrote this file byte for byte.
+swift-hook-*-<version>.txt, swift-hook-edge-list-<version>.txt and
+swift-xunit-files-<version>.txt (added 2026-11-25): capture_swift_hook in
+scripts/capture-runner-fixtures.sh, run once on Swift 6.3.2 (image
+swift:6.3.2-noble) and once on Swift 6.4.2 (image corral-swift-642-go-gawk),
+each in a container run as the invoking user, on src/swift. Each
+swift-hook-*.txt is stdout+stderr of one run, not a TTY, ending with
+`# exit:` (its exit status), the capture directory written as $DIR: the
+`swift test` row's graded command (the record wrapper and
+--xunit-output=<token>.xml, taken from the row by scripts/reportcmd) for
+pass, fail (CORRAL_FAIL_TESTING and CORRAL_FAIL_XCTEST set), xctest
+(CORRAL_FAIL_XCTEST alone), edge (src/swift-authored/edge's file copied
+into CalcTests), crash (src/swift-authored/crash's file copied into
+CalcTests, CORRAL_FAIL_TESTING set) and fallback (a mktemp that fails put
+first on PATH); unhooked and unhooked-pass are plain `swift test` with the
+fail and pass variables. swift-hook-edge-list is the stdout of `swift test
+list` with the edge file in place. swift-xunit-files lists the files `swift
+test` wrote for --xunit-output=<dir>/rec.xml alone, with --parallel, and
+given twice (operator.xml then corral.xml), with each run's exit status, and
+the exit status of a passing run given --xunit-output=/dev/null.xml.
 
 HAND MEASUREMENTS, 2026-11-19 (not captures)
 These are not fixtures. They are the commands behind figures that tracked

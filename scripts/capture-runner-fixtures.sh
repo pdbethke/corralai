@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Elastic-2.0
 #
-# scripts/capture-runner-fixtures.sh [--swift-only|--swift-coverage-only] [--keep] [DIR] — runs the
+# scripts/capture-runner-fixtures.sh [--swift-only|--swift-coverage-only|--swift-hook-only] [--keep] [DIR] — runs the
 # real jest, vitest, mocha, node --test, rspec, phpunit, go test, gotestsum,
 # cargo test, cargo nextest and swift test against the fixture suites in
 # internal/lang/testdata/runners/src, writes what each runner's LIST command
@@ -31,7 +31,9 @@
 #     -e CORRAL_FAIL_TESTING -e CORRAL_FAIL_XCTEST -v /tmp/rf:/tmp/rf \
 #     -w /tmp/rf/swift swift:6.3.2-noble swift" \
 #     scripts/capture-runner-fixtures.sh --swift-only /tmp/rf
-# --swift-coverage-only captures swift-codecov.json alone, the same way.
+# --swift-coverage-only captures swift-codecov.json alone, the same way, and
+# --swift-hook-only the failure hook's swift-*-<version>.txt captures alone
+# (capture_swift_hook), once per toolchain, each run in a DIR of its own.
 # --swift-only captures the Swift fixtures alone, needs nothing but SWIFT, and
 # leaves PROVENANCE.txt as it is (a full run rewrites it, the Swift paragraph
 # included, from swift_provenance). Either run checks `$SWIFT --version` before
@@ -42,11 +44,12 @@ cd "$(dirname "$0")/.."
 REPO="$PWD"
 OUT="$REPO/internal/lang/testdata/runners"
 
-SWIFT_ONLY=0 SWIFT_COVERAGE_ONLY=0 KEEP=0
+SWIFT_ONLY=0 SWIFT_COVERAGE_ONLY=0 SWIFT_HOOK_ONLY=0 KEEP=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --swift-only) SWIFT_ONLY=1; shift ;;
     --swift-coverage-only) SWIFT_COVERAGE_ONLY=1; shift ;;
+    --swift-hook-only) SWIFT_HOOK_ONLY=1; shift ;;
     --keep) KEEP=1; shift ;;
     *) break ;;
   esac
@@ -191,6 +194,80 @@ capture_swift() (
   return "$fail"
 )
 
+# --- swift test's failure hook (internal/lang/swift_record.go) ---------------
+# swift-testing's own JUnit record, which the row has it write with
+# --xunit-output. Its file name and some of its behaviour differ between
+# releases, so every capture here is named for the release that made it
+# (swift-*-<version>.txt) and the function is run once per toolchain CI pins
+# (6.3.2 and 6.4.2), each with its own DIR. The graded command is taken from
+# the row (scripts/reportcmd), never copied; TestSwiftHookCaptureIsTheRowsCommand
+# holds these lines to it. It runs where $SWIFT runs: every word of $SWIFT but
+# the last, then the graded command, whose first word after the wrapper is
+# swift. Needs Go on the host.
+capture_swift_hook() (
+  cd "$DIR/swift"
+  local pdir v words
+  pdir="$(pwd -P)"
+  v="$($SWIFT --version 2>/dev/null | sed -n 's/^Swift version \([0-9][0-9.]*\).*/\1/p' | head -1)"
+  [ -n "$v" ] || { echo "FAIL swift-hook: no version from \`$SWIFT --version\`"; return 1; }
+  read -ra words <<<"$SWIFT"
+  local in=("${words[@]:0:${#words[@]}-1}")
+  local GRADED=()
+  mapfile -d '' GRADED < <(cd "$REPO" && go run ./scripts/reportcmd swift swift test)
+  [ "${#GRADED[@]}" -gt 0 ] || { echo "scripts/reportcmd gave no command for swift test" >&2; return 1; }
+  # hookrun <fixture> <cmd...>: stdout+stderr of cmd run where $SWIFT runs,
+  # then `# exit:` its status, the capture directory written as $DIR.
+  hookrun() {
+    local f="$1"; shift
+    { "${in[@]}" "$@" 2>&1; echo "# exit: $?"; } | sed -e "s#$pdir#\$DIR/swift#g" > "$OUT/$f" || true
+  }
+  exitof() { sed -n 's/^# exit: //p' "$OUT/$1"; }
+  # Where swift-testing writes its record, measured for the hook's suffixes
+  # and for what it declines (swiftRecordWraps): the option alone, with
+  # --parallel, given twice, and pointed beside /dev/null on a passing run.
+  rm -rf xunit && mkdir -p xunit/plain xunit/parallel xunit/twice
+  {
+    "${in[@]}" swift test --xunit-output=xunit/plain/rec.xml >/dev/null 2>&1; echo "plain exit $?: $(cd xunit/plain && ls | tr '\n' ' ')"
+    "${in[@]}" swift test --parallel --xunit-output=xunit/parallel/rec.xml >/dev/null 2>&1; echo "parallel exit $?: $(cd xunit/parallel && ls | tr '\n' ' ')"
+    "${in[@]}" swift test --xunit-output=xunit/twice/operator.xml --xunit-output=xunit/twice/corral.xml >/dev/null 2>&1; echo "twice exit $?: $(cd xunit/twice && ls | tr '\n' ' ')"
+    "${in[@]}" swift test --xunit-output=/dev/null.xml >/dev/null 2>&1; echo "devnull exit $?"
+  } > "$OUT/swift-xunit-files-$v.txt"
+  rm -rf xunit
+  # A passing run, hooked and not: the same exit code. Then the hook unable to
+  # make its directory (a mktemp that fails, put first on PATH; a TMPDIR
+  # naming no directory fails swift itself): the option is left out, the run
+  # passes, and no record is printed.
+  hookrun "swift-hook-pass-$v.txt" "${GRADED[@]}"
+  hookrun "swift-hook-unhooked-pass-$v.txt" swift test
+  want "swift-hook-pass-exit-$v" "0 0" "$(exitof "swift-hook-pass-$v.txt") $(exitof "swift-hook-unhooked-pass-$v.txt")"
+  mkdir -p "$DIR/nomktemp" && printf '#!/bin/sh\nexit 1\n' > "$DIR/nomktemp/mktemp" && chmod +x "$DIR/nomktemp/mktemp"
+  # shellcheck disable=SC2016 # expanded by that sh, not here
+  hookrun "swift-hook-fallback-$v.txt" sh -c 'PATH=$0:$PATH exec "$@"' "$DIR/nomktemp" "${GRADED[@]}"
+  want "swift-hook-fallback-exit-$v" 0 "$(exitof "swift-hook-fallback-$v.txt")"
+  want "swift-hook-fallback-says-$v" 1 "$(grep -c 'leaves its record option out' "$OUT/swift-hook-fallback-$v.txt")"
+  want "swift-hook-fallback-no-block-$v" 0 "$(grep -c '^corral-record-begin' "$OUT/swift-hook-fallback-$v.txt" || true)"
+  # Both frameworks failing, hooked and not (the printed part must match,
+  # TestSwiftHookLeavesThePrintedOutputAlone), and XCTest alone failing.
+  CORRAL_FAIL_TESTING=1 CORRAL_FAIL_XCTEST=1 hookrun "swift-hook-fail-$v.txt" "${GRADED[@]}"
+  CORRAL_FAIL_TESTING=1 CORRAL_FAIL_XCTEST=1 hookrun "swift-hook-unhooked-$v.txt" swift test
+  want "swift-hook-fail-exit-$v" "1 1" "$(exitof "swift-hook-fail-$v.txt") $(exitof "swift-hook-unhooked-$v.txt")"
+  want "swift-hook-fail-block-$v" 1 "$(grep -c '^corral-record-end' "$OUT/swift-hook-fail-$v.txt")"
+  CORRAL_FAIL_XCTEST=1 hookrun "swift-hook-xctest-$v.txt" "${GRADED[@]}"
+  # Failure shapes the fixture does not show (src/swift-authored/edge), and
+  # the ids `swift test list` gives them.
+  cp "$DIR/swift-authored/edge/CalcTests/Edge.swift" Tests/CalcTests/
+  hookrun "swift-hook-edge-$v.txt" "${GRADED[@]}"
+  "${in[@]}" swift test list 2>/dev/null > "$OUT/swift-hook-edge-list-$v.txt" || true
+  rm Tests/CalcTests/Edge.swift
+  # A test that crashes the process after the planted failures have printed
+  # (src/swift-authored/crash): what the record then holds.
+  cp "$DIR/swift-authored/crash/CalcTests/Crash.swift" Tests/CalcTests/
+  CORRAL_FAIL_TESTING=1 hookrun "swift-hook-crash-$v.txt" "${GRADED[@]}"
+  rm Tests/CalcTests/Crash.swift
+  want "swift-hook-crash-exit-$v" 1 "$(exitof "swift-hook-crash-$v.txt")"
+  return "$fail"
+)
+
 # --- swift coverage (internal/lang/swift_coverage.go) -----------------------
 # The llvm-cov export of one coverage run of the coverage fixture
 # (internal/lang/testdata/coverage/swift: Calc.swift tested in part, Dead.swift
@@ -269,6 +346,25 @@ that swiftPlugin.CoverageCmd's own script (scripts/swiftcoverageexport) made
 for one \`swift test\` run of a copy of ../coverage/swift: the profiles the
 run wrote, over the products whose build ID they name; the capture directory
 written as /fixture.
+swift-hook-*-<version>.txt, swift-hook-edge-list-<version>.txt and
+swift-xunit-files-<version>.txt (added 2026-11-25): capture_swift_hook in
+scripts/capture-runner-fixtures.sh, run once on Swift 6.3.2 (image
+swift:6.3.2-noble) and once on Swift 6.4.2 (image corral-swift-642-go-gawk),
+each in a container run as the invoking user, on src/swift. Each
+swift-hook-*.txt is stdout+stderr of one run, not a TTY, ending with
+\`# exit:\` (its exit status), the capture directory written as \$DIR: the
+\`swift test\` row's graded command (the record wrapper and
+--xunit-output=<token>.xml, taken from the row by scripts/reportcmd) for
+pass, fail (CORRAL_FAIL_TESTING and CORRAL_FAIL_XCTEST set), xctest
+(CORRAL_FAIL_XCTEST alone), edge (src/swift-authored/edge's file copied
+into CalcTests), crash (src/swift-authored/crash's file copied into
+CalcTests, CORRAL_FAIL_TESTING set) and fallback (a mktemp that fails put
+first on PATH); unhooked and unhooked-pass are plain \`swift test\` with the
+fail and pass variables. swift-hook-edge-list is the stdout of \`swift test
+list\` with the edge file in place. swift-xunit-files lists the files \`swift
+test\` wrote for --xunit-output=<dir>/rec.xml alone, with --parallel, and
+given twice (operator.xml then corral.xml), with each run's exit status, and
+the exit status of a passing run given --xunit-output=/dev/null.xml.
 PROV
 }
 
@@ -276,8 +372,13 @@ if [ "$SWIFT_COVERAGE_ONLY" = 1 ]; then
   capture_swift_coverage || fail=1
   exit "$fail"
 fi
+if [ "$SWIFT_HOOK_ONLY" = 1 ]; then
+  capture_swift_hook || fail=1
+  exit "$fail"
+fi
 if [ "$SWIFT_ONLY" = 1 ]; then
   capture_swift || fail=1
+  capture_swift_hook || fail=1
   capture_swift_coverage || fail=1
   exit "$fail"
 fi
@@ -805,6 +906,7 @@ want pnpm-test-single 1 "$(corepack "pnpm@$PNPM" test -- --testNamePattern '^top
 want composer-test-single 1 "$(composer test -- --filter '/(?:^|\\)CalcTest::testAdds(?: with data set .*)?$/' tests/CalcTest.php 2>&1 | sed -n 's/^OK (\([0-9]*\) test.*/\1/p')"
 
 capture_swift || fail=1
+capture_swift_hook || fail=1
 capture_swift_coverage || fail=1
 
 {

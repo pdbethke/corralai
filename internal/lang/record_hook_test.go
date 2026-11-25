@@ -19,14 +19,19 @@ import (
 // --out=, and exits with the code its `exit=N` word names. `nl` makes the
 // record end with a newline, `empty` leaves the file empty, `unreadable`
 // takes every permission off it, and `env` prints the variables f, d, r, a,
-// b and rc as the runner inherited them.
+// b and rc as the runner inherited them. --derived=P writes the record to P
+// with "-st" inserted before its extension (as swift-testing 6.4.2 does with
+// --xunit-output), and --both=P writes <derived/> there and <plain/> to P
+// itself.
 const fakeRecordRunner = `echo ran
-log= code=0 nl= empty= unreadable=
+log= code=0 nl= empty= unreadable= both=
 while [ $# -gt 0 ]; do
   printf 'arg:%s\n' "$1"
   case $1 in
     --log) log=$2 ;;
     --out=*) log=${1#--out=} ;;
+    --derived=*) log=${1#--derived=}; log=${log%.xml}-st.xml ;;
+    --both=*) both=${1#--both=} ;;
     exit=*) code=${1#exit=} ;;
     nl) nl=1 ;;
     empty) empty=1 ;;
@@ -42,6 +47,10 @@ if [ -n "$log" ]; then
   fi
   [ -n "$unreadable" ] && chmod 000 "$log"
 fi
+if [ -n "$both" ]; then
+  printf '<derived/>' > "${both%.xml}-st.xml"
+  printf '<plain/>' > "$both"
+fi
 exit "$code"
 `
 
@@ -50,9 +59,16 @@ exit "$code"
 // and returns the directory holding the runner's script.
 func withFakeRecordRow(t *testing.T, args ...string) string {
 	t.Helper()
+	return withFakeRecordRowAt(t, RecordFile{}, args...)
+}
+
+// withFakeRecordRowAt is withFakeRecordRow with the hook told where the
+// runner writes its record (FileRecordHookAt).
+func withFakeRecordRowAt(t *testing.T, f RecordFile, args ...string) string {
+	t.Helper()
 	withRunners(t, []Runner{{
 		ID: "fakerunner", Name: "fakerunner", Languages: []string{"python"}, Words: []string{"fakerunner"},
-		ReportHook: FileRecordHook(func() []string { return args }, "junit", "fakerunner writes a record"),
+		ReportHook: FileRecordHookAt(func() []string { return args }, "junit", "fakerunner writes a record", f),
 	}})
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "fakerunner"), []byte(fakeRecordRunner), 0o600); err != nil {
@@ -355,5 +371,97 @@ func TestFileRecordHookLeavesTheOperatorsVariablesAlone(t *testing.T) {
 	}
 	if !strings.Contains(out, "env:F|D|R|A|B|RC\n") {
 		t.Errorf("the runner inherited changed variables:\n%s", out)
+	}
+}
+
+// A runner that writes its record to a file DERIVED from the path it is
+// given (swift-testing 6.4.2 writes `--xunit-output x.xml` to
+// x-swift-testing.xml) is read from the first of the hook's suffixed paths
+// that holds a record: the derived file, the path itself when the runner
+// wrote only that (swift-testing 6.3.2), and the first suffix when it wrote
+// both.
+func TestFileRecordHookReadsTheFirstSuffixedFile(t *testing.T) {
+	f := RecordFile{Suffixes: []string{"-st.xml", ".xml"}}
+	for _, c := range []struct{ name, arg, body string }{
+		{"derived", "--derived=" + recordToken + ".xml", "<xml/>"},
+		{"the path itself", "--out=" + recordToken + ".xml", "<xml/>"},
+		{"both: the first suffix", "--both=" + recordToken + ".xml", "<derived/>"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := withFakeRecordRowAt(t, f, c.arg)
+			out, code := runIn(t, dir, graded(t, []string{"sh", "fakerunner", "exit=1"}))
+			if code != 1 {
+				t.Fatalf("exit %d, want the runner's 1:\n%s", code, out)
+			}
+			if format, body, ok := RecordBlock(out); !ok || format != "junit" || body != c.body {
+				t.Errorf("RecordBlock = %q, %q, %v, want junit, %q, true, from:\n%s", format, body, ok, c.body, out)
+			}
+		})
+	}
+	// With no suffix the record is the path itself, as before: a derived
+	// file is not read.
+	dir := withFakeRecordRow(t, "--derived="+recordToken+".xml")
+	if out, _ := runIn(t, dir, graded(t, []string{"sh", "fakerunner"})); strings.Contains(out, recordBegin) {
+		t.Errorf("a hook with no suffix read a file it was not told of:\n%s", out)
+	}
+}
+
+// A runner that derives its record's name from the path cannot be given
+// /dev/null when the hook cannot set up: it would write beside it, where it
+// may not (swift-testing 6.4.2 exits 1 on an otherwise passing run, "error:
+// invalid access to /dev/null-swift-testing"). Such a hook leaves every word
+// carrying the token out of the command instead, so the run is the
+// operator's command exactly, with its own exit code, once, and says so.
+func TestFileRecordHookDropsTheRecordWordWhenItCannotSetUp(t *testing.T) {
+	dir := withFakeRecordRowAt(t, RecordFile{Suffixes: []string{"-st.xml"}, DropWhenUnset: true}, "--derived="+recordToken+".xml")
+	for _, code := range []int{0, 1} {
+		exit := map[int]string{0: "exit=0", 1: "exit=1"}[code]
+		out, got := runIn(t, dir, graded(t, []string{"sh", "fakerunner", exit, "keep " + recordToken[:4]}), "TMPDIR="+filepath.Join(dir, "does-not-exist"))
+		if got != code {
+			t.Fatalf("exit %d, want the runner's %d:\n%s", got, code, out)
+		}
+		if n := strings.Count(out, "ran\n"); n != 1 {
+			t.Errorf("the runner ran %d times, want once:\n%s", n, out)
+		}
+		if args := argLines(out); !slices.Equal(args, []string{exit, "keep " + recordToken[:4]}) {
+			t.Errorf("runner's words = %q, want the operator's alone", args)
+		}
+		if strings.Contains(out, recordBegin) || !strings.Contains(out, "leaves its record option out") {
+			t.Errorf("the fallback printed a block or did not say what it did:\n%s", out)
+		}
+	}
+}
+
+// What a RecordFile may say is checked when the hook is built: a suffix is
+// a file name's tail (no "/", no space, no glob or quote character), and a
+// hook that drops its words on fallback must carry the token only in
+// `--option=value` words, since dropping one word of `--option value`
+// would leave the option to take the operator's next word.
+func TestFileRecordHookAtRefusesWhatItCannotKeep(t *testing.T) {
+	for name, build := range map[string]func(){
+		"a suffix with a slash": func() {
+			FileRecordHookAt(func() []string { return nil }, "junit", "", RecordFile{Suffixes: []string{"a/b"}})
+		},
+		"a suffix with a space": func() {
+			FileRecordHookAt(func() []string { return nil }, "junit", "", RecordFile{Suffixes: []string{"a b"}})
+		},
+		"a suffix with a glob": func() {
+			FileRecordHookAt(func() []string { return nil }, "junit", "", RecordFile{Suffixes: []string{"*.xml"}})
+		},
+		"a separate value dropped": func() {
+			FileRecordHookAt(func() []string { return []string{"--x", recordToken} }, "junit", "", RecordFile{DropWhenUnset: true})
+		},
+		"a non-option word dropped": func() {
+			FileRecordHookAt(func() []string { return []string{recordToken + ".xml"} }, "junit", "", RecordFile{DropWhenUnset: true})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("FileRecordHookAt accepted %s", name)
+				}
+			}()
+			build()
+		})
 	}
 }

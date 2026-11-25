@@ -1,0 +1,4 @@
+plain exit 0: rec-swift-testing.xml 
+parallel exit 0: rec-swift-testing.xml rec.xml 
+twice exit 0: corral-swift-testing.xml 
+devnull exit 1

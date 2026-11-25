@@ -582,7 +582,13 @@ package reposcan
 // (--log-junit, lang.phpunitRecordHook), and the killing test is read from
 // it, so a project whose phpunit.xml sets testdox="true", where "54" read no
 // killing test from the printed lines, now names one, and that kill can be
-// confirmed by the test alone. Behaviour bump; the shape is unchanged.
+// confirmed by the test alone. Also in "55": every `swift test` run corral
+// can rewrite writes swift-testing's JUnit record (--xunit-output,
+// lang.swiftRecordHook), and a swift-testing killing test is read from it
+// by the id `swift test list` prints (`CalcTests.Arithmetic/adds()`) where
+// "54" recorded the bare name the printed line gives (`adds()`, or a
+// display name), so a recorded Swift killed_by changes form; an XCTest one
+// does not. Behaviour bump; the shape is unchanged.
 const VerdictGeneration = "55"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every

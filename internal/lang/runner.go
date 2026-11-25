@@ -476,11 +476,11 @@ var runners = []Runner{
 		// test file, and a critic's name (TestNamesInSource's, already in
 		// the listing's form) is checked against it before it is run.
 		ListCmd: swiftListCmd, ParseList: swiftParseList, SingleCmd: swiftSingleCmd, ResolveByList: true, Coruns: swiftCoruns,
-		FirstFailure: swiftFirstFailure,
-		ListUnits:    swiftListUnits, ParseUnits: swiftParseUnits, UnitCmd: oneUnit(swiftUnitsCmd),
+		FirstFailure: swiftFirstFailure, ReportHook: swiftRecordHook,
+		ListUnits: swiftListUnits, ParseUnits: swiftParseUnits, UnitCmd: oneUnit(swiftUnitsCmd),
 		UnitsCmd: swiftUnitsCmd, UnitForFile: swiftUnitForFile, UnitNoun: "test targets",
 		Disclose: swiftDisclose, PreflightBin: func(argv []string) string { return preflightBin(argv, "swift") },
-		Note: "corral's sandbox does not run Swift, so a Swift audit runs only on `certify --repo --substrate workspace`, and no audit with models has been run on one yet. Run on Swift 6.3.2 on Linux, in a container: the listing; one test alone (`--filter`) for each of four id shapes, an XCTest Class/method, a top-level swift-testing function, one in a suite with a display name and a parameterised one, each running exactly one test; one-target and two-target runs; and the failure lines of both frameworks. Other id shapes (nested suites, a name that is no ASCII identifier) were not run. The --help lists no retry option, so no test is reported flaky; a swift-testing failure is named by its function or display name, as its output prints it, an XCTest one as Class.method without its target; a test target declared with its own `path:` in Package.swift is not mapped to its files",
+		Note: "corral's sandbox does not run Swift, so a Swift audit runs only on `certify --repo --substrate workspace`, and no audit with models has been run on one yet. Run on Swift 6.3.2 on Linux, in a container: the listing; one test alone (`--filter`) for each of four id shapes, an XCTest Class/method, a top-level swift-testing function, one in a suite with a display name and a parameterised one, each running exactly one test; one-target and two-target runs; and the failure lines of both frameworks. Other id shapes (nested suites, a name that is no ASCII identifier) were not run. The --help lists no retry option, so no test is reported flaky; a swift-testing failure is named by the id `swift test list` prints, read from swift-testing's own record of the run (`--xunit-output`, run on Swift 6.3.2 and 6.4.2), and by its function or display name, as its output prints it, where there is no record (a command the hook does not wrap, or a crashed test process); XCTest writes no record unless its tests run in parallel, which the hook does not add, so an XCTest failure is never read from a record: it is named from its printed line, as Class.method without its target; a test target declared with its own `path:` in Package.swift is not mapped to its files",
 	},
 }
 

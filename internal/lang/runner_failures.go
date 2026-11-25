@@ -332,14 +332,40 @@ func minitestFailures(out string) []string {
 // failing, and nothing is dropped from it: under a testdox configuration the
 // printed lines name nothing at all and the record is the only source.
 func phpFailures(out string) []string {
-	printed := phpPrintedFailures(withoutRecordBlock(out))
-	ids, ok := phpunitRecordedFailures(out)
+	return recordThenPrinted(out, phpunitRecordedFailures, phpPrintedFailures, func(id, name string) bool { return id == name })
+}
+
+// recordThenPrinted is the failing tests of a run whose row has a
+// record-file hook: the ONE rule every such row's reader follows, so that a
+// row adopting the hook adds a record reader and a printed reader and never
+// a union of its own.
+//
+// recorded reads the run's record (ok false when there is none to trust:
+// no complete block, another format, a record its reader refuses); printed
+// reads the runner's printed lines, and is handed the output with the record
+// block taken out (withoutRecordBlock), so a line inside the record is never
+// read as a printed one. With no record the printed names are the whole
+// answer, as before the hook. With one, the record's ids come first, then
+// each printed name that no recorded id stands for (names(id, name): the
+// same test, written as the printed lines write it), in printed order, each
+// once.
+//
+// The printed names are added because no runner's record has yet been a
+// superset of its printed lines (PHPUnit's omits errors outside a test
+// method; swift-testing's omits a crashed process's tests), so a record read
+// alone would name fewer tests than the printed lines did. A name is only a
+// candidate: a kill is credited to a named test only where adequacy's kill
+// confirmation runs it alone, and a salvage that deselects a name too many
+// narrows the exam, never widens it.
+func recordThenPrinted(out string, recorded func(string) ([]string, bool), printed func(string) []string, names func(id, name string) bool) []string {
+	shown := printed(withoutRecordBlock(out))
+	ids, ok := recorded(out)
 	if !ok {
-		return printed
+		return shown
 	}
-	for _, id := range printed {
-		if !slices.Contains(ids, id) {
-			ids = append(ids, id)
+	for _, name := range shown {
+		if !slices.ContainsFunc(ids, func(id string) bool { return names(id, name) }) {
+			ids = append(ids, name)
 		}
 	}
 	return ids

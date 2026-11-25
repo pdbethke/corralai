@@ -122,13 +122,13 @@ var swiftTestingFailed = regexp.MustCompile(`^✘ Test (".*"|\S+\))(?: with \d+ 
 // `Test Case 'AdderTests.testFails' failed`).
 var xctestFailed = regexp.MustCompile(`^Test Case '([^']+)' failed \(`)
 
-// swiftFailures names the failing tests in a `swift test` run's output, in
-// the order printed and each once, as each framework names them: a
-// swift-testing test by its function or display name, an XCTest test as
-// Class.method. On Linux XCTest reports first and swift-testing after it,
-// whether or not the XCTest part failed. A build that failed ran no test, and
-// names none.
-func swiftFailures(output string) []string {
+// swiftPrintedFailures names the failing tests in a `swift test` run's
+// printed lines, in the order printed and each once, as each framework
+// names them: a swift-testing test by its function or display name, an
+// XCTest test as Class.method. On Linux XCTest reports first and
+// swift-testing after it, whether or not the XCTest part failed. A build
+// that failed ran no test, and names none.
+func swiftPrintedFailures(output string) []string {
 	var names []string
 	for _, line := range strings.Split(output, "\n") {
 		line = strings.TrimRight(line, "\r")
@@ -143,9 +143,30 @@ func swiftFailures(output string) []string {
 	return names
 }
 
+// swiftFailures names the failing tests of a `swift test` run: the ids
+// swift-testing's own record gives (swiftRecordedFailures, the row's
+// failure hook), then each printed name no recorded id stands for
+// (recordThenPrinted, swiftRecordedNames), which is every XCTest failure
+// (XCTest writes no record on a run the hook wraps), a swift-testing test
+// with a display name (the record does not carry it, so its printed name
+// cannot be matched to its id, and the test is named twice, once in each
+// form), and every swift-testing failure the record omits. It omits the
+// tests of a test process that crashed: Swift 6.4.2's record is then
+// well-formed and lacks that process's suite, while 6.3.2's is cut short and
+// is not read (swift-hook-crash-*.txt). With no record, the printed lines
+// are the whole answer, as before the hook.
+func swiftFailures(output string) []string {
+	return recordThenPrinted(output, swiftRecordedFailures, swiftPrintedFailures, swiftRecordedNames)
+}
+
 // swiftFirstFailure is the first test swiftFailures names, a label for the
-// record and never a selector: no swift-testing failure line names the test's
-// suite or target, so the label cannot be narrowed back to one listed id.
+// record. From swift-testing's record it is the id `swift test list` prints
+// (`CalcTests.Arithmetic/adds()`), which SingleCmd takes and the critic's
+// list uses; from the printed lines it is the bare name they print, which
+// cannot be narrowed back to one listed id, since no swift-testing failure
+// line names the test's suite or target. The row has no KillerCmd either
+// way: XCTest's printed name lacks its target, and a run killed only by one
+// still has no id to run alone.
 var swiftFirstFailure = firstOf(swiftFailures)
 
 // A Swift test unit is a test TARGET, as cargo's is: the module a test id

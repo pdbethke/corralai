@@ -1,0 +1,112 @@
+[0/1] Planning build
+Building for debugging...
+[0/11] Write sources
+[1/11] Write swift-version-24593BA9C3E375BF.txt
+[3/11] Compiling CalcTests Edge.swift
+[4/11] Emitting module CalcTests
+[5/12] $DIR/swift/.build/x86_64-unknown-linux-gnu/debug/CalcPackageDiscoveredTests.derived/all-discovered-tests.swift
+[6/13] Write sources
+[7/13] Wrapping AST for CalcTests for debugging
+[9/17] Emitting module CalcPackageDiscoveredTests
+[10/17] Compiling CalcPackageDiscoveredTests all-discovered-tests.swift
+[11/17] Compiling CalcPackageDiscoveredTests CalcTests.swift
+[12/17] Compiling CalcPackageDiscoveredTests CalcXCTests.swift
+[14/17] Emitting module CalcPackageTests
+[15/17] Write Objects.LinkFileList
+[16/17] Linking CalcPackageTests.xctest
+Build complete! (0.71s)
+Test Suite 'All tests' started at 2026-11-25 16:35:16.924
+Test Suite 'debug.xctest' started at 2026-11-25 16:35:16.925
+Test Suite 'AdderTests' started at 2026-11-25 16:35:16.925
+Test Case 'AdderTests.testAdds' started at 2026-11-25 16:35:16.925
+Test Case 'AdderTests.testAdds' passed (0.0 seconds)
+Test Case 'AdderTests.testAddsTwice' started at 2026-11-25 16:35:16.925
+Test Case 'AdderTests.testAddsTwice' passed (0.0 seconds)
+Test Case 'AdderTests.testFails' started at 2026-11-25 16:35:16.925
+Test Case 'AdderTests.testFails' passed (0.0 seconds)
+Test Suite 'AdderTests' passed at 2026-11-25 16:35:16.926
+	 Executed 3 tests, with 0 failures (0 unexpected) in 0.001 (0.001) seconds
+Test Suite 'debug.xctest' passed at 2026-11-25 16:35:16.926
+	 Executed 3 tests, with 0 failures (0 unexpected) in 0.001 (0.001) seconds
+Test Suite 'All tests' passed at 2026-11-25 16:35:16.926
+	 Executed 3 tests, with 0 failures (0 unexpected) in 0.001 (0.001) seconds
+◇ Test run started.
+↳ Testing Library Version: 6.3.2 (70eff261d7f462c)
+↳ Target Platform: x86_64-unknown-linux-gnu
+◇ Test parses() started.
+◇ Test parsesTwice() started.
+◇ Suite Arithmetic started.
+◇ Test knownIssue() started.
+◇ Suite Outer started.
+◇ Suite ThrowingInit started.
+◇ Test throwsAnError() started.
+◇ Suite "Pretty suite" started.
+◇ Test warningOnly() started.
+◇ Test doubles(value:) started.
+◇ Suite Inner started.
+➜ Test disabledOne() skipped: "off"
+◇ Test neverRuns() started.
+◇ Test fails() started.
+◇ Test "adds two numbers" started.
+✘ Test badArguments(n:) recorded an issue with 1 argument : Caught error: EdgeError()
+✘ Test throwsAnError() recorded an issue at Edge.swift:14:2: Caught error: EdgeError()
+◇ Test nested() started.
+◇ Test case passing 1 argument value → 2 to doubles(value:) started.
+◇ Test case passing 1 argument value → 3 to doubles(value:) started.
+◇ Test case passing 1 argument value → 1 to doubles(value:) started.
+✘ Test neverRuns() recorded an issue at Edge.swift:30:6: Caught error: EdgeError()
+◇ Test inPretty() started.
+⚠︎ Test warningOnly() recorded a warning at Edge.swift:37:40: Issue recorded
+↳ just a warning
+✔ Test parses() passed after 0.001 seconds.
+✔ Test parsesTwice() passed after 0.001 seconds.
+✘ Test neverRuns() failed after 0.001 seconds with 1 issue.
+✘ Test throwsAnError() failed after 0.001 seconds with 1 issue.
+✔ Test doubles(value:) with 3 test cases passed after 0.001 seconds.
+✔ Test fails() passed after 0.001 seconds.
+✔ Test "adds two numbers" passed after 0.001 seconds.
+✔ Test warningOnly() passed after 0.001 seconds with 1 warning.
+✘ Suite ThrowingInit failed after 0.001 seconds with 1 issue.
+✘ Test inPretty() recorded an issue at Edge.swift:25:29: Expectation failed: (add(1, 1) → 2) == 3
+✘ Test nested() recorded an issue at Edge.swift:20:31: Expectation failed: (add(1, 1) → 2) == 3
+✔ Suite Arithmetic passed after 0.001 seconds.
+✘ Test inPretty() failed after 0.001 seconds with 1 issue.
+✘ Test nested() failed after 0.001 seconds with 1 issue.
+✘ Suite Inner failed after 0.001 seconds with 1 issue.
+━ Test knownIssue() recorded a known issue at Edge.swift:33:44: Expectation failed: (add(1, 1) → 2) == 3
+✘ Suite "Pretty suite" failed after 0.001 seconds with 1 issue.
+✘ Suite Outer failed after 0.001 seconds with 1 issue.
+━ Test knownIssue() passed after 0.001 seconds with 1 known issue.
+✘ Test run with 12 tests in 5 suites failed after 0.001 seconds with 7 issues (including 1 warning and 1 known issue).
+
+corral-record-begin junit
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="TestResults" errors="0" tests="11" failures="4" skipped="1" time="0.000992586">
+
+    <testcase classname="CalcTests" name="parses()" time="0.000279966" />
+    <testcase classname="CalcTests" name="disabledOne()" >
+      <skipped>off</skipped>
+    </testcase>
+    <testcase classname="CalcTests.Pretty" name="inPretty()" time="0.000261251" >
+      <failure message="Expectation failed: (add(1, 1) &#8594; 2) == 3 (error)" />
+    </testcase>
+    <testcase classname="CalcTests" name="knownIssue()" time="0.00064371" />
+    <testcase classname="CalcTests" name="throwsAnError()" time="0.000342965" >
+      <failure message="Caught error: EdgeError() (error)" />
+    </testcase>
+    <testcase classname="CalcTests" name="warningOnly()" time="0.000369955" />
+    <testcase classname="CalcTests" name="parsesTwice()" time="0.000334398" />
+    <testcase classname="CalcTests.Outer.Inner" name="nested()" time="0.000346021" >
+      <failure message="Expectation failed: (add(1, 1) &#8594; 2) == 3 (error)" />
+    </testcase>
+    <testcase classname="CalcTests.Arithmetic" name="fails()" time="0.000275147" />
+    <testcase classname="CalcTests.Arithmetic" name="adds()" time="0.000268445" />
+    <testcase classname="CalcTests.Arithmetic" name="doubles(value:)" time="0.00025527" />
+    <testcase classname="CalcTests.ThrowingInit" name="neverRuns()" time="0.000236134" >
+      <failure message="Caught error: EdgeError() (error)" />
+    </testcase>
+  </testsuite>
+</testsuites>
+corral-record-end
+# exit: 1

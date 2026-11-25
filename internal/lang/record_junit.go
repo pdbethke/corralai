@@ -117,6 +117,23 @@ func junitFailures(body string) ([]junitCase, error) {
 	return out, nil
 }
 
+// junitRecord is the failing testcases of the run's record (RecordBlock)
+// when it is a complete, well-formed JUnit block: ok is false when the
+// output carries no complete block, the block is not JUnit, or junitFailures
+// refuses its XML, and a row's reader then reads the runner's printed lines
+// instead. The one door every JUnit-record row reads its record through.
+func junitRecord(out string) ([]junitCase, bool) {
+	format, body, ok := RecordBlock(out)
+	if !ok || format != recordJUnit {
+		return nil, false
+	}
+	cases, err := junitFailures(body)
+	if err != nil {
+		return nil, false
+	}
+	return cases, true
+}
+
 // xmlAttr is the value of the attribute named name on t, "" when it has none.
 func xmlAttr(t xml.StartElement, name string) string {
 	for _, a := range t.Attr {

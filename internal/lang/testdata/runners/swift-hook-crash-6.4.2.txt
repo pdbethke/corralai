@@ -1,0 +1,262 @@
+Building for debugging...
+[8 / 18] CalcTests-product
+[11 / 17] CalcTests-product
+[15 / 18] CalcTests-product
+[20 / 22] CalcTests-test-runner
+Build complete! (0.83 secs)
+Test Suite 'All tests' started at 2026-11-25 16:34:56.634
+Test Suite 'Debug-linux-x86_64.xctest' started at 2026-11-25 16:34:56.635
+Test Suite 'AdderTests' started at 2026-11-25 16:34:56.635
+Test Case 'AdderTests.testAdds' started at 2026-11-25 16:34:56.635
+Test Case 'AdderTests.testAdds' passed (0.0 seconds)
+Test Case 'AdderTests.testAddsTwice' started at 2026-11-25 16:34:56.635
+Test Case 'AdderTests.testAddsTwice' passed (0.0 seconds)
+Test Case 'AdderTests.testFails' started at 2026-11-25 16:34:56.635
+Test Case 'AdderTests.testFails' passed (0.0 seconds)
+Test Suite 'AdderTests' passed at 2026-11-25 16:34:56.635
+	 Executed 3 tests, with 0 failures (0 unexpected) in 0.001 (0.001) seconds
+Test Suite 'Debug-linux-x86_64.xctest' passed at 2026-11-25 16:34:56.635
+	 Executed 3 tests, with 0 failures (0 unexpected) in 0.001 (0.001) seconds
+Test Suite 'All tests' passed at 2026-11-25 16:34:56.635
+	 Executed 3 tests, with 0 failures (0 unexpected) in 0.001 (0.001) seconds
+Test Suite 'All tests' started at 2026-11-25 16:34:56.641
+Test Suite 'Debug-linux-x86_64.xctest' started at 2026-11-25 16:34:56.642
+Test Suite 'Debug-linux-x86_64.xctest' passed at 2026-11-25 16:34:56.642
+	 Executed 0 tests, with 0 failures (0 unexpected) in 0.0 (0.0) seconds
+Test Suite 'All tests' passed at 2026-11-25 16:34:56.642
+	 Executed 0 tests, with 0 failures (0 unexpected) in 0.0 (0.0) seconds
+◇ Test run started.
+↳ Testing Library Version: 6.4.2 (288a2328ff84644)
+↳ Target Platform: x86_64-unknown-linux-gnu
+✔ Test run with 0 tests in 0 suites passed after 0.001 seconds.
+◇ Test run started.
+↳ Testing Library Version: 6.4.2 (288a2328ff84644)
+↳ Target Platform: x86_64-unknown-linux-gnu
+◇ Suite Arithmetic started.
+◇ Test parses() started.
+◇ Test parsesTwice() started.
+◇ Test crashes() started.
+◇ Test "adds two numbers" started.
+◇ Test fails() started.
+◇ Test doubles(value:) started.
+✔ Test parsesTwice() passed after 0.001 seconds.
+✔ Test parses() passed after 0.001 seconds.
+◇ Test case passing 1 argument value → 3 to doubles(value:) started.
+◇ Test case passing 1 argument value → 2 to doubles(value:) started.
+◇ Test case passing 1 argument value → 1 to doubles(value:) started.
+✘ Test "adds two numbers" recorded an issue at CalcTests.swift:22:9: Expectation failed: add(2, 3) == (planted ? 6 : 5)
+↳ add(2, 3) == (planted ? 6 : 5) → false
+↳   add(2, 3) → 5
+↳   (planted ? 6 : 5) → 6
+✘ Test doubles(value:) recorded an issue with 1 argument value → 2 at CalcTests.swift:26:9: Expectation failed: double(value) == value + value + (planted && value == 2 ? 1 : 0)
+↳ double(value) == value + value + (planted && value == 2 ? 1 : 0) → false
+↳   double(value) → 4
+↳   value + value + (planted && value == 2 ? 1 : 0) → 5
+✘ Test fails() recorded an issue at CalcTests.swift:30:9: Expectation failed: add(2, 2) == (planted ? 5 : 4)
+↳ add(2, 2) == (planted ? 5 : 4) → false
+↳   add(2, 2) → 4
+↳   (planted ? 5 : 4) → 5
+✘ Test "adds two numbers" failed after 0.001 seconds with 1 issue.
+✘ Test fails() failed after 0.001 seconds with 1 issue.
+✘ Test doubles(value:) with 3 test cases failed after 0.001 seconds with 1 issue.
+✘ Suite Arithmetic failed after 0.001 seconds with 3 issues.
+CalcTests/Crash.swift:10: Fatal error: planted crash
+
+*** Signal 4: Backtracing from 0x75646de7c8cf... done ***
+
+*** Program crashed: Illegal instruction at 0x000075646de7c8cf ***
+
+Platform: x86_64 Linux (Ubuntu 26.04.1 LTS)
+
+Thread 5 "DispatchWorker" crashed:
+
+ 0                  0x000075646de7c8cf _assertionFailure(_:_:file:line:flags:) + 303 in libswiftCore.so
+ 1 [ra]             0x000075646e2dea5a crashes() + 105 in CalcTests.so at $DIR/swift/Tests/CalcTests/Crash.swift:10:5
+ 2 [async]          0x000075646e2de760 $s9CalcTests7crashes4TestfMp_17Z862f11d050646bd8fMu_@Sendable () in CalcTests.so at /tmp/swift-generated-sources/@__swiftmacro_9CalcTests7crashes4TestfMp_.swift:3
+ 3 [async]          0x000075646c8c1d90 closure #1 in closure #1 in closure #1 in closure #1 in static Runner._runSingleTestCaseIteration(_:within:) in libTesting.so
+ 4 [async] [thunk]  0x000075646c8c1f90 partial apply for closure #1 in closure #1 in closure #1 in closure #1 in static Runner._runSingleTestCaseIteration(_:within:) in libTesting.so
+ 5 [async] [thunk]  0x000075646c905b70 thunk for @escaping @callee_guaranteed @Sendable @async () -> (@error @owned Error) in libTesting.so
+ 6 [async]          0x000075646c8c1fa0 partial apply for thunk for @escaping @callee_guaranteed @Sendable @async () -> (@error @owned Error) in libTesting.so
+ 7 [async]          0x000075646c8bf400 specialized static Runner._applyScopingTraits(for:testCase:_:) in libTesting.so
+ 8 [async]          0x000075646c8c0e80 specialized closure #1 in closure #1 in closure #1 in static Runner._runSingleTestCaseIteration(_:within:) in libTesting.so
+ 9 [async]          0x000075646c8b2950 closure #1 in closure #1 in static Runner._runSingleTestCaseIteration(_:within:) in libTesting.so
+10 [async] [thunk]  0x000075646c8c1f60 partial apply for closure #1 in closure #1 in static Runner._runSingleTestCaseIteration(_:within:) in libTesting.so
+11 [async]          0x000075646c872690 specialized static Issue.withErrorRecording(at:configuration:isolation:_:) in libTesting.so
+12 [async]          0x000075646c8b24a0 closure #1 in static Runner._runSingleTestCaseIteration(_:within:) in libTesting.so
+13 [async] [thunk]  0x000075646c8c1f50 partial apply for closure #1 in static Runner._runSingleTestCaseIteration(_:within:) in libTesting.so
+14 [async]          0x000075646c89d970 specialized closure #1 in TestCancellable.withCancellationHandling<A>(_:) in libTesting.so
+15 [async]          0x000075646c89d770 specialized TestCancellable.withCancellationHandling<A>(_:) in libTesting.so
+16 [async]          0x000075646c8a84c0 specialized static Test.Case.withCurrent<A>(_:perform:) in libTesting.so
+17 [async]          0x000075646c8b20a0 static Runner._runSingleTestCaseIteration(_:within:) in libTesting.so
+18 [async]          0x000075646c8c0890 specialized static Runner._runTestCase(_:within:in:) in libTesting.so
+19 [async]          0x000075646c8b1ae0 closure #4 in static Runner._runTestCases<A>(_:within:context:) in libTesting.so
+20 [async] [thunk]  0x000075646c8c20a0 partial apply for closure #4 in static Runner._runTestCases<A>(_:within:context:) in libTesting.so
+21 [async] [thunk]  0x000075646c8c2060 thunk for @escaping @callee_guaranteed @Sendable @async (@unowned Int, @in_guaranteed Test.Case) -> () in libTesting.so
+22 [async] [thunk]  0x000075646c8c1f30 partial apply for thunk for @escaping @callee_guaranteed @Sendable @async (@unowned Int, @in_guaranteed Test.Case) -> () in libTesting.so
+23 [async]          0x000075646c8bdca0 specialized closure #1 in closure #1 in static Runner._forEach<A, B>(in:namingTasksWith:_:) in libTesting.so
+24 [async] [thunk]  0x000075646c8c1f40 partial apply for specialized closure #1 in closure #1 in static Runner._forEach<A, B>(in:namingTasksWith:_:) in libTesting.so
+25 [async] [system] 0x000075646db1c0b0 completeTaskWithClosure(swift::AsyncContext*, swift::SwiftError*) in libswift_Concurrency.so
+
+Thread 0 "CalcTests-test-":
+
+0      0x000075646c45a3e6 <unknown> in libc.so.6
+1 [ra] 0x000075646c3fff45 <unknown> in libc.so.6
+2 [ra] 0x000075646d89e788 _dispatch_sigsuspend + 23 in libdispatch.so
+3 [ra] 0x000075646d89bc59 _dispatch_sig_thread + 8 in libdispatch.so
+4 [ra] 0x000075646c45adf2 <unknown> in libc.so.6
+5 [ra] 0x000075646c3e460d <unknown> in libc.so.6
+6 [ra] 0x000075646c3e4718 <unknown> in libc.so.6
+
+Thread 1 "DispatchWorker":
+
+0      0x000075646c466802 <unknown> in libc.so.6
+1 [ra] 0x000075646c45a6e7 <unknown> in libc.so.6
+2 [ra] 0x000075646c4664eb <unknown> in libc.so.6
+3 [ra] 0x000075646d8a5c31 _dispatch_sema4_timedwait + 80 in libdispatch.so
+4 [ra] 0x000075646d89ea21 _dispatch_semaphore_wait_slow + 32 in libdispatch.so
+5 [ra] 0x000075646d89e34e _dispatch_worker_thread + 1069 in libdispatch.so
+6 [ra] 0x000075646c45ddfa <unknown> in libc.so.6
+
+Thread 2 "DispatchWorker":
+
+0      0x000075646c466802 <unknown> in libc.so.6
+1 [ra] 0x000075646c45a6e7 <unknown> in libc.so.6
+2 [ra] 0x000075646c4664eb <unknown> in libc.so.6
+3 [ra] 0x000075646d8a5c31 _dispatch_sema4_timedwait + 80 in libdispatch.so
+4 [ra] 0x000075646d89ea21 _dispatch_semaphore_wait_slow + 32 in libdispatch.so
+5 [ra] 0x000075646d89e34e _dispatch_worker_thread + 1069 in libdispatch.so
+6 [ra] 0x000075646c45ddfa <unknown> in libc.so.6
+
+Thread 3 "DispatchWorker":
+
+0      0x000075646c466802 <unknown> in libc.so.6
+1 [ra] 0x000075646c4f18b5 <unknown> in libc.so.6
+2 [ra] 0x000075646d8a5537 _dispatch_event_loop_drain + 54 in libdispatch.so
+3 [ra] 0x000075646d89b022 _dispatch_mgr_invoke + 129 in libdispatch.so
+4 [ra] 0x000075646d89af8d _dispatch_mgr_thread + 108 in libdispatch.so
+5 [ra] 0x000075646d89e1b5 _dispatch_worker_thread + 660 in libdispatch.so
+6 [ra] 0x000075646c45ddfa <unknown> in libc.so.6
+
+Thread 4 "DispatchWorker":
+
+0      0x000075646c466802 <unknown> in libc.so.6
+1 [ra] 0x000075646c45a6e7 <unknown> in libc.so.6
+2 [ra] 0x000075646c4664eb <unknown> in libc.so.6
+3 [ra] 0x000075646d8a5c31 _dispatch_sema4_timedwait + 80 in libdispatch.so
+4 [ra] 0x000075646d89ea21 _dispatch_semaphore_wait_slow + 32 in libdispatch.so
+5 [ra] 0x000075646d89e34e _dispatch_worker_thread + 1069 in libdispatch.so
+6 [ra] 0x000075646c45ddfa <unknown> in libc.so.6
+
+Thread 6 "DispatchWorker":
+
+0      0x000075646c466802 <unknown> in libc.so.6
+1 [ra] 0x000075646c45a6e7 <unknown> in libc.so.6
+2 [ra] 0x000075646c4664eb <unknown> in libc.so.6
+3 [ra] 0x000075646d8a5c31 _dispatch_sema4_timedwait + 80 in libdispatch.so
+4 [ra] 0x000075646d89ea21 _dispatch_semaphore_wait_slow + 32 in libdispatch.so
+5 [ra] 0x000075646d89e34e _dispatch_worker_thread + 1069 in libdispatch.so
+6 [ra] 0x000075646c45ddfa <unknown> in libc.so.6
+
+Thread 7 "DispatchWorker":
+
+0      0x000075646c466802 <unknown> in libc.so.6
+1 [ra] 0x000075646c45a6e7 <unknown> in libc.so.6
+2 [ra] 0x000075646c4664eb <unknown> in libc.so.6
+3 [ra] 0x000075646d8a5c31 _dispatch_sema4_timedwait + 80 in libdispatch.so
+4 [ra] 0x000075646d89ea21 _dispatch_semaphore_wait_slow + 32 in libdispatch.so
+5 [ra] 0x000075646d89e34e _dispatch_worker_thread + 1069 in libdispatch.so
+6 [ra] 0x000075646c45ddfa <unknown> in libc.so.6
+
+Thread 8 "DispatchWorker":
+
+0      0x000075646c466802 <unknown> in libc.so.6
+1 [ra] 0x000075646c45a6e7 <unknown> in libc.so.6
+2 [ra] 0x000075646c4664eb <unknown> in libc.so.6
+3 [ra] 0x000075646d8a5c31 _dispatch_sema4_timedwait + 80 in libdispatch.so
+4 [ra] 0x000075646d89ea21 _dispatch_semaphore_wait_slow + 32 in libdispatch.so
+5 [ra] 0x000075646d89e34e _dispatch_worker_thread + 1069 in libdispatch.so
+6 [ra] 0x000075646c45ddfa <unknown> in libc.so.6
+
+Thread 9 "DispatchWorker":
+
+0      0x000075646c466802 <unknown> in libc.so.6
+1 [ra] 0x000075646c45a6e7 <unknown> in libc.so.6
+2 [ra] 0x000075646c4664eb <unknown> in libc.so.6
+3 [ra] 0x000075646d8a5c31 _dispatch_sema4_timedwait + 80 in libdispatch.so
+4 [ra] 0x000075646d89ea21 _dispatch_semaphore_wait_slow + 32 in libdispatch.so
+5 [ra] 0x000075646d89e34e _dispatch_worker_thread + 1069 in libdispatch.so
+6 [ra] 0x000075646c45ddfa <unknown> in libc.so.6
+
+Thread 10 "DispatchWorker":
+
+0      0x000075646c466802 <unknown> in libc.so.6
+1 [ra] 0x000075646c45a6e7 <unknown> in libc.so.6
+2 [ra] 0x000075646c4664eb <unknown> in libc.so.6
+3 [ra] 0x000075646d8a5c31 _dispatch_sema4_timedwait + 80 in libdispatch.so
+4 [ra] 0x000075646d89ea21 _dispatch_semaphore_wait_slow + 32 in libdispatch.so
+5 [ra] 0x000075646d89e34e _dispatch_worker_thread + 1069 in libdispatch.so
+6 [ra] 0x000075646c45ddfa <unknown> in libc.so.6
+
+Thread 11 "DispatchWorker":
+
+0      0x000075646c466802 <unknown> in libc.so.6
+1 [ra] 0x000075646c45a6e7 <unknown> in libc.so.6
+2 [ra] 0x000075646c4664eb <unknown> in libc.so.6
+3 [ra] 0x000075646d8a5c31 _dispatch_sema4_timedwait + 80 in libdispatch.so
+4 [ra] 0x000075646d89ea21 _dispatch_semaphore_wait_slow + 32 in libdispatch.so
+5 [ra] 0x000075646d89e34e _dispatch_worker_thread + 1069 in libdispatch.so
+6 [ra] 0x000075646c45ddfa <unknown> in libc.so.6
+
+
+Registers:
+
+rax 0xerror: Process '$DIR/swift/.build/out/Products/Debug-linux-x86_64/CalcTests-test-runner --xunit-output /tmp/swiftpm-test-output-.l9RJLm/xunit-1-CalcTests.xml --testing-library swift-testing' exited with unexpected signal code 4
+Entity: line 3: parser error : Premature end of data in tag testsuites line 2
+
+^
+0000000000000000  0
+rdx 0x0000000000000002  2
+rcx 0x000075631a44b584  129068502922628
+rbx 0x0000000000000008  8
+rsi 0x8000006873617261  9223372485467140705
+rdi 0x0000756454000b70  0c 00 08 00 0c 00 09 00 0d 00 0b 00 0e 00 0d 00  ················
+rbp 0x00007564637fdb50  a0 db 7f 63 64 75 00 00 5a ea 2d 6e 64 75 00 00   Û·cdu··Zê-ndu··
+rsp 0x00007564637fdb30  60 db 7f 63 64 75 00 00 a0 bc 00 54 64 75 00 00  `Û·cdu·· ¼·Tdu··
+ r8 0x0000000000000030  48
+ r9 0x104c52b1d4c60b31  1174404526569294641
+r10 0x0000000000000035  53
+r11 0x0000000000000000  0
+r12 0x00007564637fe680  00 00 00 00 00 00 00 00 50 7a 00 5c 64 75 00 00  ········Pz·\du··
+r13 0x000075646e2de9f0  55 41 56 48 8d 6c 24 08 48 83 ec 38 4d 89 76 10  UAVH·l$·H·ì8M·v·
+r14 0x000075645400ba70  30 ba 00 54 64 75 00 00 60 e7 2d 6e 64 75 00 00  0º·Tdu··`ç-ndu··
+r15 0x000075645c007a50  48 f9 b3 6d 64 75 00 00 03 00 00 00 02 00 00 00  Hù³mdu··········
+rip 0x000075646de7c8cf  0f 0b 48 83 ec 08 48 8d 05 74 4d 30 00 48 8d 3d  ··H·ì·H··tM0·H·=
+
+rflags 0x0000000000010206  PF
+
+cs 0x0033  fs 0x0000  gs 0x0000
+
+
+Images (20 omitted):
+
+0x000075646c3ba000–0x000075646c5797d9 066527e430a32768d82741e00b81eebb1a872294 libc.so.6               /usr/lib/x86_64-linux-gnu/libc.so.6
+0x000075646c76d000–0x000075646c9515b0 a41709692fcdbf1c3d1636457ae50eb93c979d70 libTesting.so           /usr/lib/swift/linux/libTesting.so
+0x000075646d869000–0x000075646d8b10d0 32c5d68a3529a5319e8f8a46d81d6197f3a086e8 libdispatch.so          /usr/lib/swift/linux/libdispatch.so
+0x000075646daa5000–0x000075646db393d0 65c50ecb9311914870fe006dc007590eaec917de libswift_Concurrency.so /usr/lib/swift/linux/libswift_Concurrency.so
+0x000075646db71000–0x000075646e14f620 6da470321f1f609b2f2bfa5d988655b317693128 libswiftCore.so         /usr/lib/swift/linux/libswiftCore.so
+0x000075646e2d7000–0x000075646e2e1430 5ff1ccaa9df0fefe16524e894794334371f0de45 CalcTests.so            $DIR/swift/.build/out/Products/Debug-linux-x86_64/CalcTests.so
+
+Backtrace took 0.03s
+
+Note: Some test targets reported failures:
+  - CalcTests (Swift Testing)
+
+corral-record-begin junit
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<testsuites>
+  <testsuite name="TestResults" errors="0" tests="0" failures="0" skipped="0" time="0.000178996">
+
+  </testsuite>
+</testsuites>
+corral-record-end
+# exit: 1

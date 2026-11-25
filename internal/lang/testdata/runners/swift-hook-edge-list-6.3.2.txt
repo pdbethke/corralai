@@ -1,0 +1,16 @@
+CalcXCTests.AdderTests/testAdds
+CalcXCTests.AdderTests/testAddsTwice
+CalcXCTests.AdderTests/testFails
+CalcTests.Arithmetic/adds()
+CalcTests.Arithmetic/doubles(value:)
+CalcTests.Arithmetic/fails()
+CalcTests.Outer/Inner/nested()
+CalcTests.Pretty/inPretty()
+CalcTests.ThrowingInit/neverRuns()
+CalcTests.badArguments(n:)
+CalcTests.disabledOne()
+CalcTests.knownIssue()
+CalcTests.parses()
+CalcTests.parsesTwice()
+CalcTests.throwsAnError()
+CalcTests.warningOnly()

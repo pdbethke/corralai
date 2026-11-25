@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -78,11 +79,17 @@ let package = Package(name: "P", dependencies: [.package(url: "https://example.c
 		return ""
 	}
 
+	// The failure hook's line (swift_record_test.go) is said for every
+	// `swift test` run corral wraps; the lines below are the manifest's.
+	manifest := func(lines []string) []string {
+		return slices.DeleteFunc(slices.Clone(lines), func(l string) bool { return l == "swift test: "+swiftRecordHook.Says })
+	}
+
 	unresolved := t.TempDir()
 	write(unresolved, "Package.swift", branchy)
 	got := RunDisclosures(p, unresolved, Cmd([]string{"swift", "test"}))
-	if len(got) != 1 {
-		t.Errorf("want only the branch line, got %q", got)
+	if len(manifest(got)) != 1 || len(got) != 2 {
+		t.Errorf("want the branch line and the hook's, got %q", got)
 	}
 	if l := branchLine(got); !strings.Contains(l, "https://example.com/a.git") {
 		t.Errorf("branch pin, no Package.resolved: want a line naming the url, got %q", got)
@@ -91,8 +98,8 @@ let package = Package(name: "P", dependencies: [.package(url: "https://example.c
 	resolved := t.TempDir()
 	write(resolved, "Package.swift", branchy)
 	write(resolved, "Package.resolved", "{}\n")
-	if got := RunDisclosures(p, resolved, Cmd([]string{"swift", "test"})); len(got) != 0 {
-		t.Errorf("with Package.resolved: want nothing, got %q", got)
+	if got := manifest(RunDisclosures(p, resolved, Cmd([]string{"swift", "test"}))); len(got) != 0 {
+		t.Errorf("with Package.resolved: want nothing about the manifest, got %q", got)
 	}
 
 	unpinned := t.TempDir()

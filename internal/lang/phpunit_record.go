@@ -25,9 +25,8 @@ var phpunitRecordHook = FileRecordHook(
 )
 
 // phpunitRecordedFailures is phpFailures' answer from the run's JUnit
-// record: ok is false when the output carries no complete record block, the
-// block is not JUnit, or the JUnit is not well-formed (junitFailures), and
-// the printed lines are then read instead. With a record, phpFailures adds
+// record: ok is false when junitRecord reads none, and the printed lines are
+// then read instead. With a record, phpFailures adds
 // the printed names the record leaves out (errors outside a test method);
 // its doc comment says which and why that is safe.
 //
@@ -47,12 +46,8 @@ var phpunitRecordHook = FileRecordHook(
 // the two sources; both name a test that failed, and the kill confirmation
 // runs whichever is named alone.
 func phpunitRecordedFailures(out string) ([]string, bool) {
-	format, body, ok := RecordBlock(out)
-	if !ok || format != recordJUnit {
-		return nil, false
-	}
-	cases, err := junitFailures(body)
-	if err != nil {
+	cases, ok := junitRecord(out)
+	if !ok {
 		return nil, false
 	}
 	var errs, fails []string

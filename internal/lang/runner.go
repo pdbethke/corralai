@@ -689,7 +689,16 @@ func RunsAlone(p Plugin, inv Invocation, listed []string, id string) bool {
 // load in (at is the index of the runner's word); nil wraps every command
 // ReportCmd can read. Says is the scan line's sentence about it, after the
 // runner's name.
+//
+// Args, when set, is the words the hook needs on the runner's own command
+// line (a record-file runner's `--log-junit <token>`, FileRecordHook).
+// ReportCmd inserts them where the runner's options end (runnerOptionsEnd),
+// after the row's ReportArgs, and only when it applies the hook: they belong
+// to the wrapper, which is what replaces the token they carry, so a command
+// the hook is not applied to (Windows, a command Wraps declines) gets
+// neither.
 type ReportHook struct {
+	Args  func() []string
 	Wrap  func(cmd []string) []string
 	Wraps func(cmd []string, at int) bool
 	Says  string

@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-
-	"github.com/pdbethke/corralai/internal/clip"
 )
 
 // pyReportModule is the module name of the pytest plugin corral loads into
@@ -368,40 +366,25 @@ type pyReportRec struct{ kind, id string }
 // in the kept head and its end in the kept tail has lost records, and is not
 // a block. Lines are matched
 // whole, with only a trailing carriage return dropped, so an id keeps every
-// space it has.
+// space it has. That rule is lastCompleteBlock's, shared with RecordBlock;
+// this function reads the records out of the block it finds.
 func pyReportBlock(output string) (recs []pyReportRec, ok bool) {
-	var cur []pyReportRec
-	open := false
-	for _, line := range strings.Split(output, "\n") {
-		line = strings.TrimSuffix(line, "\r")
-		switch {
-		case clip.IsElision(line):
-			// Part of the run's output is not in this string. Nothing before
-			// this line can be the last block, and a block open here has lost
-			// records: neither is trusted. A block wholly after it still is.
-			recs, ok, cur, open = nil, false, nil, false
-		case line == pyReportBegin:
-			cur, open = nil, true
-		case line == pyReportEnd:
-			if open {
-				recs, ok, open = cur, true, false
-			}
-		case open:
-			rest, isRec := strings.CutPrefix(line, pyReportRecord)
-			if !isRec {
-				continue
-			}
-			kind, id, found := strings.Cut(rest, " ")
-			if !found || id == "" || (kind != pyReportFailed && kind != pyReportError) {
-				continue
-			}
-			cur = append(cur, pyReportRec{kind: kind, id: id})
-		}
-	}
-	if open {
+	body, ok := lastCompleteBlock(output, pyReportBegin, pyReportEnd)
+	if !ok {
 		return nil, false
 	}
-	return recs, ok
+	for _, line := range strings.Split(body, "\n") {
+		rest, isRec := strings.CutPrefix(line, pyReportRecord)
+		if !isRec {
+			continue
+		}
+		kind, id, found := strings.Cut(rest, " ")
+		if !found || id == "" || (kind != pyReportFailed && kind != pyReportError) {
+			continue
+		}
+		recs = append(recs, pyReportRec{kind: kind, id: id})
+	}
+	return recs, true
 }
 
 // pyReportedFirstFailure is pyFirstFailure's answer from a complete block:

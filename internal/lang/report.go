@@ -59,7 +59,9 @@ import (
 // A hook is not applied everywhere its flags are: not on Windows, where there
 // is no POSIX shell to run its wrapper (reportHookGOOS), and not to a command
 // the row's hook declines (ReportHook.Wraps: pytest behind tox, nox, docker
-// or podman, or a Python given -I or -E). Those keep the flags alone.
+// or podman, or a Python given -I or -E). Those keep the flags alone, and
+// never gain the hook's own Args (a record-file runner's token would reach
+// the runner as a file name with no wrapper to replace it).
 //
 // Applying it twice changes nothing: a command a hook has wrapped is
 // shell-wrapped, which the second application cannot read and leaves alone.
@@ -107,6 +109,13 @@ func reportCmd(p Plugin, inv Invocation, cmd []string) (out []string, flagged, h
 		flagged = true
 	}
 	if h := r.ReportHook; h != nil && reportHookGOOS != "windows" && (h.Wraps == nil || h.Wraps(cmd, at)) {
+		if h.Args != nil {
+			args := h.Args()
+			with := make([]string, 0, len(out)+len(args))
+			with = append(with, out[:end]...)
+			with = append(with, args...)
+			out = append(with, out[end:]...)
+		}
 		return h.Wrap(out), flagged, true
 	}
 	return out, flagged, false

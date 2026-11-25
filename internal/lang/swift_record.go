@@ -3,7 +3,6 @@
 package lang
 
 import (
-	"slices"
 	"strings"
 )
 
@@ -55,20 +54,13 @@ func swiftRecordWraps(cmd []string, _ int) bool {
 	if !ok {
 		return false
 	}
-	return !slices.ContainsFunc(cmd[at+1:], func(w string) bool {
-		for _, opt := range []string{"--parallel", "--num-workers", "--xunit-output"} {
-			if w == opt || strings.HasPrefix(w, opt+"=") {
-				return true
-			}
-		}
-		return false
-	})
+	return !hasFlag(cmd[at+1:], "--parallel", "--num-workers", "--xunit-output")
 }
 
 // swiftRecordedFailures is swiftFailures' answer from swift-testing's
 // record: every failing testcase's listed id, in the record's order (the
 // order its tests finished, which differs between runs, as the printed
-// order does), each once. ok is false when junitRecord reads none, and
+// order does; recordThenPrinted names each once). ok is false when junitRecord reads none, and
 // when a testcase is not one swift-testing wrote (swiftTestingID), since a
 // list missing it would be read as every failure.
 func swiftRecordedFailures(out string) ([]string, bool) {
@@ -82,9 +74,7 @@ func swiftRecordedFailures(out string) ([]string, bool) {
 		if !ok {
 			return nil, false
 		}
-		if !slices.Contains(ids, id) {
-			ids = append(ids, id)
-		}
+		ids = append(ids, id)
 	}
 	return ids, true
 }

@@ -63,10 +63,10 @@ var nodeReporterOptions = []string{"--test-reporter", "--test-reporter-destinati
 // is passed over; node reads such an option's value only after "=", so a
 // bare word after it is that script, and declines.
 func nodeRecordWraps(cmd []string, at int) bool {
-	if at < 1 || slices.ContainsFunc(cmd, isNodeReporterOption) {
+	if at < 1 || hasFlag(cmd, nodeReporterOptions...) {
 		return false
 	}
-	if env := os.Getenv("NODE_OPTIONS"); slices.ContainsFunc(strings.Fields(env), isNodeReporterOption) {
+	if hasFlag(strings.Fields(os.Getenv("NODE_OPTIONS")), nodeReporterOptions...) {
 		return false
 	}
 	for i := 1; i < at; i++ {
@@ -79,11 +79,6 @@ func nodeRecordWraps(cmd []string, at int) bool {
 		}
 	}
 	return true
-}
-
-func isNodeReporterOption(w string) bool {
-	opt, _, _ := strings.Cut(w, "=")
-	return slices.Contains(nodeReporterOptions, opt)
 }
 
 // nodeTestAt is the node --test row's At: the index of `--test` in a
@@ -101,7 +96,7 @@ func nodeTestAt(argv []string) int {
 // record-file row follows; the printed report alone where there is no
 // record.
 func nodeFailedTests(out string) []string {
-	return recordThenPrinted(out, nodeRecordedFailures, nodeFailures, func(id, name string) bool { return id == name })
+	return recordThenPrinted(out, nodeRecordedFailures, nodeFailures, sameID)
 }
 
 // nodeRecordedFailures is every failing test node's JUnit record names, in

@@ -815,17 +815,24 @@ fails phpunit-hook-unhooked.txt vendor/bin/phpunit fail/tests/FTest.php fail/dat
 # plain testcase in the record. FTest gives the record failures of its own.
 phphook PHPHOOKEDGE vendor/bin/phpunit fail/tests/FTest.php fail/edge/SetupTest.php fail/edge/ProviderTest.php fail/edge/RiskyTest.php
 fails phpunit-hook-edge.txt "${PHPHOOKEDGE[@]}"
-# What the disclosure says the hook costs: PHPUnit writes one JUnit file, so an
-# operator's own --log-junit, and a phpunit.xml <junit> entry, are written
-# without the hook and not with it.
+# A passing run exits 0 with the hook as without it, and with the hook unable
+# to make its directory (the record then goes to /dev/null) a passing run
+# still passes.
+phphook PHPHOOKPASS vendor/bin/phpunit tests/CalcTest.php
+want phpunit-hook-exit-pass "0 0" "$(vendor/bin/phpunit tests/CalcTest.php >/dev/null 2>&1; echo -n "$? "; "${PHPHOOKPASS[@]}" >/dev/null 2>&1; echo $?)"
+want phpunit-hook-fallback-exit 0 "$(TMPDIR="$DIR/no-such-dir" "${PHPHOOKPASS[@]}" >/dev/null 2>&1; echo $?)"
+# What the disclosure says the hook costs: PHPUnit writes one JUnit file, so a
+# phpunit.xml <junit> entry is written without the hook and not with it. An
+# operator's own --log-junit is written either way: the row does not wrap a
+# command that names one (phpunitRecordWraps), so scripts/reportcmd adds nothing
+# to it and exits 1.
 junit_written() { # junit_written <file> <cmd...>: present|absent after running cmd
   local f="$1"; shift
   rm -f "$f"; "$@" >/dev/null 2>&1 || true
   if [ -e "$f" ]; then echo present; else echo absent; fi
 }
-phphook PHPHOOKOPLOG vendor/bin/phpunit --log-junit operator-junit.xml fail/tests/FTest.php
+want phpunit-operator-junit-not-wrapped "1" "$(cd "$REPO" && go run ./scripts/reportcmd php vendor/bin/phpunit --log-junit operator-junit.xml fail/tests/FTest.php >/dev/null 2>&1; echo $?)"
 want phpunit-operator-junit-unhooked present "$(junit_written operator-junit.xml vendor/bin/phpunit --log-junit operator-junit.xml fail/tests/FTest.php)"
-want phpunit-operator-junit-hooked absent "$(junit_written operator-junit.xml "${PHPHOOKOPLOG[@]}")"
 phphook PHPHOOKCFGLOG vendor/bin/phpunit -c report/phpunit-junit/phpunit.xml fail/tests/FTest.php
 want phpunit-config-junit-unhooked present "$(junit_written report/phpunit-junit/project-junit.xml vendor/bin/phpunit -c report/phpunit-junit/phpunit.xml fail/tests/FTest.php)"
 want phpunit-config-junit-hooked absent "$(junit_written report/phpunit-junit/project-junit.xml "${PHPHOOKCFGLOG[@]}")"

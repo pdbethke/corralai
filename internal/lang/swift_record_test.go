@@ -237,16 +237,19 @@ func swiftPrintedShape(out string) []string {
 	return lines
 }
 
-// The hook changes nothing `swift test` prints, on either release: the
-// hooked capture up to its record block is the unhooked run's lines, in
-// another order (swift-testing runs its tests in parallel) and with other
-// timings, and both exit 1 (the capture script checks that).
+// The hook changes nothing `swift test` prints, on either release, on a
+// failing run and on a passing one: the hooked capture up to its record
+// block is the unhooked run's lines, in another order (swift-testing runs
+// its tests in parallel) and with other timings, and the exit codes match
+// (1 and 0; the capture script checks them).
 func TestSwiftHookLeavesThePrintedOutputAlone(t *testing.T) {
 	for _, v := range swiftHookToolchains {
-		hooked := swiftPrintedShape(printedPart(t, "swift-hook-fail-"+v+".txt"))
-		plain := swiftPrintedShape(readFixture(t, "swift-hook-unhooked-"+v+".txt"))
-		if !slices.Equal(hooked, plain) {
-			t.Errorf("%s: printed output differs with the hook:\n--- hooked\n%s\n--- unhooked\n%s", v, strings.Join(hooked, "\n"), strings.Join(plain, "\n"))
+		for hookedRun, plainRun := range map[string]string{"swift-hook-fail-": "swift-hook-unhooked-", "swift-hook-pass-": "swift-hook-unhooked-pass-"} {
+			hooked := swiftPrintedShape(printedPart(t, hookedRun+v+".txt"))
+			plain := swiftPrintedShape(readFixture(t, plainRun+v+".txt"))
+			if !slices.Equal(hooked, plain) {
+				t.Errorf("%s%s: printed output differs with the hook:\n--- hooked\n%s\n--- unhooked\n%s", hookedRun, v, strings.Join(hooked, "\n"), strings.Join(plain, "\n"))
+			}
 		}
 	}
 }

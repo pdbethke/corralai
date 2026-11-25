@@ -189,9 +189,11 @@ func TestPHPUnitHookCaptureIsTheRowsCommand(t *testing.T) {
 		"fails phpunit-hook-unhooked.txt " + strings.Join(operator, " "),
 		"phphook PHPHOOKEDGE vendor/bin/phpunit fail/tests/FTest.php fail/edge/SetupTest.php fail/edge/ProviderTest.php fail/edge/RiskyTest.php",
 		`fails phpunit-hook-edge.txt "${PHPHOOKEDGE[@]}"`,
-		`want phpunit-operator-junit-hooked absent "$(junit_written operator-junit.xml "${PHPHOOKOPLOG[@]}")"`,
+		`want phpunit-operator-junit-not-wrapped "1" "$(cd "$REPO" && go run ./scripts/reportcmd php vendor/bin/phpunit --log-junit operator-junit.xml fail/tests/FTest.php >/dev/null 2>&1; echo $?)"`,
+		"phphook PHPHOOKPASS vendor/bin/phpunit tests/CalcTest.php",
+		`want phpunit-hook-exit-pass "0 0" "$(vendor/bin/phpunit tests/CalcTest.php >/dev/null 2>&1; echo -n "$? "; "${PHPHOOKPASS[@]}" >/dev/null 2>&1; echo $?)"`,
+		`want phpunit-hook-fallback-exit 0 "$(TMPDIR="$DIR/no-such-dir" "${PHPHOOKPASS[@]}" >/dev/null 2>&1; echo $?)"`,
 		`want phpunit-config-junit-hooked absent "$(junit_written report/phpunit-junit/project-junit.xml "${PHPHOOKCFGLOG[@]}")"`,
-		"phphook PHPHOOKOPLOG vendor/bin/phpunit --log-junit operator-junit.xml fail/tests/FTest.php",
 		"phphook PHPHOOKCFGLOG vendor/bin/phpunit -c report/phpunit-junit/phpunit.xml fail/tests/FTest.php",
 	} {
 		if !strings.Contains(script, line) {
@@ -216,15 +218,24 @@ func TestRunDisclosuresSayWhenThePHPUnitHookWraps(t *testing.T) {
 	for _, argv := range [][]string{
 		{"vendor/bin/phpunit"},
 		{"php", "vendor/bin/phpunit", "-c", "phpunit.xml", "tests"},
-		{"vendor/bin/phpunit", "--log-junit", "theirs.xml"},
 	} {
 		if !has(argv) {
 			t.Errorf("%q: no disclosure of the JUnit record corral adds", argv)
 		}
 	}
+	// A command with a --log-junit of its own is not wrapped, as jest's
+	// --outputFile, swift's --xunit-output and nextest's
+	// --tool-config-file are not: PHPUnit writes one JUnit file, the last
+	// named, so the hook's would replace the operator's (measured on
+	// 11.5.57, phpunit-operator-junit-*).
 	for _, argv := range [][]string{
 		{"sh", "-c", "vendor/bin/phpunit"},
+		{"vendor/bin/phpunit", "--log-junit", "theirs.xml"},
+		{"vendor/bin/phpunit", "--log-junit=theirs.xml", "tests"},
 	} {
+		if got, wrapped := ReportCmd(p, Cmd(argv), argv); wrapped || !slices.Equal(got, argv) {
+			t.Errorf("ReportCmd(%q) = %q wrapped=%v, want it unchanged", argv, got, wrapped)
+		}
 		if has(argv) {
 			t.Errorf("%q: the hook is disclosed though corral does not wrap it", argv)
 		}

@@ -51,10 +51,7 @@ var jestJSONOptions = []string{"--json", "--no-json", "--outputFile", "--output-
 
 // jestRecordWraps declines a command that names jest's JSON output itself.
 func jestRecordWraps(cmd []string, at int) bool {
-	return !slices.ContainsFunc(cmd[at+1:], func(w string) bool {
-		opt, _, _ := strings.Cut(w, "=")
-		return slices.Contains(jestJSONOptions, opt)
-	})
+	return !hasFlag(cmd[at+1:], jestJSONOptions...)
 }
 
 // jestFailedTests is the jest row's failure reader: the run's JSON record
@@ -67,46 +64,25 @@ func jestRecordWraps(cmd []string, at int) bool {
 // heading is the record's titles as jest prints them, joined by " › " and
 // read back by jestFailures: a title holding " › " is split there, so
 // `Sep` › `a › b` is printed as `Sep::a::b`, and is the record's `Sep::a › b`
-// all the same.
+// all the same. That printed form is the record's id with every " › "
+// made "::" (jestPrintedAs).
 func jestFailedTests(out string) []string {
-	printedAs := map[string]string{}
-	recorded := func(out string) ([]string, bool) {
-		titles, ok := jestRecordedTitles(out)
-		if !ok {
-			return nil, false
-		}
-		ids := make([]string, len(titles))
-		for i, t := range titles {
-			ids[i] = strings.Join(t, "::")
-			printedAs[ids[i]] = strings.Join(strings.Split(strings.Join(t, " › "), " › "), "::")
-		}
-		return ids, true
-	}
-	return recordThenPrinted(out, recorded, jestFailures, func(id, name string) bool {
-		return id == name || printedAs[id] == name
+	return recordThenPrinted(out, jestRecordedFailures, jestFailures, func(id, name string) bool {
+		return sameID(id, name) || jestPrintedAs(id) == name
 	})
 }
 
+// jestPrintedAs is the id jestFailures reads from the printed heading of
+// the test the record names id: the record's titles joined by "::", each
+// " › " inside a title split as jest's heading splits it.
+func jestPrintedAs(id string) string { return strings.ReplaceAll(id, " › ", "::") }
+
 // jestRecordedFailures is every failing test jest's JSON record names, in
 // its order, by the id jestFailures reads from the printed headings: the
-// ancestor titles and the title, joined by "::". ok is false when
-// jsonRecord reads none, the JSON has no testResults (it is not jest's),
-// or a failing test has no title, since a list missing it would be read as
-// every failure.
-func jestRecordedFailures(out string) ([]string, bool) {
-	titles, ok := jestRecordedTitles(out)
-	if !ok {
-		return nil, false
-	}
-	ids := make([]string, len(titles))
-	for i, t := range titles {
-		ids[i] = strings.Join(t, "::")
-	}
-	return ids, true
-}
-
-// jestRecordedTitles is each failing test's chain of titles, outermost
-// first, from the record (jestRecordedFailures).
+// ancestor titles and the title, joined by "::" (a title holding " › "
+// kept whole). ok is false when jsonRecord reads none, the JSON has no
+// testResults (it is not jest's), or a failing test has no title, since a
+// list missing it would be read as every failure.
 //
 // Only an assertion result whose status is "failed" is a failure: jest
 // 30.5.2 records a todo as "todo", a test.failing that failed as expected
@@ -114,7 +90,7 @@ func jestRecordedFailures(out string) ([]string, bool) {
 // threw as "failed", and a test whose afterAll threw as "passed" (jest
 // prints that hook as "Test suite failed to run", which jestFailures does
 // not name either). A file that failed to load has no assertion results.
-func jestRecordedTitles(out string) ([][]string, bool) {
+func jestRecordedFailures(out string) ([]string, bool) {
 	var rep struct {
 		TestResults *[]struct {
 			AssertionResults []struct {
@@ -127,7 +103,7 @@ func jestRecordedTitles(out string) ([][]string, bool) {
 	if !jsonRecord(out, recordJestJSON, &rep) || rep.TestResults == nil {
 		return nil, false
 	}
-	var titles [][]string
+	var ids []string
 	for _, file := range *rep.TestResults {
 		for _, a := range file.AssertionResults {
 			if a.Status != "failed" {
@@ -136,8 +112,8 @@ func jestRecordedTitles(out string) ([][]string, bool) {
 			if a.Title == "" {
 				return nil, false
 			}
-			titles = append(titles, append(slices.Clone(a.AncestorTitles), a.Title))
+			ids = append(ids, strings.Join(append(slices.Clone(a.AncestorTitles), a.Title), "::"))
 		}
 	}
-	return titles, true
+	return ids, true
 }

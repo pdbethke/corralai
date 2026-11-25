@@ -40,7 +40,7 @@ var rspecRecordHook = FileRecordHook(
 // the rule every record-file row follows; the printed list alone where
 // there is no record.
 func rspecFailedTests(out string) []string {
-	return recordThenPrinted(out, rspecRecordedFailures, rspecFailures, func(id, name string) bool { return id == name })
+	return recordThenPrinted(out, rspecRecordedFailures, rspecFailures, sameID)
 }
 
 // rspecRecordedFailures is every failing example rspec's JSON record names,

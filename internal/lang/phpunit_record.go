@@ -14,15 +14,35 @@ package lang
 // What it does change, and the disclosure says: PHPUnit writes one JUnit
 // file, for the last --log-junit it is given, ahead of a <junit> entry in
 // the configuration's <logging>. So on a graded run a JUnit file the
-// project's configuration or the operator's command asks for is not
-// written (both measured on 11.5.57).
-var phpunitRecordHook = FileRecordHook(
-	func() []string { return []string{"--log-junit", recordToken} },
-	recordJUnit,
-	"corral runs every graded run through `sh -c` and adds `--log-junit <a temporary file>` after PHPUnit's options, "+
-		"and reads which test failed from that JUnit record, PHPUnit's own account of the run, whatever the project's output settings print (testdox included); "+
-		"what PHPUnit prints and its exit code are unchanged. PHPUnit writes one JUnit file, so a `--log-junit` in your command, or a `<junit>` entry in your phpunit.xml's `<logging>`, is not written on those runs",
-)
+// project's configuration asks for is not written (measured on 11.5.57,
+// phpunit-config-junit-*). A command that names a --log-junit of its own is
+// not wrapped (phpunitRecordWraps), as the other rows decline an operator's
+// own record option: wrapped, the operator's file was not written either
+// (phpunit-operator-junit-*), and nothing measured sets PHPUnit apart from
+// those rows. The configuration's <junit> cannot be declined the same way,
+// since corral does not read phpunit.xml to decide whether to wrap.
+//
+// The fallback is the zero RecordFile's: PHPUnit writes its record to
+// /dev/null and passes a passing run (phpunit-hook-fallback-exit), and a
+// passing run exits 0 with the hook as without it (phpunit-hook-exit-pass).
+var phpunitRecordHook = func() *ReportHook {
+	h := FileRecordHook(
+		func() []string { return []string{"--log-junit", recordToken} },
+		recordJUnit,
+		"corral runs every graded run through `sh -c` and adds `--log-junit <a temporary file>` after PHPUnit's options, "+
+			"and reads which test failed from that JUnit record, PHPUnit's own account of the run, whatever the project's output settings print (testdox included); "+
+			"what PHPUnit prints and its exit code are unchanged. PHPUnit writes one JUnit file, so a `<junit>` entry in your phpunit.xml's `<logging>` is not written on those runs; "+
+			"a command with a `--log-junit` of its own is not wrapped",
+	)
+	h.Wraps = phpunitRecordWraps
+	return h
+}()
+
+// phpunitRecordWraps declines a command that names a --log-junit of its
+// own: PHPUnit writes the last one given, so the hook's would replace it.
+func phpunitRecordWraps(cmd []string, at int) bool {
+	return !hasFlag(cmd[at+1:], "--log-junit")
+}
 
 // phpunitRecordedFailures is phpFailures' answer from the run's JUnit
 // record: ok is false when junitRecord reads none, and the printed lines are

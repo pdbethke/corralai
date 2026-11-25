@@ -3,7 +3,6 @@
 package lang
 
 import (
-	"slices"
 	"strings"
 )
 
@@ -94,9 +93,7 @@ func nextestRecordWraps(cmd []string, at int) bool {
 	if i >= len(head) || head[i] != "run" && head[i] != "r" {
 		return false
 	}
-	return !slices.ContainsFunc(head[i+1:], func(w string) bool {
-		return w == "--tool-config-file" || strings.HasPrefix(w, "--tool-config-file=")
-	})
+	return !hasFlag(head[i+1:], "--tool-config-file")
 }
 
 // nextestFailedTests is the failing tests of a cargo-nextest run: its
@@ -113,12 +110,12 @@ func nextestRecordWraps(cmd []string, at int) bool {
 // on a retry is a <flakyFailure> in the record, no failure, as it is FLAKY
 // and not FAIL in the printed lines.
 func nextestFailedTests(out string) []string {
-	return recordThenPrinted(out, nextestRecordedFailures, rustFailedTests, func(id, name string) bool { return id == name })
+	return recordThenPrinted(out, nextestRecordedFailures, rustFailedTests, sameID)
 }
 
 // nextestRecordedFailures is nextestFailedTests' answer from the record:
-// each failing testcase as `<classname> <name>`, in the record's order,
-// once. nextest writes the binary id as classname (`fail-cargo`,
+// each failing testcase as `<classname> <name>`, in the record's order
+// (recordThenPrinted names each once). nextest writes the binary id as classname (`fail-cargo`,
 // `units-a::it`, `nextest-edge::bin/edge-bin`) and the test's path as name
 // (`tests::a_fails`), the two words its printed FAIL line gives (measured
 // on 0.9.148, nextest-hook-*.txt). ok is false when junitRecord reads none,
@@ -135,9 +132,7 @@ func nextestRecordedFailures(out string) ([]string, bool) {
 		if c.ClassName == "" || c.Name == "" || strings.ContainsAny(c.ClassName+c.Name, " \t\n") {
 			return nil, false
 		}
-		if id := c.ClassName + " " + c.Name; !slices.Contains(ids, id) {
-			ids = append(ids, id)
-		}
+		ids = append(ids, c.ClassName+" "+c.Name)
 	}
 	return ids, true
 }

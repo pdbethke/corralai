@@ -56,7 +56,8 @@ func AppendFailFast(cmd, args []string) []string {
 // FailFastArgsFor gives.
 //
 // A runner named in the command gets the flag after its word and before its
-// own `--` (runnerOptionsEnd, the rule ReportCmd uses): appended after that
+// own `--`, or where its row's OptionsEnd says its options end (optionsEnd,
+// the rule ReportCmd uses; go test's end at -args): appended after that
 // separator the flag is a positional argument, a path to pytest or an
 // argument to cargo's test binary, and nextest then refuses the run (exit 96,
 // "failed to parse test binary arguments", cargo-nextest 0.9.148), which the

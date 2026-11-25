@@ -1,0 +1,9 @@
+partial line no newline--- FAIL: TestNoNewline (0.00s)
+child partial--- FAIL: TestParent (0.00s)
+    --- FAIL: TestParent/child (0.00s)
+look: --- FAIL: TestNotReal (0.00s)--- FAIL: TestHeadingInOutput (0.00s)
+--- FAIL: TestPlain (0.00s)
+    f_test.go:30: plain failure
+FAIL
+FAIL	example.com/fail	0.000s
+FAIL

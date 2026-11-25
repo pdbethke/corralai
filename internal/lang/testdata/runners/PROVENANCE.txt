@@ -203,3 +203,8 @@ src/inline/composed/extra.canary.rs at src/extra.rs (extra): the reach
 canary builds and fails as a test. The four inline-*-kill-*.txt files were
 re-captured in the same run, after the landing's glob gained
 #[allow(unused_imports)] (their line numbers moved by one).
+go-fail.txt (added 2026-11-25, go1.26.11 linux/amd64, GOTOOLCHAIN=local):
+`go test -count=1 ./...` on src/fail/gomod, stdout+stderr, agent variables
+unset, go's elapsed times replaced by 0.00s and 0.000s (gofails); captured
+with the script's own fails and gofails functions run alone on that one
+line, not by a full run of the script.

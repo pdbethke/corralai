@@ -134,6 +134,16 @@ func TestGoFirstFailure(t *testing.T) {
 		{"a passing package names nothing", goTestNoSummary, ""},
 		{"a build failure names nothing", goBuildFailure, ""},
 		{"empty output names nothing", "", ""},
+		// go prints a heading right after whatever the test wrote, so output
+		// that ends without a newline puts the heading mid-line (capture
+		// go-fail.txt, go 1.26.11).
+		{"a heading after output with no newline", "partial line no newline--- FAIL: TestNoNewline (0.00s)\nFAIL\n", "TestNoNewline"},
+		{"the heading go prints is the last on its line", "look: --- FAIL: TestNotReal (0.00s)--- FAIL: TestReal (0.00s)\n", "TestReal"},
+		{"a subtest's output runs into its parent's heading", "child partial--- FAIL: TestParent (0.00s)\n    --- FAIL: TestParent/child (0.00s)\n", "TestParent"},
+		// Mid-line, only go's own shape counts: a name, a space and the
+		// elapsed time, ending the line.
+		{"mid-line text that is not a heading names nothing", "    f_test.go:9: want --- FAIL: TestX, got none\nFAIL\n", ""},
+		{"the real capture names its first failing test", readFixture(t, "go-fail.txt"), "TestNoNewline"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := fp.FirstFailure([]byte(tc.output)); got != tc.want {

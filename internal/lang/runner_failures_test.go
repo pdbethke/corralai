@@ -33,6 +33,12 @@ func TestFailureParsersReadTheRealOutput(t *testing.T) {
 			"DTest::testUnnamed with data set #0", "DTest::testUnnamed with data set #2"}},
 		{"cargo-test-fail.txt", rustFailedTests, []string{"tests::a_fails", "tests::b_fails"}},
 		{"cargo-nextest-fail.txt", rustFailedTests, []string{"fail-cargo tests::a_fails", "fail-cargo tests::b_fails"}},
+		// A test whose own output ends without a newline shares its line
+		// with the next heading go prints, its own (TestNoNewline) or its
+		// parent's (TestParent); a heading a test printed itself is followed
+		// by go's real one on that line (TestHeadingInOutput, never
+		// TestNotReal).
+		{"go-fail.txt", goFailedTests, []string{"TestNoNewline", "TestParent", "TestHeadingInOutput", "TestPlain"}},
 	} {
 		got := c.parse(readFixture(t, c.fixture))
 		if c.fixture == "minitest-fail.txt" || c.fixture == "cargo-test-fail.txt" || c.fixture == "cargo-nextest-fail.txt" {

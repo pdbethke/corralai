@@ -391,11 +391,10 @@ func phpPrintedFailures(out string) []string {
 func goFailedTests(out string) []string {
 	var ids []string
 	for _, line := range strings.Split(out, "\n") {
-		rest, ok := strings.CutPrefix(strings.TrimSpace(line), "--- FAIL: ")
+		name, ok := goFailHeading(line)
 		if !ok {
 			continue
 		}
-		name, _, _ := strings.Cut(rest, " ")
 		name, _, _ = strings.Cut(name, "/")
 		if name != "" && !slices.Contains(ids, name) {
 			ids = append(ids, name)

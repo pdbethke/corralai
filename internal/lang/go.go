@@ -564,7 +564,8 @@ func goParseTestList(output string) []string {
 // goFirstFailure names the first test `go test` reported as failing. The
 // runner prints one `--- FAIL: <name> (<elapsed>)` line per failing test,
 // indented one level per subtest depth; the name is taken VERBATIM, so a
-// subtest comes back as `TestA/sub` — the form `go test -run` accepts.
+// subtest comes back as `TestA/sub` — the form `go test -run` accepts. Each
+// line is read by goFailHeading.
 //
 // The FIRST such line in the stream is the answer, whether that turns out to
 // be a parent or one of its subtests: which of the two `go test` flushes
@@ -575,19 +576,43 @@ func goParseTestList(output string) []string {
 // failed to BUILD — names nothing. No test ran, so no test can be blamed.
 func goFirstFailure(output []byte) string {
 	for _, line := range strings.Split(string(output), "\n") {
-		line = strings.TrimSpace(line)
-		rest, ok := strings.CutPrefix(line, "--- FAIL: ")
-		if !ok {
-			continue
-		}
-		if name, _, found := strings.Cut(rest, " "); found {
-			rest = name
-		}
-		if rest = strings.TrimSpace(rest); rest != "" {
-			return rest
+		if name, ok := goFailHeading(line); ok {
+			return name
 		}
 	}
 	return ""
+}
+
+// goFailMidLine is go's heading where it ends a line it does not start:
+// `--- FAIL: `, a name with no space, a space and the elapsed time go prints
+// (`(0.00s)`).
+var goFailMidLine = regexp.MustCompile(`--- FAIL: (\S+) \([0-9]+\.[0-9]+s\)$`)
+
+// goFailHeading is the test a printed `--- FAIL:` line names, the one rule
+// goFirstFailure and goFailedTests share. go prints a heading right after
+// whatever the test itself wrote, so a test whose own output ends without a
+// newline puts the heading mid-line (`partial--- FAIL: TestX (0.00s)`; for a
+// subtest, the parent's heading follows the subtest's output), and a test
+// that printed a heading-shaped text of its own is followed by go's real one
+// on the same line (capture go-fail.txt, go 1.26.11). So the heading that
+// ENDS the line in go's shape is go's, wherever it starts; a line that only
+// starts with `--- FAIL: ` is read as before, the name up to its first space.
+// A heading-shaped text a test prints on a line of its own is still read as
+// one: the printed lines cannot tell it from go's.
+func goFailHeading(line string) (string, bool) {
+	line = strings.TrimSpace(line)
+	if m := goFailMidLine.FindStringSubmatch(line); m != nil {
+		return m[1], true
+	}
+	rest, ok := strings.CutPrefix(line, "--- FAIL: ")
+	if !ok {
+		return "", false
+	}
+	name, _, _ := strings.Cut(rest, " ")
+	if name = strings.TrimSpace(name); name == "" {
+		return "", false
+	}
+	return name, true
 }
 
 // isGoBinary reports whether argv0 names the go command: base name go or

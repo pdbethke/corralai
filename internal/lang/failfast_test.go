@@ -4,7 +4,9 @@ package lang
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -79,6 +81,15 @@ func TestFailFastCmdGoesBeforeTheRunnersOwnSeparator(t *testing.T) {
 		{"python", []string{"python3", "-m", "pytest", "tests/"}, "python3 -m pytest tests/ -x"},
 		{"python", []string{"pytest", "-x", "tests/"}, "pytest -x tests/"},
 		{"go", []string{"go", "test", "./..."}, "go test ./... -failfast"},
+		// Everything after go's -args (or --args) is the test binary's:
+		// -failfast there is a flag the binary does not define, and a
+		// passing suite exits 1 (TestGoFailFastBeforeArgsKeepsAPassingRunGreen).
+		{"go", []string{"go", "test", "./...", "-args", "-update"}, "go test ./... -failfast -args -update"},
+		{"go", []string{"go", "test", "./...", "--args", "-update"}, "go test ./... -failfast --args -update"},
+		{"go", []string{"go", "test", "-v", "./...", "-args", "-failfast"}, "go test -v ./... -failfast -args -failfast"},
+		{"go", []string{"go", "test", "./...", "-failfast", "-args", "-update"}, "go test ./... -failfast -args -update"},
+		// After go's `--` the flag is inert (the run did not stop, go 1.26.11).
+		{"go", []string{"go", "test", "./...", "--", "-update"}, "go test ./... -failfast -- -update"},
 	} {
 		p, _ := ByName(c.lang)
 		got, ok := FailFastCmd(p, Cmd(c.cmd))
@@ -183,4 +194,94 @@ func TestFailFastRefusesAShellBehindAPrefix(t *testing.T) {
 	if args, ok := FailFastArgsFor(p, Cmd([]string{"env", "A=1", "pytest", "tests"})); !ok || strings.Join(args, " ") != "-x" {
 		t.Errorf("env A=1 pytest tests: got %v ok=%v, want -x", args, ok)
 	}
+}
+
+// The go-test row's options end at -args, measured: a passing suite whose
+// test defines a flag of its own (`-args -update`, a golden-file switch) stays
+// green with -failfast placed where FailFastCmd places it, and exits non-zero
+// with -failfast appended after -args, where the test binary refuses it as a
+// flag it does not define. A real go run, since the claim is about what go
+// does with the words.
+func TestGoFailFastBeforeArgsKeepsAPassingRunGreen(t *testing.T) {
+	goBin, err := exec.LookPath("go")
+	if err != nil {
+		t.Skip("SKIP: no go on PATH")
+	}
+	dir := t.TempDir()
+	for name, body := range map[string]string{
+		"go.mod": "module example.com/argsfixture\n\ngo 1.26\n",
+		"p_test.go": "package p\n\nimport (\n\t\"flag\"\n\t\"testing\"\n)\n\n" +
+			"var update = flag.Bool(\"update\", false, \"rewrite golden files\")\n\n" +
+			"func TestPasses(t *testing.T) { _ = *update }\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run := func(argv []string) (int, string) {
+		c := exec.Command(goBin, argv[1:]...) // #nosec G204 -- go from PATH, words built by this test
+		c.Dir = dir
+		c.Env = append(os.Environ(), "GOTOOLCHAIN=local", "GOFLAGS=")
+		out, err := c.CombinedOutput()
+		if ee, ok := err.(*exec.ExitError); ok {
+			return ee.ExitCode(), string(out)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		return 0, string(out)
+	}
+	p, _ := ByName("go")
+	operator := []string{"go", "test", "-count=1", ".", "-args", "-update"}
+	if code, out := run(operator); code != 0 {
+		t.Fatalf("the operator's own command is red (exit %d):\n%s", code, out)
+	}
+	placed, ok := FailFastCmd(p, Cmd(operator))
+	if !ok {
+		t.Fatal("go test has a fail-fast flag")
+	}
+	if code, out := run(placed); code != 0 {
+		t.Errorf("%q: exit %d, want 0 (a passing suite stays green):\n%s", placed, code, out)
+	}
+	appended := append(slices.Clone(operator), "-failfast")
+	if code, out := run(appended); code == 0 || !strings.Contains(out, "flag provided but not defined: -failfast") {
+		t.Errorf("%q: exit %d, want the test binary to refuse -failfast (the negative control):\n%s", appended, code, out)
+	}
+}
+
+// One placement rule for go test: what FailFastCmd adds and the run cache's
+// -count=1 both go where go's own options end, before -args, so neither ever
+// reaches the test binary. A -count=1 after -args would be the binary's, and
+// go would store and replay the run's result.
+func TestGoFailFastAndRunCacheShareOnePlacement(t *testing.T) {
+	p, _ := ByName("go")
+	for _, argv := range [][]string{
+		{"go", "test", "./..."},
+		{"go", "test", "./...", "-args", "-update"},
+		{"go", "test", "-v", "./pkg", "--args", "-update", "-count=3"},
+	} {
+		ff, ok := FailFastCmd(p, Cmd(argv))
+		if !ok {
+			t.Fatalf("%q: no fail-fast command", argv)
+		}
+		rc, state := RunCacheCmd(p, Cmd(argv), argv)
+		if state != RunCacheRewritten {
+			t.Fatalf("%q: run cache state %v", argv, state)
+		}
+		end := optionsEnd(goTestRow(t), argv, 1)
+		if ff[end] != "-failfast" || rc[end] != "-count=1" {
+			t.Errorf("%q: options end at %d; fail-fast %q, run cache %q", argv, end, ff, rc)
+		}
+	}
+}
+
+func goTestRow(t *testing.T) Runner {
+	t.Helper()
+	for _, r := range runners {
+		if r.ID == "go-test" {
+			return r
+		}
+	}
+	t.Fatal("no go-test row")
+	return Runner{}
 }

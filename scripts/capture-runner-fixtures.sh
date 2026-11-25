@@ -829,6 +829,16 @@ want phpunit-operator-junit-hooked absent "$(junit_written operator-junit.xml "$
 phphook PHPHOOKCFGLOG vendor/bin/phpunit -c report/phpunit-junit/phpunit.xml fail/tests/FTest.php
 want phpunit-config-junit-unhooked present "$(junit_written report/phpunit-junit/project-junit.xml vendor/bin/phpunit -c report/phpunit-junit/phpunit.xml fail/tests/FTest.php)"
 want phpunit-config-junit-hooked absent "$(junit_written report/phpunit-junit/project-junit.xml "${PHPHOOKCFGLOG[@]}")"
+# go test's printed `--- FAIL:` lines (go.go's goFirstFailure and goFailedTests).
+# A test whose own output ends without a newline shares its line with the next
+# heading go prints (its own, or its parent's for a subtest), and a test that
+# prints a heading of its own is followed on that line by go's real one. The
+# clocks go prints are taken out so a recapture changes nothing that ran.
+gofails() { # gofails <fixture> <cmd...>: fails, with go's elapsed times taken out
+  fails "$@"
+  sed -i -E -e 's/\([0-9]+\.[0-9]+s\)/(0.00s)/g' -e 's/\t[0-9]+\.[0-9]+s$/\t0.000s/' "$OUT/$1"
+}
+(cd fail/gomod && gofails go-fail.txt go test -count=1 ./...)
 (cd fail/cargo && cargo build --tests -q 2>/dev/null; fails cargo-test-fail.txt cargo test)
 (cd fail/cargo && fails cargo-nextest-fail.txt cargo nextest run)
 # The cargo-nextest row's failure hook (internal/lang/nextest_record.go): the

@@ -43,7 +43,9 @@ type Runner struct {
 	// options do not run to its own `--` or the command's end
 	// (runnerOptionsEnd): node reads its options only before the first file,
 	// so a flag after one is handed to the test files, and its options end
-	// right after `--test`, where nodeWith puts its own. at is At's answer.
+	// right after `--test`, where nodeWith puts its own; go test's end at
+	// -args, after which every word is the test binary's
+	// (goTestOptionsEnd). at is At's answer.
 	// nil: runnerOptionsEnd. ReportCmd and FailFastCmd both place what they
 	// add there (optionsEnd).
 	OptionsEnd func(argv []string, at int) int
@@ -306,13 +308,14 @@ var runners = []Runner{
 	{
 		// -failfast stops after the first test binary failure.
 		Name: "go test", ID: "go-test", Languages: []string{"go"}, Default: true, Detect: goTestCmd,
+		At: goTestAt, OptionsEnd: goTestOptionsEnd,
 		FailFast: []string{"-failfast"},
 		ListCmd:  goListCmd, ParseList: goParseTestList, SingleCmd: goSingleCmd,
 		FirstFailure: goFirstFailure, FailedTests: goFailedTests, DeselectCmd: goDeselectCmd, KillerCmd: goKillerCmd,
 		ListUnits: goTestListUnits, ParseUnits: goParseUnits, UnitCmd: oneUnit(goTestUnitsCmd),
 		UnitsCmd: goTestUnitsCmd, UnitForFile: goUnitForFile, UnitNoun: "packages",
 		EvidenceArgs: goTestEvidenceArgs, EvidenceCache: goEvidenceCache, RunCacheArgs: goRunCacheArgs,
-		Note: "one-package and several-package runs and their `go list` listing verified on go 1.26; the unit evidence pass runs each package with -count=1 over one GOCACHE the pass shares, warmed by its first package and frozen for the rest, so a cached test result is never read as a run",
+		Note: "one-package and several-package runs and their `go list` listing verified on go 1.26; -failfast is added before the operator's -args (after it, the test binary refuses it and a passing run exits 1, measured on go 1.26.11); a failing test is read from its `--- FAIL:` line, also where go prints it after a test's own output that did not end in a newline (go 1.26.11); the unit evidence pass runs each package with -count=1 over one GOCACHE the pass shares, warmed by its first package and frozen for the rest, so a cached test result is never read as a run",
 	},
 	{
 		Name: "gotestsum", ID: "gotestsum", Languages: []string{"go"}, Words: []string{"gotestsum"},

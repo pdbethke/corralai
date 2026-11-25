@@ -611,8 +611,15 @@ package reposcan
 // FAIL`, `SIGABRT`, `TIMEOUT`, which the printed reader never took), and the
 // first failure is the record's first, in its order, not the first printed,
 // so a "54" nextest killed_by that was empty, or named another failing test
-// of the same run, can now name such a test. Behaviour bump; the shape is
-// unchanged.
+// of the same run, can now name such a test. Also in "55": go test's
+// printed reader (lang.goFailHeading) takes a `--- FAIL:` heading that ends
+// a line it does not start, which go prints after a test's own output that
+// did not end in a newline (go 1.26.11). "54" skipped that line, so a go
+// killed_by that was empty, or named a later failing test (or, for a
+// subtest's output, the subtest where its parent's heading came first), can
+// now name the test whose heading it was; on a line where a test printed a
+// heading of its own, the name is go's heading that ends it. Behaviour bump;
+// the shape is unchanged.
 const VerdictGeneration = "55"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every

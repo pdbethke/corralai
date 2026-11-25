@@ -32,8 +32,10 @@ import (
 //     = false` (tried, to keep the record small) a project's own report
 //     lost each failure's captured output (nextest-theirs-same-content).
 //     The record therefore carries the captured output of each failing
-//     test, as nextest's default does, and one larger than the output
-//     corral keeps is not read (the printed lines are).
+//     test, as nextest's default does, and is often large: a record over
+//     RecordPrintMax bytes is not printed (the wrapper prints one
+//     `corral-record-skipped` line in its place), and the printed lines
+//     are read, as without the hook.
 //
 // What it does not change: a JUnit path the project's own config sets for
 // the profile in use (or a --config-file's) has the higher priority, so
@@ -144,5 +146,5 @@ func nextestRecordedFailures(out string) ([]string, bool) {
 // line inside the record (a test's captured output, when a project's config
 // stores it) is never read as nextest's own FLAKY line.
 func nextestFlakyTests(output []byte) []string {
-	return rustFlakyTests([]byte(withoutRecordBlock(string(output))))
+	return rustFlakyTests([]byte(PrintedOutput(string(output))))
 }

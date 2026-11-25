@@ -134,7 +134,7 @@ func TestNodeRecordIDsEqualPrintedIDs(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s: no record read", fixture)
 		}
-		printed := nodeFailures(withoutRecordBlock(out))
+		printed := nodeFailures(PrintedOutput(out))
 		if !slices.Equal(recorded, want) || !slices.Equal(printed, want) {
 			t.Errorf("%s:\nrecord  %q\nprinted %q\nwant    %q", fixture, recorded, printed, want)
 		}
@@ -204,7 +204,7 @@ func TestNodeRecordLeavesOutAFileThatDidNotLoad(t *testing.T) {
 // directory, so it left its four words out) prints no block and passes.
 func TestNodeFallsBackToPrintedLinesWithoutARecord(t *testing.T) {
 	out := readFixture(t, "node-hook-fail.txt")
-	printed := nodeFailures(withoutRecordBlock(out))
+	printed := nodeFailures(PrintedOutput(out))
 	begin := strings.Index(out, recordBegin)
 	for name, o := range map[string]string{
 		"no block":    out[:begin],

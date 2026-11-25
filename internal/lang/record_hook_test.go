@@ -3,6 +3,7 @@
 package lang
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -25,9 +26,9 @@ import (
 // itself. --cfg=P stands for a runner that reads a config file the hook
 // wrote (cargo-nextest's --tool-config-file): it prints the file, one
 // `cfg:` line per line, and writes its record to the path the file's
-// `out=` line names.
+// `out=` line names. src=P writes the file P as the record, byte for byte.
 const fakeRecordRunner = `echo ran
-log= code=0 nl= empty= unreadable= both= cfg=
+log= code=0 nl= empty= unreadable= both= cfg= src=
 while [ $# -gt 0 ]; do
   printf 'arg:%s\n' "$1"
   case $1 in
@@ -37,6 +38,7 @@ while [ $# -gt 0 ]; do
     --both=*) both=${1#--both=} ;;
     --cfg=*) cfg=${1#--cfg=}; sed 's/^/cfg:/' "$cfg"; log=$(sed -n 's/^out=//p' "$cfg") ;;
     exit=*) code=${1#exit=} ;;
+    src=*) src=${1#src=} ;;
     nl) nl=1 ;;
     empty) empty=1 ;;
     unreadable) unreadable=1 ;;
@@ -46,6 +48,7 @@ while [ $# -gt 0 ]; do
 done
 if [ -n "$log" ]; then
   if [ -n "$empty" ]; then : > "$log"
+  elif [ -n "$src" ]; then cat "$src" > "$log"
   elif [ -n "$nl" ]; then printf '<xml/>\n' > "$log"
   else printf '<xml/>' > "$log"
   fi
@@ -361,6 +364,53 @@ func TestFileRecordHookPrintsNoCompleteBlockForAnUnreadableRecord(t *testing.T) 
 	}
 	if format, body, ok := RecordBlock(out); ok {
 		t.Errorf("RecordBlock = %q, %q, true from an unreadable record, want no block:\n%s", format, body, out)
+	}
+}
+
+// A record larger than RecordPrintMax is not printed: the wrapper prints one
+// `corral-record-skipped <format> <bytes>` line in its place, so the record
+// never takes from the printed lines the room a run's kept tail has for
+// them (adequacy keeps the last 64 KiB of a mutant's run). A record of
+// exactly RecordPrintMax bytes is printed whole. The exit code is the
+// runner's either way, and the skipped line is not a printed line to any
+// reader (PrintedOutput takes it out).
+func TestFileRecordHookSkipsARecordOverTheBound(t *testing.T) {
+	dir := withFakeRecordRow(t, "--log", recordToken)
+	for _, c := range []struct {
+		name  string
+		size  int
+		block bool
+	}{
+		{"at the bound", RecordPrintMax, true},
+		{"one byte over", RecordPrintMax + 1, false},
+		{"far over", 4 * RecordPrintMax, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			body := "<x>" + strings.Repeat("y", c.size-len("<x></x>")) + "</x>"
+			src := filepath.Join(t.TempDir(), "record.xml")
+			if err := os.WriteFile(src, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			out, code := runIn(t, dir, graded(t, []string{"sh", "fakerunner", "src=" + src, "exit=1"}))
+			if code != 1 {
+				t.Fatalf("exit %d, want the runner's 1", code)
+			}
+			_, got, ok := RecordBlock(out)
+			skipped := fmt.Sprintf("\ncorral-record-skipped junit %d\n", c.size)
+			switch {
+			case c.block && (!ok || got != body):
+				t.Errorf("a record of %d bytes was not printed whole (ok=%v, %d bytes)", c.size, ok, len(got))
+			case c.block && strings.Contains(out, "corral-record-skipped"):
+				t.Errorf("a record of %d bytes was printed and said skipped", c.size)
+			case !c.block && (ok || strings.Contains(out, recordBegin)):
+				t.Errorf("a record of %d bytes, over the %d-byte bound, was printed", c.size, RecordPrintMax)
+			case !c.block && !strings.HasSuffix(out, skipped):
+				t.Errorf("output does not end with %q:\n%s", skipped, clip.Tail(out, 500))
+			}
+			if printed := PrintedOutput(out); strings.Contains(printed, "corral-record-") {
+				t.Errorf("PrintedOutput kept the wrapper's lines:\n%s", clip.Tail(printed, 500))
+			}
+		})
 	}
 }
 

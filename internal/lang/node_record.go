@@ -132,7 +132,7 @@ func nodeRecordedFailures(out string) ([]string, bool) {
 	if !ok {
 		return nil, false
 	}
-	entries, _ := nodeEntries(withoutRecordBlock(out))
+	entries, _ := nodeEntries(PrintedOutput(out))
 	var ids []string
 	for _, c := range cases {
 		if c.Name == "" {

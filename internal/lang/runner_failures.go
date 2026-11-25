@@ -131,10 +131,11 @@ func withoutVitestProject(rest string) string {
 // jestFailedUnits reads jest's "FAIL <file>" line, one per failing file, a
 // file that failed to load included. A line with more after the file (a
 // project's displayName, which no fixture here shows) names nothing rather
-// than a guess.
+// than a guess. It reads the printed lines alone (PrintedOutput), as every
+// reader of printed lines does, never a line inside the record block.
 func jestFailedUnits(out string) []string {
 	var units []string
-	for _, line := range strings.Split(out, "\n") {
+	for _, line := range strings.Split(PrintedOutput(out), "\n") {
 		rest, ok := strings.CutPrefix(strings.TrimLeft(line, " "), "FAIL ")
 		if !ok {
 			continue
@@ -308,7 +309,7 @@ func minitestFailures(out string) []string {
 // phpunitRecordedFailures), comes first, errors then failures. Then every
 // name PHPUnit's printed "N) Class::method" lines give that the record does
 // not, in printed order; the printed lines are read with the record block
-// left out (withoutRecordBlock), so a line inside the record is never read
+// left out (PrintedOutput), so a line inside the record is never read
 // as a printed one. With no record (a command corral does not wrap, output
 // recorded before the hook existed, a block the output cap cut, a record
 // PHPUnit did not write or that is not well-formed) the printed lines are
@@ -345,7 +346,7 @@ func phpFailures(out string) []string {
 // recorded reads the run's record (ok false when there is none to trust:
 // no complete block, another format, a record its reader refuses); printed
 // reads the runner's printed lines, and is handed the output with the record
-// block taken out (withoutRecordBlock), so a line inside the record is never
+// block taken out (PrintedOutput), so a line inside the record is never
 // read as a printed one. With no record the printed names are the whole
 // answer, as before the hook. With one, the record's ids come first, then
 // each printed name that no recorded id stands for (names(id, name): the
@@ -360,7 +361,7 @@ func phpFailures(out string) []string {
 // confirmation runs it alone, and a salvage that deselects a name too many
 // narrows the exam, never widens it.
 func recordThenPrinted(out string, recorded func(string) ([]string, bool), printed func(string) []string, names func(id, name string) bool) []string {
-	shown := printed(withoutRecordBlock(out))
+	shown := printed(PrintedOutput(out))
 	ids, ok := recorded(out)
 	if !ok {
 		return shown

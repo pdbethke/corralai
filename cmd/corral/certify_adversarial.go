@@ -512,7 +512,7 @@ func renderAdvVerdict(w io.Writer, codePath string, v advVerdict) {
 		// --repo has done this since #59; --local computed the identical string
 		// and dropped it, so the most common first-run failure — a suite that
 		// cannot start inside the jail — arrived with no way to diagnose it.
-		if out := strings.TrimSpace(v.BaselineOutput); out != "" {
+		if out := strings.TrimSpace(lang.PrintedOutput(v.BaselineOutput)); out != "" {
 			fmt.Fprintf(w, "  the suite said:\n%s\n", indentLines(out, "    "))
 			if hint := moduleImportHint(out); hint != "" {
 				fmt.Fprintf(w, "  %s\n", hint)

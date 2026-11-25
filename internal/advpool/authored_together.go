@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/pdbethke/corralai/internal/clip"
+	golang "github.com/pdbethke/corralai/internal/lang"
 )
 
 // The values of Verdict.AuthoredTogether. "" is the third: not checked.
@@ -50,7 +51,15 @@ func (d *Driver) checkAuthoredTogether(ctx context.Context, run *runState) {
 		return
 	}
 	run.authoredTogether = AuthoredTogetherFail
-	run.authoredTogetherOutput = clip.Tail(strings.TrimSpace(out), 2000)
+	run.authoredTogetherOutput = authoredTogetherOutput(out)
 	log.Printf("advpool: %s: the %d proven tests each pass alone but FAIL when run together on the unmutated code (interference, or a broken merge); see authored_together_output",
 		run.rs.CodePath, run.provenMissed)
+}
+
+// authoredTogetherOutput is what a failing together check keeps for the
+// record (authored_together_output): the last 2000 bytes of what the runner
+// printed (lang.PrintedOutput), without the record a record hook prints
+// after the run, which on its own would fill those 2000 bytes.
+func authoredTogetherOutput(out string) string {
+	return clip.Tail(strings.TrimSpace(golang.PrintedOutput(out)), 2000)
 }

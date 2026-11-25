@@ -57,9 +57,33 @@ const recordArgv0 = "corral-record"
 // is read as genuine: a body is never proof that corral wrote it, and nothing
 // that reads one may treat it as such.
 const (
-	recordBegin = "corral-record-begin"
-	recordEnd   = "corral-record-end"
+	recordBegin   = "corral-record-begin"
+	recordEnd     = "corral-record-end"
+	recordSkipped = "corral-record-skipped"
 )
+
+// RecordPrintMax is the largest record, in bytes, the wrapper prints
+// (recordScript): 30 KiB. A larger record is not printed, and one
+// `corral-record-skipped <format> <bytes>` line stands in its place.
+//
+// WHY A BOUND. The block is printed after everything the runner printed,
+// and adequacy keeps only the last 64 KiB of a mutant's run (its
+// maxDetailedOutput). A record printed whole into that tail pushes the
+// runner's own printed failure lines out of it, and a record larger than
+// the tail loses its beginning too, so the block is incomplete and is not
+// read: the hook would then name fewer tests than the same run without it,
+// or none. Bounded, a record that is printed leaves the printed lines the
+// rest of the tail, and one that is not leaves them all of it.
+//
+// WHY THIS VALUE. It is the largest round size that, with the block's
+// marker lines, leaves at least half the 64 KiB tail (32 KiB) to the
+// printed lines (adequacy's TestRecordPrintMaxLeavesTheTailRoom pins that),
+// and it was chosen with jest in mind, whose record is the largest per
+// test of the six (each failing test's whole failure message and stack,
+// twice): the five-test fixture's record is 26.8 KB (jest 30.5.2,
+// jest-hook-fail.txt), which is printed; a larger suite's is not, and its
+// failures are read from the printed `●` headings, as without the hook.
+const RecordPrintMax = 30 << 10
 
 // recordScript is the wrapper a graded run of a record-file runner goes
 // through. Like pyReportScript it holds only corral's own text: its first
@@ -104,6 +128,13 @@ const (
 //     exited. The record file is the record path plus the first of the
 //     RecordFile's suffixes that names such a file (the path itself when it
 //     has none).
+//   - The block is printed only when the record is at most RecordPrintMax
+//     bytes (`wc -c`). A larger one is not printed: the wrapper prints one
+//     line, `corral-record-skipped <format> <bytes>`, after the same blank
+//     line, and the run's failures are read from what the runner printed,
+//     whose kept tail is then what it was without the hook but for those
+//     two lines. A size `wc` cannot give (no wc) is not at most the bound,
+//     and the line says `unknown`.
 //
 // The record file is `corral-record` inside a directory made for this run
 // alone (mktemp -d), so it cannot collide with a file the project writes, and
@@ -125,7 +156,7 @@ const (
 // name (`d`, `rc`) the operator's environment happens to export would change
 // what the runner inherits; the prefix is a name no project plausibly
 // exports.
-const recordScript = `__corral_fmt=$1
+var recordScript = `__corral_fmt=$1
 __corral_fb=$2
 __corral_sfx=$3
 __corral_cs=$4
@@ -201,11 +232,17 @@ if [ -n "$__corral_d" ]; then
   done
 fi
 if [ -n "$__corral_f" ]; then
+  __corral_sz=$(wc -c < "$__corral_f" 2>/dev/null)
+  __corral_sz=${__corral_sz##*[!0-9]}
   echo
-  printf '%s %s\n' "` + recordBegin + `" "$__corral_fmt"
-  if cat "$__corral_f"; then
-    [ -n "$(tail -c 1 "$__corral_f" 2>/dev/null)" ] && echo
-    echo "` + recordEnd + `"
+  if [ -n "$__corral_sz" ] && [ "$__corral_sz" -le ` + strconv.Itoa(RecordPrintMax) + ` ]; then
+    printf '%s %s\n' "` + recordBegin + `" "$__corral_fmt"
+    if cat "$__corral_f"; then
+      [ -n "$(tail -c 1 "$__corral_f" 2>/dev/null)" ] && echo
+      echo "` + recordEnd + `"
+    fi
+  else
+    printf '%s %s %s\n' "` + recordSkipped + `" "$__corral_fmt" "${__corral_sz:-unknown}"
   fi
 fi
 exit "$__corral_rc"
@@ -365,34 +402,48 @@ func hookWordsAt(cmd, words []string) (from, n int) {
 // record's, each with a trailing carriage return dropped, joined by "\n",
 // with no final newline.
 func RecordBlock(out string) (format, body string, ok bool) {
-	return lastBlock(out, func(line string) (string, bool) {
-		f, found := strings.CutPrefix(line, recordBegin+" ")
-		return f, found && f != ""
-	}, recordEnd)
+	format, body, _, ok = lastBlock(out, isRecordBegin, recordEnd)
+	return format, body, ok
 }
 
-// withoutRecordBlock is out with the block RecordBlock reads (begin and end
-// lines included) taken out, so a reader of the runner's printed lines does
-// not read the record's lines as printed ones; out itself when RecordBlock
-// finds no block.
-func withoutRecordBlock(out string) string {
-	if _, _, ok := RecordBlock(out); !ok {
+// isRecordBegin is RecordBlock's begin line: the marker and a format.
+func isRecordBegin(line string) (string, bool) {
+	f, found := strings.CutPrefix(line, recordBegin+" ")
+	return f, found && f != ""
+}
+
+// recordSkippedLine is the line the wrapper prints in place of a record
+// over RecordPrintMax: the marker, a format, and the record's size or
+// `unknown`.
+var recordSkippedLine = regexp.MustCompile(`^` + recordSkipped + ` \S+ (?:[0-9]+|unknown)$`)
+
+// PrintedOutput is out as the runner printed it: with the record block
+// RecordBlock reads (begin and end lines included) and every line the
+// wrapper prints in place of a record it did not print
+// (`corral-record-skipped`, RecordPrintMax) taken out; out itself when it
+// has neither.
+//
+// It is the view every door takes that SHOWS a run's output, to a person or
+// to a model (the red baseline's "the suite said", the test writer's
+// clean-code failure, the together check's record), and the one a reader of
+// the runner's printed lines reads, so a line inside the record is never
+// read as a printed one. Only the readers of the record itself
+// (RecordBlock) read the block.
+func PrintedOutput(out string) string {
+	if !strings.Contains(out, recordEnd) && !strings.Contains(out, recordSkipped) {
 		return out
 	}
 	lines := strings.Split(out, "\n")
-	end := -1
-	for i := len(lines) - 1; i >= 0; i-- {
-		if strings.TrimSuffix(lines[i], "\r") == recordEnd {
-			end = i
-			break
+	if _, _, span, ok := lastBlock(out, isRecordBegin, recordEnd); ok {
+		lines = append(lines[:span[0]:span[0]], lines[span[1]+1:]...)
+	}
+	kept := lines[:0:0]
+	for _, line := range lines {
+		if !recordSkippedLine.MatchString(strings.TrimSuffix(line, "\r")) {
+			kept = append(kept, line)
 		}
 	}
-	for j := end - 1; j >= 0; j-- {
-		if f, found := strings.CutPrefix(strings.TrimSuffix(lines[j], "\r"), recordBegin+" "); found && f != "" {
-			return strings.Join(append(lines[:j:j], lines[end+1:]...), "\n")
-		}
-	}
-	return out
+	return strings.Join(kept, "\n")
 }
 
 // lastCompleteBlock is the one "last complete block between begin and end"
@@ -408,30 +459,32 @@ func withoutRecordBlock(out string) string {
 // everything before it and any block it falls inside: a block with its begin
 // in the kept head and its end in the kept tail has lost lines.
 func lastCompleteBlock(out, begin, end string) (body string, ok bool) {
-	_, body, ok = lastBlock(out, func(line string) (string, bool) { return "", line == begin }, end)
+	_, body, _, ok = lastBlock(out, func(line string) (string, bool) { return "", line == begin }, end)
 	return body, ok
 }
 
 // lastBlock is lastCompleteBlock with a begin line that may carry an
-// argument (RecordBlock's format), which isBegin returns. The two share it
-// so the rule is written once.
-func lastBlock(out string, isBegin func(line string) (arg string, ok bool), end string) (arg, body string, ok bool) {
+// argument (RecordBlock's format), which isBegin returns, and the block's
+// span: the indexes, in out split at "\n", of its begin and end lines
+// (PrintedOutput takes them out). The three share it so the rule is
+// written once.
+func lastBlock(out string, isBegin func(line string) (arg string, ok bool), end string) (arg, body string, span [2]int, ok bool) {
 	var cur []string
 	var curArg string
-	open := false
-	for _, line := range strings.Split(out, "\n") {
+	open, from := false, 0
+	for i, line := range strings.Split(out, "\n") {
 		line = strings.TrimSuffix(line, "\r")
 		if clip.IsElision(line) {
-			arg, body, ok, cur, open = "", "", false, nil, false
+			arg, body, span, ok, cur, open = "", "", [2]int{}, false, nil, false
 			continue
 		}
 		if a, isB := isBegin(line); isB {
-			cur, curArg, open = nil, a, true
+			cur, curArg, open, from = nil, a, true, i
 			continue
 		}
 		if line == end {
 			if open {
-				arg, body, ok, open = curArg, strings.Join(cur, "\n"), true, false
+				arg, body, span, ok, open = curArg, strings.Join(cur, "\n"), [2]int{from, i}, true, false
 			}
 			continue
 		}
@@ -440,7 +493,7 @@ func lastBlock(out string, isBegin func(line string) (arg string, ok bool), end 
 		}
 	}
 	if open {
-		return "", "", false
+		return "", "", [2]int{}, false
 	}
-	return arg, body, ok
+	return arg, body, span, ok
 }

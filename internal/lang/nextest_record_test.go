@@ -153,7 +153,7 @@ func TestNextestRecordIDsEqualPrintedIDs(t *testing.T) {
 			if !slices.Equal(sorted(rec), sorted(c.record)) {
 				t.Errorf("record = %q, want %q", rec, c.record)
 			}
-			printed := rustFailedTests(withoutRecordBlock(out))
+			printed := rustFailedTests(PrintedOutput(out))
 			var missing []string
 			for _, id := range rec {
 				if !slices.Contains(printed, id) {

@@ -291,7 +291,7 @@ func TestPHPUnitPrintedReaderSkipsTheRecordBlock(t *testing.T) {
 	if got := phpFailures(out); !slices.Equal(got, []string{"FTest::testAdds"}) {
 		t.Errorf("phpFailures = %q, want only FTest::testAdds", got)
 	}
-	if got := withoutRecordBlock(out); strings.Contains(got, recordBegin) || strings.Contains(got, "Fake") || !strings.Contains(got, "1) FTest::testAdds") {
-		t.Errorf("withoutRecordBlock left %q", got)
+	if got := PrintedOutput(out); strings.Contains(got, recordBegin) || strings.Contains(got, "Fake") || !strings.Contains(got, "1) FTest::testAdds") {
+		t.Errorf("PrintedOutput left %q", got)
 	}
 }

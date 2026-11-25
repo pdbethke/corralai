@@ -123,7 +123,7 @@ func TestJestRecordIDsEqualPrintedIDs(t *testing.T) {
 	if !slices.Equal(sorted(recorded), sorted(want)) {
 		t.Errorf("record = %q, want %q in some order", recorded, want)
 	}
-	printed := jestFailures(withoutRecordBlock(out))
+	printed := jestFailures(PrintedOutput(out))
 	asPrinted := make([]string, len(recorded))
 	for i, id := range recorded {
 		asPrinted[i] = strings.ReplaceAll(id, " › ", "::")
@@ -155,7 +155,7 @@ func TestJestRecordIDsEqualPrintedIDs(t *testing.T) {
 // so jest wrote its JSON to /dev/null) prints no block and passes.
 func TestJestFallsBackToPrintedLinesWithoutARecord(t *testing.T) {
 	out := readFixture(t, "jest-hook-fail.txt")
-	printed := jestFailures(withoutRecordBlock(out))
+	printed := jestFailures(PrintedOutput(out))
 	begin := strings.Index(out, recordBegin)
 	for name, o := range map[string]string{
 		"no block":    out[:begin],
@@ -257,5 +257,15 @@ func TestJestHookCaptureIsTheRowsCommand(t *testing.T) {
 		if out := readFixture(t, f); !strings.Contains(out, "\n"+recordEnd) || strings.Contains(out, `"startTime":1`) {
 			t.Errorf("%s: no complete record block, or its clock was kept", f)
 		}
+	}
+}
+
+// jestFailedUnits reads the printed `FAIL <file>` lines only, like every
+// other reader of printed lines: a line inside the record block (a record
+// is the runner's or a test's text) is never read as one jest printed.
+func TestJestFailedUnitsSkipsTheRecordBlock(t *testing.T) {
+	out := "FAIL tests/a.test.js\n  ● adds\n\ncorral-record-begin jest-json\nFAIL tests/b.test.js\ncorral-record-end\n"
+	if got := jestFailedUnits(out); !slices.Equal(got, []string{"tests/a.test.js"}) {
+		t.Errorf("jestFailedUnits = %q, want the printed file alone", got)
 	}
 }

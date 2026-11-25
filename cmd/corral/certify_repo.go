@@ -6410,7 +6410,7 @@ func (l *localExecutor) timedOutBaseline(j reposcan.Job, runner reposcan.Baselin
 	}
 	l.note("%s: baseline timed out: the unmutated suite did not finish within %s, the bound on one run (--timeout) — not graded, and not retried: leaving units out is not a way to make it finish\n", j.Path, to.BaselineBound())
 	if br, ok := runner.(interface{ BaselineOutput() string }); ok {
-		if out := strings.TrimSpace(br.BaselineOutput()); out != "" {
+		if out := strings.TrimSpace(lang.PrintedOutput(br.BaselineOutput())); out != "" {
 			l.note("%s: the suite's last output before it was stopped:\n%s\n", j.Path, indentLines(out, "    "))
 		}
 	}
@@ -6696,9 +6696,11 @@ func (l *localExecutor) note(format string, a ...any) {
 // words, followed by what the suite printed when it printed anything, and
 // moduleImportHint's note when the output carries one. The one way a red
 // baseline reaches the operator on certify --repo, whichever run found it:
-// the stability check before the audit, or the audit's own.
+// the stability check before the audit, or the audit's own. What the suite
+// printed is the runner's lines (lang.PrintedOutput), without the record a
+// record hook prints after them.
 func (l *localExecutor) noteRedBaseline(path, lead, output string) {
-	out := strings.TrimSpace(output)
+	out := strings.TrimSpace(lang.PrintedOutput(output))
 	if out == "" {
 		l.note("%s: %s\n", path, lead)
 		return

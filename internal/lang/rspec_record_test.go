@@ -89,7 +89,7 @@ func TestRSpecRecordIDsEqualPrintedIDs(t *testing.T) {
 	if !ok {
 		t.Fatal("no record read")
 	}
-	printed := rspecFailures(withoutRecordBlock(out))
+	printed := rspecFailures(PrintedOutput(out))
 	if !slices.Equal(recorded, want) || !slices.Equal(printed, want) {
 		t.Errorf("\nrecord  %q\nprinted %q\nwant    %q", recorded, printed, want)
 	}
@@ -108,7 +108,7 @@ func TestRSpecRecordIDsEqualPrintedIDs(t *testing.T) {
 // block and passes.
 func TestRSpecFallsBackToPrintedLinesWithoutARecord(t *testing.T) {
 	out := readFixture(t, "rspec-hook-fail.txt")
-	printed := rspecFailures(withoutRecordBlock(out))
+	printed := rspecFailures(PrintedOutput(out))
 	begin := strings.Index(out, recordBegin)
 	for name, o := range map[string]string{
 		"no block":    out[:begin],

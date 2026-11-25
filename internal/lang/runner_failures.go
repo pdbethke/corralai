@@ -298,9 +298,19 @@ func minitestFailures(out string) []string {
 	return ids
 }
 
-// phpFailures is every "N) Class::method" line of PHPUnit's failure and
-// error sections, verbatim (see phpFirstFailure).
+// phpFailures is every test PHPUnit reported failing or erroring, errors
+// first, in the id form phpFailureID gives (see phpFirstFailure).
+//
+// It reads the run's own record when the output carries one: the JUnit
+// block the PHPUnit row's failure hook prints (phpunitRecordedFailures).
+// Only where there is no complete, well-formed JUnit block (a command corral
+// does not wrap, output recorded before the hook existed, a block the output
+// cap cut, a record PHPUnit did not write) does it read the printed "N)
+// Class::method" lines of PHPUnit's failure and error sections.
 func phpFailures(out string) []string {
+	if ids, ok := phpunitRecordedFailures(out); ok {
+		return ids
+	}
 	var ids []string
 	for _, line := range strings.Split(out, "\n") {
 		if id, ok := phpFailureID(line); ok {

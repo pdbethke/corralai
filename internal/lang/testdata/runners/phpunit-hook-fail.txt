@@ -1,0 +1,138 @@
+PHPUnit 11.5.57 by Sebastian Bergmann and contributors.
+
+Runtime:       PHP 8.5.4
+
+F..FEF.FFF.FF                                                     13 / 13 (100%)
+
+
+There was 1 error:
+
+1) FTest::testBoom
+RuntimeException: boom
+
+$DIR/fail/tests/FTest.php:10
+
+--
+
+There were 8 failures:
+
+1) FTest::testAdds
+Failed asserting that 2 is identical to 3.
+
+$DIR/fail/tests/FTest.php:5
+
+2) FTest::testData with data set "two" (2)
+Failed asserting that 2 is identical to 1.
+
+$DIR/fail/tests/FTest.php:8
+
+3) DTest::testNamed with data set "first" (7)
+Failed asserting that 7 is identical to 1.
+
+$DIR/fail/datasets/DTest.php:10
+
+4) DTest::testNamed with data set "third" (9)
+Failed asserting that 9 is identical to 1.
+
+$DIR/fail/datasets/DTest.php:10
+
+5) DTest::testNamed with data set "x (y)" (3)
+Failed asserting that 3 is identical to 1.
+
+$DIR/fail/datasets/DTest.php:10
+
+6) DTest::testUnnamed with data set #0 (5, 'x')
+Failed asserting that 5 is identical to 1.
+
+$DIR/fail/datasets/DTest.php:13
+
+7) DTest::testUnnamed with data set #2 (9, 'z (y) "q"')
+Failed asserting that 9 is identical to 1.
+
+$DIR/fail/datasets/DTest.php:13
+
+8) App\Tests\NTest::testNamespaced
+Failed asserting that 2 is identical to 3.
+
+$DIR/fail/ns/NTest.php:8
+
+ERRORS!
+Tests: 13, Assertions: 12, Errors: 1, Failures: 8.
+
+corral-record-begin junit
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="CLI Arguments" tests="13" assertions="12" errors="1" failures="8" skipped="0" time="0.003483">
+    <testsuite name="FTest" file="$DIR/fail/tests/FTest.php" tests="5" assertions="4" errors="1" failures="2" skipped="0" time="0.002814">
+      <testcase name="testAdds" file="$DIR/fail/tests/FTest.php" line="5" class="FTest" classname="FTest" assertions="1" time="0.002353">
+        <failure type="PHPUnit\Framework\ExpectationFailedException">FTest::testAdds
+Failed asserting that 2 is identical to 3.
+
+$DIR/fail/tests/FTest.php:5</failure>
+      </testcase>
+      <testcase name="testOk" file="$DIR/fail/tests/FTest.php" line="6" class="FTest" classname="FTest" assertions="1" time="0.000186"/>
+      <testsuite name="FTest::testData" tests="2" assertions="2" errors="0" failures="1" skipped="0" time="0.000190">
+        <testcase name="testData with data set &quot;one&quot;" file="$DIR/fail/tests/FTest.php" line="8" class="FTest" classname="FTest" assertions="1" time="0.000071"/>
+        <testcase name="testData with data set &quot;two&quot;" file="$DIR/fail/tests/FTest.php" line="8" class="FTest" classname="FTest" assertions="1" time="0.000119">
+          <failure type="PHPUnit\Framework\ExpectationFailedException">FTest::testData with data set "two"
+Failed asserting that 2 is identical to 1.
+
+$DIR/fail/tests/FTest.php:8</failure>
+        </testcase>
+      </testsuite>
+      <testcase name="testBoom" file="$DIR/fail/tests/FTest.php" line="10" class="FTest" classname="FTest" assertions="0" time="0.000085">
+        <error type="RuntimeException">FTest::testBoom
+RuntimeException: boom
+
+$DIR/fail/tests/FTest.php:10</error>
+      </testcase>
+    </testsuite>
+    <testsuite name="DTest" file="$DIR/fail/datasets/DTest.php" tests="7" assertions="7" errors="0" failures="5" skipped="0" time="0.000577">
+      <testsuite name="DTest::testNamed" tests="4" assertions="4" errors="0" failures="3" skipped="0" time="0.000336">
+        <testcase name="testNamed with data set &quot;first&quot;" file="$DIR/fail/datasets/DTest.php" line="10" class="DTest" classname="DTest" assertions="1" time="0.000109">
+          <failure type="PHPUnit\Framework\ExpectationFailedException">DTest::testNamed with data set "first"
+Failed asserting that 7 is identical to 1.
+
+$DIR/fail/datasets/DTest.php:10</failure>
+        </testcase>
+        <testcase name="testNamed with data set &quot;second&quot;" file="$DIR/fail/datasets/DTest.php" line="10" class="DTest" classname="DTest" assertions="1" time="0.000050"/>
+        <testcase name="testNamed with data set &quot;third&quot;" file="$DIR/fail/datasets/DTest.php" line="10" class="DTest" classname="DTest" assertions="1" time="0.000088">
+          <failure type="PHPUnit\Framework\ExpectationFailedException">DTest::testNamed with data set "third"
+Failed asserting that 9 is identical to 1.
+
+$DIR/fail/datasets/DTest.php:10</failure>
+        </testcase>
+        <testcase name="testNamed with data set &quot;x (y)&quot;" file="$DIR/fail/datasets/DTest.php" line="10" class="DTest" classname="DTest" assertions="1" time="0.000089">
+          <failure type="PHPUnit\Framework\ExpectationFailedException">DTest::testNamed with data set "x (y)"
+Failed asserting that 3 is identical to 1.
+
+$DIR/fail/datasets/DTest.php:10</failure>
+        </testcase>
+      </testsuite>
+      <testsuite name="DTest::testUnnamed" tests="3" assertions="3" errors="0" failures="2" skipped="0" time="0.000240">
+        <testcase name="testUnnamed with data set #0" file="$DIR/fail/datasets/DTest.php" line="13" class="DTest" classname="DTest" assertions="1" time="0.000102">
+          <failure type="PHPUnit\Framework\ExpectationFailedException">DTest::testUnnamed with data set #0
+Failed asserting that 5 is identical to 1.
+
+$DIR/fail/datasets/DTest.php:13</failure>
+        </testcase>
+        <testcase name="testUnnamed with data set #1" file="$DIR/fail/datasets/DTest.php" line="13" class="DTest" classname="DTest" assertions="1" time="0.000048"/>
+        <testcase name="testUnnamed with data set #2" file="$DIR/fail/datasets/DTest.php" line="13" class="DTest" classname="DTest" assertions="1" time="0.000090">
+          <failure type="PHPUnit\Framework\ExpectationFailedException">DTest::testUnnamed with data set #2
+Failed asserting that 9 is identical to 1.
+
+$DIR/fail/datasets/DTest.php:13</failure>
+        </testcase>
+      </testsuite>
+    </testsuite>
+    <testsuite name="App\Tests\NTest" file="$DIR/fail/ns/NTest.php" tests="1" assertions="1" errors="0" failures="1" skipped="0" time="0.000092">
+      <testcase name="testNamespaced" file="$DIR/fail/ns/NTest.php" line="8" class="App\Tests\NTest" classname="App.Tests.NTest" assertions="1" time="0.000092">
+        <failure type="PHPUnit\Framework\ExpectationFailedException">App\Tests\NTest::testNamespaced
+Failed asserting that 2 is identical to 3.
+
+$DIR/fail/ns/NTest.php:8</failure>
+      </testcase>
+    </testsuite>
+  </testsuite>
+</testsuites>
+corral-record-end

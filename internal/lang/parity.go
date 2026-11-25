@@ -213,7 +213,7 @@ var ParityExemptions = []Exemption{
 
 	{"go", "readable-failures", "not needed: go test reads no project file that sets its flags or output, so a project cannot hide its `--- FAIL:` lines (GOFLAGS, which could add -json, is the operator's environment, not the project's); gotestsum's format comes from its own flag or GOTESTSUM_FORMAT, also not a project file, and was not run here"},
 
-	{"php", "readable-failures", "a phpunit.xml with testdox=\"true\" replaces the `N) Class::method` lines corral reads (measured 2026-11-17 on PHPUnit 11.5.57), and 11.5 has no option to turn it off (it refuses --no-testdox), so there is no flag to add"},
+	{"php", "readable-failures", "a phpunit.xml with testdox=\"true\" replaces the `N) Class::method` lines corral reads (measured 2026-11-17 on PHPUnit 11.5.57), and 11.5 has no option to turn it off (it refuses --no-testdox), so there is no flag to add; the failure hook reads PHPUnit's JUnit record instead, which testdox does not change (measured on 11.5.57)"},
 
 	{"php", "run-cache", "nothing worth sharing was found. measured 2026-11-18 on one 32-core machine, outside the sandbox, as the median of 3 to 5 runs: on ramsey/uuid at 7a16331 the PHPUnit run (2,299 tests) took 10.6 s without OPcache and 10.2 s with a warm OPcache file cache after one source file changed, a difference inside the spread of single runs (9.9 s to 11.0 s)"},
 
@@ -222,8 +222,6 @@ var ParityExemptions = []Exemption{
 	{"javascript", "failure-hook", "not built: corral reads the lines jest, vitest, mocha and node --test print. Each takes a reporter module named on the command line, which is what would do it; none has been written or run, and whether one can run beside the reporters a project configures was not checked"},
 
 	{"typescript", "failure-hook", "not built: corral reads the lines jest, vitest, mocha and node --test print. Each takes a reporter module named on the command line, which is what would do it; none has been written or run, and whether one can run beside the reporters a project configures was not checked"},
-
-	{"php", "failure-hook", "not built: corral reads PHPUnit's printed `N) Class::method` lines. PHPUnit's `--log-junit <file>` writes its own record of each test and would be the hook; corral does not add it, and it has not been run for this"},
 
 	{"ruby", "failure-hook", "not built: corral reads rspec's `Failed examples:` list and minitest's printed failures. rspec takes a second formatter writing to a file (`--format json --out <file>`), which would be the hook; corral does not add it, and nothing comparable was looked for in minitest"},
 

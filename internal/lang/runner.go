@@ -428,11 +428,12 @@ var runners = []Runner{
 	},
 	{
 		Name: "phpunit", ID: "phpunit", Languages: []string{"php"}, Default: true, Words: []string{"phpunit"},
-		FailFast: []string{"--stop-on-failure"}, FirstFailure: phpFirstFailure, FailedTests: phpFailures, DeselectCmd: phpunitDeselectCmd, KillerCmd: phpunitKillerCmd,
+		FailFast: []string{"--stop-on-failure"}, ReportHook: phpunitRecordHook,
+		FirstFailure: phpFirstFailure, FailedTests: phpFailures, DeselectCmd: phpunitDeselectCmd, KillerCmd: phpunitKillerCmd,
 		ListCmd: phpunitListCmd, ParseList: phpunitParseList, SingleCmd: phpunitSingleCmd, ResolveByList: true,
 		ListUnits: phpunitListUnits, ParseUnits: phpunitParseUnits, ListUnitsSetup: phpunitUnitsSetup, UnitCmd: oneUnit(phpunitUnitsCmd),
 		UnitsCmd: phpunitUnitsCmd, UnitForFile: fileUnitForFile, UnitNoun: "test files",
-		Note: "listing, one-test, one-file and several-file runs verified on PHPUnit 11.5; the test-file listing (`--list-tests`, with PHP naming each test class's file) also on 9.6, 10.5 and 12.5, where one-file runs were run as well; PHPUnit 9 and 10 ignore `--group` and `--exclude-group` when listing, so a command carrying one gets no test-file listing there",
+		Note: "listing, one-test, one-file and several-file runs verified on PHPUnit 11.5; the test-file listing (`--list-tests`, with PHP naming each test class's file) also on 9.6, 10.5 and 12.5, where one-file runs were run as well; PHPUnit 9 and 10 ignore `--group` and `--exclude-group` when listing, so a command carrying one gets no test-file listing there. Every graded run corral can rewrite (the command names phpunit and is not shell-wrapped or a composer script) goes through `sh -c` with `--log-junit <a temporary file>` added after PHPUnit's options, and corral reads the killing test from that JUnit record, errors first as PHPUnit prints them, so a phpunit.xml with testdox=\"true\" (which replaces the printed `N) Class::method` lines) does not hide it; the printed lines are read when the record is missing, cut short or not well-formed. Run on PHPUnit 11.5.57 on Linux outside the sandbox: printed output and exit code unchanged, and a `--log-junit` in the command or a `<junit>` logging entry in phpunit.xml is not written on a graded run (PHPUnit writes one JUnit file, the last named). Not run: PHPUnit 9, 10 and 12, the bubblewrap sandbox, the workspace substrate, macOS. Not wrapped: Windows",
 	},
 	{
 		// FirstFailure and Flaky read the grammar off the output, not the

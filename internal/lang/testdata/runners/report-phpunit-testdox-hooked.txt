@@ -1,0 +1,62 @@
+PHPUnit 11.5.57 by Sebastian Bergmann and contributors.
+
+Runtime:       PHP 8.5.4
+Configuration: $DIR/report/phpunit/phpunit.xml
+
+F..FE                                                               5 / 5 (100%)
+
+
+F
+ ✘ Adds
+   │
+   │ Failed asserting that 2 is identical to 3.
+   │
+   │ $DIR/fail/tests/FTest.php:5
+   │
+ ✔ Ok
+ ✔ Data with data set "one"
+ ✘ Data with data set "two"
+   │
+   │ Failed asserting that 2 is identical to 1.
+   │
+   │ $DIR/fail/tests/FTest.php:8
+   │
+ ✘ Boom
+   │
+   │ RuntimeException: boom
+   │
+   │ $DIR/fail/tests/FTest.php:10
+   │
+
+ERRORS!
+Tests: 5, Assertions: 4, Errors: 1, Failures: 2.
+
+corral-record-begin junit
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="FTest" file="$DIR/fail/tests/FTest.php" tests="5" assertions="4" errors="1" failures="2" skipped="0" time="0.002982">
+    <testcase name="testAdds" file="$DIR/fail/tests/FTest.php" line="5" class="FTest" classname="FTest" assertions="1" time="0.002463">
+      <failure type="PHPUnit\Framework\ExpectationFailedException">FTest::testAdds
+Failed asserting that 2 is identical to 3.
+
+$DIR/fail/tests/FTest.php:5</failure>
+    </testcase>
+    <testcase name="testOk" file="$DIR/fail/tests/FTest.php" line="6" class="FTest" classname="FTest" assertions="1" time="0.000198"/>
+    <testsuite name="FTest::testData" tests="2" assertions="2" errors="0" failures="1" skipped="0" time="0.000220">
+      <testcase name="testData with data set &quot;one&quot;" file="$DIR/fail/tests/FTest.php" line="8" class="FTest" classname="FTest" assertions="1" time="0.000085"/>
+      <testcase name="testData with data set &quot;two&quot;" file="$DIR/fail/tests/FTest.php" line="8" class="FTest" classname="FTest" assertions="1" time="0.000135">
+        <failure type="PHPUnit\Framework\ExpectationFailedException">FTest::testData with data set "two"
+Failed asserting that 2 is identical to 1.
+
+$DIR/fail/tests/FTest.php:8</failure>
+      </testcase>
+    </testsuite>
+    <testcase name="testBoom" file="$DIR/fail/tests/FTest.php" line="10" class="FTest" classname="FTest" assertions="0" time="0.000101">
+      <error type="RuntimeException">FTest::testBoom
+RuntimeException: boom
+
+$DIR/fail/tests/FTest.php:10</error>
+    </testcase>
+  </testsuite>
+</testsuites>
+corral-record-end

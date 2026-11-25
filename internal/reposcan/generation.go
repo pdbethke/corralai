@@ -577,7 +577,12 @@ package reposcan
 // 11.5.57: "No tests executed!"), so a data set's kill fell back to
 // repeating the run; now that data set is run alone and the kill can be
 // confirmed by the test itself. A recorded killed_by id for a data set
-// changes form. Behaviour bump; the shape is unchanged.
+// changes form. In the same generation, since neither has reached main:
+// every PHPUnit run corral can rewrite now writes PHPUnit's own JUnit record
+// (--log-junit, lang.phpunitRecordHook), and the killing test is read from
+// it, so a project whose phpunit.xml sets testdox="true", where "54" read no
+// killing test from the printed lines, now names one, and that kill can be
+// confirmed by the test alone. Behaviour bump; the shape is unchanged.
 const VerdictGeneration = "55"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every

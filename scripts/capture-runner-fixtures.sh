@@ -579,6 +579,23 @@ fails phpunit-fail.txt vendor/bin/phpunit fail/tests/FTest.php
 # Data sets whose printed argument suffix is not their position, with parentheses
 # and quotes in a name and in an argument: phpFailures drops the suffix.
 fails phpunit-datasets-fail.txt vendor/bin/phpunit fail/datasets/DTest.php
+# The PHPUnit row's failure hook (internal/lang/phpunit_record.go): the command a
+# graded run runs, `--log-junit` and the record wrapper included, is taken from
+# the row (scripts/reportcmd), never copied here; TestPHPUnitHookCaptureIsTheRowsCommand
+# holds these lines to it. The second run's phpunit.xml sets testdox="true", which
+# replaces the printed `N)` lines; the record still names every failure.
+phphook() { # phphook <array name> <phpunit command...>: the row's graded command, NUL-separated
+  local name="$1"; shift
+  mapfile -d '' "$name" < <(cd "$REPO" && go run ./scripts/reportcmd php "$@")
+  local -n words="$name"
+  [ "${#words[@]}" -gt 0 ] || { echo "scripts/reportcmd gave no command for $*" >&2; exit 1; }
+}
+phphook PHPHOOK vendor/bin/phpunit fail/tests/FTest.php fail/datasets/DTest.php fail/ns/NTest.php
+fails phpunit-hook-fail.txt "${PHPHOOK[@]}"
+# The hook keeps PHPUnit's exit code: 2 (an error) with it and without it.
+want phpunit-hook-exit "2 2" "$(vendor/bin/phpunit fail/tests/FTest.php fail/datasets/DTest.php fail/ns/NTest.php >/dev/null 2>&1; echo -n "$? "; "${PHPHOOK[@]}" >/dev/null 2>&1; echo $?)"
+phphook PHPHOOKTESTDOX vendor/bin/phpunit -c report/phpunit/phpunit.xml fail/tests/FTest.php
+fails report-phpunit-testdox-hooked.txt "${PHPHOOKTESTDOX[@]}"
 (cd fail/cargo && cargo build --tests -q 2>/dev/null; fails cargo-test-fail.txt cargo test)
 (cd fail/cargo && fails cargo-nextest-fail.txt cargo nextest run)
 

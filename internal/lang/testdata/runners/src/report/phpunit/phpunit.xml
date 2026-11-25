@@ -1,0 +1,4 @@
+<?xml version="1.0"?>
+<!-- testdox="true" replaces the "N) Class::method" lines corral reads from
+     PHPUnit's printed output; PHPUnit's JUnit record does not change. -->
+<phpunit testdox="true"/>

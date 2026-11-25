@@ -360,7 +360,8 @@ Anthropic seat alive through an otherwise all-Gemini run.
 `demo`, `doctor`, goal derivation, shadow seats and `review` — either to a
 coding-agent CLI in `agent:model` form (`--writer-model codex`,
 `--reviewer-model claude-code:claude-sonnet-5`, a bare name for the tool's
-default model) or to an API model. `claude-code`, `codex` and `antigravity`
+default model) or to an API model. `claude-code`, `codex`, `antigravity` and
+`copilot` (GitHub Copilot's CLI, which must be pinned: `copilot:<model>`)
 come defined; any other agent is the operator's own, defined as
 `CORRALAI_AGENT_<NAME>="<command line>"` with an optional
 `CORRALAI_AGENT_<NAME>_WIRE` (`claude-json`, `codex-jsonl`, `text`). The agent

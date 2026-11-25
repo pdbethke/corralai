@@ -115,6 +115,41 @@ var builtinAgents = map[string]builtinAgent{
 		maker:  "google",
 		binary: "agy",
 	},
+	// GitHub Copilot's CLI (`copilot`), on a Copilot subscription. It reads
+	// the brief on stdin under -s (silent: the reply alone).
+	//
+	// Cold, measured 2026-11-25 on Copilot CLI 1.0.115: by default it loads
+	// the operator's ~/.copilot (user MCP servers, skills, plugins), its
+	// built-in MCP servers and AGENTS.md from the working directory (a
+	// planted AGENTS.md changed its reply). COPILOT_HOME pointed at a fresh
+	// directory inside {dir}, --no-custom-instructions and
+	// --disable-builtin-mcps left none of them loaded. The login is not kept
+	// in COPILOT_HOME: an empty one, with no token in the environment, still
+	// authenticated.
+	// --no-auto-update keeps the CLI version the record names.
+	//
+	// No tools: its read tools (glob, view) ran without asking even with an
+	// empty --available-tools, so the definition names a tool that does not
+	// exist (`none`), which leaves the model none. A certify seat needs none
+	// (its prompt carries the code). A model that reaches for one prints the
+	// call as text instead of an answer (seen with a prompt that asked for a
+	// tool), rather than reading the host. review, whose seats read the tree,
+	// has not been run on it, and {tools} is not passed.
+	//
+	// It REQUIRES a pin (`copilot:<model>`; a bare `copilot` is refused when
+	// the seat is built, before any spend) and declares no maker: unpinned,
+	// Copilot's Auto routing picks the model (Microsoft's mai-code-2-flash for
+	// a short prompt, measured), so no one vendor is true of the CLI, and a
+	// maker of "github" would make Copilot running Claude look like a second
+	// vendor beside a Claude writer. A pinned model's vendor comes from its
+	// name, or is unknown and said so. Its JSON output
+	// reports premium requests rather than tokens and has no wire here, so
+	// it is a text wire (not metered) with no cold ceiling.
+	"copilot": {
+		def:    "env COPILOT_HOME={dir}/.copilot-home copilot -s --no-custom-instructions --disable-builtin-mcps --no-auto-update --available-tools=none --model {model}",
+		wire:   "text",
+		binary: "copilot",
+	},
 }
 
 // builtinAgent is one agent corral has run and therefore defines itself.
@@ -289,18 +324,27 @@ func AgentVersion(name string) string {
 	if err != nil || len(argv) == 0 {
 		return ""
 	}
-	// argv[0] is the agent's binary — UNLESS the definition wraps it in a
-	// shell, which a seat must do when its CLI takes the brief as a flag
-	// value rather than on stdin (antigravity). Probing `sh --version` there
-	// would put the SHELL's version on the record as the seat's provenance:
-	// a signed entry naming the wrong thing as the reviewer. Report no
-	// version rather than a wrong one, and let the definition speak.
+	// The binary probed is the CLI's, never a wrapper's: putting a wrapper's
+	// version on the record would make a signed entry name the wrong thing
+	// as the seat. A built-in declares its CLI (binary), whatever its
+	// definition starts with (copilot's starts with env, antigravity's with
+	// sh). An operator definition's CLI is its first word after an `env`
+	// and its NAME=value assignments; when that is a shell, which a seat
+	// must use when its CLI takes the brief as a flag value rather than on
+	// stdin, the CLI cannot be found from the words, so no version is
+	// reported rather than a wrong one, and the definition speaks.
+	probe := ""
+	if builtin {
+		probe = builtinAgents[name].binary
+	} else if w := afterEnv(argv); len(w) > 0 && !isShell(w[0]) {
+		probe = w[0]
+	}
 	version := ""
-	if !isShell(argv[0]) {
+	if probe != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), agentVersionTimeout)
 		defer cancel()
 		var out bytes.Buffer
-		cmd := agentCommand(ctx, []string{argv[0], "--version"})
+		cmd := agentCommand(ctx, []string{probe, "--version"})
 		cmd.Stdout = &out
 		if err := runAgent(cmd); err == nil {
 			version = strings.TrimSpace(strings.SplitN(out.String(), "\n", 2)[0])
@@ -358,6 +402,22 @@ func AgentBinary(name string) error {
 
 // isShell reports whether a definition's first word is a shell rather than
 // the agent itself, so its --version is not mistaken for the seat's.
+// afterEnv is argv without a leading `env` and the NAME=value assignments
+// after it: the command env runs. argv unchanged when it does not start
+// with env. An env option (`env -i …`) is left in place, so a definition
+// using one is probed by that word and names no CLI version rather than a
+// guessed one.
+func afterEnv(argv []string) []string {
+	if len(argv) == 0 || filepath.Base(argv[0]) != "env" {
+		return argv
+	}
+	i := 1
+	for i < len(argv) && strings.Contains(argv[i], "=") && !strings.HasPrefix(argv[i], "-") {
+		i++
+	}
+	return argv[i:]
+}
+
 func isShell(prog string) bool {
 	switch filepath.Base(prog) {
 	case "sh", "bash", "zsh", "dash", "ksh", "fish":

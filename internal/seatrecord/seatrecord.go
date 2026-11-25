@@ -36,7 +36,7 @@ const ResolvedOnly = "NOT COALESCE(" + UnresolvedColumn + ", false)"
 // builtinAgents keys, held equal by agentbackend's
 // TestSeatrecordKnowsEveryBuiltinAgent). Only the names live here: an older
 // record carries no tool, and its first word is all that says an agent sat.
-var builtinAgents = map[string]bool{"claude-code": true, "codex": true, "antigravity": true}
+var builtinAgents = map[string]bool{"claude-code": true, "codex": true, "antigravity": true, "copilot": true}
 
 // BuiltinAgentNames lists builtinAgents, for the parity test.
 func BuiltinAgentNames() []string {

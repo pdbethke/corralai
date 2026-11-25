@@ -151,6 +151,36 @@ func TestAgentVersionOfAShellWrappedDefinitionNamesTheDefinitionNotTheShell(t *t
 	}
 }
 
+// The version on the record is the CLI's, never a wrapper's: a definition
+// that sets a variable with `env NAME=value cli …` is probed as `cli`, a
+// built-in as its declared binary (copilot's definition starts with env,
+// and antigravity's with sh), and a shell-wrapped operator definition, whose
+// CLI cannot be found from its first word, names its definition alone. The
+// built-in copilot recorded `env (uutils coreutils) 0.10.0` as its version
+// until this (2026-11-25).
+func TestAgentVersionNamesTheCLINotItsWrapper(t *testing.T) {
+	bin := t.TempDir()
+	writeExec(t, filepath.Join(bin, "fakecli"), "#!/bin/sh\necho fakecli 9.9.9\n")
+	writeExec(t, filepath.Join(bin, "copilot"), "#!/bin/sh\necho GitHub Copilot CLI 1.2.3.\n")
+	writeExec(t, filepath.Join(bin, "agy"), "#!/bin/sh\necho agy 4.5.6\n")
+	writeExec(t, filepath.Join(bin, "env"), "#!/bin/sh\necho WRONG: the env wrapper was probed\n")
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("CORRALAI_AGENT_ENVWRAPPED", "env FOO=1 BAR={dir}/x fakecli -s {model:--model}")
+	if got, want := AgentVersion("envwrapped"), "fakecli 9.9.9 [env FOO=1 BAR={dir}/x fakecli -s {model:--model}]"; got != want {
+		t.Errorf("operator env-wrapped: got %q, want %q", got, want)
+	}
+	if got, want := AgentVersion("copilot"), "GitHub Copilot CLI 1.2.3."; got != want {
+		t.Errorf("built-in copilot: got %q, want %q", got, want)
+	}
+	if got, want := AgentVersion("antigravity"), "agy 4.5.6"; got != want {
+		t.Errorf("built-in antigravity: got %q, want %q", got, want)
+	}
+	t.Setenv("CORRALAI_AGENT_ENVSHELL", "env FOO=1 sh -c 'fakecli'")
+	if got, want := AgentVersion("envshell"), "[env FOO=1 sh -c 'fakecli']"; got != want {
+		t.Errorf("env then a shell: got %q, want %q", got, want)
+	}
+}
+
 func TestAgentSeatNamesNoAPIModel(t *testing.T) {
 	if _, _, ok := AgentSeat("gemini-3.6-flash"); ok {
 		t.Error("a provider model name is not an agentic seat")
@@ -240,7 +270,7 @@ func TestForSeatRefusesAnAgentWhoseBinaryIsMissing(t *testing.T) {
 	}
 	// A built-in is checked by its real binary, a shell-wrapped one included.
 	t.Setenv("PATH", t.TempDir())
-	for name, bin := range map[string]string{"codex": "codex", "claude-code": "claude", "antigravity": "agy"} {
+	for name, bin := range map[string]string{"codex": "codex", "claude-code": "claude", "antigravity": "agy", "copilot:mai-code-2-flash": "copilot"} {
 		_, err := ForSeat(name, SeatOptions{})
 		if err == nil || !errors.Is(err, ErrSeatEnvironment) || !strings.Contains(err.Error(), `"`+bin+`"`) {
 			t.Errorf("%s: want a refusal naming binary %q, got %v", name, bin, err)
@@ -352,5 +382,22 @@ func TestAntigravitySkipsPermissionsOnlyWhenToolsAreGranted(t *testing.T) {
 		if !strings.Contains(m.Content, "-p=brief") {
 			t.Errorf("the brief must still reach agy as -p: %q", m.Content)
 		}
+	}
+}
+
+// copilot routes among several vendors' models, so it names no maker and
+// requires a pin instead: a bare `copilot` seat is refused when it is built,
+// before anything runs, naming the form to use, and a pinned one is built.
+func TestCopilotRequiresAPin(t *testing.T) {
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "copilot"), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil { // #nosec G306 -- a test stub
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if _, err := ForSeat("copilot", SeatOptions{}); err == nil || !strings.Contains(err.Error(), "copilot:<model>") {
+		t.Fatalf("an unpinned copilot seat must be refused naming copilot:<model>, got %v", err)
+	}
+	if _, err := ForSeat("copilot:mai-code-2-flash", SeatOptions{}); err != nil {
+		t.Fatalf("a pinned copilot seat must be built: %v", err)
 	}
 }

@@ -43,7 +43,8 @@ corral demo --writer-model codex --mutant-model codex --critic-model claude-code
 ```
 
 **Any seat can be a coding-agent CLI instead of an API model.** `claude-code`
-and `codex` come defined (`antigravity` too, unmeasured), and you can define
+and `codex` come defined (`antigravity` too, unmeasured, and `copilot`, GitHub
+Copilot's CLI, pinned as `copilot:<model>`), and you can define
 your own as `CORRALAI_AGENT_<NAME>`. The agent brings its own login, so on a
 Claude or ChatGPT subscription a seat has no per-token API bill. The second
 command above was run with no API key in the environment: 6 of 6 survivors
@@ -1113,7 +1114,7 @@ withheld unless `--push-source` — to a warehouse or MotherDuck, where the
 seats rank across every repository that pushes. A seat can be a coding
 agent — any agent you assign: `--reviewer-model <name>`, pinned to a model
 as `<name>:<model>`, where a name is a command line you define as
-`CORRALAI_AGENT_<NAME>="…"` (`claude-code`, `codex` and `antigravity` come defined; see [docs/corral/agent-seats.md](docs/corral/agent-seats.md)) —
+`CORRALAI_AGENT_<NAME>="…"` (`claude-code`, `codex`, `antigravity` and `copilot` come defined, `copilot` not yet run in review; see [docs/corral/agent-seats.md](docs/corral/agent-seats.md)) —
 started in a throwaway worktree with the brief on stdin; it reads the
 tree itself and hands back scripts, and only corral's run of them is the
 record. `corral review plan` is

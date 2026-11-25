@@ -12,7 +12,9 @@ import (
 // stdout (FileRecordHook). Measured on jest 30.5.2
 // (capture-runner-fixtures.sh jest-hook-*.txt): the exit code is unchanged
 // on a failing run and a passing one, and jest prints what it printed
-// without the flags plus one line, `Test results written to: <file>`. The
+// without the flags plus one line, `Test results written to: <file>`, on
+// stdout and stderr together: --json moves jest-cli's own messages from
+// stdout to stderr, so either stream alone differs. The
 // JSON is written whatever reporters run, and the record's ids are the ones
 // the printed `●` headings give (jestRecordedFailures).
 //
@@ -34,7 +36,7 @@ var jestRecordHook = func() *ReportHook {
 		recordJestJSON,
 		"corral runs every graded run through `sh -c` and adds `--json --outputFile=<a temporary file>` after jest's options, "+
 			"and reads which test failed from that JSON record, jest's own account of the run, by the titles the printed `●` headings give (a title holding ` › ` whole); "+
-			"the exit code is unchanged, and so is what jest prints but for one more line, `Test results written to: <that file>`. "+
+			"the exit code is unchanged, and so is what jest prints, on stdout and stderr together (`--json` moves jest's own messages to stderr), but for one more line, `Test results written to: <that file>`. "+
 			"A command naming `--json` or `--outputFile` of its own is not wrapped",
 	)
 	h.Wraps = jestRecordWraps

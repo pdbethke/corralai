@@ -507,14 +507,14 @@ func phpunitDeselectCmd(argv, ids []string) ([]string, bool) {
 // (goFailedTests), placed where go test's options end (goTestOptionsEnd,
 // the rule fail-fast uses): after -args it would be the test binary's, which
 // refuses it as a flag it does not define (go 1.26.11). Only go's own words
-// are searched for an operator's -run or -skip; one after -args is the
-// binary's.
+// are searched for an operator's -run or -skip, in every spelling go reads
+// (goRunFlags, goSkipFlags); one after -args is the binary's.
 func goDeselectCmd(argv, ids []string) ([]string, bool) {
 	if len(ids) == 0 || !goTestCmd(argv) {
 		return nil, false
 	}
 	end := goTestOptionsEnd(argv, goTestAt(argv))
-	if hasFlag(argv[:end], "-run", "-skip", "--run", "--skip") {
+	if hasFlag(argv[:end], append(slices.Clone(goRunFlags), goSkipFlags...)...) {
 		return nil, false
 	}
 	return slices.Insert(slices.Clone(argv), end, "-skip", "^(?:"+alternation(ids, regexp.QuoteMeta)+")$"), true

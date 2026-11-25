@@ -582,13 +582,24 @@ package reposcan
 // (--log-junit, lang.phpunitRecordHook), and the killing test is read from
 // it, so a project whose phpunit.xml sets testdox="true", where "54" read no
 // killing test from the printed lines, now names one, and that kill can be
-// confirmed by the test alone. Also in "55": every `swift test` run corral
+// confirmed by the test alone. A PHPUnit killed_by can also change where
+// the two sources disagree: an error the record leaves out (a throwing
+// setUpBeforeClass or data provider, printed only) is now named after every
+// id the record gives, where "54" read the printed lines in their order, and
+// under --reverse-list, where PHPUnit prints each section in reverse and the
+// record does not change, the first named error is the record's first, not
+// the first printed (PHPUnit 11.5.57). Also in "55": every `swift test` run corral
 // can rewrite writes swift-testing's JUnit record (--xunit-output,
 // lang.swiftRecordHook), and a swift-testing killing test is read from it
 // by the id `swift test list` prints (`CalcTests.Arithmetic/adds()`) where
 // "54" recorded the bare name the printed line gives (`adds()`, or a
-// display name), so a recorded Swift killed_by changes form; an XCTest one
-// does not. Also in "55": every `node --test` run corral can rewrite writes
+// display name), so a recorded Swift killed_by changes form. An XCTest
+// killing test keeps its form (Class.method, read from the printed line, as
+// XCTest writes no record), but which test is named first changes on a run
+// where both frameworks fail: "54" named the XCTest test, printed first
+// (AdderTests.testFails), and "55" names the record's swift-testing test,
+// which comes first (Swift 6.3.2 and 6.4.2, swift-hook-fail-*.txt). Also in
+// "55": every `node --test` run corral can rewrite writes
 // node's JUnit record (lang.nodeRecordHook) and the killing test is read
 // from it, by the same id the printed TAP gave, so a node killed_by keeps
 // its form; a todo test that fails, which node does not fail the run for
@@ -619,7 +630,12 @@ package reposcan
 // subtest's output, the subtest where its parent's heading came first), can
 // now name the test whose heading it was; on a line where a test printed a
 // heading of its own, the name is go's heading that ends it; a t.Log or
-// t.Error line ending in that shape still names nothing. Behaviour bump;
+// t.Error line ending in that shape still names nothing. And go test's
+// killer command (lang.goKillerCmd) now declines a command that filters by
+// name in any spelling go reads (`-test.run=X`, `--run=X`), among go's own
+// words, where "54" built a killer the operator's later filter overrode, so
+// such a kill is now confirmed by repeating the run; a `-run` after -args no
+// longer declines it. Behaviour bump;
 // the shape is unchanged.
 const VerdictGeneration = "55"
 

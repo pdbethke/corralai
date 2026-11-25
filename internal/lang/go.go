@@ -609,6 +609,10 @@ var goLogLine = regexp.MustCompile(`^\S+\.go:[0-9]+: `)
 // printed itself (fmt.Print, not t.Log) that starts with `--- FAIL: `, or
 // that ends in go's heading shape, names the test it spells, whether or not
 // the test failed. The printed lines cannot tell such a line from go's.
+// And the converse, a failure go did report that is not read: a test that
+// printed, with fmt.Print and no final newline, text starting with go's
+// t.Log prefix (`f_test.go:9: `) has go's real heading follow it on that
+// line, which goLogLine takes for a t.Log line, so it names nothing.
 func goFailHeading(line string) (string, bool) {
 	line = strings.TrimSpace(line)
 	if !goLogLine.MatchString(line) {
@@ -718,12 +722,26 @@ func (goPlugin) CoverageCounts(stdout, modulePath string) (map[string]LineCounts
 	return counts, nil
 }
 
+// goRunFlags and goSkipFlags are every spelling go test reads its name
+// filters in: a single or double dash, with or without the `test.` prefix
+// (each run on go 1.26.7; hasFlag also takes the `=value` forms).
+var (
+	goRunFlags  = []string{"-run", "--run", "-test.run", "--test.run"}
+	goSkipFlags = []string{"-skip", "--skip", "-test.skip", "--test.skip"}
+)
+
 // goKillerCmd is argv with `-run` for the one test the failing run named,
 // inserted right after the `test` word. Each `/`-separated part is anchored
 // on its own (`TestX/sub` is `^TestX$/^sub$`), because go test matches a
 // subtest pattern level by level.
+//
+// It declines a command that already filters by name among go's own words
+// (goRunFlags, before goTestOptionsEnd): go takes the last -run given, so an
+// operator's later `-test.run=X` would replace the killer's (go 1.26.7: `-run
+// '^TestB$' -test.run=TestA` ran TestA). A -run after -args is the test
+// binary's word and filters nothing, so it does not decline.
 func goKillerCmd(argv []string, id string) ([]string, bool) {
-	if id == "" || !narrowable(argv, "-run") || !goTestCmd(argv) {
+	if id == "" || !goTestCmd(argv) || hasFlag(argv[:goTestOptionsEnd(argv, goTestAt(argv))], goRunFlags...) {
 		return nil, false
 	}
 	parts := strings.Split(id, "/")

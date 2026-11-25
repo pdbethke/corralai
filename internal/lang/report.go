@@ -125,7 +125,8 @@ func reportCmd(p Plugin, inv Invocation, cmd []string) (out []string, flagged, h
 // the index of the runner's own `--` after that word, or len(cmd). Every word
 // after that separator is the runner's positional argument (pytest's paths)
 // or the test binary's (cargo's libtest), so a flag meant for the runner goes
-// before it. The one placement rule ReportCmd and FailFastCmd share.
+// before it. A row with no OptionsEnd of its own is placed by it
+// (optionsEnd, the one placement rule ReportCmd and FailFastCmd share).
 func runnerOptionsEnd(cmd []string, at int) int {
 	if i := slices.Index(cmd[at+1:], "--"); i >= 0 {
 		return at + 1 + i

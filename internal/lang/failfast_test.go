@@ -336,3 +336,54 @@ func TestGoDeselectBeforeArgsRuns(t *testing.T) {
 		t.Errorf("%q: exit 0, want the test binary to refuse -skip (the negative control)", appended)
 	}
 }
+
+// go test reads its name filter in every spelling it accepts (-run, --run,
+// -test.run, --test.run, each with = or a separate word; the same for
+// -skip), and the last one given wins (go 1.26.7: `-run '^TestB$'
+// -test.run=TestA` ran TestA). So the killer, which inserts its own -run
+// before the operator's words, declines a command that already filters by
+// name in any spelling, among go's own words; one after -args is the test
+// binary's and does not filter (the killer is built). goDeselectCmd's -skip
+// declines the same spellings of -run and -skip.
+func TestGoNarrowingDeclinesEverySpellingOfANameFilter(t *testing.T) {
+	for _, f := range []string{"-run=X", "--run=X", "-test.run=X", "--test.run=X", "-run", "--test.run"} {
+		argv := []string{"go", "test", f, "./..."}
+		if f == "-run" || f == "--test.run" {
+			argv = []string{"go", "test", f, "X", "./..."}
+		}
+		if got, ok := goKillerCmd(argv, "TestA"); ok {
+			t.Errorf("goKillerCmd(%q) = %q, want it declined", argv, got)
+		}
+		if got, ok := goDeselectCmd(argv, []string{"TestA"}); ok {
+			t.Errorf("goDeselectCmd(%q) = %q, want it declined", argv, got)
+		}
+	}
+	for _, f := range []string{"-skip=X", "--skip=X", "-test.skip=X", "--test.skip=X"} {
+		argv := []string{"go", "test", f, "./..."}
+		if got, ok := goDeselectCmd(argv, []string{"TestA"}); ok {
+			t.Errorf("goDeselectCmd(%q) = %q, want it declined", argv, got)
+		}
+	}
+	for _, f := range []string{"-run=X", "-test.run=X", "--run=X"} {
+		argv := []string{"go", "test", "./...", "-args", f}
+		got, ok := goKillerCmd(argv, "TestA")
+		if want := []string{"go", "test", "-run", "^TestA$", "./...", "-args", f}; !ok || !slices.Equal(got, want) {
+			t.Errorf("goKillerCmd(%q) = %q, %v, want %q: a -run after -args is the binary's", argv, got, ok, want)
+		}
+		if _, ok := goDeselectCmd(argv, []string{"TestA"}); !ok {
+			t.Errorf("goDeselectCmd(%q) declined over a word after -args", argv)
+		}
+	}
+}
+
+// The limit goFailHeading's doc states, pinned: a test that printed text
+// starting with go's t.Log prefix, with no final newline, has go's real
+// heading follow on that line, and the line names nothing.
+func TestGoFailHeadingAfterALogShapedPrintNamesNothing(t *testing.T) {
+	if name, ok := goFailHeading("f_test.go:9: printed by fmt--- FAIL: TestX (0.00s)"); ok {
+		t.Errorf("goFailHeading named %q; the doc says this line names nothing", name)
+	}
+	if name, ok := goFailHeading("printed by fmt--- FAIL: TestX (0.00s)"); !ok || name != "TestX" {
+		t.Errorf("goFailHeading = %q, %v, want TestX (the control: no t.Log prefix)", name, ok)
+	}
+}

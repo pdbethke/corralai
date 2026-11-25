@@ -26,8 +26,9 @@ import (
 const recordToken = "__CORRAL_RECORD__"
 
 // recordArgv0 is the $0 the record wrapper's script runs under: the word
-// after the script, before the record's format, fallback and suffixes and
-// the operator's command.
+// after the script, before its five positional parameters (the record's
+// format, the fallback, the suffixes, and the companion file's suffix and
+// text, RecordFile.Companion) and the operator's command.
 const recordArgv0 = "corral-record"
 
 // The marker lines around a runner's record of its run, printed by
@@ -251,7 +252,8 @@ exit "$__corral_rc"
 // FileRecordHook is the ReportHook of a runner that writes its own record
 // of the run to a file named on its command line. args returns the words to
 // insert, carrying recordToken where the path goes; they are inserted at
-// runnerOptionsEnd (ReportCmd's placement rule). format names the record's
+// optionsEnd (ReportCmd's placement rule: the row's OptionsEnd, or
+// runnerOptionsEnd). format names the record's
 // format for its reader ("junit", "jest-json", "rspec-json").
 //
 // Such a runner needs no plugin, and its record is the runner's own account

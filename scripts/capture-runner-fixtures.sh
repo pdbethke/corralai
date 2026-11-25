@@ -933,12 +933,28 @@ want nextest-wrote-store-hooked "ours mystore/ mystore/default/" "$(nextest_wrot
 want nextest-wrote-absolute-flagged "no-record target/nextest/ target/nextest/default/ theirs-abs.xml" "$(nextest_wrote absolute cargo nextest run "${NFLAGS[@]}")"
 want nextest-wrote-absolute-hooked "no-record target/nextest/ target/nextest/default/ theirs-abs.xml" "$(nextest_wrote absolute "${NEXTESTOF[@]}")"
 # The project's own report is the same with and without the hook, the run id and
-# clocks aside.
-nextest_theirs() { # nextest_theirs <cmd...>: the theirs shape's report after a run, without run id and clocks
-  nextest_wrote theirs "$@" >/dev/null
-  sed -e 's/ uuid="[^"]*"//' -e 's/ timestamp="[^"]*"//g' -e 's/ time="[^"]*"//g' report/nextest-junit/target/nextest/default/theirs.xml
+# clocks aside, in every shape above that writes one: the default profile, a
+# profile chosen with -P or NEXTEST_PROFILE, an operator's --config-file, and an
+# absolute path. Each pair runs with -j 1, so the testcases are in one order.
+nextest_theirs() { # nextest_theirs <config> <report> <cmd...>: the project's report after a run, without run id and clocks
+  local cfg="$1" rep="$2"; shift 2
+  nextest_wrote "$cfg" "$@" >/dev/null
+  sed -e 's/ uuid="[^"]*"//' -e 's/ timestamp="[^"]*"//g' -e 's/ time="[^"]*"//g' "report/nextest-junit/$rep"
 }
-want nextest-theirs-same-content same "$([ "$(nextest_theirs cargo nextest run -j 1 "${NFLAGS[@]}")" = "$(nextest_theirs "${NEXTESTHOOK[@]}")" ] && echo same || echo differs)"
+nextest_same() { # nextest_same <config> <report> <flagged cmd> -- <hooked cmd>: same|differs
+  local cfg="$1" rep="$2"; shift 2
+  local flagged=() a
+  while [ "$1" != -- ]; do flagged+=("$1"); shift; done; shift
+  a="$(nextest_theirs "$cfg" "$rep" "${flagged[@]}")"
+  if [ -n "$a" ] && [ "$a" = "$(nextest_theirs "$cfg" "$rep" "$@")" ]; then echo same; else echo differs; fi
+}
+reporthook NEXTESTHOOKP rust cargo nextest run -j 1 -P ci
+reporthook NEXTESTHOOKC rust cargo nextest run -j 1 --config-file configs/other.toml
+want nextest-theirs-same-content same "$(nextest_same theirs target/nextest/default/theirs.xml cargo nextest run -j 1 "${NFLAGS[@]}" -- "${NEXTESTHOOK[@]}")"
+want nextest-profile-same-content same "$(nextest_same profile target/nextest/ci/theirs.xml cargo nextest run -j 1 -P ci "${NFLAGS[@]}" -- "${NEXTESTHOOKP[@]}")"
+want nextest-profile-env-same-content same "$(export NEXTEST_PROFILE=ci; nextest_same profile target/nextest/ci/theirs.xml cargo nextest run -j 1 "${NFLAGS[@]}" -- "${NEXTESTHOOK[@]}")"
+want nextest-config-file-same-content same "$(nextest_same theirs target/nextest/default/other.xml cargo nextest run -j 1 --config-file configs/other.toml "${NFLAGS[@]}" -- "${NEXTESTHOOKC[@]}")"
+want nextest-absolute-same-content same "$(nextest_same absolute theirs-abs.xml cargo nextest run -j 1 "${NFLAGS[@]}" -- "${NEXTESTHOOK[@]}")"
 # Why cargo test has no failure hook (its row's Note): libtest writes a record
 # only in its json and junit formats, which stable refuses, and its --logfile,
 # which every test binary of a run rewrites, so it holds the last binary's

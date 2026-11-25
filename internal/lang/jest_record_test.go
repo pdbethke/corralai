@@ -93,7 +93,8 @@ func TestRunDisclosuresSayWhenTheJestHookWraps(t *testing.T) {
 	const hook = "jest: corral runs every graded run through `sh -c` and adds `--json --outputFile=<a temporary file>`"
 	got := RunDisclosures(p, t.TempDir(), Cmd([]string{"npx", "jest", "a.test.ts"}))
 	if !slices.ContainsFunc(got, func(l string) bool {
-		return strings.HasPrefix(l, hook) && strings.Contains(l, "`Test results written to: <that file>`")
+		return strings.HasPrefix(l, hook) && strings.Contains(l, "`Test results written to: <that file>`") &&
+			strings.Contains(l, "on stdout and stderr together")
 	}) {
 		t.Errorf("RunDisclosures = %q, want the hook's sentence", got)
 	}

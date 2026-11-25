@@ -58,11 +58,13 @@ func phpunitSingleCmd(argv []string, testPath, id string) ([]string, bool) {
 	return append(cmd, testPath), true
 }
 
-// phpunitKillerCmd narrows argv to the method id names (`Class::method`, as
-// PHPUnit's `N) Class::method` failure lines give it, phpFailures): every
-// data set of that method runs, since the failure line's data set is
-// dropped from the id, so the run is that one method. argv already scopes
-// the files.
+// phpunitKillerCmd narrows argv to the test id names, as phpFailures reads
+// it from PHPUnit's `N) Class::method` failure lines: `Class::method` runs
+// every data set of that method, and a data set's id (`Class::method with
+// data set "two"`, `... #2`, the printed arguments dropped: phpDataSetID)
+// runs that data set alone (measured on PHPUnit 11.5.57,
+// capture-runner-fixtures.sh "phpunit-killer-one-dataset"). argv already
+// scopes the files.
 func phpunitKillerCmd(argv []string, id string) ([]string, bool) {
 	class, method, ok := strings.Cut(id, "::")
 	if !ok || class == "" || method == "" || !narrowable(argv, "--filter") {

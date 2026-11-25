@@ -576,6 +576,9 @@ fails rspec-fail.txt $RSPEC fail/spec/f_spec.rb
 fails rspec-loadfail.txt $RSPEC fail/spec/broken_spec.rb
 fails minitest-fail.txt ruby fail/f_test.rb
 fails phpunit-fail.txt vendor/bin/phpunit fail/tests/FTest.php
+# Data sets whose printed argument suffix is not their position, with parentheses
+# and quotes in a name and in an argument: phpFailures drops the suffix.
+fails phpunit-datasets-fail.txt vendor/bin/phpunit fail/datasets/DTest.php
 (cd fail/cargo && cargo build --tests -q 2>/dev/null; fails cargo-test-fail.txt cargo test)
 (cd fail/cargo && fails cargo-nextest-fail.txt cargo nextest run)
 
@@ -613,6 +616,12 @@ want rspec-killer "1 example, 1 failure" "$($RSPEC fail/spec/f_spec.rb -E '\ACal
 want rspec-killer-nested "1 example, 1 failure" "$($RSPEC fail/spec/f_spec.rb -E '\AMyApp::Calc top level\z' 2>&1 | killed)"
 want phpunit-killer "Tests: 1, Assertions: 1, Failures: 1" "$(vendor/bin/phpunit fail/tests/FTest.php --filter '/(?:^|\\)FTest::testAdds(?: with data set .*)?$/' 2>&1 | killed)"
 want phpunit-killer-dataset "Tests: 2, Assertions: 2, Failures: 1" "$(vendor/bin/phpunit fail/tests/FTest.php --filter '/(?:^|\\)FTest::testData(?: with data set .*)?$/' 2>&1 | killed)"
+# A failing data set's id (phpFailures, the argument suffix dropped) runs that
+# data set alone. With the suffix kept, the filter selected nothing (PHPUnit
+# 11.5.57: "No tests executed!").
+want phpunit-killer-one-dataset "Tests: 1, Assertions: 1, Failures: 1" "$(vendor/bin/phpunit fail/tests/FTest.php --filter '/(?:^|\\)FTest::testData with data set "two"(?: with data set .*)?$/' 2>&1 | killed)"
+want phpunit-killer-one-dataset-parens "Tests: 1, Assertions: 1, Failures: 1" "$(vendor/bin/phpunit fail/datasets/DTest.php --filter '/(?:^|\\)DTest::testNamed with data set "x \(y\)"(?: with data set .*)?$/' 2>&1 | killed)"
+want phpunit-killer-one-dataset-unnamed "Tests: 1, Assertions: 1, Failures: 1" "$(vendor/bin/phpunit fail/datasets/DTest.php --filter '/(?:^|\\)DTest::testUnnamed with data set #2(?: with data set .*)?$/' 2>&1 | killed)"
 
 # Each skip command names the three failing tests; exactly the one passing test
 # must run, and pass.

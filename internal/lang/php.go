@@ -375,7 +375,8 @@ func (phpPlugin) WorkspaceRunEnv() (env []string, cleanup func()) { return nil, 
 // phpFailureID matches PHPUnit's numbered failure/error entry — "N) id" —
 // shared by both its "There was N failure(s):" and "There were N error(s):"
 // sections, which use the identical "N) Class::method" shape. The id is
-// everything after the first "N) " on the line, taken verbatim.
+// everything after the first "N) " on the line, with a data set's printed
+// arguments dropped (phpDataSetID).
 func phpFailureID(line string) (string, bool) {
 	line = strings.TrimSpace(line)
 	idx := strings.Index(line, ") ")
@@ -385,11 +386,58 @@ func phpFailureID(line string) (string, bool) {
 	if _, err := strconv.Atoi(line[:idx]); err != nil {
 		return "", false
 	}
-	id := strings.TrimSpace(line[idx+2:])
+	id := phpDataSetID(strings.TrimSpace(line[idx+2:]))
 	if id == "" {
 		return "", false
 	}
 	return id, true
+}
+
+// phpDataSetDelim is what PHPUnit puts between a test method and its data
+// set's name. A method name holds no space, so its first occurrence in an id
+// is PHPUnit's.
+const phpDataSetDelim = " with data set "
+
+// phpDataSetID is a printed PHPUnit id without the arguments PHPUnit prints
+// after a data set's name: `C::m with data set "two" (2)` is
+// `C::m with data set "two"`, and `C::m with data set #2 (9, 'z')` is
+// `C::m with data set #2`. An id with no data set is returned as it is.
+//
+// The parenthesised part is the data set's ARGUMENTS, exported and
+// shortened (PHPUnit 11.5.57's TestCase::dataSetAsStringWithData), not its
+// position: `"first" (7)` is the first data set. Kept, it made the id one
+// that no --filter selects (phpunitKillerCmd's filter ran no test), and one
+// PHPUnit's JUnit record never gives (its testcase name stops at the data
+// set's name). Without it, the id selects exactly that data set.
+//
+// The cut is by structure, since an argument's export can hold parentheses,
+// quotes and spaces: for an unnamed set, the suffix starts at the ` (` right
+// after `#<digits>`; for a named one, at the first `" (` after the opening
+// quote. A NAME holding `" (` is therefore cut short, and its killer filter
+// then selects no test, which is what every data-set filter did before this:
+// the kill falls back to repeating the run. An id whose shape is neither is
+// returned as it is.
+func phpDataSetID(id string) string {
+	i := strings.Index(id, phpDataSetDelim)
+	if i < 0 || !strings.HasSuffix(id, ")") {
+		return id
+	}
+	head, rest := id[:i+len(phpDataSetDelim)], id[i+len(phpDataSetDelim):]
+	switch {
+	case strings.HasPrefix(rest, "#"):
+		j := 1
+		for j < len(rest) && rest[j] >= '0' && rest[j] <= '9' {
+			j++
+		}
+		if j > 1 && strings.HasPrefix(rest[j:], " (") {
+			return head + rest[:j]
+		}
+	case strings.HasPrefix(rest, `"`):
+		if k := strings.Index(rest[1:], `" (`); k >= 0 {
+			return head + rest[:1+k+1]
+		}
+	}
+	return id
 }
 
 // phpFirstFailure names the first test PHPUnit's numbered failure/error section

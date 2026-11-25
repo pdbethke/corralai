@@ -569,7 +569,16 @@ package reposcan
 // recorded a critic that judged an empty file and found nothing). Behaviour
 // and shape bump, both in this one generation since neither has reached
 // main.
-const VerdictGeneration = "54"
+// "55" (2026-11-25): a PHPUnit data set's id loses the arguments PHPUnit
+// prints after its name (lang.phpDataSetID: `C::m with data set "two" (2)`
+// is `C::m with data set "two"`, `... #2 (9, 'z')` is `... #2`). The printed
+// arguments are the data set's exported values, not its position, and the
+// killer command built from an id carrying them selected no test (PHPUnit
+// 11.5.57: "No tests executed!"), so a data set's kill fell back to
+// repeating the run; now that data set is run alone and the kill can be
+// confirmed by the test itself. A recorded killed_by id for a data set
+// changes form. Behaviour bump; the shape is unchanged.
+const VerdictGeneration = "55"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

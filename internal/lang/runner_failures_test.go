@@ -23,7 +23,14 @@ func TestFailureParsersReadTheRealOutput(t *testing.T) {
 		{"node-spec-fail.txt", nodeFailures, []string{"Calc::adds (a+b)", "Calc::neg::adds", "top level"}},
 		{"rspec-fail.txt", rspecFailures, []string{"Calc adds (a+b)", "Calc neg adds", "MyApp::Calc top level"}},
 		{"minitest-fail.txt", minitestFailures, []string{"MyApp::NegTest#test_x", "CalcTest#test_adds", "CalcTest#test_boom"}},
-		{"phpunit-fail.txt", phpFailures, []string{"FTest::testBoom", "FTest::testAdds", `FTest::testData with data set "two" (2)`}},
+		{"phpunit-fail.txt", phpFailures, []string{"FTest::testBoom", "FTest::testAdds", `FTest::testData with data set "two"`}},
+		// A data set's id drops the arguments PHPUnit prints after its name
+		// (`"first" (7)`, `#2 (9, 'z (y) "q"')`), parentheses and quotes in
+		// a name or an argument included: it is the form --filter selects
+		// that one data set by, and the form PHPUnit's JUnit record gives.
+		{"phpunit-datasets-fail.txt", phpFailures, []string{
+			`DTest::testNamed with data set "first"`, `DTest::testNamed with data set "third"`, `DTest::testNamed with data set "x (y)"`,
+			"DTest::testUnnamed with data set #0", "DTest::testUnnamed with data set #2"}},
 		{"cargo-test-fail.txt", rustFailedTests, []string{"tests::a_fails", "tests::b_fails"}},
 		{"cargo-nextest-fail.txt", rustFailedTests, []string{"fail-cargo tests::a_fails", "fail-cargo tests::b_fails"}},
 	} {
@@ -207,7 +214,7 @@ func TestDeselectCmds(t *testing.T) {
 			[]string{"bundle", "exec", "rspec", "-E", `\A(?!(?:Calc adds \(a\+b\)|MyApp::Calc top level)\z)`}},
 		{"minitest", minitestDeselectCmd, []string{"ruby", "-Itest", "test/f_test.rb"}, []string{"CalcTest#test_adds", "MyApp::NegTest#test_x"},
 			[]string{"ruby", "-Itest", "test/f_test.rb", "--exclude", `/\A(?:CalcTest#test_adds|MyApp::NegTest#test_x)\z/`}},
-		{"phpunit", phpunitDeselectCmd, []string{"vendor/bin/phpunit"}, []string{"FTest::testBoom", `App\Tests\FTest::testAdds`, `FTest::testData with data set "two" (2)`},
+		{"phpunit", phpunitDeselectCmd, []string{"vendor/bin/phpunit"}, []string{"FTest::testBoom", `App\Tests\FTest::testAdds`, `FTest::testData with data set "two"`},
 			[]string{"vendor/bin/phpunit", "--exclude-filter", `/(?:^|\\)(?:FTest::testBoom|FTest::testAdds|FTest::testData)(?: with data set .*)?$/`}},
 		{"go", goDeselectCmd, []string{"go", "test", "./..."}, []string{"TestA", "TestB"},
 			[]string{"go", "test", "./...", "-skip", `^(?:TestA|TestB)$`}},

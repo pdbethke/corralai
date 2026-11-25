@@ -1192,7 +1192,8 @@ and reports and lets the step pass. The audit's own status wins when the
 audit failed.
 
 **Seats on a runner.** A seat may be an API model (its key through the
-`*-key` inputs) or an agent seat (`claude-code`, `codex`, `antigravity`, or
+`*-key` inputs) or an agent seat (`claude-code`, `codex`, `antigravity`,
+`copilot:<model>`, or
 one you define as `CORRALAI_AGENT_<NAME>` in the job's `env`; see
 [agent-seats.md](agent-seats.md)). An agent seat needs its CLI installed on
 the runner and a login. A GitHub-hosted runner has neither by default:

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -194,15 +195,21 @@ func TestWireArgs(t *testing.T) {
 	}
 }
 
-// Every built-in names a registered wire and a maker: the table is read by
-// name, so a typo would otherwise surface only when that seat first runs.
+// Every built-in names a registered wire, and either a maker or a required
+// pin: the table is read by name, so a typo would otherwise surface only when
+// that seat first runs. A built-in whose CLI routes among several vendors'
+// models (copilot) has no one maker that is true of it; it must then REQUIRE
+// a pin (a bare {model} word, which newAgentSeat refuses without one), so its
+// vendor always comes from the model it runs and never from a guess. Changed
+// 2026-11-25 (founder's choice) from "every built-in names a maker".
 func TestEveryBuiltinNamesARegisteredWire(t *testing.T) {
 	for name, b := range builtinAgents {
 		if _, ok := agentWires[b.wire]; !ok {
 			t.Errorf("%s: wire %q is not registered", name, b.wire)
 		}
-		if b.maker == "" {
-			t.Errorf("%s: no maker", name)
+		requiresPin := slices.Contains(strings.Fields(b.def), "{model}")
+		if b.maker == "" && !requiresPin {
+			t.Errorf("%s: no maker, and its definition does not require a pinned model", name)
 		}
 	}
 }
@@ -214,6 +221,11 @@ func TestBuiltinSeatDefinitionsCarryTheColdFlags(t *testing.T) {
 	for name, want := range map[string][]string{
 		"claude-code": {"--output-format json", `--setting-sources ""`, "--strict-mcp-config", "--disable-slash-commands", "--no-session-persistence", "--system-prompt", "{tools:--tools}"},
 		"codex":       {"--json", "--ignore-user-config", "--ignore-rules", "--sandbox read-only", "--ephemeral"},
+		// Each measured 2026-11-25 on Copilot CLI 1.0.115 (agentseat.go's
+		// comment on the entry): without them a planted AGENTS.md changed the
+		// reply and the operator's MCP servers loaded; with --available-tools
+		// empty its read tools still ran.
+		"copilot": {"COPILOT_HOME={dir}/", "--no-custom-instructions", "--disable-builtin-mcps", "--no-auto-update", "--available-tools=none", "-s"},
 	} {
 		def := builtinAgents[name].def
 		for _, w := range want {

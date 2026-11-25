@@ -1,7 +1,7 @@
 # Agent seats: run a seat on a coding-agent CLI
 
 Every model seat in corral can be a **coding-agent CLI** instead of an API
-model: `claude-code`, `codex` and `antigravity` come defined, and any other
+model: `claude-code`, `codex`, `antigravity` and `copilot` come defined, and any other
 agent you can start from a shell is defined by you (see "Define your own agent"
 below). One resolver, `agentbackend.ForSeat`, serves `certify --local`,
 `certify --repo`, `demo`, `doctor`, goal derivation (`--derive-model`), the
@@ -177,6 +177,69 @@ write to the pipe corral held, or at its own timeout. Run long audits under
 
 Up to 10 agent calls ran at once on one subscription with no limit hit. That
 was observed, not stress-tested. Default concurrency is unchanged.
+
+## GitHub Copilot (`copilot`)
+
+A Copilot subscription can run seats through GitHub Copilot's CLI, `copilot`.
+Install it and log in once (`copilot`, then `/login`); the seat uses that
+login and needs no API key. The login is not kept in the CLI's config
+directory: with that pointed at an empty directory and no token in the
+environment, the CLI still answered.
+
+```bash
+corral demo --mutant-model copilot:claude-sonnet-5.5 \
+  --writer-model copilot:claude-sonnet-5.5 --critic-model copilot:mai-code-2-flash
+```
+
+**It must be pinned.** `copilot` alone is refused before anything runs
+("agent copilot takes a model … pin one as copilot:<model>"). Unpinned, the
+CLI's own Auto routing picks the model (Microsoft's `mai-code-2-flash` for a
+short prompt), so corral could not say what sat in the seat or whose model
+it was. A pinned model's vendor is read from its name (`claude-…` is
+Anthropic); any other, `mai-code-2-flash` included, is recorded as an
+unknown vendor, and corral then says it could not compare the critic's
+vendor with the writer's.
+
+**Model names are Copilot's, not the vendors'.** Copilot spells versions with
+dots: `claude-sonnet-5.5`, not `claude-sonnet-5-5`. Which models a plan
+offers is the plan's. On one Copilot Pro account on 2026-11-25, these answered:
+`claude-sonnet-5.5`, `claude-haiku-5.5`, `claude-sonnet-5` and
+`mai-code-2-flash`, each one premium request per call as Copilot reported
+it, and `claude-opus-5.5` and `claude-fable-5.2`, fifteen each. A name the
+plan does not offer exits 1 with no reply, which corral reports as a failed
+seat, never as an answer. Mind the multiplier: the writer seat makes one call
+per survivor, so a fifteen-request model there spends fast.
+
+**It starts cold.** By default the CLI loads the operator's `~/.copilot`
+(their MCP servers, skills and plugins), GitHub's built-in MCP servers and an
+`AGENTS.md` in its working directory: with one planted there saying to end
+every reply with a word, the reply ended with that word. The built-in
+definition points `COPILOT_HOME` at a fresh directory inside the seat's
+working directory and passes `--no-custom-instructions` and
+`--disable-builtin-mcps`; with those, the planted file changed nothing and no
+MCP server loaded. `--no-auto-update` keeps the CLI version the record names.
+
+**It has no tools.** Copilot's read tools (`glob`, `view`) ran without asking
+even with an empty `--available-tools`, so the definition names a tool that
+does not exist (`--available-tools=none`), which leaves the model none. A
+certify seat needs none: its prompt carries the code. A model that reaches
+for a tool anyway prints the call as text instead of an answer (seen with a
+prompt that asked for one); in the certify runs below no seat did.
+`corral review`, whose seats read the tree with tools, has not been run on
+Copilot.
+
+**It is not metered.** It speaks the `text` wire, so its calls print
+`not metered` and a run with `--max-tokens` refuses the seat. Copilot's JSON
+output reports premium requests rather than tokens; corral does not read it
+yet.
+
+What ran, 2026-11-25, one workstation, GitHub Copilot CLI 1.0.115, no API key
+in the environment:
+
+| run | result |
+|---|---|
+| `corral demo --mutant-model copilot:claude-sonnet-5.5 --writer-model copilot:claude-sonnet-5.5 --critic-model copilot:mai-code-2-flash` | the dev suite killed 2 of 7 graded mutants (4 failed the compile check); 5 of 5 survivors were PROVED by an authored test; the critic judged both tests sound. 7 calls, all `not metered`. The verdict's models line read `copilot:claude-sonnet-5.5 [GitHub Copilot CLI 1.0.115.]`. |
+| the same with `--mutant-model copilot` | refused before any seat started (exit 2), naming `copilot:<model>`. |
 
 ## Define your own agent
 

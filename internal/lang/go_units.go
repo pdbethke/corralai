@@ -218,7 +218,11 @@ func goArgsMarker(a string) bool { return a == "-args" || a == "--args" }
 // `go test`, or after gotestsum's "--"): the index of the -args marker, or
 // len(args). The one rule for where corral puts a flag meant for go test:
 // the run cache's -count=1 (goGradingArgs) and the go-test row's OptionsEnd
-// (fail-fast's -failfast) both go there.
+// (fail-fast's -failfast) both go there. It does not end at a `--`, as
+// goTestOptionsEnd does, because the run cache refuses a command with a `--`
+// among go's own words as unreadable before it places anything (goRunsNoTest
+// reads it as a flag go test does not list), so a caller that may see a `--`
+// places through goTestOptionsEnd.
 func goOwnArgsEnd(args []string) int {
 	if i := slices.IndexFunc(args, goArgsMarker); i >= 0 {
 		return i

@@ -503,10 +503,18 @@ func phpunitDeselectCmd(argv, ids []string) ([]string, bool) {
 }
 
 // goDeselectCmd uses -skip (Go 1.20 or later) over top-level test names
-// (goFailedTests).
+// (goFailedTests), placed where go test's options end (goTestOptionsEnd,
+// the rule fail-fast uses): after -args it would be the test binary's, which
+// refuses it as a flag it does not define (go 1.26.11). Only go's own words
+// are searched for an operator's -run or -skip; one after -args is the
+// binary's.
 func goDeselectCmd(argv, ids []string) ([]string, bool) {
-	if len(ids) == 0 || !goTestCmd(argv) || hasFlag(argv, "-run", "-skip", "--run", "--skip") {
+	if len(ids) == 0 || !goTestCmd(argv) {
 		return nil, false
 	}
-	return append(slices.Clone(argv), "-skip", "^(?:"+alternation(ids, regexp.QuoteMeta)+")$"), true
+	end := goTestOptionsEnd(argv, goTestAt(argv))
+	if hasFlag(argv[:end], "-run", "-skip", "--run", "--skip") {
+		return nil, false
+	}
+	return slices.Insert(slices.Clone(argv), end, "-skip", "^(?:"+alternation(ids, regexp.QuoteMeta)+")$"), true
 }

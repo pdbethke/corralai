@@ -224,6 +224,13 @@ func TestDeselectCmds(t *testing.T) {
 			[]string{"vendor/bin/phpunit", "--exclude-filter", `/(?:^|\\)(?:FTest::testBoom|FTest::testAdds|FTest::testData)(?: with data set .*)?$/`}},
 		{"go", goDeselectCmd, []string{"go", "test", "./..."}, []string{"TestA", "TestB"},
 			[]string{"go", "test", "./...", "-skip", `^(?:TestA|TestB)$`}},
+		// After -args every word is the test binary's: -skip goes where go
+		// test's options end (goTestOptionsEnd), and a -skip of the binary's
+		// own is not the operator's filter (TestGoDeselectBeforeArgsRuns).
+		{"go -args", goDeselectCmd, []string{"go", "test", "./...", "-args", "-update"}, []string{"TestA"},
+			[]string{"go", "test", "./...", "-skip", `^(?:TestA)$`, "-args", "-update"}},
+		{"go --args", goDeselectCmd, []string{"go", "test", "./...", "--args", "-skip", "x"}, []string{"TestA"},
+			[]string{"go", "test", "./...", "-skip", `^(?:TestA)$`, "--args", "-skip", "x"}},
 	} {
 		if got, ok := c.cmd(c.argv, c.ids); !ok || !slices.Equal(got, c.want) {
 			t.Errorf("%s = %q, %v\n want %q", c.name, got, ok, c.want)
@@ -258,6 +265,7 @@ func TestDeselectCmdsRefuse(t *testing.T) {
 		{"minitest own -n", minitestDeselectCmd, []string{"ruby", "t.rb", "-n", "x"}},
 		{"phpunit own filter", phpunitDeselectCmd, []string{"phpunit", "--filter", "x"}},
 		{"go own -skip", goDeselectCmd, []string{"go", "test", "-skip", "X", "./..."}},
+		{"go own -run before -args", goDeselectCmd, []string{"go", "test", "-run", "X", "./...", "-args", "-update"}},
 		{"go not go test", goDeselectCmd, []string{"make", "test"}},
 	} {
 		if got, ok := c.cmd(c.argv, []string{"T::x"}); ok {

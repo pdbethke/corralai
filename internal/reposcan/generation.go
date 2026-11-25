@@ -618,7 +618,8 @@ package reposcan
 // killed_by that was empty, or named a later failing test (or, for a
 // subtest's output, the subtest where its parent's heading came first), can
 // now name the test whose heading it was; on a line where a test printed a
-// heading of its own, the name is go's heading that ends it. Behaviour bump;
+// heading of its own, the name is go's heading that ends it; a t.Log or
+// t.Error line ending in that shape still names nothing. Behaviour bump;
 // the shape is unchanged.
 const VerdictGeneration = "55"
 

@@ -143,6 +143,14 @@ func TestGoFirstFailure(t *testing.T) {
 		// Mid-line, only go's own shape counts: a name, a space and the
 		// elapsed time, ending the line.
 		{"mid-line text that is not a heading names nothing", "    f_test.go:9: want --- FAIL: TestX, got none\nFAIL\n", ""},
+		// A t.Log or t.Error line (`<file>.go:<line>: `) that ends in go's
+		// heading shape is the test's message, never go's heading: go
+		// prints its own after the message's newline.
+		{"a t.Log line ending in a heading names nothing", "    f_test.go:9: expected --- FAIL: TestX (0.00s)\nFAIL\n", ""},
+		{"a t.Error line of a subtest ending in a heading names nothing", "        sub_test.go:12: got --- FAIL: TestY/z (0.01s)\n", ""},
+		// A whole heading-shaped line a test printed itself is read as one:
+		// the printed lines cannot tell it from go's.
+		{"a heading-shaped line a test printed is still read", "--- FAIL: TestPrinted (0.00s)\n", "TestPrinted"},
 		{"the real capture names its first failing test", readFixture(t, "go-fail.txt"), "TestNoNewline"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

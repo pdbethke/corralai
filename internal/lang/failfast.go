@@ -129,7 +129,8 @@ func FailFastArgsFor(p Plugin, inv Invocation) ([]string, bool) {
 	}
 	// A shell behind a prefix (`env A=1 sh -c pytest`) is a wrapper too, by
 	// the rule ReportCmd uses: the flag would be the script's $1. A row
-	// detected without a word (go test) is checked over the whole command.
+	// detected without a word places its runner through At (go test's is
+	// `test`, goTestAt), and the words before it are checked.
 	if shellWrappedBefore(words, runnerWordIndex(words, r)) {
 		return nil, false
 	}

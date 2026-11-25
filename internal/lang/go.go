@@ -588,21 +588,33 @@ func goFirstFailure(output []byte) string {
 // (`(0.00s)`).
 var goFailMidLine = regexp.MustCompile(`--- FAIL: (\S+) \([0-9]+\.[0-9]+s\)$`)
 
+// goLogLine is the prefix go gives a t.Log or t.Error line,
+// `<file>.go:<line>: `, indented for a subtest.
+var goLogLine = regexp.MustCompile(`^\S+\.go:[0-9]+: `)
+
 // goFailHeading is the test a printed `--- FAIL:` line names, the one rule
 // goFirstFailure and goFailedTests share. go prints a heading right after
 // whatever the test itself wrote, so a test whose own output ends without a
 // newline puts the heading mid-line (`partial--- FAIL: TestX (0.00s)`; for a
 // subtest, the parent's heading follows the subtest's output), and a test
 // that printed a heading-shaped text of its own is followed by go's real one
-// on the same line (capture go-fail.txt, go 1.26.11). So the heading that
-// ENDS the line in go's shape is go's, wherever it starts; a line that only
-// starts with `--- FAIL: ` is read as before, the name up to its first space.
-// A heading-shaped text a test prints on a line of its own is still read as
-// one: the printed lines cannot tell it from go's.
+// on the same line (capture go-fail.txt, go 1.26.11). So a heading in go's
+// shape that ENDS a line is read wherever it starts, except on a t.Log or
+// t.Error line (goLogLine): go ends each of those with a newline before it
+// prints anything of its own, so a heading there is the test's message. A
+// line that starts with `--- FAIL: ` is read as before, the name up to its
+// first space.
+//
+// What is still read as a failure that go did not report: a line a test
+// printed itself (fmt.Print, not t.Log) that starts with `--- FAIL: `, or
+// that ends in go's heading shape, names the test it spells, whether or not
+// the test failed. The printed lines cannot tell such a line from go's.
 func goFailHeading(line string) (string, bool) {
 	line = strings.TrimSpace(line)
-	if m := goFailMidLine.FindStringSubmatch(line); m != nil {
-		return m[1], true
+	if !goLogLine.MatchString(line) {
+		if m := goFailMidLine.FindStringSubmatch(line); m != nil {
+			return m[1], true
+		}
 	}
 	rest, ok := strings.CutPrefix(line, "--- FAIL: ")
 	if !ok {

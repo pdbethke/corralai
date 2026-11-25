@@ -285,3 +285,54 @@ func goTestRow(t *testing.T) Runner {
 	t.Fatal("no go-test row")
 	return Runner{}
 }
+
+// goDeselectCmd's -skip lands before -args, measured on a real go run: the
+// salvage rerun of a suite whose test defines a flag of its own stays green,
+// where -skip appended after -args would reach the test binary's own flag
+// parser.
+func TestGoDeselectBeforeArgsRuns(t *testing.T) {
+	goBin, err := exec.LookPath("go")
+	if err != nil {
+		t.Skip("SKIP: no go on PATH")
+	}
+	dir := t.TempDir()
+	for name, body := range map[string]string{
+		"go.mod": "module example.com/skipfixture\n\ngo 1.26\n",
+		"p_test.go": "package p\n\nimport (\n\t\"flag\"\n\t\"testing\"\n)\n\n" +
+			"var update = flag.Bool(\"update\", false, \"rewrite golden files\")\n\n" +
+			"func TestPasses(t *testing.T) { _ = *update }\n\nfunc TestFails(t *testing.T) { t.Fail() }\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run := func(argv []string) (int, string) {
+		c := exec.Command(goBin, argv[1:]...) // #nosec G204 -- go from PATH, words built by this test
+		c.Dir = dir
+		c.Env = append(os.Environ(), "GOTOOLCHAIN=local", "GOFLAGS=")
+		out, err := c.CombinedOutput()
+		if ee, ok := err.(*exec.ExitError); ok {
+			return ee.ExitCode(), string(out)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		return 0, string(out)
+	}
+	operator := []string{"go", "test", "-count=1", ".", "-args", "-update"}
+	code, out := run(operator)
+	if code == 0 {
+		t.Fatalf("the operator's command should fail on TestFails:\n%s", out)
+	}
+	skip, ok := goDeselectCmd(operator, goFailedTests(out))
+	if !ok {
+		t.Fatalf("no skip command for %q", operator)
+	}
+	if code, out := run(skip); code != 0 {
+		t.Errorf("%q: exit %d, want 0 (TestFails skipped, TestPasses run):\n%s", skip, code, out)
+	}
+	appended := append(slices.Clone(operator), "-skip", "^(?:TestFails)$")
+	if code, _ := run(appended); code == 0 {
+		t.Errorf("%q: exit 0, want the test binary to refuse -skip (the negative control)", appended)
+	}
+}

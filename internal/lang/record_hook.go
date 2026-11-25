@@ -4,6 +4,7 @@ package lang
 
 import (
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -11,9 +12,10 @@ import (
 )
 
 // recordToken is the placeholder a row's record args carry for the record
-// file's path; the wrapper substitutes the real path (or /dev/null when it
-// cannot make a temporary directory, so the run is never changed by a
-// hook that could not be set up).
+// file's path; the wrapper substitutes the real path. When it cannot make a
+// temporary directory it substitutes /dev/null, or, for a RecordFile with
+// DropWhenUnset, leaves the hook's words out, so the run is never changed by
+// a hook that could not be set up.
 //
 // It is a placeholder rather than a path corral picks in Go because the path
 // must exist where the command RUNS: inside a jail that is the jail's own
@@ -24,7 +26,8 @@ import (
 const recordToken = "__CORRAL_RECORD__"
 
 // recordArgv0 is the $0 the record wrapper's script runs under: the word
-// after the script, before the record's format and the operator's command.
+// after the script, before the record's format, fallback and suffixes and
+// the operator's command.
 const recordArgv0 = "corral-record"
 
 // The marker lines around a runner's record of its run, printed by
@@ -61,8 +64,8 @@ const (
 // recordScript is the wrapper a graded run of a record-file runner goes
 // through. Like pyReportScript it holds only corral's own text: its first
 // three positional parameters are corral's constants (the record's format,
-// the fallback, `null` or `drop`, and the record's suffixes joined by "/",
-// RecordFile), the rest is the command, run as `"$@"` and never spliced into
+// the fallback, `null` or `drop:<from>:<n>`, and the record's suffixes
+// joined by "/", RecordFile), the rest is the command, run as `"$@"` and never spliced into
 // the script, so the shell never re-reads a word of it.
 //
 // The token is replaced word by word with the `for a do shift; …; set --
@@ -87,10 +90,10 @@ const (
 //     they were before this hook existed. /dev/null and not the token's
 //     removal, because removing words would leave a flag with no argument
 //     (`--log-junit` would take the next word as its file). A hook whose
-//     RecordFile says DropWhenUnset instead leaves every word carrying the
-//     token out of the command, which then is the operator's own: its runner
-//     derives a file name from the path, and a name beside /dev/null is one
-//     it may not write (see RecordFile).
+//     RecordFile says DropWhenUnset instead leaves every word it added out
+//     of the command (the `drop:<from>:<n>` fallback word says which), which
+//     then is the operator's own: its runner cannot be pointed at /dev/null
+//     (see RecordFile).
 //   - The block is printed only when a record file exists and is not empty,
 //     after a blank line (which keeps the begin marker on a line of its own
 //     when the runner's last line had no newline), after the command has
@@ -122,6 +125,14 @@ const recordScript = `__corral_fmt=$1
 __corral_fb=$2
 __corral_sfx=$3
 shift 3
+__corral_from=0 __corral_n=0 __corral_i=0
+case $__corral_fb in
+  drop:*:*)
+    __corral_from=${__corral_fb#drop:}
+    __corral_n=${__corral_from#*:}
+    __corral_from=${__corral_from%%:*}
+    __corral_fb=drop ;;
+esac
 if __corral_d=$(mktemp -d 2>/dev/null) && [ -n "$__corral_d" ]; then
   trap 'rm -rf "$__corral_d"' EXIT
   __corral_r="$__corral_d/corral-record"
@@ -136,10 +147,9 @@ else
 fi
 for __corral_a do
   shift
-  if [ -z "$__corral_d" ] && [ "$__corral_fb" = drop ]; then
-    case $__corral_a in
-      *` + recordToken + `*) continue ;;
-    esac
+  __corral_i=$((__corral_i + 1))
+  if [ -z "$__corral_d" ] && [ "$__corral_fb" = drop ] && [ "$__corral_i" -gt "$__corral_from" ] && [ "$__corral_i" -le $((__corral_from + __corral_n)) ]; then
+    continue
   fi
   __corral_b=
   while :; do
@@ -210,15 +220,21 @@ func FileRecordHook(args func() []string, format string, says string) *ReportHoo
 // name's tail: no "/" (the wrapper joins them with it), no space, and none
 // of the characters a shell pattern or quote gives meaning to.
 //
-// DropWhenUnset is for the same runners: a name derived from /dev/null is a
-// file beside it, which a runner may not write, and swift-testing 6.4.2 then
-// fails a run that passed ("error: invalid access to
-// /dev/null-swift-testing", exit 1), which the hook must never do. So the
-// wrapper leaves out every word carrying the token instead, and the command
-// is the operator's own. That is safe only when such a word is a whole
-// option, `--option=value`: dropping the token's word from `--option value`
-// would leave the option to take the operator's next word as its value, so
-// FileRecordHookAt refuses that.
+// DropWhenUnset is for a runner that cannot be pointed at /dev/null. A name
+// derived from /dev/null is a file beside it, which a runner may not write,
+// and swift-testing 6.4.2 then fails a run that passed ("error: invalid
+// access to /dev/null-swift-testing", exit 1); node --test fsyncs its
+// reporter's destination, which /dev/null refuses (node 22.23.5: "EINVAL:
+// invalid argument, fsync", exit 1 on a run that passed). The hook must
+// never change the exit code, so the wrapper instead leaves out every word
+// the hook added (its args, all of them, not only the one carrying the
+// token), and the command is the operator's own. All of them, because a
+// hook's words can depend on each other: node pairs each --test-reporter
+// with a --test-reporter-destination by position and refuses a run whose
+// counts differ, so leaving out the destination alone would leave its
+// reporter unpaired (ERR_INVALID_ARG_VALUE, measured on node 22.23.5).
+// Wrap finds the words where ReportCmd put them (the last run of them in
+// the command) and hands the wrapper their place.
 type RecordFile struct {
 	Suffixes      []string
 	DropWhenUnset bool
@@ -228,36 +244,48 @@ type RecordFile struct {
 var recordSuffix = regexp.MustCompile(`^[A-Za-z0-9._-]*$`)
 
 // FileRecordHookAt is FileRecordHook for a runner whose record's file, or
-// whose fallback, is not the zero RecordFile's. It panics on a RecordFile
-// it cannot keep (a suffix recordSuffix refuses, or DropWhenUnset with the
-// token in a word that is not `-…=…`): every caller is a row of the runner
-// table, built when the package loads, so a bad one fails every test.
+// whose fallback, is not the zero RecordFile's. It panics on a suffix
+// recordSuffix refuses: every caller is a row of the runner table, built
+// when the package loads, so a bad one fails every test.
+//
+// The wrapper's fallback word is `null`, or for DropWhenUnset
+// `drop:<from>:<n>`: the hook's n words start after the command's first
+// <from> words. A command that does not carry the hook's words (Wrap
+// called on its own, not through ReportCmd) is `drop:0:0`, which leaves
+// out nothing, so it runs as given.
 func FileRecordHookAt(args func() []string, format, says string, f RecordFile) *ReportHook {
 	for _, sfx := range f.Suffixes {
 		if !recordSuffix.MatchString(sfx) {
 			panic("lang: record suffix " + strconv.Quote(sfx) + " is not a file name's tail")
 		}
 	}
-	fallback := "null"
-	if f.DropWhenUnset {
-		fallback = "drop"
-		for _, w := range args() {
-			if !strings.Contains(w, recordToken) {
-				continue
-			}
-			if opt, _, ok := strings.Cut(w, "="); !ok || !strings.HasPrefix(w, "-") || strings.Contains(opt, recordToken) {
-				panic("lang: a record word dropped on fallback must be one --option=value word, not " + strconv.Quote(w))
-			}
-		}
-	}
 	suffixes := strings.Join(f.Suffixes, "/")
 	return &ReportHook{
 		Args: args,
 		Wrap: func(cmd []string) []string {
+			fallback := "null"
+			if f.DropWhenUnset {
+				from, n := hookWordsAt(cmd, args())
+				fallback = "drop:" + strconv.Itoa(from) + ":" + strconv.Itoa(n)
+			}
 			return append([]string{"sh", "-c", recordScript, recordArgv0, format, fallback, suffixes}, cmd...)
 		},
 		Says: says,
 	}
+}
+
+// hookWordsAt is where the last run of words sits in cmd, and its length;
+// 0, 0 when cmd does not carry them (or there are none).
+func hookWordsAt(cmd, words []string) (from, n int) {
+	if len(words) == 0 {
+		return 0, 0
+	}
+	for i := len(cmd) - len(words); i >= 0; i-- {
+		if slices.Equal(cmd[i:i+len(words)], words) {
+			return i, len(words)
+		}
+	}
+	return 0, 0
 }
 
 // RecordBlock is the last COMPLETE `corral-record-begin <format>` …

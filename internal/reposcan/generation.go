@@ -588,7 +588,14 @@ package reposcan
 // by the id `swift test list` prints (`CalcTests.Arithmetic/adds()`) where
 // "54" recorded the bare name the printed line gives (`adds()`, or a
 // display name), so a recorded Swift killed_by changes form; an XCTest one
-// does not. Behaviour bump; the shape is unchanged.
+// does not. Also in "55": every `node --test` run corral can rewrite writes
+// node's JUnit record (lang.nodeRecordHook) and the killing test is read
+// from it, by the same id the printed TAP gave, so a node killed_by keeps
+// its form; a todo test that fails, which node does not fail the run for
+// and the TAP reader used to name, is named by neither source, so a "54"
+// killed_by that named one names the test that failed. On node 23 and
+// later the printed report under the hook is TAP, not spec; the ids are
+// the same. Behaviour bump; the shape is unchanged.
 const VerdictGeneration = "55"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every

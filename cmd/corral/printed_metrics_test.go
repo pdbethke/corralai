@@ -703,6 +703,7 @@ var printedMetrics = map[string]printedRow{
 	"internal/lang/python.go:CoverageCounts":                             {Exempt: "error message: the numbers are limits, ids, exit codes, offsets and counts inside a failure text, not an audit measurement"},
 	"internal/lang/python.go:Preflight":                                  {Exempt: "error message: builds failure text from causes, ids and paths via %v; no measured number"},
 	"internal/lang/python.go:pyPreflightStockDefault":                    {Exempt: "error message: builds failure text from causes, ids and paths via %v; no measured number"},
+	"internal/lang/record_hook.go:FileRecordHookAt":                      {Exempt: "command word for the record wrapper: where in the command the hook's own words sit, so its fallback can leave them out"},
 	"internal/lang/rust_landing.go:rustFreeModuleName":                   {Exempt: "module name suffix from a counter"},
 	"internal/lang/rust_workspace.go:owningCrateDir":                     {Exempt: "error message: builds failure text from causes, ids and paths via %v; no measured number"},
 	"internal/learn/draft.go:Draft":                                      {Exempt: "error message: the numbers are limits, ids, exit codes, offsets and counts inside a failure text, not an audit measurement"},

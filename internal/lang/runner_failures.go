@@ -194,8 +194,10 @@ func mochaFailures(out string) []string {
 // nodeFailures reads node's report off a TTY: TAP on node 22, the spec
 // reporter on node 23 and later (measured on 22.23 and 24.22). Either way it
 // names every failing test with no subtests: a suite, or a test whose
-// subtests failed, is rolled up as failed and is not itself the failure, and
-// a file that failed to load is not a test.
+// subtests failed, is rolled up as failed and is not itself the failure, a
+// file that failed to load is not a test, and a todo test that failed is
+// not a failure (node does not fail the run for it; node 23's spec report
+// leaves it out, and TAP marks it `# TODO`).
 func nodeFailures(out string) []string {
 	if !strings.Contains(out, "TAP version") {
 		return nodeSpecFailures(out)
@@ -203,7 +205,7 @@ func nodeFailures(out string) []string {
 	entries, hasChild := nodeEntries(out)
 	var ids []string
 	for _, e := range entries {
-		if !e.ok && e.typ == "test" && !e.exit && !hasChild[nodeKey(e.path)] {
+		if !e.ok && !e.todo && e.typ == "test" && !e.exit && !hasChild[nodeKey(e.path)] {
 			ids = append(ids, strings.Join(e.path, "::"))
 		}
 	}

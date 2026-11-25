@@ -128,9 +128,9 @@ func TestReportCmdAppliesTheRowsReportArgs(t *testing.T) {
 			[]string{"cargo", "nextest", "run", "-p", "x", "--status-level", "pass", "--final-status-level", "flaky", "--", "--exact", "a"}},
 		{"cargo-nextest binary", "rust", Cmd([]string{"cargo-nextest", "nextest", "run"}),
 			[]string{"cargo-nextest", "nextest", "run", "--status-level", "pass", "--final-status-level", "flaky"}},
-		// cargo test, node --test, minitest and go test have none.
+		// cargo test, minitest and go test have none (node --test's record
+		// hook: node_record_test.go).
 		{"cargo test", "rust", Cmd([]string{"cargo", "test"}), nil},
-		{"node --test", "javascript", Cmd([]string{"node", "--test"}), nil},
 		{"minitest", "ruby", Cmd([]string{"ruby", "-Itest", "test/a_test.rb"}), nil},
 		// Through a package script nothing is added.
 		{"npm test (jest)", "javascript", Invocation{Argv: []string{"npm", "test"}, Script: []string{"jest"}, Pass: "--", Narrow: true}, nil},
@@ -213,7 +213,7 @@ func TestEveryRowWithReportArgsHasWordsAndAReader(t *testing.T) {
 		if h := r.ReportHook; h != nil {
 			if h.Wrap == nil || strings.TrimSpace(h.Says) == "" {
 				t.Errorf("%s declares a ReportHook with no Wrap or no disclosure", r.ID)
-			} else if w := h.Wrap([]string{r.Words[0]}); !cmdIsShellWrapped(w) {
+			} else if w := h.Wrap([]string{r.Name}); !cmdIsShellWrapped(w) {
 				t.Errorf("%s: the hook's wrapper %v is not a shell wrapper, so ReportCmd would wrap it again", r.ID, w)
 			}
 		}

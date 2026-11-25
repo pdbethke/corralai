@@ -5,6 +5,7 @@ package lang
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -57,9 +58,12 @@ func TestJUnitFailuresReadsFailuresAndErrorsInOrder(t *testing.T) {
 	var files []string
 	for i := range got {
 		files = append(files, got[i].File)
-		got[i].File = ""
+		if n := len(got[i].Suites); n == 0 || got[i].Suites[n-1] != got[i].Suite {
+			t.Errorf("case %d: suites %q do not end in its suite %q", i, got[i].Suites, got[i].Suite)
+		}
+		got[i].File, got[i].Suites = "", nil
 	}
-	if !slices.Equal(got, want) {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("junitFailures:\n got %+v\nwant %+v", got, want)
 	}
 	for i, f := range files {

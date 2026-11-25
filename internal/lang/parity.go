@@ -219,10 +219,6 @@ var ParityExemptions = []Exemption{
 
 	{"go", "failure-hook", "not built: corral reads go test's printed `--- FAIL:` lines. `go test -json` is the runner's own record of each test's result and would be the hook; corral does not add it, and nothing here measured what it does to the output the other readers take"},
 
-	{"javascript", "failure-hook", "not built: corral reads the lines jest, vitest, mocha and node --test print. Each takes a reporter module named on the command line, which is what would do it; none has been written or run, and whether one can run beside the reporters a project configures was not checked"},
-
-	{"typescript", "failure-hook", "not built: corral reads the lines jest, vitest, mocha and node --test print. Each takes a reporter module named on the command line, which is what would do it; none has been written or run, and whether one can run beside the reporters a project configures was not checked"},
-
 	{"ruby", "failure-hook", "not built: corral reads rspec's `Failed examples:` list and minitest's printed failures. rspec takes a second formatter writing to a file (`--format json --out <file>`), which would be the hook; corral does not add it, and nothing comparable was looked for in minitest"},
 
 	{"rust", "failure-hook", "not built: corral reads the lines cargo test and cargo-nextest print. nextest writes a JUnit file when a profile in the project's .config/nextest.toml asks for one, and libtest's JSON output is an unstable option; a way to ask for either from the command line was not looked for"},

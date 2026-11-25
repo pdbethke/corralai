@@ -432,11 +432,41 @@ func TestFileRecordHookDropsTheRecordWordWhenItCannotSetUp(t *testing.T) {
 	}
 }
 
+// A hook that drops its words on fallback drops every word it added, not
+// only the one carrying the token: node --test pairs each --test-reporter
+// with a --test-reporter-destination by position, so leaving out the
+// destination alone would leave its reporter unpaired, and an option given
+// its value as a separate word (`--log <token>`) would otherwise leave the
+// option to take the operator's next word. The operator's words, a word
+// equal to one of the hook's among them, all reach the runner.
+func TestFileRecordHookDropsEveryHookWordWhenItCannotSetUp(t *testing.T) {
+	dir := withFakeRecordRowAt(t, RecordFile{DropWhenUnset: true}, "--reporter=tap", "--log", recordToken, "nl")
+	operator := []string{"sh", "fakerunner", "exit=1", "nl", "--"}
+	cmd := graded(t, operator)
+	if i := slices.Index(cmd, "drop:4:4"); i != 5 {
+		t.Fatalf("fallback word = %q, want drop:4:4 (the hook's 4 words after the operator's first 4, before its --)", cmd[5])
+	}
+	out, got := runIn(t, dir, cmd, "TMPDIR="+filepath.Join(dir, "does-not-exist"))
+	if got != 1 {
+		t.Fatalf("exit %d, want the runner's 1:\n%s", got, out)
+	}
+	if args := argLines(out); !slices.Equal(args, []string{"exit=1", "nl", "--"}) {
+		t.Errorf("runner's words = %q, want the operator's alone", args)
+	}
+	// With the directory made, every word is there and the record is read.
+	out, _ = runIn(t, dir, cmd)
+	if args := argLines(out); len(args) != 7 || args[2] != "--reporter=tap" || args[3] != "--log" || args[5] != "nl" {
+		t.Errorf("runner's words = %q, want the hook's four before the --", args)
+	}
+	if _, body, ok := RecordBlock(out); !ok || body != "<xml/>" {
+		t.Errorf("no record read with the directory made:\n%s", out)
+	}
+}
+
 // What a RecordFile may say is checked when the hook is built: a suffix is
-// a file name's tail (no "/", no space, no glob or quote character), and a
-// hook that drops its words on fallback must carry the token only in
-// `--option=value` words, since dropping one word of `--option value`
-// would leave the option to take the operator's next word.
+// a file name's tail (no "/", no space, no glob or quote character). A hook
+// that drops its words on fallback may carry them in any shape, since it
+// drops all of them (TestFileRecordHookDropsEveryHookWordWhenItCannotSetUp).
 func TestFileRecordHookAtRefusesWhatItCannotKeep(t *testing.T) {
 	for name, build := range map[string]func(){
 		"a suffix with a slash": func() {
@@ -447,12 +477,6 @@ func TestFileRecordHookAtRefusesWhatItCannotKeep(t *testing.T) {
 		},
 		"a suffix with a glob": func() {
 			FileRecordHookAt(func() []string { return nil }, "junit", "", RecordFile{Suffixes: []string{"*.xml"}})
-		},
-		"a separate value dropped": func() {
-			FileRecordHookAt(func() []string { return []string{"--x", recordToken} }, "junit", "", RecordFile{DropWhenUnset: true})
-		},
-		"a non-option word dropped": func() {
-			FileRecordHookAt(func() []string { return []string{recordToken + ".xml"} }, "junit", "", RecordFile{DropWhenUnset: true})
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

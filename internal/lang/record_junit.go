@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 )
 
@@ -18,7 +19,11 @@ const recordJUnit = "junit"
 // an <error> child. Every field is the record's own text, unchanged:
 //
 //   - Suite is the name of the innermost <testsuite> holding it (PHPUnit
-//     nests a method's data sets in a <testsuite name="Class::method">);
+//     nests a method's data sets in a <testsuite name="Class::method">),
+//     and Suites the names of every <testsuite> holding it, outermost
+//     first (node --test writes a describe block, or a test with subtests,
+//     as a <testsuite> and writes no file: a test's chain of suites is its
+//     path);
 //   - Class is its `class` attribute and ClassName its `classname`. They are
 //     kept apart because they differ: PHPUnit 11.5.57 writes a namespaced
 //     class as class="App\Tests\NTest" and classname="App.Tests.NTest", and
@@ -28,10 +33,14 @@ const recordJUnit = "junit"
 //   - Name is its `name` attribute (PHPUnit: the method, with `with data set
 //     "x"` or `with data set #k` for a data set, and no arguments);
 //   - File is its `file` attribute, "" when the runner writes none;
-//   - Kind is "failure" or "error", the first of the two children it has.
+//   - Kind is "failure" or "error", the first of the two children it has;
+//   - Skipped is whether it also has a <skipped> child: node --test writes
+//     a todo test that failed with both, and does not fail the run for it.
 type junitCase struct {
 	Suite, Class, ClassName, Name, File string
+	Suites                              []string
 	Kind                                string
+	Skipped                             bool
 }
 
 // The two kinds of a failing testcase. JUnit's <failure> is an assertion
@@ -89,11 +98,16 @@ func junitFailures(body string) ([]junitCase, error) {
 				c := junitCase{Class: xmlAttr(t, "class"), ClassName: xmlAttr(t, "classname"), Name: xmlAttr(t, "name"), File: xmlAttr(t, "file")}
 				if len(suites) > 0 {
 					c.Suite = suites[len(suites)-1]
+					c.Suites = slices.Clone(suites)
 				}
 				cur = &c
 			case junitFailure, junitError:
 				if cur != nil && cur.Kind == "" {
 					cur.Kind = name
+				}
+			case "skipped":
+				if cur != nil {
+					cur.Skipped = true
 				}
 			}
 		case xml.EndElement:

@@ -1,0 +1,417 @@
+TAP version 13
+# $DIR/broken.node.test.js:4
+# throw new Error('this file does not load');
+# ^
+# Error: this file does not load
+#     at Object.<anonymous> ($DIR/broken.node.test.js:4:7)
+#     at Module._compile (node:internal/modules/cjs/loader:1781:14)
+#     at Object..js (node:internal/modules/cjs/loader:1913:10)
+#     at Module.load (node:internal/modules/cjs/loader:1505:32)
+#     at Function._load (node:internal/modules/cjs/loader:1309:12)
+#     at wrapModuleLoad (node:internal/modules/cjs/loader:254:19)
+#     at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:171:5)
+#     at node:internal/main/run_main_module:36:49
+# Node.js v22.23.5
+# Subtest: broken.node.test.js
+not ok 1 - broken.node.test.js
+  ---
+  type: 'test'
+  location: '$DIR/broken.node.test.js:1:1'
+  failureType: 'testCodeFailure'
+  exitCode: 1
+  signal: ~
+  error: 'test failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+# Subtest: Calc
+    # Subtest: adds (a+b)
+    not ok 1 - adds (a+b)
+      ---
+      type: 'test'
+      location: '$DIR/fail/f.node.test.js:4:3'
+      failureType: 'testCodeFailure'
+      error: '2 == 3'
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      expected: 3
+      actual: 2
+      operator: '=='
+      stack: |-
+        TestContext.<anonymous> ($DIR/fail/f.node.test.js:4:35)
+        Test.runInAsyncScope (node:async_hooks:214:14)
+        Test.run (node:internal/test_runner/test:1047:25)
+        Test.start (node:internal/test_runner/test:944:17)
+        node:internal/test_runner/test:1440:71
+        node:internal/per_context/primordials:466:82
+        new Promise (<anonymous>)
+        new SafePromise (node:internal/per_context/primordials:435:3)
+        node:internal/per_context/primordials:466:9
+        Array.map (<anonymous>)
+      ...
+    # Subtest: ok
+    ok 2 - ok
+      ---
+      type: 'test'
+      ...
+    # Subtest: neg
+        # Subtest: adds
+        not ok 1 - adds
+          ---
+          type: 'test'
+          location: '$DIR/fail/f.node.test.js:6:27'
+          failureType: 'testCodeFailure'
+          error: 'boom'
+          code: 'ERR_TEST_FAILURE'
+          stack: |-
+            TestContext.<anonymous> ($DIR/fail/f.node.test.js:6:52)
+            Test.runInAsyncScope (node:async_hooks:214:14)
+            Test.run (node:internal/test_runner/test:1047:25)
+            Test.start (node:internal/test_runner/test:944:17)
+            node:internal/test_runner/test:1440:71
+            node:internal/per_context/primordials:466:82
+            new Promise (<anonymous>)
+            new SafePromise (node:internal/per_context/primordials:435:3)
+            node:internal/per_context/primordials:466:9
+            Array.map (<anonymous>)
+          ...
+        1..1
+    not ok 3 - neg
+      ---
+      type: 'suite'
+      location: '$DIR/fail/f.node.test.js:6:3'
+      failureType: 'subtestsFailed'
+      error: '1 subtest failed'
+      code: 'ERR_TEST_FAILURE'
+      ...
+    1..3
+not ok 2 - Calc
+  ---
+  type: 'suite'
+  location: '$DIR/fail/f.node.test.js:3:1'
+  failureType: 'subtestsFailed'
+  error: '2 subtests failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+# Subtest: top level
+not ok 3 - top level
+  ---
+  type: 'test'
+  location: '$DIR/fail/f.node.test.js:8:1'
+  failureType: 'testCodeFailure'
+  error: '1 == 2'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 2
+  actual: 1
+  operator: '=='
+  stack: |-
+    TestContext.<anonymous> ($DIR/fail/f.node.test.js:8:34)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Suite.postRun (node:internal/test_runner/test:1173:19)
+    Suite.run (node:internal/test_runner/test:1457:10)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+# Subtest: parent
+    # Subtest: child fails
+    not ok 1 - child fails
+      ---
+      type: 'test'
+      location: '$DIR/fail/node-edge/e.node.test.js:3:39'
+      failureType: 'testCodeFailure'
+      error: '1 == 2'
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      expected: 2
+      actual: 1
+      operator: '=='
+      stack: |-
+        TestContext.<anonymous> ($DIR/fail/node-edge/e.node.test.js:3:74)
+        Test.runInAsyncScope (node:async_hooks:214:14)
+        Test.run (node:internal/test_runner/test:1047:25)
+        Test.start (node:internal/test_runner/test:944:17)
+        TestContext.test (node:internal/test_runner/test:373:20)
+        TestContext.<anonymous> ($DIR/fail/node-edge/e.node.test.js:3:39)
+        Test.runInAsyncScope (node:async_hooks:214:14)
+        Test.run (node:internal/test_runner/test:1047:25)
+        Test.start (node:internal/test_runner/test:944:17)
+        startSubtestAfterBootstrap (node:internal/test_runner/harness:296:17)
+      ...
+    1..1
+not ok 4 - parent
+  ---
+  type: 'test'
+  location: '$DIR/fail/node-edge/e.node.test.js:3:1'
+  failureType: 'subtestsFailed'
+  error: '1 subtest failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+# Subtest: body fails after child
+    # Subtest: child ok
+    ok 1 - child ok
+      ---
+      type: 'test'
+      ...
+    1..1
+not ok 5 - body fails after child
+  ---
+  type: 'test'
+  location: '$DIR/fail/node-edge/e.node.test.js:4:1'
+  failureType: 'testCodeFailure'
+  error: 'after'
+  code: 'ERR_TEST_FAILURE'
+  stack: |-
+    TestContext.<anonymous> ($DIR/fail/node-edge/e.node.test.js:4:89)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: hooked
+    # Subtest: a
+    not ok 1 - a
+      ---
+      type: 'test'
+      location: '$DIR/fail/node-edge/e.node.test.js:5:72'
+      failureType: 'cancelledByParent'
+      error: 'test did not finish before its parent and was cancelled'
+      code: 'ERR_TEST_FAILURE'
+      ...
+    1..1
+not ok 6 - hooked
+  ---
+  type: 'suite'
+  location: '$DIR/fail/node-edge/e.node.test.js:5:1'
+  failureType: 'hookFailed'
+  error: 'hook'
+  code: 'ERR_TEST_FAILURE'
+  stack: |-
+    SuiteContext.<anonymous> ($DIR/fail/node-edge/e.node.test.js:5:49)
+    TestHook.runInAsyncScope (node:async_hooks:214:14)
+    TestHook.run (node:internal/test_runner/test:1047:25)
+    TestHook.run (node:internal/test_runner/test:1354:18)
+    TestHook.run (node:internal/util:580:20)
+    Suite.runHook (node:internal/test_runner/test:965:20)
+    Suite.run (node:internal/test_runner/test:1436:18)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: todo fails
+not ok 7 - todo fails # TODO
+  ---
+  type: 'test'
+  location: '$DIR/fail/node-edge/e.node.test.js:6:6'
+  failureType: 'testCodeFailure'
+  error: 'todo'
+  code: 'ERR_TEST_FAILURE'
+  stack: |-
+    TestContext.<anonymous> ($DIR/fail/node-edge/e.node.test.js:6:39)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Suite.postRun (node:internal/test_runner/test:1173:19)
+    Suite.run (node:internal/test_runner/test:1457:10)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: a > b :: c \#1
+not ok 8 - a > b :: c \#1
+  ---
+  type: 'test'
+  location: '$DIR/fail/node-edge/e.node.test.js:7:1'
+  failureType: 'testCodeFailure'
+  error: '1 == 2'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 2
+  actual: 1
+  operator: '=='
+  stack: |-
+    TestContext.<anonymous> ($DIR/fail/node-edge/e.node.test.js:7:38)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+1..8
+# tests 12
+# suites 3
+# pass 2
+# fail 8
+# cancelled 1
+# skipped 0
+# todo 1
+
+corral-record-begin junit
+<?xml version="1.0" encoding="utf-8"?>
+<testsuites>
+	<testcase name="broken.node.test.js" time="0.023926" classname="test" failure="test failed">
+		<failure type="testCodeFailure" message="test failed">
+[Error: test failed] { code: 'ERR_TEST_FAILURE', failureType: 'testCodeFailure', cause: 'test failed', exitCode: 1, signal: null }
+		</failure>
+	</testcase>
+	<testsuite name="Calc" time="0.001899" disabled="0" errors="0" tests="3" failures="2" skipped="0">
+		<testcase name="adds (a+b)" time="0.000938" classname="test" failure="2 == 3">
+			<failure type="testCodeFailure" message="2 == 3">
+Error [ERR_TEST_FAILURE]: 2 == 3
+    at new Promise (&lt;anonymous>)
+    at Array.map (&lt;anonymous>) {
+  code: 'ERR_TEST_FAILURE',
+  failureType: 'testCodeFailure',
+  cause: AssertionError [ERR_ASSERTION]: 2 == 3
+      at TestContext.&lt;anonymous> ($DIR/fail/f.node.test.js:4:35)
+      at Test.runInAsyncScope (node:async_hooks:214:14)
+      at Test.run (node:internal/test_runner/test:1047:25)
+      at Test.start (node:internal/test_runner/test:944:17)
+      at node:internal/test_runner/test:1440:71
+      at node:internal/per_context/primordials:466:82
+      at new Promise (&lt;anonymous>)
+      at new SafePromise (node:internal/per_context/primordials:435:3)
+      at node:internal/per_context/primordials:466:9
+      at Array.map (&lt;anonymous>) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 2,
+    expected: 3,
+    operator: '==',
+    diff: 'simple'
+  }
+}
+			</failure>
+		</testcase>
+		<testcase name="ok" time="0.000102" classname="test"/>
+		<testsuite name="neg" time="0.000201" disabled="0" errors="0" tests="1" failures="1" skipped="0">
+			<testcase name="adds" time="0.000123" classname="test" failure="boom">
+				<failure type="testCodeFailure" message="boom">
+Error [ERR_TEST_FAILURE]: boom
+    at new Promise (&lt;anonymous>)
+    at Array.map (&lt;anonymous>) {
+  code: 'ERR_TEST_FAILURE',
+  failureType: 'testCodeFailure',
+  cause: Error: boom
+      at TestContext.&lt;anonymous> ($DIR/fail/f.node.test.js:6:52)
+      at Test.runInAsyncScope (node:async_hooks:214:14)
+      at Test.run (node:internal/test_runner/test:1047:25)
+      at Test.start (node:internal/test_runner/test:944:17)
+      at node:internal/test_runner/test:1440:71
+      at node:internal/per_context/primordials:466:82
+      at new Promise (&lt;anonymous>)
+      at new SafePromise (node:internal/per_context/primordials:435:3)
+      at node:internal/per_context/primordials:466:9
+      at Array.map (&lt;anonymous>)
+}
+				</failure>
+			</testcase>
+		</testsuite>
+	</testsuite>
+	<testcase name="top level" time="0.000188" classname="test" failure="1 == 2">
+		<failure type="testCodeFailure" message="1 == 2">
+[Error [ERR_TEST_FAILURE]: 1 == 2] {
+  code: 'ERR_TEST_FAILURE',
+  failureType: 'testCodeFailure',
+  cause: AssertionError [ERR_ASSERTION]: 1 == 2
+      at TestContext.&lt;anonymous> ($DIR/fail/f.node.test.js:8:34)
+      at Test.runInAsyncScope (node:async_hooks:214:14)
+      at Test.run (node:internal/test_runner/test:1047:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+      at Suite.postRun (node:internal/test_runner/test:1173:19)
+      at Suite.run (node:internal/test_runner/test:1457:10)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 2,
+    operator: '==',
+    diff: 'simple'
+  }
+}
+		</failure>
+	</testcase>
+	<testsuite name="parent" time="0.001160" disabled="0" errors="0" tests="1" failures="1" skipped="0">
+		<testcase name="child fails" time="0.000749" classname="test" failure="1 == 2">
+			<failure type="testCodeFailure" message="1 == 2">
+Error [ERR_TEST_FAILURE]: 1 == 2
+    at TestContext.&lt;anonymous> ($DIR/fail/node-edge/e.node.test.js:3:39)
+    at Test.runInAsyncScope (node:async_hooks:214:14) {
+  code: 'ERR_TEST_FAILURE',
+  failureType: 'testCodeFailure',
+  cause: AssertionError [ERR_ASSERTION]: 1 == 2
+      at TestContext.&lt;anonymous> ($DIR/fail/node-edge/e.node.test.js:3:74)
+      at Test.runInAsyncScope (node:async_hooks:214:14)
+      at Test.run (node:internal/test_runner/test:1047:25)
+      at Test.start (node:internal/test_runner/test:944:17)
+      at TestContext.test (node:internal/test_runner/test:373:20)
+      at TestContext.&lt;anonymous> ($DIR/fail/node-edge/e.node.test.js:3:39)
+      at Test.runInAsyncScope (node:async_hooks:214:14)
+      at Test.run (node:internal/test_runner/test:1047:25)
+      at Test.start (node:internal/test_runner/test:944:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:296:17) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 2,
+    operator: '==',
+    diff: 'simple'
+  }
+}
+			</failure>
+		</testcase>
+	</testsuite>
+	<testsuite name="body fails after child" time="0.000186" disabled="0" errors="0" tests="1" failures="0" skipped="0">
+		<testcase name="child ok" time="0.000063" classname="test"/>
+	</testsuite>
+	<testsuite name="hooked" time="0.000151" disabled="0" errors="0" tests="1" failures="1" skipped="0">
+		<testcase name="a" time="0.000000" classname="test" failure="test did not finish before its parent and was cancelled">
+			<failure type="cancelledByParent" message="test did not finish before its parent and was cancelled">
+[Error [ERR_TEST_FAILURE]: test did not finish before its parent and was cancelled] { code: 'ERR_TEST_FAILURE', failureType: 'cancelledByParent', cause: 'test did not finish before its parent and was cancelled' }
+			</failure>
+		</testcase>
+	</testsuite>
+	<testcase name="todo fails" time="0.000040" classname="test" failure="todo">
+		<skipped type="todo" message="true"/>
+		<failure type="testCodeFailure" message="todo">
+[Error [ERR_TEST_FAILURE]: todo] {
+  code: 'ERR_TEST_FAILURE',
+  failureType: 'testCodeFailure',
+  cause: Error: todo
+      at TestContext.&lt;anonymous> ($DIR/fail/node-edge/e.node.test.js:6:39)
+      at Test.runInAsyncScope (node:async_hooks:214:14)
+      at Test.run (node:internal/test_runner/test:1047:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+      at Suite.postRun (node:internal/test_runner/test:1173:19)
+      at Suite.run (node:internal/test_runner/test:1457:10)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+}
+		</failure>
+	</testcase>
+	<testcase name="a > b :: c #1" time="0.000672" classname="test" failure="1 == 2">
+		<failure type="testCodeFailure" message="1 == 2">
+[Error [ERR_TEST_FAILURE]: 1 == 2] {
+  code: 'ERR_TEST_FAILURE',
+  failureType: 'testCodeFailure',
+  cause: AssertionError [ERR_ASSERTION]: 1 == 2
+      at TestContext.&lt;anonymous> ($DIR/fail/node-edge/e.node.test.js:7:38)
+      at Test.runInAsyncScope (node:async_hooks:214:14)
+      at Test.run (node:internal/test_runner/test:1047:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+      at Test.postRun (node:internal/test_runner/test:1173:19)
+      at Test.run (node:internal/test_runner/test:1101:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:744:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 2,
+    operator: '==',
+    diff: 'simple'
+  }
+}
+		</failure>
+	</testcase>
+	<!-- tests 12 -->
+	<!-- suites 3 -->
+	<!-- pass 2 -->
+	<!-- fail 8 -->
+	<!-- cancelled 1 -->
+	<!-- skipped 0 -->
+	<!-- todo 1 -->
+</testsuites>
+corral-record-end

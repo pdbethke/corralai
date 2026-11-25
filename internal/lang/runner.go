@@ -39,6 +39,14 @@ type Runner struct {
 	// ReportCmd reads the runner's options from there. nil: the first of
 	// Words.
 	At func(argv []string) int
+	// OptionsEnd is where the runner's options end, for a runner whose
+	// options do not run to its own `--` or the command's end
+	// (runnerOptionsEnd): node reads its options only before the first file,
+	// so a flag after one is handed to the test files, and its options end
+	// right after `--test`, where nodeWith puts its own. at is At's answer.
+	// nil: runnerOptionsEnd. ReportCmd and FailFastCmd both place what they
+	// add there (optionsEnd).
+	OptionsEnd func(argv []string, at int) int
 
 	// FailFast is the runner's stop-at-first-failure flag, appended only to a
 	// command that NAMES this runner and is not shell-wrapped (see
@@ -383,6 +391,17 @@ var runners = []Runner{
 		// A reporters list in the project's vitest config (json, junit)
 		// replaces the default reporter, whose ` FAIL ` lines the readers
 		// take; one on the command line wins (measured on vitest 5.1.0).
+		//
+		// No ReportHook, on purpose: a JUnit record next to the default
+		// reporter would be the hook, and no command line keeps vitest
+		// from writing it into a project's file. vitest keeps the options
+		// a config gives a reporter whenever the command line names the
+		// same reporter (its resolveConfig maps CLI reporter names onto the
+		// config's [name, options] pairs), and a reporter's own outputFile
+		// wins over --outputFile, so under `reporters: [['junit',
+		// {outputFile: 'x.xml'}]]` `--reporter=junit` writes x.xml whatever
+		// else is given; the capture script's vitest-outputfile-* checks
+		// run each config shape. --reporter=default alone writes no file.
 		ReportArgs: []string{"--reporter=default"},
 		ListCmd:    vitestListCmd, ParseList: vitestParseList, SingleCmd: vitestSingleCmd, ResolveByList: true, Coruns: vitestCoruns,
 		FirstFailure: firstOf(vitestFailures), FailedTests: vitestFailures, DeselectCmd: vitestDeselectCmd, FailedUnits: vitestFailedUnits, KillerCmd: vitestKillerCmd,
@@ -391,18 +410,22 @@ var runners = []Runner{
 		EvidenceArgs:   vitestEvidenceArgs,
 		VersionCmd:     vitestVersionCmd,
 		UnitNoCoverage: "no worker coverage: the run's V8 coverage named no project file, though corral ran the unit with --pool=threads; that is what vitest's forks pool gives (measured on vitest 3.2.7 and 5.0.3), so check whether the test file itself forces another pool",
-		Note:           "listing, one-test, one-file and several-file runs verified on vitest 3.2 and 5.1, salvage on 5.1; --reporter=default verified on vitest 5.1.0 against a config whose reporters list (json) hides the failures; the unit evidence pass runs each file with --pool=threads, because the forks pool wrote no worker coverage (measured on vitest 3.2.7 and 5.0.3); unit evidence counted through corral's vm source-map preload on vitest 3.2.7 and 5.0.3; vitest 1, 2 and 4 were not run",
+		Note:           "listing, one-test, one-file and several-file runs verified on vitest 3.2 and 5.1, salvage on 5.1; --reporter=default verified on vitest 5.1.0 against a config whose reporters list (json) hides the failures; the unit evidence pass runs each file with --pool=threads, because the forks pool wrote no worker coverage (measured on vitest 3.2.7 and 5.0.3); unit evidence counted through corral's vm source-map preload on vitest 3.2.7 and 5.0.3; vitest 1, 2 and 4 were not run. vitest has no failure hook, because corral must never write into a project's file and no command line keeps vitest's JUnit report out of one (measured on vitest 5.1.0, report/vitest-outputfile): `--outputFile=<file>` keeps it out of a config's `outputFile`, a string or an object, but a reporter the config names with options, `reporters: [['junit', {outputFile}]]`, keeps them when the command line names the same reporter, and the report goes to the project's file (`--outputFile.junit=<file>` loses to a config's string `outputFile` as well); so the killing test is read from the printed ` FAIL ` lines alone",
 	},
 	{
 		Name: "node --test", ID: "node-test", Languages: []string{"javascript", "typescript"}, Default: true,
 		Detect: func(argv []string) bool {
 			return len(argv) > 0 && filepath.Base(argv[0]) == "node" && slices.Contains(argv, "--test")
 		},
-		ListCmd: nodeListCmd, ParseList: nodeParseList, SingleCmd: nodeSingleCmd, ResolveByList: true, Coruns: nodeCoruns,
-		FirstFailure: firstOf(nodeFailures), FailedTests: nodeFailures, DeselectCmd: nodeDeselectCmd,
+		// node reads its options only before the first file, so the
+		// hook's words go right after `--test` (nodeWith's place).
+		At: nodeTestAt, OptionsEnd: func(_ []string, at int) int { return at + 1 },
+		ReportHook: nodeRecordHook,
+		ListCmd:    nodeListCmd, ParseList: nodeParseList, SingleCmd: nodeSingleCmd, ResolveByList: true, Coruns: nodeCoruns,
+		FirstFailure: firstOf(nodeFailedTests), FailedTests: nodeFailedTests, DeselectCmd: nodeDeselectCmd,
 		ListUnits: nodeListUnits, ParseUnits: nodeParseUnits, UnitCmd: oneUnit(nodeUnitsCmd),
 		UnitsCmd: nodeUnitsCmd, UnitForFile: fileUnitForFile, UnitNoun: "test files",
-		Note: "node has no collect-only mode, so listing RUNS the test file once on the unmutated code; verified on node 22.23 and 24.22: listing, one-test, one-file and several-file runs, and salvage, on both (24.22.2 measured 2026-11-10). Through a package script, listing, one-test runs and salvage need `--test` to be the script's last word, since node reads options only before the first file",
+		Note: "node has no collect-only mode, so listing RUNS the test file once on the unmutated code; verified on node 22.23 and 24.22: listing, one-test, one-file and several-file runs, and salvage, on both (24.22.2 measured 2026-11-10). Through a package script, listing, one-test runs and salvage need `--test` to be the script's last word, since node reads options only before the first file. Every graded run corral can rewrite (the program is node, every word before `--test` is an option or its value, and no reporter or config file is named in the command or in NODE_OPTIONS) goes through `sh -c` with `--test-reporter=tap --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=<a temporary file>` added right after `--test`, and corral reads the killing test from node's JUnit record by the same id the printed TAP gives (suites and name joined by `::`), then adds the tests the printed TAP names that the record does not; a file that failed to load and a failing todo test are named by neither. Run on node 22.23.5 on Linux outside the sandbox (printed output and exit code unchanged, on a failing run and a passing one) and node 24.22.1 in a container (exit code unchanged; node 24's spec report is replaced by TAP). Not run: the bubblewrap sandbox, the workspace substrate, macOS. Not wrapped: Windows",
 	},
 	// rspec takes --fail-fast. Minitest is deliberately without one: its own
 	// --fail-fast arrived in minitest 5.22, and an older minitest treats an

@@ -673,6 +673,56 @@ fails node-fail.txt node --test fail/f.node.test.js
 # 22's --test-reporter=spec prints the same tree.
 fails node-spec-fail.txt node --test --test-reporter=spec fail/f.node.test.js
 fails node-spec-loadfail.txt node --test --test-reporter=spec broken.node.test.js
+# The node --test row's failure hook (internal/lang/node_record.go): the graded
+# command, the four reporter words and the record wrapper included, is taken from
+# the row (scripts/reportcmd), never copied here; TestNodeHookCaptureIsTheRowsCommand
+# holds these lines to it. fail/node-edge holds the shapes where node's JUnit
+# record and its printed report could disagree; broken.node.test.js is a file
+# that fails to load, which the record writes as a top-level testcase. The record's
+# hostname and timestamp attributes are taken out: these files are public.
+reporthook() { # reporthook <array name> <language> <command...>: the row's graded command, NUL-separated
+  local name="$1"; shift
+  mapfile -d '' "$name" < <(cd "$REPO" && env -u NODE_OPTIONS go run ./scripts/reportcmd "$@")
+  local -n words="$name"
+  [ "${#words[@]}" -gt 0 ] || { echo "scripts/reportcmd gave no command for $*" >&2; exit 1; }
+}
+nodefails() { # nodefails <fixture> <cmd...>: fails, with the record's host and clock taken out
+  fails "$@"
+  sed -i -e 's/ hostname="[^"]*"//' -e 's/ timestamp="[^"]*"//' "$OUT/$1"
+}
+NODEFILES=(fail/f.node.test.js fail/node-edge/e.node.test.js broken.node.test.js)
+reporthook NODEHOOK javascript node --test "${NODEFILES[@]}"
+nodefails node-hook-fail.txt "${NODEHOOK[@]}"
+# The same files unhooked (node 22 prints TAP off a TTY): the hooked capture's
+# printed part must equal it (TestNodeHookLeavesThePrintedOutputAlone).
+fails node-hook-unhooked.txt node --test "${NODEFILES[@]}"
+# The hook keeps node's exit code, on a failing run and a passing one, and when
+# it cannot make its directory it leaves its four words out (pointed at
+# /dev/null, node fails the fsync of its destination and exits 1 on a run that passed).
+reporthook NODEHOOKPASS javascript node --test calc.node.test.js
+want node-hook-exit-fail "1 1" "$(env -u NODE_OPTIONS node --test "${NODEFILES[@]}" >/dev/null 2>&1; echo -n "$? "; env -u NODE_OPTIONS "${NODEHOOK[@]}" >/dev/null 2>&1; echo $?)"
+want node-hook-exit-pass "0 0" "$(env -u NODE_OPTIONS node --test calc.node.test.js >/dev/null 2>&1; echo -n "$? "; env -u NODE_OPTIONS "${NODEHOOKPASS[@]}" >/dev/null 2>&1; echo $?)"
+nodefails node-hook-pass.txt "${NODEHOOKPASS[@]}"
+fails node-hook-unhooked-pass.txt node --test calc.node.test.js
+nodefails node-hook-fallback.txt env TMPDIR="$DIR/no-such-dir" "${NODEHOOKPASS[@]}"
+want node-hook-fallback-exit 0 "$(env -u NODE_OPTIONS TMPDIR="$DIR/no-such-dir" "${NODEHOOKPASS[@]}" >/dev/null 2>&1; echo $?)"
+want node-devnull-destination-fails-a-pass 1 "$(env -u NODE_OPTIONS node --test --test-reporter=tap --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=/dev/null calc.node.test.js >/dev/null 2>&1; echo $?)"
+# Why the hook declines a command with a reporter of its own, or one in
+# NODE_OPTIONS: node refuses reporters and destinations that differ in number.
+want node-unpaired-reporter-fails-a-pass 1 "$(env -u NODE_OPTIONS NODE_OPTIONS=--test-reporter=dot node --test --test-reporter=tap --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination="$DIR/n.xml" calc.node.test.js >/dev/null 2>&1; echo $?)"
+# node 23 and later print the spec reporter off a TTY, so there the hook changes
+# the printed form to TAP. NODE24, when set, is a command prefix that runs its
+# arguments where `node` is node 24 and `sh` a POSIX shell (a container: mount
+# DIR at its own path, start in DIR, run as the invoking user), e.g.
+#   NODE24="docker run --rm -u $(id -u):$(id -g) -v /tmp/rf:/tmp/rf -w /tmp/rf node:24.22.1-bookworm"
+# Unset, the node24 captures are left as they are.
+if [ -n "${NODE24:-}" ]; then
+  $NODE24 node --version > "$OUT/toolchain-node24-hook-version.txt"
+  nodefails node24-hook-fail.txt $NODE24 "${NODEHOOK[@]}"
+  nodefails node24-hook-unhooked.txt $NODE24 node --test "${NODEFILES[@]}"
+  want node24-hook-exit-fail "1 1" "$($NODE24 node --test "${NODEFILES[@]}" >/dev/null 2>&1; echo -n "$? "; $NODE24 "${NODEHOOK[@]}" >/dev/null 2>&1; echo $?)"
+  want node24-hook-exit-pass "0 0" "$($NODE24 node --test calc.node.test.js >/dev/null 2>&1; echo -n "$? "; $NODE24 "${NODEHOOKPASS[@]}" >/dev/null 2>&1; echo $?)"
+fi
 fails rspec-fail.txt $RSPEC fail/spec/f_spec.rb
 fails rspec-loadfail.txt $RSPEC fail/spec/broken_spec.rb
 fails minitest-fail.txt ruby fail/f_test.rb
@@ -731,6 +781,28 @@ want phpunit-config-junit-hooked absent "$(junit_written report/phpunit-junit/pr
 (cd report/jest && fails report-jest-shown.txt npx jest f.jest.test.js --reporters=default)
 (cd report/vitest && fails report-vitest-hidden.txt npx vitest run f.vitest.test.mjs)
 (cd report/vitest && fails report-vitest-shown.txt npx vitest run f.vitest.test.mjs --reporter=default)
+# Why vitest's row has no failure hook (its Note in internal/lang/runner.go):
+# corral must never write into a project's file, and no command line keeps
+# vitest's JUnit report out of one. A string --outputFile keeps it out of a
+# config's outputFile, string or object, but a reporter the config names with
+# its own options (`reporters: [['junit', {outputFile}]]`) keeps those options
+# when the command line names the same reporter, and writes the project's file.
+vitest_wrote() { # vitest_wrote <config dir> <vitest args...>: which report files a run wrote
+  local d="$1"; shift
+  rm -rf "$DIR/vitest-ours" "$d/theirs.xml" "$d/theirs.json"; mkdir -p "$DIR/vitest-ours"
+  (cd "$d" && env -u AI_AGENT -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT npx --no-install vitest run "$@" f.vitest.test.mjs >/dev/null 2>&1 || true)
+  local w=""
+  [ -e "$DIR/vitest-ours/rec" ] && w="ours"
+  [ -e "$d/theirs.xml" ] || [ -e "$d/theirs.json" ] && w="${w:+$w+}theirs"
+  echo "${w:-neither}"
+}
+VOURS=(--reporter=default --reporter=junit --outputFile="$DIR/vitest-ours/rec")
+want vitest-outputfile-none ours "$(vitest_wrote report/vitest-outputfile/none "${VOURS[@]}")"
+want vitest-outputfile-string ours "$(vitest_wrote report/vitest-outputfile/string "${VOURS[@]}")"
+want vitest-outputfile-object ours "$(vitest_wrote report/vitest-outputfile/object "${VOURS[@]}")"
+want vitest-outputfile-reporter-options theirs "$(vitest_wrote report/vitest-outputfile/reporter "${VOURS[@]}")"
+want vitest-outputfile-junit-key-string theirs "$(vitest_wrote report/vitest-outputfile/string --reporter=default --reporter=junit --outputFile.junit="$DIR/vitest-ours/rec")"
+want vitest-outputfile-reporter-options-unflagged neither "$(vitest_wrote report/vitest-outputfile/reporter --reporter=default)"
 (cd report/mocha && fails report-mocha-hidden.txt npx mocha f.mocha.js)
 (cd report/mocha && fails report-mocha-shown.txt npx mocha f.mocha.js --reporter spec)
 (cd report/rspec && fails report-rspec-hidden.txt $RSPEC spec/f_spec.rb)

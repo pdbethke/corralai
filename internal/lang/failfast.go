@@ -75,7 +75,7 @@ func FailFastCmd(p Plugin, inv Invocation) ([]string, bool) {
 	if inv.Script == nil {
 		if r, named := namedRunner(p, inv.detectWords()); named {
 			if at := runnerWordIndex(cmd, r); at >= 0 {
-				end = runnerOptionsEnd(cmd, at)
+				end = optionsEnd(r, cmd, at)
 			}
 		}
 	}

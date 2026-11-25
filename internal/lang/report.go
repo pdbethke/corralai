@@ -98,7 +98,7 @@ func reportCmd(p Plugin, inv Invocation, cmd []string) (out []string, flagged, h
 	if shellWrappedBefore(cmd, at) {
 		return cmd, false, false
 	}
-	end := runnerOptionsEnd(cmd, at)
+	end := optionsEnd(r, cmd, at)
 	out = cmd
 	if len(r.ReportArgs) > 0 && !carriesLast(cmd[at+1:end], r.ReportArgs) {
 		out = make([]string, 0, len(cmd)+len(r.ReportArgs))
@@ -131,6 +131,15 @@ func runnerOptionsEnd(cmd []string, at int) int {
 		return at + 1 + i
 	}
 	return len(cmd)
+}
+
+// optionsEnd is where options to row r, whose word is cmd[at], end: the
+// row's OptionsEnd when it has one, runnerOptionsEnd otherwise.
+func optionsEnd(r Runner, cmd []string, at int) int {
+	if r.OptionsEnd != nil {
+		return r.OptionsEnd(cmd, at)
+	}
+	return runnerOptionsEnd(cmd, at)
 }
 
 // reportHookGOOS is the operating system ReportCmd decides a hook's wrapper

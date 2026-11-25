@@ -59,7 +59,9 @@ import (
 // A hook is not applied everywhere its flags are: not on Windows, where there
 // is no POSIX shell to run its wrapper (reportHookGOOS), and not to a command
 // the row's hook declines (ReportHook.Wraps: pytest behind tox, nox, docker
-// or podman, or a Python given -I or -E). Those keep the flags alone.
+// or podman, or a Python given -I or -E). Those keep the flags alone, and
+// never gain the hook's own Args (a record-file runner's token would reach
+// the runner as a file name with no wrapper to replace it).
 //
 // Applying it twice changes nothing: a command a hook has wrapped is
 // shell-wrapped, which the second application cannot read and leaves alone.
@@ -96,7 +98,7 @@ func reportCmd(p Plugin, inv Invocation, cmd []string) (out []string, flagged, h
 	if shellWrappedBefore(cmd, at) {
 		return cmd, false, false
 	}
-	end := runnerOptionsEnd(cmd, at)
+	end := optionsEnd(r, cmd, at)
 	out = cmd
 	if len(r.ReportArgs) > 0 && !carriesLast(cmd[at+1:end], r.ReportArgs) {
 		out = make([]string, 0, len(cmd)+len(r.ReportArgs))
@@ -107,6 +109,13 @@ func reportCmd(p Plugin, inv Invocation, cmd []string) (out []string, flagged, h
 		flagged = true
 	}
 	if h := r.ReportHook; h != nil && reportHookGOOS != "windows" && (h.Wraps == nil || h.Wraps(cmd, at)) {
+		if h.Args != nil {
+			args := h.Args()
+			with := make([]string, 0, len(out)+len(args))
+			with = append(with, out[:end]...)
+			with = append(with, args...)
+			out = append(with, out[end:]...)
+		}
 		return h.Wrap(out), flagged, true
 	}
 	return out, flagged, false
@@ -116,12 +125,22 @@ func reportCmd(p Plugin, inv Invocation, cmd []string) (out []string, flagged, h
 // the index of the runner's own `--` after that word, or len(cmd). Every word
 // after that separator is the runner's positional argument (pytest's paths)
 // or the test binary's (cargo's libtest), so a flag meant for the runner goes
-// before it. The one placement rule ReportCmd and FailFastCmd share.
+// before it. A row with no OptionsEnd of its own is placed by it
+// (optionsEnd, the one placement rule ReportCmd and FailFastCmd share).
 func runnerOptionsEnd(cmd []string, at int) int {
 	if i := slices.Index(cmd[at+1:], "--"); i >= 0 {
 		return at + 1 + i
 	}
 	return len(cmd)
+}
+
+// optionsEnd is where options to row r, whose word is cmd[at], end: the
+// row's OptionsEnd when it has one, runnerOptionsEnd otherwise.
+func optionsEnd(r Runner, cmd []string, at int) int {
+	if r.OptionsEnd != nil {
+		return r.OptionsEnd(cmd, at)
+	}
+	return runnerOptionsEnd(cmd, at)
 }
 
 // reportHookGOOS is the operating system ReportCmd decides a hook's wrapper

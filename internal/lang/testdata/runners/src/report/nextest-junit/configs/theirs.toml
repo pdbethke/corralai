@@ -1,0 +1,3 @@
+# The default profile writes target/nextest/default/theirs.xml.
+[profile.default.junit]
+path = "theirs.xml"

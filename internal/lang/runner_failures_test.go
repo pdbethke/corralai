@@ -23,9 +23,22 @@ func TestFailureParsersReadTheRealOutput(t *testing.T) {
 		{"node-spec-fail.txt", nodeFailures, []string{"Calc::adds (a+b)", "Calc::neg::adds", "top level"}},
 		{"rspec-fail.txt", rspecFailures, []string{"Calc adds (a+b)", "Calc neg adds", "MyApp::Calc top level"}},
 		{"minitest-fail.txt", minitestFailures, []string{"MyApp::NegTest#test_x", "CalcTest#test_adds", "CalcTest#test_boom"}},
-		{"phpunit-fail.txt", phpFailures, []string{"FTest::testBoom", "FTest::testAdds", `FTest::testData with data set "two" (2)`}},
+		{"phpunit-fail.txt", phpFailures, []string{"FTest::testBoom", "FTest::testAdds", `FTest::testData with data set "two"`}},
+		// A data set's id drops the arguments PHPUnit prints after its name
+		// (`"first" (7)`, `#2 (9, 'z (y) "q"')`), parentheses and quotes in
+		// a name or an argument included: it is the form --filter selects
+		// that one data set by, and the form PHPUnit's JUnit record gives.
+		{"phpunit-datasets-fail.txt", phpFailures, []string{
+			`DTest::testNamed with data set "first"`, `DTest::testNamed with data set "third"`, `DTest::testNamed with data set "x (y)"`,
+			"DTest::testUnnamed with data set #0", "DTest::testUnnamed with data set #2"}},
 		{"cargo-test-fail.txt", rustFailedTests, []string{"tests::a_fails", "tests::b_fails"}},
 		{"cargo-nextest-fail.txt", rustFailedTests, []string{"fail-cargo tests::a_fails", "fail-cargo tests::b_fails"}},
+		// A test whose own output ends without a newline shares its line
+		// with the next heading go prints, its own (TestNoNewline) or its
+		// parent's (TestParent); a heading a test printed itself is followed
+		// by go's real one on that line (TestHeadingInOutput, never
+		// TestNotReal).
+		{"go-fail.txt", goFailedTests, []string{"TestNoNewline", "TestParent", "TestHeadingInOutput", "TestPlain"}},
 	} {
 		got := c.parse(readFixture(t, c.fixture))
 		if c.fixture == "minitest-fail.txt" || c.fixture == "cargo-test-fail.txt" || c.fixture == "cargo-nextest-fail.txt" {
@@ -207,10 +220,17 @@ func TestDeselectCmds(t *testing.T) {
 			[]string{"bundle", "exec", "rspec", "-E", `\A(?!(?:Calc adds \(a\+b\)|MyApp::Calc top level)\z)`}},
 		{"minitest", minitestDeselectCmd, []string{"ruby", "-Itest", "test/f_test.rb"}, []string{"CalcTest#test_adds", "MyApp::NegTest#test_x"},
 			[]string{"ruby", "-Itest", "test/f_test.rb", "--exclude", `/\A(?:CalcTest#test_adds|MyApp::NegTest#test_x)\z/`}},
-		{"phpunit", phpunitDeselectCmd, []string{"vendor/bin/phpunit"}, []string{"FTest::testBoom", `App\Tests\FTest::testAdds`, `FTest::testData with data set "two" (2)`},
+		{"phpunit", phpunitDeselectCmd, []string{"vendor/bin/phpunit"}, []string{"FTest::testBoom", `App\Tests\FTest::testAdds`, `FTest::testData with data set "two"`},
 			[]string{"vendor/bin/phpunit", "--exclude-filter", `/(?:^|\\)(?:FTest::testBoom|FTest::testAdds|FTest::testData)(?: with data set .*)?$/`}},
 		{"go", goDeselectCmd, []string{"go", "test", "./..."}, []string{"TestA", "TestB"},
 			[]string{"go", "test", "./...", "-skip", `^(?:TestA|TestB)$`}},
+		// After -args every word is the test binary's: -skip goes where go
+		// test's options end (goTestOptionsEnd), and a -skip of the binary's
+		// own is not the operator's filter (TestGoDeselectBeforeArgsRuns).
+		{"go -args", goDeselectCmd, []string{"go", "test", "./...", "-args", "-update"}, []string{"TestA"},
+			[]string{"go", "test", "./...", "-skip", `^(?:TestA)$`, "-args", "-update"}},
+		{"go --args", goDeselectCmd, []string{"go", "test", "./...", "--args", "-skip", "x"}, []string{"TestA"},
+			[]string{"go", "test", "./...", "-skip", `^(?:TestA)$`, "--args", "-skip", "x"}},
 	} {
 		if got, ok := c.cmd(c.argv, c.ids); !ok || !slices.Equal(got, c.want) {
 			t.Errorf("%s = %q, %v\n want %q", c.name, got, ok, c.want)
@@ -245,6 +265,7 @@ func TestDeselectCmdsRefuse(t *testing.T) {
 		{"minitest own -n", minitestDeselectCmd, []string{"ruby", "t.rb", "-n", "x"}},
 		{"phpunit own filter", phpunitDeselectCmd, []string{"phpunit", "--filter", "x"}},
 		{"go own -skip", goDeselectCmd, []string{"go", "test", "-skip", "X", "./..."}},
+		{"go own -run before -args", goDeselectCmd, []string{"go", "test", "-run", "X", "./...", "-args", "-update"}},
 		{"go not go test", goDeselectCmd, []string{"make", "test"}},
 	} {
 		if got, ok := c.cmd(c.argv, []string{"T::x"}); ok {

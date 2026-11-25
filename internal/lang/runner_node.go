@@ -4,6 +4,7 @@ package lang
 
 import (
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -82,6 +83,9 @@ type nodeEntry struct {
 	ok   bool
 	typ  string
 	exit bool
+	// todo: the result carries TAP's TODO directive (`not ok 5 - t #
+	// TODO`): node does not fail a run for a todo test that failed.
+	todo bool
 }
 
 // nodeEntries walks a TAP report into its results, and which of them have
@@ -102,7 +106,7 @@ func nodeEntries(stdout string) (entries []*nodeEntry, hasChild map[string]bool)
 				cur = nil
 				continue
 			}
-			cur = &nodeEntry{path: slices.Clone(stack[:level+1]), ok: strings.HasPrefix(trimmed, "ok ")}
+			cur = &nodeEntry{path: slices.Clone(stack[:level+1]), ok: strings.HasPrefix(trimmed, "ok "), todo: nodeTAPTodo.MatchString(trimmed)}
 			entries = append(entries, cur)
 			continue
 		}
@@ -126,6 +130,11 @@ func nodeEntries(stdout string) (entries []*nodeEntry, hasChild map[string]bool)
 	}
 	return entries, hasChild
 }
+
+// nodeTAPTodo is TAP's TODO directive at the end of a result line. node
+// escapes a "#" in a test's name (`\#`), so an unescaped " # TODO" is the
+// directive (node 22.23.5, capture-runner-fixtures.sh node-hook-fail.txt).
+var nodeTAPTodo = regexp.MustCompile(`[^\\] # TODO( .*)?$`)
 
 func nodeKey(path []string) string { return strings.Join(path, "\x00") }
 

@@ -39,6 +39,16 @@ type Runner struct {
 	// ReportCmd reads the runner's options from there. nil: the first of
 	// Words.
 	At func(argv []string) int
+	// OptionsEnd is where the runner's options end, for a runner whose
+	// options do not run to its own `--` or the command's end
+	// (runnerOptionsEnd): node reads its options only before the first file,
+	// so a flag after one is handed to the test files, and its options end
+	// right after `--test`, where nodeWith puts its own; go test's end at
+	// -args, after which every word is the test binary's
+	// (goTestOptionsEnd). at is At's answer.
+	// nil: runnerOptionsEnd. ReportCmd and FailFastCmd both place what they
+	// add there (optionsEnd).
+	OptionsEnd func(argv []string, at int) int
 
 	// FailFast is the runner's stop-at-first-failure flag, appended only to a
 	// command that NAMES this runner and is not shell-wrapped (see
@@ -298,13 +308,14 @@ var runners = []Runner{
 	{
 		// -failfast stops after the first test binary failure.
 		Name: "go test", ID: "go-test", Languages: []string{"go"}, Default: true, Detect: goTestCmd,
+		At: goTestAt, OptionsEnd: goTestOptionsEnd,
 		FailFast: []string{"-failfast"},
 		ListCmd:  goListCmd, ParseList: goParseTestList, SingleCmd: goSingleCmd,
 		FirstFailure: goFirstFailure, FailedTests: goFailedTests, DeselectCmd: goDeselectCmd, KillerCmd: goKillerCmd,
 		ListUnits: goTestListUnits, ParseUnits: goParseUnits, UnitCmd: oneUnit(goTestUnitsCmd),
 		UnitsCmd: goTestUnitsCmd, UnitForFile: goUnitForFile, UnitNoun: "packages",
 		EvidenceArgs: goTestEvidenceArgs, EvidenceCache: goEvidenceCache, RunCacheArgs: goRunCacheArgs,
-		Note: "one-package and several-package runs and their `go list` listing verified on go 1.26; the unit evidence pass runs each package with -count=1 over one GOCACHE the pass shares, warmed by its first package and frozen for the rest, so a cached test result is never read as a run",
+		Note: "one-package and several-package runs and their `go list` listing verified on go 1.26; -failfast is added before the operator's -args (after it, the test binary refuses it and a passing run exits 1, measured on go 1.26.11); a failing test is read from its `--- FAIL:` line, also where go prints it after a test's own output that did not end in a newline (go 1.26.11); the unit evidence pass runs each package with -count=1 over one GOCACHE the pass shares, warmed by its first package and frozen for the rest, so a cached test result is never read as a run",
 	},
 	{
 		Name: "gotestsum", ID: "gotestsum", Languages: []string{"go"}, Words: []string{"gotestsum"},
@@ -350,12 +361,13 @@ var runners = []Runner{
 		// named on the command line replaces the config's (measured on jest
 		// 30.5.2 with reporters ["summary"] and []).
 		ReportArgs: []string{"--reporters=default"},
+		ReportHook: jestRecordHook,
 		ListCmd:    jestListCmd, ParseList: jestParseList, SingleCmd: jestSingleCmd, ResolveByList: true, Coruns: jestCoruns,
-		FirstFailure: firstOf(jestFailures), FailedTests: jestFailures, DeselectCmd: jestDeselectCmd, FailedUnits: jestFailedUnits, KillerCmd: jestKillerCmd,
+		FirstFailure: firstOf(jestFailedTests), FailedTests: jestFailedTests, DeselectCmd: jestDeselectCmd, FailedUnits: jestFailedUnits, KillerCmd: jestKillerCmd,
 		ListUnits: jestListUnits, ParseUnits: jestParseUnits, UnitCmd: oneUnit(jestUnitsCmd), UnitCoruns: jestUnitCoruns,
 		UnitsCmd: jestUnitsCmd, UnitsCoruns: eachUnitCoruns(jestUnitCoruns), UnitForFile: fileUnitForFile, UnitNoun: "test files",
 		VersionCmd: jestVersionCmd,
-		Note:       "listing, one-test, one-file and several-file runs verified on jest 30.5; --reporters=default verified on jest 30.5.2 against a config whose reporters list hides the failures (testdata/runners/report-jest-*.txt); through a package script corral adds nothing",
+		Note:       "listing, one-test, one-file and several-file runs verified on jest 30.5; --reporters=default verified on jest 30.5.2 against a config whose reporters list hides the failures (testdata/runners/report-jest-*.txt); through a package script corral adds nothing. Every graded run corral can rewrite (the command names jest, is not shell-wrapped or a package script, and names no `--json` or `--outputFile` of its own) goes through `sh -c` with `--json --outputFile=<a temporary file>` added after `--reporters=default`, and corral reads the killing test from jest's JSON record by the id the printed `●` headings give (ancestor titles and title joined by `::`; a title holding ` › `, which the printed heading splits, is whole), then adds the tests the printed headings name that the record does not. Run on jest 30.5.2 on Linux outside the sandbox: exit code unchanged, printed output, on stdout and stderr together (`--json` moves jest-cli's own messages from stdout to stderr), unchanged but for one more line, `Test results written to: <file>`; and the hook writes no project file: a jest config's `json`/`outputFile` (which are command-line options, not configuration), a package.json `jest` block naming them and a configured reporter with an `outputFile` option are not written, with or without the hook, and a testResultsProcessor writes what it writes either way. Not run: other jest versions, the bubblewrap sandbox, the workspace substrate, macOS. Not wrapped: Windows. A record over 30 KiB (lang.RecordPrintMax) is not printed, so that it cannot push the printed lines out of the 64 KiB tail corral keeps of a mutant's run: the wrapper prints one `corral-record-skipped <format> <bytes>` line in its place, and the printed lines are read, as without the hook. A record that is printed still takes its size out of that tail, leaving the printed lines at least 34 KiB, so a failure only the printed lines name can fall out of the tail when the run printed more than that (measured with PHPUnit's edge capture, 40 KiB of printed failure text and a record just under the bound: a throwing setUpBeforeClass and a throwing data provider, named without the hook, were not named with it)",
 	},
 	{
 		ListsFullNames: true,
@@ -372,7 +384,7 @@ var runners = []Runner{
 		// on its command line (measured on mocha 11.8.0), so `mocha <file>`
 		// runs every configured spec as well, and argv cannot show whether
 		// a config names one.
-		Note: "listing and one-test runs verified on mocha 11.8 and 12.0 (listing needs mocha 9 or later); --reporter spec verified on mocha 12.0.3 against a .mocharc json reporter; no unit evidence: its config's spec list is always added to the files on its command line, so it has no one-file run",
+		Note: "listing and one-test runs verified on mocha 11.8 and 12.0 (listing needs mocha 9 or later); --reporter spec verified on mocha 12.0.3 against a .mocharc json reporter; no unit evidence: its config's spec list is always added to the files on its command line, so it has no one-file run; no failure hook: mocha runs one reporter, the last one named (on mocha 12.0.3, `--reporter spec --reporter xunit` printed none of spec's lines), so a record reporter would replace the spec lines corral reads and the operator sees",
 	},
 	{
 		// Detect adds vitest's entry script to the word; a shell-wrapped
@@ -383,6 +395,17 @@ var runners = []Runner{
 		// A reporters list in the project's vitest config (json, junit)
 		// replaces the default reporter, whose ` FAIL ` lines the readers
 		// take; one on the command line wins (measured on vitest 5.1.0).
+		//
+		// No ReportHook, on purpose: a JUnit record next to the default
+		// reporter would be the hook, and no command line keeps vitest
+		// from writing it into a project's file. vitest keeps the options
+		// a config gives a reporter whenever the command line names the
+		// same reporter (its resolveConfig maps CLI reporter names onto the
+		// config's [name, options] pairs), and a reporter's own outputFile
+		// wins over --outputFile, so under `reporters: [['junit',
+		// {outputFile: 'x.xml'}]]` `--reporter=junit` writes x.xml whatever
+		// else is given; the capture script's vitest-outputfile-* checks
+		// run each config shape. --reporter=default alone writes no file.
 		ReportArgs: []string{"--reporter=default"},
 		ListCmd:    vitestListCmd, ParseList: vitestParseList, SingleCmd: vitestSingleCmd, ResolveByList: true, Coruns: vitestCoruns,
 		FirstFailure: firstOf(vitestFailures), FailedTests: vitestFailures, DeselectCmd: vitestDeselectCmd, FailedUnits: vitestFailedUnits, KillerCmd: vitestKillerCmd,
@@ -391,18 +414,22 @@ var runners = []Runner{
 		EvidenceArgs:   vitestEvidenceArgs,
 		VersionCmd:     vitestVersionCmd,
 		UnitNoCoverage: "no worker coverage: the run's V8 coverage named no project file, though corral ran the unit with --pool=threads; that is what vitest's forks pool gives (measured on vitest 3.2.7 and 5.0.3), so check whether the test file itself forces another pool",
-		Note:           "listing, one-test, one-file and several-file runs verified on vitest 3.2 and 5.1, salvage on 5.1; --reporter=default verified on vitest 5.1.0 against a config whose reporters list (json) hides the failures; the unit evidence pass runs each file with --pool=threads, because the forks pool wrote no worker coverage (measured on vitest 3.2.7 and 5.0.3); unit evidence counted through corral's vm source-map preload on vitest 3.2.7 and 5.0.3; vitest 1, 2 and 4 were not run",
+		Note:           "listing, one-test, one-file and several-file runs verified on vitest 3.2 and 5.1, salvage on 5.1; --reporter=default verified on vitest 5.1.0 against a config whose reporters list (json) hides the failures; the unit evidence pass runs each file with --pool=threads, because the forks pool wrote no worker coverage (measured on vitest 3.2.7 and 5.0.3); unit evidence counted through corral's vm source-map preload on vitest 3.2.7 and 5.0.3; vitest 1, 2 and 4 were not run. vitest has no failure hook, because corral must never write into a project's file and no command line keeps vitest's JUnit report out of one (measured on vitest 5.1.0, report/vitest-outputfile): `--outputFile=<file>` keeps it out of a config's `outputFile`, a string or an object, but a reporter the config names with options, `reporters: [['junit', {outputFile}]]`, keeps them when the command line names the same reporter, and the report goes to the project's file (`--outputFile.junit=<file>` loses to a config's string `outputFile` as well); so the killing test is read from the printed ` FAIL ` lines alone",
 	},
 	{
 		Name: "node --test", ID: "node-test", Languages: []string{"javascript", "typescript"}, Default: true,
 		Detect: func(argv []string) bool {
 			return len(argv) > 0 && filepath.Base(argv[0]) == "node" && slices.Contains(argv, "--test")
 		},
-		ListCmd: nodeListCmd, ParseList: nodeParseList, SingleCmd: nodeSingleCmd, ResolveByList: true, Coruns: nodeCoruns,
-		FirstFailure: firstOf(nodeFailures), FailedTests: nodeFailures, DeselectCmd: nodeDeselectCmd,
+		// node reads its options only before the first file, so the
+		// hook's words go right after `--test` (nodeWith's place).
+		At: nodeTestAt, OptionsEnd: func(_ []string, at int) int { return at + 1 },
+		ReportHook: nodeRecordHook,
+		ListCmd:    nodeListCmd, ParseList: nodeParseList, SingleCmd: nodeSingleCmd, ResolveByList: true, Coruns: nodeCoruns,
+		FirstFailure: firstOf(nodeFailedTests), FailedTests: nodeFailedTests, DeselectCmd: nodeDeselectCmd,
 		ListUnits: nodeListUnits, ParseUnits: nodeParseUnits, UnitCmd: oneUnit(nodeUnitsCmd),
 		UnitsCmd: nodeUnitsCmd, UnitForFile: fileUnitForFile, UnitNoun: "test files",
-		Note: "node has no collect-only mode, so listing RUNS the test file once on the unmutated code; verified on node 22.23 and 24.22: listing, one-test, one-file and several-file runs, and salvage, on both (24.22.2 measured 2026-11-10). Through a package script, listing, one-test runs and salvage need `--test` to be the script's last word, since node reads options only before the first file",
+		Note: "node has no collect-only mode, so listing RUNS the test file once on the unmutated code; verified on node 22.23 and 24.22: listing, one-test, one-file and several-file runs, and salvage, on both (24.22.2 measured 2026-11-10). Through a package script, listing, one-test runs and salvage need `--test` to be the script's last word, since node reads options only before the first file. Every graded run corral can rewrite (the program is node, every word before `--test` is an option or its value, and no reporter or config file is named in the command or in NODE_OPTIONS) goes through `sh -c` with `--test-reporter=tap --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=<a temporary file>` added right after `--test`, and corral reads the killing test from node's JUnit record by the same id the printed TAP gives (suites and name joined by `::`), then adds the tests the printed TAP names that the record does not; a file that failed to load and a failing todo test are named by neither. Run on node 22.23.5 on Linux outside the sandbox (printed output and exit code unchanged, on a failing run and a passing one) and node 24.22.1 in a container (exit code unchanged; node 24's spec report is replaced by TAP). Not run: the bubblewrap sandbox, the workspace substrate, macOS. Not wrapped: Windows. A record over 30 KiB (lang.RecordPrintMax) is not printed, so that it cannot push the printed lines out of the 64 KiB tail corral keeps of a mutant's run: the wrapper prints one `corral-record-skipped <format> <bytes>` line in its place, and the printed lines are read, as without the hook. A record that is printed still takes its size out of that tail, leaving the printed lines at least 34 KiB, so a failure only the printed lines name can fall out of the tail when the run printed more than that (measured with PHPUnit's edge capture, 40 KiB of printed failure text and a record just under the bound: a throwing setUpBeforeClass and a throwing data provider, named without the hook, were not named with it)",
 	},
 	// rspec takes --fail-fast. Minitest is deliberately without one: its own
 	// --fail-fast arrived in minitest 5.22, and an older minitest treats an
@@ -415,28 +442,32 @@ var runners = []Runner{
 		// command line replaces the file's (measured on rspec-core 3.13.6,
 		// with documentation too).
 		ReportArgs: []string{"--format", "progress"},
+		ReportHook: rspecRecordHook,
 		ListCmd:    rspecListCmd, ParseList: rspecParseList, SingleCmd: rspecSingleCmd, ResolveByList: true, Coruns: lastFullColl,
-		FirstFailure: firstOf(rspecFailures), FailedTests: rspecFailures, DeselectCmd: rspecDeselectCmd, KillerCmd: rspecKillerCmd,
+		FirstFailure: firstOf(rspecFailedTests), FailedTests: rspecFailedTests, DeselectCmd: rspecDeselectCmd, KillerCmd: rspecKillerCmd,
 		ListUnits: rspecListUnits, ParseUnits: rspecParseUnits, UnitCmd: oneUnit(rspecUnitsCmd),
 		UnitsCmd: rspecUnitsCmd, UnitForFile: fileUnitForFile, UnitNoun: "test files",
-		Note: "listing, one-test, one-file and several-file runs verified on rspec-core 3.13 (one-test runs need 3.12 or later); --format progress verified on rspec-core 3.13.6 against an .rspec `--format json`, and it replaces an .rspec `--format documentation` too",
+		Note: "listing, one-test, one-file and several-file runs verified on rspec-core 3.13 (one-test runs need 3.12 or later); --format progress verified on rspec-core 3.13.6 against an .rspec `--format json`, and it replaces an .rspec `--format documentation` too. Every graded run corral can rewrite (the command names rspec and is not shell-wrapped) goes through `sh -c` with `--format json --out <a temporary file>` added after `--format progress`, and corral reads the killing test from rspec's JSON record by its full description, the id the printed `Failed examples:` list gives, then adds the examples that list names that the record does not. Run on rspec-core 3.13.6 on Linux outside the sandbox: printed output and exit code unchanged, and the hook writes no project file: an `--out` in ~/.rspec, .rspec or .rspec-local was already replaced by `--format progress` and is not written with or without the hook, while a SPEC_OPTS naming a formatter, or an `--out` of the operator's or a formatter a spec_helper adds, is written with or without it (a SPEC_OPTS formatter replaces corral's, so there no record is written and the printed lines, if any, are read). Not run: other rspec versions, the bubblewrap sandbox, the workspace substrate, macOS. Not wrapped: Windows. A record over 30 KiB (lang.RecordPrintMax) is not printed, so that it cannot push the printed lines out of the 64 KiB tail corral keeps of a mutant's run: the wrapper prints one `corral-record-skipped <format> <bytes>` line in its place, and the printed lines are read, as without the hook. A record that is printed still takes its size out of that tail, leaving the printed lines at least 34 KiB, so a failure only the printed lines name can fall out of the tail when the run printed more than that (measured with PHPUnit's edge capture, 40 KiB of printed failure text and a record just under the bound: a throwing setUpBeforeClass and a throwing data provider, named without the hook, were not named with it)",
 	},
 	{
 		Name: "minitest", ID: "minitest", Languages: []string{"ruby"}, Words: []string{"ruby", "rake", "testrb"},
 		FirstFailure: firstOf(minitestFailures), FailedTests: minitestFailures, DeselectCmd: minitestDeselectCmd,
-		Note: "minitest has no list mode and no full-name selector; rspec is the Ruby runner that lists and runs one test; no unit evidence: no listing command; Ruby falls back to name pairing under minitest; no report flags: a reporter the project installs in its own test helper (minitest-reporters, not run here) can replace the printed failures, and no flag undoes it",
+		Note: "minitest has no list mode and no full-name selector; rspec is the Ruby runner that lists and runs one test; no unit evidence: no listing command; Ruby falls back to name pairing under minitest; no report flags: a reporter the project installs in its own test helper (minitest-reporters, not run here) can replace the printed failures, and no flag undoes it; no failure hook: no option minitest 5.20.0 lists (the --help of the fixture's test file, run) writes a record of the run to a file, and a reporter gem that writes one (minitest-reporters' JUnit reporter, not run) is installed by the project's own test helper, which no command-line word does, so its failures are read from what it prints",
 	},
 	{
 		Name: "phpunit", ID: "phpunit", Languages: []string{"php"}, Default: true, Words: []string{"phpunit"},
-		FailFast: []string{"--stop-on-failure"}, FirstFailure: phpFirstFailure, FailedTests: phpFailures, DeselectCmd: phpunitDeselectCmd, KillerCmd: phpunitKillerCmd,
+		FailFast: []string{"--stop-on-failure"}, ReportHook: phpunitRecordHook,
+		FirstFailure: phpFirstFailure, FailedTests: phpFailures, DeselectCmd: phpunitDeselectCmd, KillerCmd: phpunitKillerCmd,
 		ListCmd: phpunitListCmd, ParseList: phpunitParseList, SingleCmd: phpunitSingleCmd, ResolveByList: true,
 		ListUnits: phpunitListUnits, ParseUnits: phpunitParseUnits, ListUnitsSetup: phpunitUnitsSetup, UnitCmd: oneUnit(phpunitUnitsCmd),
 		UnitsCmd: phpunitUnitsCmd, UnitForFile: fileUnitForFile, UnitNoun: "test files",
-		Note: "listing, one-test, one-file and several-file runs verified on PHPUnit 11.5; the test-file listing (`--list-tests`, with PHP naming each test class's file) also on 9.6, 10.5 and 12.5, where one-file runs were run as well; PHPUnit 9 and 10 ignore `--group` and `--exclude-group` when listing, so a command carrying one gets no test-file listing there",
+		Note: "listing, one-test, one-file and several-file runs verified on PHPUnit 11.5; the test-file listing (`--list-tests`, with PHP naming each test class's file) also on 9.6, 10.5 and 12.5, where one-file runs were run as well; PHPUnit 9 and 10 ignore `--group` and `--exclude-group` when listing, so a command carrying one gets no test-file listing there. Every graded run corral can rewrite (the command names phpunit, is not shell-wrapped or a composer script, and names no `--log-junit` of its own) goes through `sh -c` with `--log-junit <a temporary file>` added after PHPUnit's options, and corral reads the killing test from that JUnit record, errors first as PHPUnit prints them, so a phpunit.xml with testdox=\"true\" (which replaces the printed `N) Class::method` lines) does not hide it; the tests the printed lines name that the record leaves out (a throwing setUpBeforeClass or data provider) are added after the record's, and the printed lines are the whole answer when the record is missing, cut short or not well-formed. Run on PHPUnit 11.5.57 on Linux outside the sandbox: printed output and exit code unchanged, on a failing run and a passing one, a passing run still passing with the record sent to /dev/null when the hook cannot make its directory, and a `<junit>` logging entry in phpunit.xml is not written on a graded run (PHPUnit writes one JUnit file, the last named): PHPUnit is the one hooked row where corral's record overrides a report the project's configuration asks for, because corral does not read phpunit.xml before it wraps a command; a command with a `--log-junit` of its own is not wrapped, as the other rows decline an operator's own record option, so that file is written. Not run: PHPUnit 9, 10 and 12, the bubblewrap sandbox, the workspace substrate, macOS. Not wrapped: Windows. A record over 30 KiB (lang.RecordPrintMax) is not printed, so that it cannot push the printed lines out of the 64 KiB tail corral keeps of a mutant's run: the wrapper prints one `corral-record-skipped <format> <bytes>` line in its place, and the printed lines are read, as without the hook. A record that is printed still takes its size out of that tail, leaving the printed lines at least 34 KiB, so a failure only the printed lines name can fall out of the tail when the run printed more than that (measured with PHPUnit's edge capture, 40 KiB of printed failure text and a record just under the bound: a throwing setUpBeforeClass and a throwing data provider, named without the hook, were not named with it)",
 	},
 	{
-		// FirstFailure and Flaky read the grammar off the output, not the
-		// command (rustGrammarOf), so both cargo rows share them.
+		// The readers read the grammar off the output, not the command
+		// (rustGrammarOf). This row reads its failure hook's JUnit record
+		// first and the printed lines second (nextestFailedTests); the
+		// cargo test row, which has no hook, reads the printed lines.
 		Name: "cargo nextest", ID: "cargo-nextest", Languages: []string{"rust"}, Detect: isNextest, At: nextestIndex,
 		// A .config/nextest.toml profile with status-level and
 		// final-status-level "none" drops the FAIL lines the readers take.
@@ -444,6 +475,7 @@ var runners = []Runner{
 		// prints exactly what it did, retry lines included (measured on
 		// cargo-nextest 0.9.148).
 		ReportArgs: []string{"--status-level", "pass", "--final-status-level", "flaky"},
+		ReportHook: nextestRecordHook,
 		ListCmd:    nextestListCmd, ParseList: nextestParseList, SingleCmd: nextestSingleCmd, ResolveByList: true,
 		// --fail-fast is nextest's default, so it changes a run only where a
 		// profile or the command turned it off (`fail-fast = false`,
@@ -452,12 +484,12 @@ var runners = []Runner{
 		// cargo test has no such flag: libtest has none, and cargo already
 		// stops at the first failing test binary unless told otherwise.
 		FailFast:     []string{"--fail-fast"},
-		FirstFailure: rustFirstFailure, Flaky: rustFlakyTests, KillerCmd: nextestKillerCmd,
-		FailedTests: rustFailedTests, DeselectCmd: nextestDeselectCmd, SelectCmd: nextestSelectCmd,
+		FirstFailure: firstOf(nextestFailedTests), Flaky: nextestFlakyTests, KillerCmd: nextestKillerCmd,
+		FailedTests: nextestFailedTests, DeselectCmd: nextestDeselectCmd, SelectCmd: nextestSelectCmd,
 		Disclose: nextestDisclose, PreflightBin: nextestPreflightBin,
 		ListUnits: nextestListUnits, ParseUnits: nextestParseUnits, UnitCmd: oneUnit(nextestUnitsCmd),
 		UnitsCmd: nextestUnitsCmd, UnitForFile: nextestUnitForFile, UnitNoun: "test targets",
-		Note: "one-binary and several-binary runs (one `-E 'binary_id(=...)'` each) and their `list` listing verified on cargo-nextest 0.9.148; --status-level pass --final-status-level flaky (nextest's own defaults) verified on 0.9.148 against a profile with both set to none; a command with its own filterset or a partition has no unit form",
+		Note: "one-binary and several-binary runs (one `-E 'binary_id(=...)'` each) and their `list` listing verified on cargo-nextest 0.9.148; --status-level pass --final-status-level flaky (nextest's own defaults) verified on 0.9.148 against a profile with both set to none; a command with its own filterset or a partition has no unit form. Every graded run corral can rewrite (a cargo nextest command with `run`, or its alias `r`, directly after `nextest`, not shell-wrapped and naming no `--tool-config-file` of its own) goes through `sh -c` with `--tool-config-file corral:<a temporary file>` added after its options: a nextest config corral writes in its own temporary directory, setting only `[profile.default.junit] path` (which every profile inherits) to another temporary file. corral reads the killing test from nextest's JUnit record by the id the printed FAIL lines give (`<binary id> <test>`), then adds the tests the printed lines name that the record does not; the record also names a test that failed every retry, aborted or timed out, which the printed lines show as `TRY n FAIL`, `SIGABRT` and `TIMEOUT` and the printed reader does not take. Run on cargo-nextest 0.9.148 on Linux outside the sandbox: printed output and exit code unchanged, on a failing run and a passing one; 0.9.50, 0.9.70 and 0.9.100 were run by hand on one failing crate (exit code and printed lines unchanged, record written) and not captured. The hook writes no project file (report/nextest-junit): a JUnit path the project's own config sets for the profile in use (the default profile, one chosen with -P or NEXTEST_PROFILE, an absolute path, an operator's --config-file) wins, and is written with and without the hook, with the same content (each of the four compared, run id and clocks aside, on 0.9.148), while no record of corral's is written and the printed lines are read; but with a JUnit report configured nextest creates the profile's store directory (target/nextest/<profile>, or <store.dir>/<profile>) when it is missing, so a graded run can leave that directory, empty, where the run without the hook would not. Not run: the bubblewrap sandbox, the workspace substrate, macOS. Not wrapped: Windows. A record over 30 KiB (lang.RecordPrintMax) is not printed, so that it cannot push the printed lines out of the 64 KiB tail corral keeps of a mutant's run: the wrapper prints one `corral-record-skipped <format> <bytes>` line in its place, and the printed lines are read, as without the hook. A record that is printed still takes its size out of that tail, leaving the printed lines at least 34 KiB, so a failure only the printed lines name can fall out of the tail when the run printed more than that (measured with PHPUnit's edge capture, 40 KiB of printed failure text and a record just under the bound: a throwing setUpBeforeClass and a throwing data provider, named without the hook, were not named with it)",
 	},
 	{
 		Name: "cargo test", ID: "cargo-test", Languages: []string{"rust"}, Default: true, Words: []string{"cargo"},
@@ -467,7 +499,7 @@ var runners = []Runner{
 		Disclose: libtestDisclose, PreflightBin: libtestPreflightBin,
 		ListUnits: cargoListUnits, ParseUnits: cargoParseUnits, UnitCmd: oneUnit(cargoUnitsCmd),
 		UnitsCmd: cargoUnitsCmd, UnitsCoruns: cargoUnitsCoruns, UnitForFile: cargoUnitForFile, UnitNoun: "test targets",
-		Note: "libtest has no retries; flaky tests are named when the output is nextest's (a wrapper that runs nextest under another command); one-target runs (`-p <package>` with `--lib`, `--test` or `--bin`, in place of the command's own package and target selection) verified on cargo 1.90; a run of several targets runs each named target in every named package, since cargo selects targets across the packages it is given (measured on cargo 1.90); doc tests, examples and benches are no unit",
+		Note: "libtest has no retries; flaky tests are named when the output is nextest's (a wrapper that runs nextest under another command); one-target runs (`-p <package>` with `--lib`, `--test` or `--bin`, in place of the command's own package and target selection) verified on cargo 1.90; a run of several targets runs each named target in every named package, since cargo selects targets across the packages it is given (measured on cargo 1.90); doc tests, examples and benches are no unit; no failure hook: libtest writes a record of the run only in its json and junit formats, which stable refuses (on cargo 1.90 `-- --format junit` and `-- -Z unstable-options --format json` exit 101), and to its --logfile, which every test binary of the run rewrites, so it held the last binary's tests alone (three test binaries, cargo 1.90); its failures are read from what it prints, and cargo-nextest is the Rust runner with the hook",
 	},
 	{
 		Name: "swift test", ID: "swift-test", Languages: []string{"swift"}, Default: true, Words: []string{"swift"},
@@ -475,11 +507,11 @@ var runners = []Runner{
 		// test file, and a critic's name (TestNamesInSource's, already in
 		// the listing's form) is checked against it before it is run.
 		ListCmd: swiftListCmd, ParseList: swiftParseList, SingleCmd: swiftSingleCmd, ResolveByList: true, Coruns: swiftCoruns,
-		FirstFailure: swiftFirstFailure,
-		ListUnits:    swiftListUnits, ParseUnits: swiftParseUnits, UnitCmd: oneUnit(swiftUnitsCmd),
+		FirstFailure: swiftFirstFailure, ReportHook: swiftRecordHook,
+		ListUnits: swiftListUnits, ParseUnits: swiftParseUnits, UnitCmd: oneUnit(swiftUnitsCmd),
 		UnitsCmd: swiftUnitsCmd, UnitForFile: swiftUnitForFile, UnitNoun: "test targets",
 		Disclose: swiftDisclose, PreflightBin: func(argv []string) string { return preflightBin(argv, "swift") },
-		Note: "corral's sandbox does not run Swift, so a Swift audit runs only on `certify --repo --substrate workspace`, and no audit with models has been run on one yet. Run on Swift 6.3.2 on Linux, in a container: the listing; one test alone (`--filter`) for each of four id shapes, an XCTest Class/method, a top-level swift-testing function, one in a suite with a display name and a parameterised one, each running exactly one test; one-target and two-target runs; and the failure lines of both frameworks. Other id shapes (nested suites, a name that is no ASCII identifier) were not run. The --help lists no retry option, so no test is reported flaky; a swift-testing failure is named by its function or display name, as its output prints it, an XCTest one as Class.method without its target; a test target declared with its own `path:` in Package.swift is not mapped to its files",
+		Note: "corral's sandbox does not run Swift, so a Swift audit runs only on `certify --repo --substrate workspace`, and no audit with models has been run on one yet. Run on Swift 6.3.2 on Linux, in a container: the listing; one test alone (`--filter`) for each of four id shapes, an XCTest Class/method, a top-level swift-testing function, one in a suite with a display name and a parameterised one, each running exactly one test; one-target and two-target runs; and the failure lines of both frameworks. Other id shapes (nested suites, a name that is no ASCII identifier) were not run. The --help lists no retry option, so no test is reported flaky; a swift-testing failure is named by the id `swift test list` prints, read from swift-testing's own record of the run (`--xunit-output`, run on Swift 6.3.2 and 6.4.2), and by its function or display name, as its output prints it, where there is no record (a command the hook does not wrap, or a crashed test process); XCTest writes no record unless its tests run in parallel, which the hook does not add, so an XCTest failure is never read from a record: it is named from its printed line, as Class.method without its target; a test target declared with its own `path:` in Package.swift is not mapped to its files; a swift-testing record over 30 KiB (lang.RecordPrintMax) is not printed, so that it cannot push the printed lines out of the 64 KiB tail corral keeps of a mutant's run: the wrapper prints one `corral-record-skipped <format> <bytes>` line in its place, and the printed lines are read, as without the hook; a record that is printed still takes its size out of that tail, leaving the printed lines at least 34 KiB, so an XCTest failure, or a test of a crashed swift-testing process, which only the printed lines name, can fall out of it when the run printed more than that",
 	},
 }
 
@@ -689,7 +721,16 @@ func RunsAlone(p Plugin, inv Invocation, listed []string, id string) bool {
 // load in (at is the index of the runner's word); nil wraps every command
 // ReportCmd can read. Says is the scan line's sentence about it, after the
 // runner's name.
+//
+// Args, when set, is the words the hook needs on the runner's own command
+// line (a record-file runner's `--log-junit <token>`, FileRecordHook).
+// ReportCmd inserts them where the runner's options end (optionsEnd),
+// after the row's ReportArgs, and only when it applies the hook: they belong
+// to the wrapper, which is what replaces the token they carry, so a command
+// the hook is not applied to (Windows, a command Wraps declines) gets
+// neither.
 type ReportHook struct {
+	Args  func() []string
 	Wrap  func(cmd []string) []string
 	Wraps func(cmd []string, at int) bool
 	Says  string

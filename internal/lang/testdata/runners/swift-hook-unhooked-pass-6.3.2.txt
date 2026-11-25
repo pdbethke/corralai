@@ -1,0 +1,39 @@
+[0/1] Planning build
+Building for debugging...
+[0/2] Write swift-version-24593BA9C3E375BF.txt
+Build complete! (0.07s)
+Test Suite 'All tests' started at 2026-11-25 16:35:12.783
+Test Suite 'debug.xctest' started at 2026-11-25 16:35:12.785
+Test Suite 'AdderTests' started at 2026-11-25 16:35:12.785
+Test Case 'AdderTests.testAdds' started at 2026-11-25 16:35:12.785
+Test Case 'AdderTests.testAdds' passed (0.001 seconds)
+Test Case 'AdderTests.testAddsTwice' started at 2026-11-25 16:35:12.785
+Test Case 'AdderTests.testAddsTwice' passed (0.1 seconds)
+Test Case 'AdderTests.testFails' started at 2026-11-25 16:35:12.886
+Test Case 'AdderTests.testFails' passed (0.0 seconds)
+Test Suite 'AdderTests' passed at 2026-11-25 16:35:12.886
+	 Executed 3 tests, with 0 failures (0 unexpected) in 0.101 (0.101) seconds
+Test Suite 'debug.xctest' passed at 2026-11-25 16:35:12.886
+	 Executed 3 tests, with 0 failures (0 unexpected) in 0.101 (0.101) seconds
+Test Suite 'All tests' passed at 2026-11-25 16:35:12.886
+	 Executed 3 tests, with 0 failures (0 unexpected) in 0.101 (0.101) seconds
+◇ Test run started.
+↳ Testing Library Version: 6.3.2 (70eff261d7f462c)
+↳ Target Platform: x86_64-unknown-linux-gnu
+◇ Test parses() started.
+◇ Suite Arithmetic started.
+◇ Test parsesTwice() started.
+◇ Test "adds two numbers" started.
+◇ Test doubles(value:) started.
+◇ Test fails() started.
+◇ Test case passing 1 argument value → 1 to doubles(value:) started.
+◇ Test case passing 1 argument value → 3 to doubles(value:) started.
+◇ Test case passing 1 argument value → 2 to doubles(value:) started.
+✔ Test parsesTwice() passed after 0.001 seconds.
+✔ Test "adds two numbers" passed after 0.001 seconds.
+✔ Test fails() passed after 0.001 seconds.
+✔ Test parses() passed after 0.001 seconds.
+✔ Test doubles(value:) with 3 test cases passed after 0.001 seconds.
+✔ Suite Arithmetic passed after 0.001 seconds.
+✔ Test run with 5 tests in 1 suite passed after 0.001 seconds.
+# exit: 0

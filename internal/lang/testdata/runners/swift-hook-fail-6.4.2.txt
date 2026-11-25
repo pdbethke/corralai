@@ -1,0 +1,85 @@
+Building for debugging...
+Build complete! (0.27 secs)
+Test Suite 'All tests' started at 2026-11-25 16:34:49.925
+Test Suite 'Debug-linux-x86_64.xctest' started at 2026-11-25 16:34:49.926
+Test Suite 'AdderTests' started at 2026-11-25 16:34:49.926
+Test Case 'AdderTests.testAdds' started at 2026-11-25 16:34:49.926
+Test Case 'AdderTests.testAdds' passed (0.0 seconds)
+Test Case 'AdderTests.testAddsTwice' started at 2026-11-25 16:34:49.926
+Test Case 'AdderTests.testAddsTwice' passed (0.0 seconds)
+Test Case 'AdderTests.testFails' started at 2026-11-25 16:34:49.927
+$DIR/swift/Tests/CalcXCTests/CalcXCTests.swift:22: error: AdderTests.testFails : XCTAssertEqual failed: ("4") is not equal to ("5") - 
+Test Case 'AdderTests.testFails' failed (0.0 seconds)
+Test Suite 'AdderTests' failed at 2026-11-25 16:34:49.927
+	 Executed 3 tests, with 1 failure (0 unexpected) in 0.001 (0.001) seconds
+Test Suite 'Debug-linux-x86_64.xctest' failed at 2026-11-25 16:34:49.927
+	 Executed 3 tests, with 1 failure (0 unexpected) in 0.001 (0.001) seconds
+Test Suite 'All tests' failed at 2026-11-25 16:34:49.927
+	 Executed 3 tests, with 1 failure (0 unexpected) in 0.001 (0.001) seconds
+Test Suite 'All tests' started at 2026-11-25 16:34:49.934
+Test Suite 'Debug-linux-x86_64.xctest' started at 2026-11-25 16:34:49.935
+Test Suite 'Debug-linux-x86_64.xctest' passed at 2026-11-25 16:34:49.935
+	 Executed 0 tests, with 0 failures (0 unexpected) in 0.0 (0.0) seconds
+Test Suite 'All tests' passed at 2026-11-25 16:34:49.935
+	 Executed 0 tests, with 0 failures (0 unexpected) in 0.0 (0.0) seconds
+◇ Test run started.
+↳ Testing Library Version: 6.4.2 (288a2328ff84644)
+↳ Target Platform: x86_64-unknown-linux-gnu
+✔ Test run with 0 tests in 0 suites passed after 0.001 seconds.
+◇ Test run started.
+↳ Testing Library Version: 6.4.2 (288a2328ff84644)
+↳ Target Platform: x86_64-unknown-linux-gnu
+◇ Suite Arithmetic started.
+◇ Test parsesTwice() started.
+◇ Test parses() started.
+◇ Test fails() started.
+◇ Test doubles(value:) started.
+◇ Test "adds two numbers" started.
+◇ Test case passing 1 argument value → 1 to doubles(value:) started.
+◇ Test case passing 1 argument value → 3 to doubles(value:) started.
+◇ Test case passing 1 argument value → 2 to doubles(value:) started.
+✔ Test parses() passed after 0.001 seconds.
+✔ Test parsesTwice() passed after 0.001 seconds.
+✘ Test doubles(value:) recorded an issue with 1 argument value → 2 at CalcTests.swift:26:9: Expectation failed: double(value) == value + value + (planted && value == 2 ? 1 : 0)
+↳ double(value) == value + value + (planted && value == 2 ? 1 : 0) → false
+↳   double(value) → 4
+↳   value + value + (planted && value == 2 ? 1 : 0) → 5
+✘ Test "adds two numbers" recorded an issue at CalcTests.swift:22:9: Expectation failed: add(2, 3) == (planted ? 6 : 5)
+↳ add(2, 3) == (planted ? 6 : 5) → false
+↳   add(2, 3) → 5
+↳   (planted ? 6 : 5) → 6
+✘ Test fails() recorded an issue at CalcTests.swift:30:9: Expectation failed: add(2, 2) == (planted ? 5 : 4)
+↳ add(2, 2) == (planted ? 5 : 4) → false
+↳   add(2, 2) → 4
+↳   (planted ? 5 : 4) → 5
+✘ Test fails() failed after 0.001 seconds with 1 issue.
+✘ Test doubles(value:) with 3 test cases failed after 0.001 seconds with 1 issue.
+✘ Test "adds two numbers" failed after 0.001 seconds with 1 issue.
+✘ Suite Arithmetic failed after 0.001 seconds with 3 issues.
+✘ Test run with 5 tests in 1 suite failed after 0.001 seconds with 3 issues.
+Note: Some test targets reported failures:
+  - CalcXCTests (XCTest)
+  - CalcTests (Swift Testing)
+
+corral-record-begin junit
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<testsuites>
+  <testsuite name="TestResults" errors="0" tests="0" failures="0" skipped="0" time="0.000186822">
+
+  </testsuite>
+  <testsuite name="TestResults" errors="0" tests="5" failures="3" skipped="0" time="0.000921342">
+    <testcase classname="CalcTests" name="parsesTwice()" time="0.000206218"/>
+    <testcase classname="CalcTests" name="parses()" time="0.000210726"/>
+    <testcase classname="CalcTests.Arithmetic" name="adds()" time="0.000504859">
+      <failure message="Expectation failed: add(2, 3) == (planted ? 6 : 5) (error)"/>
+    </testcase>
+    <testcase classname="CalcTests.Arithmetic" name="doubles(value:)" time="0.000454063">
+      <failure message="Expectation failed: double(value) == value + value + (planted &amp;&amp; value == 2 ? 1 : 0) (error)"/>
+    </testcase>
+    <testcase classname="CalcTests.Arithmetic" name="fails()" time="0.000468991">
+      <failure message="Expectation failed: add(2, 2) == (planted ? 5 : 4) (error)"/>
+    </testcase>
+  </testsuite>
+</testsuites>
+corral-record-end
+# exit: 1

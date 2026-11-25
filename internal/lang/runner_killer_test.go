@@ -221,3 +221,41 @@ func TestKillerFiltersAreTheOnesTheCaptureScriptRan(t *testing.T) {
 		}
 	}
 }
+
+// A failing data set's killer command runs that data set alone: the ids
+// phpFailures reads from the captured runs, made into KillerCmd's filter,
+// are the filters the capture script ran and saw run exactly one test
+// ("phpunit-killer-one-dataset*"). With the printed argument suffix kept in
+// the id (`with data set "two" (2)`), the filter selected no test at all
+// (PHPUnit 11.5.57: "No tests executed!").
+func TestPHPUnitKillerRunsTheFailingDataSetAlone(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "scripts", "capture-runner-fixtures.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := killerRow(t, "php", "phpunit")
+	for _, c := range []struct{ fixture, id string }{
+		{"phpunit-fail.txt", `FTest::testData with data set "two"`},
+		{"phpunit-datasets-fail.txt", `DTest::testNamed with data set "x (y)"`},
+		{"phpunit-datasets-fail.txt", "DTest::testUnnamed with data set #2"},
+	} {
+		if !slices.Contains(phpFailures(readFixture(t, c.fixture)), c.id) {
+			t.Errorf("%s: phpFailures names no %q (got %q)", c.fixture, c.id, phpFailures(readFixture(t, c.fixture)))
+			continue
+		}
+		cmd, ok := r.KillerCmd([]string{"phpunit"}, c.id)
+		if !ok {
+			t.Fatalf("%q: no killer command", c.id)
+		}
+		filter := "'" + cmd[len(cmd)-1] + "'"
+		var ran bool
+		for _, line := range strings.Split(string(b), "\n") {
+			if strings.HasPrefix(line, "want phpunit-killer-one-dataset") && strings.Contains(line, `"Tests: 1, Assertions: 1, Failures: 1"`) && strings.Contains(line, filter) {
+				ran = true
+			}
+		}
+		if !ran {
+			t.Errorf("%q: the capture script saw no %s run exactly one test", c.id, filter)
+		}
+	}
+}

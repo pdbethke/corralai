@@ -131,10 +131,11 @@ func withoutVitestProject(rest string) string {
 // jestFailedUnits reads jest's "FAIL <file>" line, one per failing file, a
 // file that failed to load included. A line with more after the file (a
 // project's displayName, which no fixture here shows) names nothing rather
-// than a guess.
+// than a guess. It reads the printed lines alone (PrintedOutput), as every
+// reader of printed lines does, never a line inside the record block.
 func jestFailedUnits(out string) []string {
 	var units []string
-	for _, line := range strings.Split(out, "\n") {
+	for _, line := range strings.Split(PrintedOutput(out), "\n") {
 		rest, ok := strings.CutPrefix(strings.TrimLeft(line, " "), "FAIL ")
 		if !ok {
 			continue
@@ -194,8 +195,10 @@ func mochaFailures(out string) []string {
 // nodeFailures reads node's report off a TTY: TAP on node 22, the spec
 // reporter on node 23 and later (measured on 22.23 and 24.22). Either way it
 // names every failing test with no subtests: a suite, or a test whose
-// subtests failed, is rolled up as failed and is not itself the failure, and
-// a file that failed to load is not a test.
+// subtests failed, is rolled up as failed and is not itself the failure, a
+// file that failed to load is not a test, and a todo test that failed is
+// not a failure (node does not fail the run for it; node 23's spec report
+// leaves it out, and TAP marks it `# TODO`).
 func nodeFailures(out string) []string {
 	if !strings.Contains(out, "TAP version") {
 		return nodeSpecFailures(out)
@@ -203,7 +206,7 @@ func nodeFailures(out string) []string {
 	entries, hasChild := nodeEntries(out)
 	var ids []string
 	for _, e := range entries {
-		if !e.ok && e.typ == "test" && !e.exit && !hasChild[nodeKey(e.path)] {
+		if !e.ok && !e.todo && e.typ == "test" && !e.exit && !hasChild[nodeKey(e.path)] {
 			ids = append(ids, strings.Join(e.path, "::"))
 		}
 	}
@@ -298,9 +301,94 @@ func minitestFailures(out string) []string {
 	return ids
 }
 
-// phpFailures is every "N) Class::method" line of PHPUnit's failure and
-// error sections, verbatim (see phpFirstFailure).
+// phpFailures is every test PHPUnit reported failing or erroring, in the id
+// form phpFailureID gives (see phpFirstFailure).
+//
+// Two sources, both read. The run's own record, when the output carries a
+// complete, well-formed JUnit block (the PHPUnit row's failure hook,
+// phpunitRecordedFailures), comes first, errors then failures. Then every
+// name PHPUnit's printed "N) Class::method" lines give that the record does
+// not, in printed order; the printed lines are read with the record block
+// left out (PrintedOutput), so a line inside the record is never read
+// as a printed one. With no record (a command corral does not wrap, output
+// recorded before the hook existed, a block the output cap cut, a record
+// PHPUnit did not write or that is not well-formed) the printed lines are
+// the whole answer, as they were before the hook.
+//
+// The union is there because the record is not a superset of the printed
+// lines (PHPUnit 11.5.57, capture-runner-fixtures.sh phpunit-hook-edge.txt):
+// a setUpBeforeClass that throws is printed as `N) Class` and a data
+// provider that throws as `N) Class::method` (a "PHPUnit error"), and
+// neither is in the JUnit record at all, so a record read alone would name
+// fewer tests than the printed lines did, and a run killed only by such an
+// error would name no killing test. Adding the printed names is safe in the
+// way the printed lines always were: a name here is only a candidate, and a
+// kill is credited to it only when it, run alone, fails on the fault and
+// passes on the clean code (adequacy's kill confirmation); a salvage that
+// deselects a name too many narrows the exam, never widens it. That
+// includes the one name the union adds which is not a failure: the printed
+// reader takes every numbered section, so a risky test (PHPUnit 11's
+// default strictness reports a test with no assertion as risky, in a
+// numbered section of its own) is named, as it was before the hook. The
+// record lists that test as a plain, passing testcase, never as an <error>
+// (measured), so the record adds no name the printed lines do not consider
+// failing, and nothing is dropped from it: under a testdox configuration the
+// printed lines name nothing at all and the record is the only source.
 func phpFailures(out string) []string {
+	return recordThenPrinted(out, phpunitRecordedFailures, phpPrintedFailures, sameID)
+}
+
+// recordThenPrinted is the failing tests of a run whose row has a
+// record-file hook: the ONE rule every such row's reader follows, so that a
+// row adopting the hook adds a record reader and a printed reader and never
+// a union of its own.
+//
+// recorded reads the run's record (ok false when there is none to trust:
+// no complete block, another format, a record its reader refuses); printed
+// reads the runner's printed lines, and is handed the output with the record
+// block taken out (PrintedOutput), so a line inside the record is never
+// read as a printed one. With no record the printed names are the whole
+// answer, as before the hook. With one, the record's ids come first, each
+// once (a record may name a test twice: nextest writes each retry, and
+// swift-testing each case of a parameterised test, as a testcase of its
+// own), then each printed name that no recorded id stands for (names(id,
+// name): the same test, written as the printed lines write it; sameID when
+// the two are written alike), in printed order, each once.
+//
+// The printed names are added because no runner's record has yet been a
+// superset of its printed lines (PHPUnit's omits errors outside a test
+// method; swift-testing's omits a crashed process's tests), so a record read
+// alone would name fewer tests than the printed lines did. A name is only a
+// candidate: a kill is credited to a named test only where adequacy's kill
+// confirmation runs it alone, and a salvage that deselects a name too many
+// narrows the exam, never widens it.
+func recordThenPrinted(out string, recorded func(string) ([]string, bool), printed func(string) []string, names func(id, name string) bool) []string {
+	shown := printed(PrintedOutput(out))
+	recordedIDs, ok := recorded(out)
+	if !ok {
+		return shown
+	}
+	ids := []string{}
+	for _, id := range recordedIDs {
+		if !slices.Contains(ids, id) {
+			ids = append(ids, id)
+		}
+	}
+	for _, name := range shown {
+		if !slices.ContainsFunc(ids, func(id string) bool { return names(id, name) }) {
+			ids = append(ids, name)
+		}
+	}
+	return ids
+}
+
+// sameID is recordThenPrinted's names for a row whose record writes a test's
+// id exactly as its printed lines do.
+func sameID(id, name string) bool { return id == name }
+
+// phpPrintedFailures is every "N) Class::method" line of PHPUnit's printed
+// numbered sections, in printed order.
+func phpPrintedFailures(out string) []string {
 	var ids []string
 	for _, line := range strings.Split(out, "\n") {
 		if id, ok := phpFailureID(line); ok {
@@ -316,11 +404,10 @@ func phpFailures(out string) []string {
 func goFailedTests(out string) []string {
 	var ids []string
 	for _, line := range strings.Split(out, "\n") {
-		rest, ok := strings.CutPrefix(strings.TrimSpace(line), "--- FAIL: ")
+		name, ok := goFailHeading(line)
 		if !ok {
 			continue
 		}
-		name, _, _ := strings.Cut(rest, " ")
 		name, _, _ = strings.Cut(name, "/")
 		if name != "" && !slices.Contains(ids, name) {
 			ids = append(ids, name)
@@ -429,10 +516,20 @@ func phpunitDeselectCmd(argv, ids []string) ([]string, bool) {
 }
 
 // goDeselectCmd uses -skip (Go 1.20 or later) over top-level test names
-// (goFailedTests).
+// (goFailedTests), placed where go test's options end (goTestOptionsEnd,
+// the rule fail-fast uses): after -args it would be the test binary's, which
+// refuses it as a flag it does not define (go 1.26.11). It declines a
+// command that filters by name already (goFiltersByName): a -run or -skip
+// among go's own words in any spelling, or a `-test.run` or `-test.skip`
+// (one or two dashes) after -args, which the test binary reads itself; a
+// plain -run or -skip after -args filters nothing.
 func goDeselectCmd(argv, ids []string) ([]string, bool) {
-	if len(ids) == 0 || !goTestCmd(argv) || hasFlag(argv, "-run", "-skip", "--run", "--skip") {
+	if len(ids) == 0 || !goTestCmd(argv) {
 		return nil, false
 	}
-	return append(slices.Clone(argv), "-skip", "^(?:"+alternation(ids, regexp.QuoteMeta)+")$"), true
+	if goFiltersByName(argv, append(slices.Clone(goRunFlags), goSkipFlags...), append(slices.Clone(goBinaryRunFlags), goBinarySkipFlags...)) {
+		return nil, false
+	}
+	end := goTestOptionsEnd(argv, goTestAt(argv))
+	return slices.Insert(slices.Clone(argv), end, "-skip", "^(?:"+alternation(ids, regexp.QuoteMeta)+")$"), true
 }

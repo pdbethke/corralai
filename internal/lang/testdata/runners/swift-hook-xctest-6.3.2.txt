@@ -1,0 +1,53 @@
+[0/1] Planning build
+Building for debugging...
+[0/2] Write swift-version-24593BA9C3E375BF.txt
+Build complete! (0.06s)
+Test Suite 'All tests' started at 2026-11-25 16:35:15.628
+Test Suite 'debug.xctest' started at 2026-11-25 16:35:15.629
+Test Suite 'AdderTests' started at 2026-11-25 16:35:15.629
+Test Case 'AdderTests.testAdds' started at 2026-11-25 16:35:15.629
+Test Case 'AdderTests.testAdds' passed (0.0 seconds)
+Test Case 'AdderTests.testAddsTwice' started at 2026-11-25 16:35:15.629
+Test Case 'AdderTests.testAddsTwice' passed (0.0 seconds)
+Test Case 'AdderTests.testFails' started at 2026-11-25 16:35:15.629
+$DIR/swift/Tests/CalcXCTests/CalcXCTests.swift:22: error: AdderTests.testFails : XCTAssertEqual failed: ("4") is not equal to ("5") - 
+Test Case 'AdderTests.testFails' failed (0.0 seconds)
+Test Suite 'AdderTests' failed at 2026-11-25 16:35:15.630
+	 Executed 3 tests, with 1 failure (0 unexpected) in 0.001 (0.001) seconds
+Test Suite 'debug.xctest' failed at 2026-11-25 16:35:15.630
+	 Executed 3 tests, with 1 failure (0 unexpected) in 0.001 (0.001) seconds
+Test Suite 'All tests' failed at 2026-11-25 16:35:15.630
+	 Executed 3 tests, with 1 failure (0 unexpected) in 0.001 (0.001) seconds
+◇ Test run started.
+↳ Testing Library Version: 6.3.2 (70eff261d7f462c)
+↳ Target Platform: x86_64-unknown-linux-gnu
+◇ Test parsesTwice() started.
+◇ Test parses() started.
+◇ Suite Arithmetic started.
+◇ Test doubles(value:) started.
+◇ Test "adds two numbers" started.
+◇ Test fails() started.
+◇ Test case passing 1 argument value → 3 to doubles(value:) started.
+◇ Test case passing 1 argument value → 1 to doubles(value:) started.
+◇ Test case passing 1 argument value → 2 to doubles(value:) started.
+✔ Test parses() passed after 0.001 seconds.
+✔ Test parsesTwice() passed after 0.001 seconds.
+✔ Test fails() passed after 0.001 seconds.
+✔ Test doubles(value:) with 3 test cases passed after 0.001 seconds.
+✔ Test "adds two numbers" passed after 0.001 seconds.
+✔ Suite Arithmetic passed after 0.001 seconds.
+✔ Test run with 5 tests in 1 suite passed after 0.001 seconds.
+
+corral-record-begin junit
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="TestResults" errors="0" tests="5" failures="0" skipped="0" time="0.000765719">
+    <testcase classname="CalcTests" name="parses()" time="0.000305465" />
+    <testcase classname="CalcTests.Arithmetic" name="fails()" time="0.000204214" />
+    <testcase classname="CalcTests.Arithmetic" name="doubles(value:)" time="0.000246734" />
+    <testcase classname="CalcTests.Arithmetic" name="adds()" time="0.000266291" />
+    <testcase classname="CalcTests" name="parsesTwice()" time="0.000359576" />
+  </testsuite>
+</testsuites>
+corral-record-end
+# exit: 1

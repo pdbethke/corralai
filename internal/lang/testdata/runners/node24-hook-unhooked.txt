@@ -1,0 +1,174 @@
+$DIR/broken.node.test.js:4
+throw new Error('this file does not load');
+^
+
+Error: this file does not load
+    at Object.<anonymous> ($DIR/broken.node.test.js:4:7)
+    at Module._compile (node:internal/modules/cjs/loader:1929:14)
+    at Object..js (node:internal/modules/cjs/loader:2060:10)
+    at Module.load (node:internal/modules/cjs/loader:1651:32)
+    at Module._load (node:internal/modules/cjs/loader:1443:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:261:19)
+    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+    at node:internal/main/run_main_module:33:47
+
+Node.js v24.22.1
+✖ broken.node.test.js (25.125597ms)
+▶ Calc
+  ✖ adds (a+b) (0.680347ms)
+  ✔ ok (0.087114ms)
+  ▶ neg
+    ✖ adds (0.076724ms)
+  ✖ neg (0.169368ms)
+✖ Calc (1.537696ms)
+✖ top level (3.623282ms)
+▶ parent
+  ✖ child fails (0.755468ms)
+✖ parent (1.327683ms)
+▶ body fails after child
+  ✔ child ok (0.075141ms)
+✖ body fails after child (0.763524ms)
+▶ hooked
+  ✖ a
+✖ hooked (0.163006ms)
+⚠ todo fails (0.05324ms) # TODO
+✖ a > b :: c #1 (0.132419ms)
+ℹ tests 12
+ℹ suites 3
+ℹ pass 2
+ℹ fail 8
+ℹ cancelled 1
+ℹ skipped 0
+ℹ todo 1
+
+✖ failing tests:
+
+test at broken.node.test.js:1:1
+✖ broken.node.test.js (25.125597ms)
+  'test failed'
+
+test at fail/f.node.test.js:4:3
+✖ adds (a+b) (0.680347ms)
+  AssertionError [ERR_ASSERTION]: 2 == 3
+      at TestContext.<anonymous> ($DIR/fail/f.node.test.js:4:35)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at node:internal/test_runner/test:1903:71
+      at node:internal/per_context/primordials:504:82
+      at new Promise (<anonymous>)
+      at new SafePromise (node:internal/per_context/primordials:478:3)
+      at node:internal/per_context/primordials:504:9
+      at Array.map (<anonymous>) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 2,
+    expected: 3,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at fail/f.node.test.js:6:27
+✖ adds (0.076724ms)
+  Error: boom
+      at TestContext.<anonymous> ($DIR/fail/f.node.test.js:6:52)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at node:internal/test_runner/test:1903:71
+      at node:internal/per_context/primordials:504:82
+      at new Promise (<anonymous>)
+      at new SafePromise (node:internal/per_context/primordials:478:3)
+      at node:internal/per_context/primordials:504:9
+      at Array.map (<anonymous>)
+
+test at fail/f.node.test.js:8:1
+✖ top level (3.623282ms)
+  AssertionError [ERR_ASSERTION]: 1 == 2
+      at TestContext.<anonymous> ($DIR/fail/f.node.test.js:8:34)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Suite.postRun (node:internal/test_runner/test:1542:19)
+      at Suite.run (node:internal/test_runner/test:1921:10)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 2,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at fail/node-edge/e.node.test.js:3:39
+✖ child fails (0.755468ms)
+  AssertionError [ERR_ASSERTION]: 1 == 2
+      at TestContext.<anonymous> ($DIR/fail/node-edge/e.node.test.js:3:74)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at TestContext.test (node:internal/test_runner/test:400:20)
+      at TestContext.<anonymous> ($DIR/fail/node-edge/e.node.test.js:3:39)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 2,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at fail/node-edge/e.node.test.js:4:1
+✖ body fails after child (0.763524ms)
+  Error: after
+      at TestContext.<anonymous> ($DIR/fail/node-edge/e.node.test.js:4:89)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+
+test at fail/node-edge/e.node.test.js:5:72
+✖ a
+  'test did not finish before its parent and was cancelled'
+
+test at fail/node-edge/e.node.test.js:5:1
+✖ hooked (0.163006ms)
+  Error: hook
+      at SuiteContext.<anonymous> ($DIR/fail/node-edge/e.node.test.js:5:49)
+      at TestHook.runInAsyncScope (node:async_hooks:227:14)
+      at TestHook.run (node:internal/test_runner/test:1402:25)
+      at TestHook.run (node:internal/test_runner/test:1757:18)
+      at TestHook.run (node:internal/util:581:20)
+      at Suite.runHook (node:internal/test_runner/test:1289:20)
+      at Suite.run (node:internal/test_runner/test:1899:18)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+
+test at fail/node-edge/e.node.test.js:6:6
+⚠ todo fails (0.05324ms) # TODO
+  Error: todo
+      at TestContext.<anonymous> ($DIR/fail/node-edge/e.node.test.js:6:39)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Suite.postRun (node:internal/test_runner/test:1542:19)
+      at Suite.run (node:internal/test_runner/test:1921:10)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+
+test at fail/node-edge/e.node.test.js:7:1
+✖ a > b :: c #1 (0.132419ms)
+  AssertionError [ERR_ASSERTION]: 1 == 2
+      at TestContext.<anonymous> ($DIR/fail/node-edge/e.node.test.js:7:38)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 2,
+    operator: '==',
+    diff: 'simple'
+  }

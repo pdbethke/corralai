@@ -1,0 +1,10 @@
+[package]
+name = "nextest-edge"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "edge-bin"
+path = "src/main.rs"
+
+[workspace]

@@ -1,0 +1,33 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s
+────────────
+    Starting 6 tests across 5 binaries
+        PASS [   0.002s] (1/6) units-a tests::adds
+        PASS [   0.002s] (2/6) units-a tests::adds_more
+        PASS [   0.002s] (3/6) units-a::it integrates
+        PASS [   0.003s] (4/6) units-a::bin/units-a tests::runs
+        PASS [   0.002s] (5/6) units-b tests::negates
+        PASS [   0.002s] (6/6) units-b::it integrates
+────────────
+     Summary [   0.015s] 6 tests run: 6 passed, 0 skipped
+
+corral-record-begin junit
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="6" skipped="0" failures="0" errors="0" time="0">
+    <testsuite name="units-a" tests="2" skipped="0" errors="0" failures="0">
+        <testcase name="tests::adds" classname="units-a" time="0"/>
+        <testcase name="tests::adds_more" classname="units-a" time="0"/>
+    </testsuite>
+    <testsuite name="units-a::it" tests="1" skipped="0" errors="0" failures="0">
+        <testcase name="integrates" classname="units-a::it" time="0"/>
+    </testsuite>
+    <testsuite name="units-a::bin/units-a" tests="1" skipped="0" errors="0" failures="0">
+        <testcase name="tests::runs" classname="units-a::bin/units-a" time="0"/>
+    </testsuite>
+    <testsuite name="units-b" tests="1" skipped="0" errors="0" failures="0">
+        <testcase name="tests::negates" classname="units-b" time="0"/>
+    </testsuite>
+    <testsuite name="units-b::it" tests="1" skipped="0" errors="0" failures="0">
+        <testcase name="integrates" classname="units-b::it" time="0"/>
+    </testsuite>
+</testsuites>
+corral-record-end

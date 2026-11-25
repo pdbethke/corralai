@@ -569,7 +569,79 @@ package reposcan
 // recorded a critic that judged an empty file and found nothing). Behaviour
 // and shape bump, both in this one generation since neither has reached
 // main.
-const VerdictGeneration = "54"
+// "55" (2026-11-25): a PHPUnit data set's id loses the arguments PHPUnit
+// prints after its name (lang.phpDataSetID: `C::m with data set "two" (2)`
+// is `C::m with data set "two"`, `... #2 (9, 'z')` is `... #2`). The printed
+// arguments are the data set's exported values, not its position, and the
+// killer command built from an id carrying them selected no test (PHPUnit
+// 11.5.57: "No tests executed!"), so a data set's kill fell back to
+// repeating the run; now that data set is run alone and the kill can be
+// confirmed by the test itself. A recorded killed_by id for a data set
+// changes form. In the same generation, since neither has reached main:
+// every PHPUnit run corral can rewrite now writes PHPUnit's own JUnit record
+// (--log-junit, lang.phpunitRecordHook), and the killing test is read from
+// it, so a project whose phpunit.xml sets testdox="true", where "54" read no
+// killing test from the printed lines, now names one, and that kill can be
+// confirmed by the test alone. A PHPUnit killed_by can also change where
+// the two sources disagree: an error the record leaves out (a throwing
+// setUpBeforeClass or data provider, printed only) is now named after every
+// id the record gives, where "54" read the printed lines in their order, and
+// under --reverse-list, where PHPUnit prints each section in reverse and the
+// record does not change, the first named error is the record's first, not
+// the first printed (PHPUnit 11.5.57). Also in "55": every `swift test` run corral
+// can rewrite writes swift-testing's JUnit record (--xunit-output,
+// lang.swiftRecordHook), and a swift-testing killing test is read from it
+// by the id `swift test list` prints (`CalcTests.Arithmetic/adds()`) where
+// "54" recorded the bare name the printed line gives (`adds()`, or a
+// display name), so a recorded Swift killed_by changes form. An XCTest
+// killing test keeps its form (Class.method, read from the printed line, as
+// XCTest writes no record), but which test is named first changes on a run
+// where both frameworks fail: "54" named the XCTest test, printed first
+// (AdderTests.testFails), and "55" names the record's swift-testing test,
+// which comes first (Swift 6.3.2 and 6.4.2, swift-hook-fail-*.txt). Also in
+// "55": every `node --test` run corral can rewrite writes
+// node's JUnit record (lang.nodeRecordHook) and the killing test is read
+// from it, by the same id the printed TAP gave, so a node killed_by keeps
+// its form; a todo test that fails, which node does not fail the run for
+// and the TAP reader used to name, is named by neither source, so a "54"
+// killed_by that named one names the test that failed. On node 23 and
+// later the printed report under the hook is TAP, not spec; the ids are
+// the same. Also in "55": every jest and rspec run corral can rewrite
+// writes the runner's JSON record (lang.jestRecordHook, --json
+// --outputFile; lang.rspecRecordHook, --format json --out) and the killing
+// test is read from it by the id the printed lines gave, so an rspec
+// killed_by keeps its form, and so does a jest one except for a test whose
+// title holds jest's printed separator ` › `: "54" split that title
+// (`Sep::a::b`) and the record keeps it whole (`Sep::a › b`), which the
+// killer command now selects. Also in "55": every `cargo nextest run`
+// corral can rewrite writes nextest's JUnit record (lang.nextestRecordHook,
+// --tool-config-file naming a config corral writes) and the killing test is
+// read from it, by the id the printed FAIL lines gave (`<binary id>
+// <test>`), so a nextest killed_by keeps its form; but the record also names
+// a test that failed every retry, aborted or timed out (printed as `TRY n
+// FAIL`, `SIGABRT`, `TIMEOUT`, which the printed reader never took), and the
+// first failure is the record's first, in its order, not the first printed,
+// so a "54" nextest killed_by that was empty, or named another failing test
+// of the same run, can now name such a test. Also in "55": go test's
+// printed reader (lang.goFailHeading) takes a `--- FAIL:` heading that ends
+// a line it does not start, which go prints after a test's own output that
+// did not end in a newline (go 1.26.11). "54" skipped that line, so a go
+// killed_by that was empty, or named a later failing test (or, for a
+// subtest's output, the subtest where its parent's heading came first), can
+// now name the test whose heading it was; on a line where a test printed a
+// heading of its own, the name is go's heading that ends it; a t.Log or
+// t.Error line ending in that shape still names nothing. And go test's
+// killer command (lang.goKillerCmd) now declines a command that filters by
+// name in any spelling go reads (`-test.run=X`, `--run=X`), among go's own
+// words, or with `-test.run` / `--test.run` after -args, which the test
+// binary reads and which overrides go's -run (go 1.26.7), where "54" built
+// a killer the operator's filter overrode, so such a kill is now confirmed
+// by repeating the run; a plain `-run` or `--run` after -args, which the
+// binary refuses and which filters nothing, no longer declines it. The
+// salvage -skip declines the same, and `-test.skip` / `--test.skip` after
+// -args. Behaviour bump;
+// the shape is unchanged.
+const VerdictGeneration = "55"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

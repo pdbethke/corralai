@@ -1,0 +1,4 @@
+plain exit 0: rec.xml 
+parallel exit 0: rec.xml 
+twice exit 0: operator.xml 
+devnull exit 1

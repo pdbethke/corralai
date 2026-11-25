@@ -214,6 +214,41 @@ func goCountOne(args []string, parse func([]string) (opts, patterns []string, at
 // --args alike.
 func goArgsMarker(a string) bool { return a == "-args" || a == "--args" }
 
+// goOwnArgsEnd is where go test's own words end in args (the words after
+// `go test`, or after gotestsum's "--"): the index of the -args marker, or
+// len(args). The one rule for where corral puts a flag meant for go test:
+// the run cache's -count=1 (goGradingArgs) and the go-test row's OptionsEnd
+// (fail-fast's -failfast) both go there. It does not end at a `--`, as
+// goTestOptionsEnd does, because the run cache refuses a command with a `--`
+// among go's own words as unreadable before it places anything (goRunsNoTest
+// reads it as a flag go test does not list), so a caller that may see a `--`
+// places through goTestOptionsEnd.
+func goOwnArgsEnd(args []string) int {
+	if i := slices.IndexFunc(args, goArgsMarker); i >= 0 {
+		return i
+	}
+	return len(args)
+}
+
+// goTestAt is the go-test row's At: `go test` is two words, and go test's
+// options start after the second.
+func goTestAt(argv []string) int {
+	if goTestCmd(argv) {
+		return 1
+	}
+	return -1
+}
+
+// goTestOptionsEnd is the go-test row's OptionsEnd: go test's options end at
+// the -args marker (goOwnArgsEnd), or at a `--` before it
+// (runnerOptionsEnd). After -args every word is the test binary's, so a
+// -failfast there is a flag the binary does not define and a passing suite
+// exits 1; after `--` go test does not read it, and the run does not stop at
+// the first failure. Both measured on go 1.26.11.
+func goTestOptionsEnd(argv []string, at int) int {
+	return min(at+1+goOwnArgsEnd(argv[at+1:]), runnerOptionsEnd(argv, at))
+}
+
 // goGradingArgs is what grading hands the jail for go test arguments:
 // the arguments with a result-forbidding -count in them, and ok false when
 // go's own parsing cannot read them. Unlike goEvidenceArgs it accepts -run
@@ -232,22 +267,16 @@ func goArgsMarker(a string) bool { return a == "-args" || a == "--args" }
 // own rule of replacing any -count. A command that runs no test
 // (goRunsNoTest) is the caller's to tell apart first.
 func goGradingArgs(args []string) ([]string, bool) {
-	own := args
-	if i := slices.IndexFunc(args, goArgsMarker); i >= 0 {
-		own = args[:i]
-	}
-	opts, _, _, ok := goTestArgsRefusing(own, map[string]bool{})
+	end := goOwnArgsEnd(args)
+	opts, _, _, ok := goTestArgsRefusing(args[:end], map[string]bool{})
 	if !ok {
 		return nil, false
 	}
 	if goHasCount(opts) {
 		return slices.Clone(args), true
 	}
-	var tail []string
-	if i := slices.IndexFunc(args, goArgsMarker); i >= 0 {
-		args, tail = slices.Clone(args[:i]), args[i:]
-	}
-	out, ok := goCountOne(args, func(a []string) ([]string, []string, int, bool) {
+	tail := args[end:]
+	out, ok := goCountOne(slices.Clone(args[:end]), func(a []string) ([]string, []string, int, bool) {
 		return goTestArgsRefusing(a, map[string]bool{})
 	})
 	if !ok {

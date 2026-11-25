@@ -1,0 +1,4 @@
+# The operator's --config-file, which replaces .config/nextest.toml and writes
+# target/nextest/default/other.xml.
+[profile.default.junit]
+path = "other.xml"

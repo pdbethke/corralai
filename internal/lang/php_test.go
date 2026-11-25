@@ -313,3 +313,26 @@ func TestPHPCoverageNamesPcovWhenTheProbeFindsNone(t *testing.T) {
 		t.Errorf("a probe that finds no pcov must name the extension; stderr:\n%s", stderr.String())
 	}
 }
+
+// A data set's printed arguments are cut by structure, not at the last "(":
+// an argument or a name may hold parentheses, quotes and spaces. Ids with no
+// data set, or no suffix, are unchanged.
+func TestPHPDataSetIDDropsTheArgumentsOnly(t *testing.T) {
+	for in, want := range map[string]string{
+		`C::m with data set "two" (2)`:            `C::m with data set "two"`,
+		`C::m with data set "x (y)" (3)`:          `C::m with data set "x (y)"`,
+		`C::m with data set #2 (9, 'z (y) "q"')`:  `C::m with data set #2`,
+		`C::m with data set #10 (1)`:              `C::m with data set #10`,
+		`C::m with data set "a" ('" (b)')`:        `C::m with data set "a"`,
+		`App\T::m with data set "n" (array(...))`: `App\T::m with data set "n"`,
+		`C::m`:                      `C::m`,
+		`C::m with data set "two"`:  `C::m with data set "two"`,
+		`C::m with data set #2`:     `C::m with data set #2`,
+		`C::m (x)`:                  `C::m (x)`,
+		`C::m with data set #x (1)`: `C::m with data set #x (1)`,
+	} {
+		if got := phpDataSetID(in); got != want {
+			t.Errorf("phpDataSetID(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

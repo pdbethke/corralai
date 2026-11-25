@@ -1,0 +1,10 @@
+[profile.default]
+fail-fast = false
+
+[[profile.default.overrides]]
+filter = 'test(=tests::passes_on_retry) | test(=tests::fails_every_try)'
+retries = 1
+
+[[profile.default.overrides]]
+filter = 'test(=tests::times_out)'
+slow-timeout = { period = "1s", terminate-after = 1 }

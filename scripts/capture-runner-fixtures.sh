@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Elastic-2.0
 #
-# scripts/capture-runner-fixtures.sh [--swift-only|--swift-coverage-only] [--keep] [DIR] — runs the
+# scripts/capture-runner-fixtures.sh [--swift-only|--swift-coverage-only|--swift-hook-only] [--keep] [DIR] — runs the
 # real jest, vitest, mocha, node --test, rspec, phpunit, go test, gotestsum,
 # cargo test, cargo nextest and swift test against the fixture suites in
 # internal/lang/testdata/runners/src, writes what each runner's LIST command
@@ -31,7 +31,9 @@
 #     -e CORRAL_FAIL_TESTING -e CORRAL_FAIL_XCTEST -v /tmp/rf:/tmp/rf \
 #     -w /tmp/rf/swift swift:6.3.2-noble swift" \
 #     scripts/capture-runner-fixtures.sh --swift-only /tmp/rf
-# --swift-coverage-only captures swift-codecov.json alone, the same way.
+# --swift-coverage-only captures swift-codecov.json alone, the same way, and
+# --swift-hook-only the failure hook's swift-*-<version>.txt captures alone
+# (capture_swift_hook), once per toolchain, each run in a DIR of its own.
 # --swift-only captures the Swift fixtures alone, needs nothing but SWIFT, and
 # leaves PROVENANCE.txt as it is (a full run rewrites it, the Swift paragraph
 # included, from swift_provenance). Either run checks `$SWIFT --version` before
@@ -42,11 +44,12 @@ cd "$(dirname "$0")/.."
 REPO="$PWD"
 OUT="$REPO/internal/lang/testdata/runners"
 
-SWIFT_ONLY=0 SWIFT_COVERAGE_ONLY=0 KEEP=0
+SWIFT_ONLY=0 SWIFT_COVERAGE_ONLY=0 SWIFT_HOOK_ONLY=0 KEEP=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --swift-only) SWIFT_ONLY=1; shift ;;
     --swift-coverage-only) SWIFT_COVERAGE_ONLY=1; shift ;;
+    --swift-hook-only) SWIFT_HOOK_ONLY=1; shift ;;
     --keep) KEEP=1; shift ;;
     *) break ;;
   esac
@@ -191,6 +194,80 @@ capture_swift() (
   return "$fail"
 )
 
+# --- swift test's failure hook (internal/lang/swift_record.go) ---------------
+# swift-testing's own JUnit record, which the row has it write with
+# --xunit-output. Its file name and some of its behaviour differ between
+# releases, so every capture here is named for the release that made it
+# (swift-*-<version>.txt) and the function is run once per toolchain CI pins
+# (6.3.2 and 6.4.2), each with its own DIR. The graded command is taken from
+# the row (scripts/reportcmd), never copied; TestSwiftHookCaptureIsTheRowsCommand
+# holds these lines to it. It runs where $SWIFT runs: every word of $SWIFT but
+# the last, then the graded command, whose first word after the wrapper is
+# swift. Needs Go on the host.
+capture_swift_hook() (
+  cd "$DIR/swift"
+  local pdir v words
+  pdir="$(pwd -P)"
+  v="$($SWIFT --version 2>/dev/null | sed -n 's/^Swift version \([0-9][0-9.]*\).*/\1/p' | head -1)"
+  [ -n "$v" ] || { echo "FAIL swift-hook: no version from \`$SWIFT --version\`"; return 1; }
+  read -ra words <<<"$SWIFT"
+  local in=("${words[@]:0:${#words[@]}-1}")
+  local GRADED=()
+  mapfile -d '' GRADED < <(cd "$REPO" && go run ./scripts/reportcmd swift swift test)
+  [ "${#GRADED[@]}" -gt 0 ] || { echo "scripts/reportcmd gave no command for swift test" >&2; return 1; }
+  # hookrun <fixture> <cmd...>: stdout+stderr of cmd run where $SWIFT runs,
+  # then `# exit:` its status, the capture directory written as $DIR.
+  hookrun() {
+    local f="$1"; shift
+    { "${in[@]}" "$@" 2>&1; echo "# exit: $?"; } | sed -e "s#$pdir#\$DIR/swift#g" > "$OUT/$f" || true
+  }
+  exitof() { sed -n 's/^# exit: //p' "$OUT/$1"; }
+  # Where swift-testing writes its record, measured for the hook's suffixes
+  # and for what it declines (swiftRecordWraps): the option alone, with
+  # --parallel, given twice, and pointed beside /dev/null on a passing run.
+  rm -rf xunit && mkdir -p xunit/plain xunit/parallel xunit/twice
+  {
+    "${in[@]}" swift test --xunit-output=xunit/plain/rec.xml >/dev/null 2>&1; echo "plain exit $?: $(cd xunit/plain && ls | tr '\n' ' ')"
+    "${in[@]}" swift test --parallel --xunit-output=xunit/parallel/rec.xml >/dev/null 2>&1; echo "parallel exit $?: $(cd xunit/parallel && ls | tr '\n' ' ')"
+    "${in[@]}" swift test --xunit-output=xunit/twice/operator.xml --xunit-output=xunit/twice/corral.xml >/dev/null 2>&1; echo "twice exit $?: $(cd xunit/twice && ls | tr '\n' ' ')"
+    "${in[@]}" swift test --xunit-output=/dev/null.xml >/dev/null 2>&1; echo "devnull exit $?"
+  } > "$OUT/swift-xunit-files-$v.txt"
+  rm -rf xunit
+  # A passing run, hooked and not: the same exit code. Then the hook unable to
+  # make its directory (a mktemp that fails, put first on PATH; a TMPDIR
+  # naming no directory fails swift itself): the option is left out, the run
+  # passes, and no record is printed.
+  hookrun "swift-hook-pass-$v.txt" "${GRADED[@]}"
+  hookrun "swift-hook-unhooked-pass-$v.txt" swift test
+  want "swift-hook-pass-exit-$v" "0 0" "$(exitof "swift-hook-pass-$v.txt") $(exitof "swift-hook-unhooked-pass-$v.txt")"
+  mkdir -p "$DIR/nomktemp" && printf '#!/bin/sh\nexit 1\n' > "$DIR/nomktemp/mktemp" && chmod +x "$DIR/nomktemp/mktemp"
+  # shellcheck disable=SC2016 # expanded by that sh, not here
+  hookrun "swift-hook-fallback-$v.txt" sh -c 'PATH=$0:$PATH exec "$@"' "$DIR/nomktemp" "${GRADED[@]}"
+  want "swift-hook-fallback-exit-$v" 0 "$(exitof "swift-hook-fallback-$v.txt")"
+  want "swift-hook-fallback-says-$v" 1 "$(grep -c 'leaves its record option out' "$OUT/swift-hook-fallback-$v.txt")"
+  want "swift-hook-fallback-no-block-$v" 0 "$(grep -c '^corral-record-begin' "$OUT/swift-hook-fallback-$v.txt" || true)"
+  # Both frameworks failing, hooked and not (the printed part must match,
+  # TestSwiftHookLeavesThePrintedOutputAlone), and XCTest alone failing.
+  CORRAL_FAIL_TESTING=1 CORRAL_FAIL_XCTEST=1 hookrun "swift-hook-fail-$v.txt" "${GRADED[@]}"
+  CORRAL_FAIL_TESTING=1 CORRAL_FAIL_XCTEST=1 hookrun "swift-hook-unhooked-$v.txt" swift test
+  want "swift-hook-fail-exit-$v" "1 1" "$(exitof "swift-hook-fail-$v.txt") $(exitof "swift-hook-unhooked-$v.txt")"
+  want "swift-hook-fail-block-$v" 1 "$(grep -c '^corral-record-end' "$OUT/swift-hook-fail-$v.txt")"
+  CORRAL_FAIL_XCTEST=1 hookrun "swift-hook-xctest-$v.txt" "${GRADED[@]}"
+  # Failure shapes the fixture does not show (src/swift-authored/edge), and
+  # the ids `swift test list` gives them.
+  cp "$DIR/swift-authored/edge/CalcTests/Edge.swift" Tests/CalcTests/
+  hookrun "swift-hook-edge-$v.txt" "${GRADED[@]}"
+  "${in[@]}" swift test list 2>/dev/null > "$OUT/swift-hook-edge-list-$v.txt" || true
+  rm Tests/CalcTests/Edge.swift
+  # A test that crashes the process after the planted failures have printed
+  # (src/swift-authored/crash): what the record then holds.
+  cp "$DIR/swift-authored/crash/CalcTests/Crash.swift" Tests/CalcTests/
+  CORRAL_FAIL_TESTING=1 hookrun "swift-hook-crash-$v.txt" "${GRADED[@]}"
+  rm Tests/CalcTests/Crash.swift
+  want "swift-hook-crash-exit-$v" 1 "$(exitof "swift-hook-crash-$v.txt")"
+  return "$fail"
+)
+
 # --- swift coverage (internal/lang/swift_coverage.go) -----------------------
 # The llvm-cov export of one coverage run of the coverage fixture
 # (internal/lang/testdata/coverage/swift: Calc.swift tested in part, Dead.swift
@@ -269,6 +346,25 @@ that swiftPlugin.CoverageCmd's own script (scripts/swiftcoverageexport) made
 for one \`swift test\` run of a copy of ../coverage/swift: the profiles the
 run wrote, over the products whose build ID they name; the capture directory
 written as /fixture.
+swift-hook-*-<version>.txt, swift-hook-edge-list-<version>.txt and
+swift-xunit-files-<version>.txt (added 2026-11-25): capture_swift_hook in
+scripts/capture-runner-fixtures.sh, run once on Swift 6.3.2 (image
+swift:6.3.2-noble) and once on Swift 6.4.2 (image corral-swift-642-go-gawk),
+each in a container run as the invoking user, on src/swift. Each
+swift-hook-*.txt is stdout+stderr of one run, not a TTY, ending with
+\`# exit:\` (its exit status), the capture directory written as \$DIR: the
+\`swift test\` row's graded command (the record wrapper and
+--xunit-output=<token>.xml, taken from the row by scripts/reportcmd) for
+pass, fail (CORRAL_FAIL_TESTING and CORRAL_FAIL_XCTEST set), xctest
+(CORRAL_FAIL_XCTEST alone), edge (src/swift-authored/edge's file copied
+into CalcTests), crash (src/swift-authored/crash's file copied into
+CalcTests, CORRAL_FAIL_TESTING set) and fallback (a mktemp that fails put
+first on PATH); unhooked and unhooked-pass are plain \`swift test\` with the
+fail and pass variables. swift-hook-edge-list is the stdout of \`swift test
+list\` with the edge file in place. swift-xunit-files lists the files \`swift
+test\` wrote for --xunit-output=<dir>/rec.xml alone, with --parallel, and
+given twice (operator.xml then corral.xml), with each run's exit status, and
+the exit status of a passing run given --xunit-output=/dev/null.xml.
 PROV
 }
 
@@ -276,8 +372,13 @@ if [ "$SWIFT_COVERAGE_ONLY" = 1 ]; then
   capture_swift_coverage || fail=1
   exit "$fail"
 fi
+if [ "$SWIFT_HOOK_ONLY" = 1 ]; then
+  capture_swift_hook || fail=1
+  exit "$fail"
+fi
 if [ "$SWIFT_ONLY" = 1 ]; then
   capture_swift || fail=1
+  capture_swift_hook || fail=1
   capture_swift_coverage || fail=1
   exit "$fail"
 fi
@@ -567,17 +668,308 @@ fails vitest-fail.txt npx vitest run fail/f.vitest.test.mjs
 fails vitest-suitefail.txt npx vitest run fail/broken.vitest.test.mjs
 fails mocha-fail.txt npx mocha fail/f.mocha.js
 fails mocha-hookfail.txt npx mocha fail/hook.mocha.js
+# Why mocha has no failure hook (its row's Note): mocha runs one reporter, the
+# last one named, so a record reporter (xunit, to a file) beside spec replaces
+# the spec lines the readers take, and the operator sees nothing. The counts are
+# spec's `N passing` and `N failing` lines, without and with xunit after spec.
+want mocha-one-reporter-per-run "2 0" "$(a=$(npx mocha --reporter spec fail/f.mocha.js 2>/dev/null | grep -cE '^ +[0-9]+ (passing|failing)'); b=$(npx mocha --reporter spec --reporter xunit --reporter-option output="$DIR/mocha-xunit.xml" fail/f.mocha.js 2>/dev/null | grep -cE '^ +[0-9]+ (passing|failing)'); echo "$a $b")"
 fails node-fail.txt node --test fail/f.node.test.js
 # node 23+ prints the spec reporter off a TTY too (measured on node 24.22); node
 # 22's --test-reporter=spec prints the same tree.
 fails node-spec-fail.txt node --test --test-reporter=spec fail/f.node.test.js
 fails node-spec-loadfail.txt node --test --test-reporter=spec broken.node.test.js
+# The node --test row's failure hook (internal/lang/node_record.go): the graded
+# command, the four reporter words and the record wrapper included, is taken from
+# the row (scripts/reportcmd), never copied here; TestNodeHookCaptureIsTheRowsCommand
+# holds these lines to it. fail/node-edge holds the shapes where node's JUnit
+# record and its printed report could disagree; broken.node.test.js is a file
+# that fails to load, which the record writes as a top-level testcase. The record's
+# hostname and timestamp attributes are taken out: these files are public.
+reporthook() { # reporthook <array name> <language> <command...>: the row's graded command, NUL-separated
+  local name="$1"; shift
+  mapfile -d '' "$name" < <(cd "$REPO" && env -u NODE_OPTIONS go run ./scripts/reportcmd "$@")
+  local -n words="$name"
+  [ "${#words[@]}" -gt 0 ] || { echo "scripts/reportcmd gave no command for $*" >&2; exit 1; }
+}
+nodefails() { # nodefails <fixture> <cmd...>: fails, with the record's host and clock taken out
+  fails "$@"
+  sed -i -e 's/ hostname="[^"]*"//' -e 's/ timestamp="[^"]*"//' "$OUT/$1"
+}
+NODEFILES=(fail/f.node.test.js fail/node-edge/e.node.test.js broken.node.test.js)
+reporthook NODEHOOK javascript node --test "${NODEFILES[@]}"
+nodefails node-hook-fail.txt "${NODEHOOK[@]}"
+# The same files unhooked (node 22 prints TAP off a TTY): the hooked capture's
+# printed part must equal it (TestNodeHookLeavesThePrintedOutputAlone).
+fails node-hook-unhooked.txt node --test "${NODEFILES[@]}"
+# The hook keeps node's exit code, on a failing run and a passing one, and when
+# it cannot make its directory it leaves its four words out (pointed at
+# /dev/null, node fails the fsync of its destination and exits 1 on a run that passed).
+reporthook NODEHOOKPASS javascript node --test calc.node.test.js
+want node-hook-exit-fail "1 1" "$(env -u NODE_OPTIONS node --test "${NODEFILES[@]}" >/dev/null 2>&1; echo -n "$? "; env -u NODE_OPTIONS "${NODEHOOK[@]}" >/dev/null 2>&1; echo $?)"
+want node-hook-exit-pass "0 0" "$(env -u NODE_OPTIONS node --test calc.node.test.js >/dev/null 2>&1; echo -n "$? "; env -u NODE_OPTIONS "${NODEHOOKPASS[@]}" >/dev/null 2>&1; echo $?)"
+nodefails node-hook-pass.txt "${NODEHOOKPASS[@]}"
+fails node-hook-unhooked-pass.txt node --test calc.node.test.js
+nodefails node-hook-fallback.txt env TMPDIR="$DIR/no-such-dir" "${NODEHOOKPASS[@]}"
+want node-hook-fallback-exit 0 "$(env -u NODE_OPTIONS TMPDIR="$DIR/no-such-dir" "${NODEHOOKPASS[@]}" >/dev/null 2>&1; echo $?)"
+want node-devnull-destination-fails-a-pass 1 "$(env -u NODE_OPTIONS node --test --test-reporter=tap --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=/dev/null calc.node.test.js >/dev/null 2>&1; echo $?)"
+# Why the hook declines a command with a reporter of its own, or one in
+# NODE_OPTIONS: node refuses reporters and destinations that differ in number.
+want node-unpaired-reporter-fails-a-pass 1 "$(env -u NODE_OPTIONS NODE_OPTIONS=--test-reporter=dot node --test --test-reporter=tap --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination="$DIR/n.xml" calc.node.test.js >/dev/null 2>&1; echo $?)"
+# node 23 and later print the spec reporter off a TTY, so there the hook changes
+# the printed form to TAP. NODE24, when set, is a command prefix that runs its
+# arguments where `node` is node 24 and `sh` a POSIX shell (a container: mount
+# DIR at its own path, start in DIR, run as the invoking user), e.g.
+#   NODE24="docker run --rm -u $(id -u):$(id -g) -v /tmp/rf:/tmp/rf -w /tmp/rf node:24.22.1-bookworm"
+# Unset, the node24 captures are left as they are.
+if [ -n "${NODE24:-}" ]; then
+  $NODE24 node --version > "$OUT/toolchain-node24-hook-version.txt"
+  nodefails node24-hook-fail.txt $NODE24 "${NODEHOOK[@]}"
+  nodefails node24-hook-unhooked.txt $NODE24 node --test "${NODEFILES[@]}"
+  want node24-hook-exit-fail "1 1" "$($NODE24 node --test "${NODEFILES[@]}" >/dev/null 2>&1; echo -n "$? "; $NODE24 "${NODEHOOK[@]}" >/dev/null 2>&1; echo $?)"
+  want node24-hook-exit-pass "0 0" "$($NODE24 node --test calc.node.test.js >/dev/null 2>&1; echo -n "$? "; $NODE24 "${NODEHOOKPASS[@]}" >/dev/null 2>&1; echo $?)"
+fi
+# The jest row's failure hook (internal/lang/jest_record.go): the graded command,
+# --json --outputFile and the record wrapper included, is taken from the row
+# (scripts/reportcmd); TestJestHookCaptureIsTheRowsCommand holds these lines to it.
+# fail/jest-edge holds the shapes where jest's JSON record and its printed `●`
+# headings could disagree; -i keeps the files' order the same from run to run.
+# jest names the record file in one printed line, a fresh temporary name, written
+# here as <record>; the record's clock is zeroed: these files are public.
+jestfails() { # jestfails <fixture> <cmd...>: fails, with the record's name and clock taken out
+  fails "$@"
+  sed -i -e 's#^Test results written to: .*#Test results written to: <record>#' \
+    -e 's/"\(startTime\|endTime\|startAt\|start\|end\|runtime\|duration\|loadTestEnvironmentStart\|loadTestEnvironmentEnd\|setupFilesStart\|setupFilesEnd\|setupAfterEnvStart\|setupAfterEnvEnd\)":[0-9][0-9.]*/"\1":0/g' "$OUT/$1"
+}
+JESTFILES=(fail/f.jest.test.js fail/jest-edge/e.jest.test.js fail/broken.jest.test.js)
+reporthook JESTHOOK javascript npx jest -i "${JESTFILES[@]}"
+jestfails jest-hook-fail.txt "${JESTHOOK[@]}"
+# The same files with the row's report flag alone: the hooked capture's printed
+# part, less its `Test results written to` line, must equal it
+# (TestJestHookLeavesThePrintedOutputAlone).
+fails jest-hook-unhooked.txt npx jest -i "${JESTFILES[@]}" --reporters=default
+reporthook JESTHOOKPASS javascript npx jest calc.jest.test.js
+jestfails jest-hook-pass.txt "${JESTHOOKPASS[@]}"
+fails jest-hook-unhooked-pass.txt npx jest calc.jest.test.js --reporters=default
+want jest-hook-exit-fail "1 1" "$(env -u AI_AGENT -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT npx jest -i "${JESTFILES[@]}" --reporters=default >/dev/null 2>&1; echo -n "$? "; env -u AI_AGENT -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT "${JESTHOOK[@]}" >/dev/null 2>&1; echo $?)"
+want jest-hook-exit-pass "0 0" "$(env -u AI_AGENT -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT npx jest calc.jest.test.js --reporters=default >/dev/null 2>&1; echo -n "$? "; env -u AI_AGENT -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT "${JESTHOOKPASS[@]}" >/dev/null 2>&1; echo $?)"
+# When the wrapper cannot make its directory the record goes to /dev/null, and
+# jest writes it there and passes.
+want jest-hook-fallback-exit 0 "$(env -u AI_AGENT -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT TMPDIR="$DIR/no-such-dir" "${JESTHOOKPASS[@]}" >/dev/null 2>&1; echo $?)"
 fails rspec-fail.txt $RSPEC fail/spec/f_spec.rb
 fails rspec-loadfail.txt $RSPEC fail/spec/broken_spec.rb
+# The rspec row's failure hook (internal/lang/rspec_record.go), as jest's above:
+# --format json --out after the row's --format progress, from scripts/reportcmd;
+# TestRSpecHookCaptureIsTheRowsCommand holds these lines to it. fail/rspec-edge
+# holds the shapes where rspec's JSON record and its printed `Failed examples:`
+# list could disagree. The record's timings are zeroed: these files are public.
+rspecfails() { # rspecfails <fixture> <cmd...>: fails, with the record's timings taken out
+  fails "$@"
+  sed -i -e 's/"\(run_time\|duration\|load_time\)":[0-9][0-9.e-]*/"\1":0/g' "$OUT/$1"
+}
+RSPECFILES=(fail/spec/f_spec.rb fail/rspec-edge/e_spec.rb)
+# shellcheck disable=SC2086 # RSPEC may be two words (ruby -S rspec)
+reporthook RSPECHOOK ruby $RSPEC "${RSPECFILES[@]}"
+rspecfails rspec-hook-fail.txt "${RSPECHOOK[@]}"
+# The same files with the row's report flag alone: the hooked capture's printed
+# part must equal it (TestRSpecHookLeavesThePrintedOutputAlone).
+fails rspec-hook-unhooked.txt $RSPEC "${RSPECFILES[@]}" --format progress
+# shellcheck disable=SC2086
+reporthook RSPECHOOKPASS ruby $RSPEC spec/calc_spec.rb
+rspecfails rspec-hook-pass.txt "${RSPECHOOKPASS[@]}"
+fails rspec-hook-unhooked-pass.txt $RSPEC spec/calc_spec.rb --format progress
+want rspec-hook-exit-fail "1 1" "$($RSPEC "${RSPECFILES[@]}" --format progress >/dev/null 2>&1; echo -n "$? "; "${RSPECHOOK[@]}" >/dev/null 2>&1; echo $?)"
+want rspec-hook-exit-pass "0 0" "$($RSPEC spec/calc_spec.rb --format progress >/dev/null 2>&1; echo -n "$? "; "${RSPECHOOKPASS[@]}" >/dev/null 2>&1; echo $?)"
+want rspec-hook-fallback-exit 0 "$(TMPDIR="$DIR/no-such-dir" "${RSPECHOOKPASS[@]}" >/dev/null 2>&1; echo $?)"
 fails minitest-fail.txt ruby fail/f_test.rb
+# Why minitest has no failure hook (its row's Note): no option its --help lists
+# writes a record of the run to a file; the count is the option names that
+# mention one (junit, xml, json, out, log, file, report).
+want minitest-no-record-option 0 "$(ruby fail/f_test.rb --help 2>&1 | grep -cE -- '--[a-z-]*(junit|xml|json|out|log|file|report)')"
 fails phpunit-fail.txt vendor/bin/phpunit fail/tests/FTest.php
+# Data sets whose printed argument suffix is not their position, with parentheses
+# and quotes in a name and in an argument: phpFailures drops the suffix.
+fails phpunit-datasets-fail.txt vendor/bin/phpunit fail/datasets/DTest.php
+# The PHPUnit row's failure hook (internal/lang/phpunit_record.go): the command a
+# graded run runs, `--log-junit` and the record wrapper included, is taken from
+# the row (scripts/reportcmd), never copied here; TestPHPUnitHookCaptureIsTheRowsCommand
+# holds these lines to it. The second run's phpunit.xml sets testdox="true", which
+# replaces the printed `N)` lines; the record still names every failure.
+phphook() { # phphook <array name> <phpunit command...>: the row's graded command, NUL-separated
+  local name="$1"; shift
+  mapfile -d '' "$name" < <(cd "$REPO" && go run ./scripts/reportcmd php "$@")
+  local -n words="$name"
+  [ "${#words[@]}" -gt 0 ] || { echo "scripts/reportcmd gave no command for $*" >&2; exit 1; }
+}
+phphook PHPHOOK vendor/bin/phpunit fail/tests/FTest.php fail/datasets/DTest.php fail/ns/NTest.php
+fails phpunit-hook-fail.txt "${PHPHOOK[@]}"
+# The hook keeps PHPUnit's exit code: 2 (an error) with it and without it.
+want phpunit-hook-exit "2 2" "$(vendor/bin/phpunit fail/tests/FTest.php fail/datasets/DTest.php fail/ns/NTest.php >/dev/null 2>&1; echo -n "$? "; "${PHPHOOK[@]}" >/dev/null 2>&1; echo $?)"
+phphook PHPHOOKTESTDOX vendor/bin/phpunit -c report/phpunit/phpunit.xml fail/tests/FTest.php
+fails report-phpunit-testdox-hooked.txt "${PHPHOOKTESTDOX[@]}"
+# The same files unhooked: the hooked capture's printed part must equal it
+# (TestPHPUnitHookLeavesThePrintedOutputAlone).
+fails phpunit-hook-unhooked.txt vendor/bin/phpunit fail/tests/FTest.php fail/datasets/DTest.php fail/ns/NTest.php
+# What the record leaves out (fail/edge): a setUpBeforeClass that throws and a
+# data provider that throws are printed as numbered errors and are not in the
+# JUnit record; a risky test is printed in its own numbered section and is a
+# plain testcase in the record. FTest gives the record failures of its own.
+phphook PHPHOOKEDGE vendor/bin/phpunit fail/tests/FTest.php fail/edge/SetupTest.php fail/edge/ProviderTest.php fail/edge/RiskyTest.php
+fails phpunit-hook-edge.txt "${PHPHOOKEDGE[@]}"
+# A passing run exits 0 with the hook as without it, and with the hook unable
+# to make its directory (the record then goes to /dev/null) a passing run
+# still passes.
+phphook PHPHOOKPASS vendor/bin/phpunit tests/CalcTest.php
+want phpunit-hook-exit-pass "0 0" "$(vendor/bin/phpunit tests/CalcTest.php >/dev/null 2>&1; echo -n "$? "; "${PHPHOOKPASS[@]}" >/dev/null 2>&1; echo $?)"
+want phpunit-hook-fallback-exit 0 "$(TMPDIR="$DIR/no-such-dir" "${PHPHOOKPASS[@]}" >/dev/null 2>&1; echo $?)"
+# What the disclosure says the hook costs: PHPUnit writes one JUnit file, so a
+# phpunit.xml <junit> entry is written without the hook and not with it. An
+# operator's own --log-junit is written either way: the row does not wrap a
+# command that names one (phpunitRecordWraps), so scripts/reportcmd adds nothing
+# to it and exits 1.
+junit_written() { # junit_written <file> <cmd...>: present|absent after running cmd
+  local f="$1"; shift
+  rm -f "$f"; "$@" >/dev/null 2>&1 || true
+  if [ -e "$f" ]; then echo present; else echo absent; fi
+}
+want phpunit-operator-junit-not-wrapped "1" "$(cd "$REPO" && go run ./scripts/reportcmd php vendor/bin/phpunit --log-junit operator-junit.xml fail/tests/FTest.php >/dev/null 2>&1; echo $?)"
+want phpunit-operator-junit-unhooked present "$(junit_written operator-junit.xml vendor/bin/phpunit --log-junit operator-junit.xml fail/tests/FTest.php)"
+phphook PHPHOOKCFGLOG vendor/bin/phpunit -c report/phpunit-junit/phpunit.xml fail/tests/FTest.php
+want phpunit-config-junit-unhooked present "$(junit_written report/phpunit-junit/project-junit.xml vendor/bin/phpunit -c report/phpunit-junit/phpunit.xml fail/tests/FTest.php)"
+want phpunit-config-junit-hooked absent "$(junit_written report/phpunit-junit/project-junit.xml "${PHPHOOKCFGLOG[@]}")"
+# go test's printed `--- FAIL:` lines (go.go's goFirstFailure and goFailedTests).
+# A test whose own output ends without a newline shares its line with the next
+# heading go prints (its own, or its parent's for a subtest), and a test that
+# prints a heading of its own is followed on that line by go's real one. The
+# clocks go prints are taken out so a recapture changes nothing that ran.
+gofails() { # gofails <fixture> <cmd...>: fails, with go's elapsed times taken out
+  fails "$@"
+  sed -i -E -e 's/\([0-9]+\.[0-9]+s\)/(0.00s)/g' -e 's/\t[0-9]+\.[0-9]+s$/\t0.000s/' "$OUT/$1"
+}
+(cd fail/gomod && gofails go-fail.txt go test -count=1 ./...)
 (cd fail/cargo && cargo build --tests -q 2>/dev/null; fails cargo-test-fail.txt cargo test)
 (cd fail/cargo && fails cargo-nextest-fail.txt cargo nextest run)
+# The cargo-nextest row's failure hook (internal/lang/nextest_record.go): the
+# graded command, --tool-config-file and the record wrapper included, is taken
+# from the row (scripts/reportcmd), never copied here;
+# TestNextestHookCaptureIsTheRowsCommand holds these lines to it. The wrapper
+# writes the nextest config the option names (its Companion) in its own
+# temporary directory. -j 1 keeps the order of the printed lines the same from
+# run to run. fail/nextest-edge holds the shapes where nextest's JUnit record and
+# its printed lines could disagree; units/cargo is a passing workspace. The
+# record's run id and clocks are taken out: these files are public.
+nextestfails() { # nextestfails <fixture> <cmd...>: fails, with the record's run id and clocks taken out
+  fails "$@"
+  sed -i -e 's/ uuid="[^"]*"//' -e 's/ timestamp="[^"]*"//g' -e 's/ time="[^"]*"/ time="0"/g' "$OUT/$1"
+}
+reporthook NEXTESTHOOK rust cargo nextest run -j 1
+(cd fail/nextest-edge && cargo build --tests -q 2>/dev/null || true)
+(cd units/cargo && cargo build --workspace --tests -q 2>/dev/null || true)
+(cd fail/cargo && nextestfails nextest-hook-fail.txt "${NEXTESTHOOK[@]}")
+# The same runs with the row's report flags alone: the hooked capture's printed
+# part must equal it, durations aside (TestNextestHookLeavesThePrintedOutputAlone).
+(cd fail/cargo && fails nextest-hook-unhooked.txt cargo nextest run -j 1 --status-level pass --final-status-level flaky)
+(cd fail/nextest-edge && nextestfails nextest-hook-edge.txt "${NEXTESTHOOK[@]}")
+(cd fail/nextest-edge && fails nextest-hook-edge-unhooked.txt cargo nextest run -j 1 --status-level pass --final-status-level flaky)
+(cd units/cargo && nextestfails nextest-hook-pass.txt "${NEXTESTHOOK[@]}")
+(cd units/cargo && fails nextest-hook-unhooked-pass.txt cargo nextest run -j 1 --status-level pass --final-status-level flaky)
+# The hook keeps nextest's exit code, on a failing run and a passing one, and
+# when it cannot make its directory it leaves its two words out (pointed at
+# /dev/null, nextest would be handed a config file that does not exist).
+want nextest-hook-exit-fail "100 100" "$(cd fail/cargo && cargo nextest run -j 1 --status-level pass --final-status-level flaky >/dev/null 2>&1; echo -n "$? "; "${NEXTESTHOOK[@]}" >/dev/null 2>&1; echo $?)"
+want nextest-hook-exit-pass "0 0" "$(cd units/cargo && cargo nextest run -j 1 --status-level pass --final-status-level flaky >/dev/null 2>&1; echo -n "$? "; "${NEXTESTHOOK[@]}" >/dev/null 2>&1; echo $?)"
+(cd fail/cargo && nextestfails nextest-hook-fallback.txt env TMPDIR="$DIR/no-such-dir" "${NEXTESTHOOK[@]}")
+want nextest-hook-fallback-exit 100 "$(cd fail/cargo && TMPDIR="$DIR/no-such-dir" "${NEXTESTHOOK[@]}" >/dev/null 2>&1; echo $?)"
+# The binding rule every failure hook is held to: corral never writes into a
+# project's file. report/nextest-junit is one crate; each run copies one of its
+# configs/ to .config/nextest.toml (none: no config at all) and starts with no
+# target/nextest or mystore. A run is the row's report flags alone (-flagged, the
+# graded run before the hook) or the row's command from scripts/reportcmd
+# (-hooked). nextest_wrote prints "ours" when the run printed corral's record
+# (else "no-record"), then every path the run added to the checkout or whose
+# content it changed (a directory with a trailing /), cargo's build output
+# (target/debug, target/.rustc_info.json) aside. A JUnit path of the project's (the default profile's, a profile chosen
+# with -P or NEXTEST_PROFILE, an absolute one, an operator's --config-file) is
+# written with and without the hook, and corral's record is then not written.
+# What the hook adds is never a file: with a JUnit report configured nextest makes
+# the profile's store directory (target/nextest/<profile>, or <store.dir>/<profile>)
+# when it is missing, and leaves it empty; nextest_record.go and the disclosure
+# say so.
+# target/.rustc_info.json is cargo's cache of the compiler's version, which cargo
+# rewrites when it pleases, with or without the hook (a flagged run rewrote it).
+nextest_snap() { # nextest_snap <dir>: every path under <dir> but cargo's build output, a file with its checksum
+  (cd "$1" && find . \( -path ./target/debug -o -path ./target/.rustc_info.json \) -prune -o -print | LC_ALL=C sort | while read -r p; do
+    if [ -f "$p" ]; then echo "$p $(cksum < "$p" | cut -d' ' -f1)"; else echo "$p/"; fi
+  done)
+}
+nextest_wrote() { # nextest_wrote <config|-> <cmd...>: what a run in report/nextest-junit wrote
+  local d=report/nextest-junit cfg="$1"; shift
+  rm -rf "$d/target/nextest" "$d/mystore" "$d/.config" "$d/theirs-abs.xml"
+  if [ "$cfg" = absolute ]; then
+    mkdir -p "$d/.config"; printf '[profile.default.junit]\npath = "%s"\n' "$DIR/$d/theirs-abs.xml" > "$d/.config/nextest.toml"
+  elif [ "$cfg" != - ]; then
+    mkdir -p "$d/.config"; cp "$d/configs/$cfg.toml" "$d/.config/nextest.toml"
+  fi
+  local before after out w
+  before="$(nextest_snap "$d")"
+  out="$(cd "$d" && env -u AI_AGENT -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT "$@" 2>&1 || true)"
+  after="$(nextest_snap "$d")"
+  case "$out" in *"corral-record-begin "*) w=ours ;; *) w=no-record ;; esac
+  echo "$w $(LC_ALL=C comm -13 <(echo "$before") <(echo "$after") | sed -e 's#^\./##' -e 's/ [0-9]*$//' | tr '\n' ' ' | sed 's/ $//')"
+}
+(cd report/nextest-junit && cargo build --tests -q 2>/dev/null || true)
+NFLAGS=(--status-level pass --final-status-level flaky)
+reporthook NEXTESTOF rust cargo nextest run
+reporthook NEXTESTOFP rust cargo nextest run -P ci
+reporthook NEXTESTOFC rust cargo nextest run --config-file configs/other.toml
+want nextest-wrote-none-flagged "no-record " "$(nextest_wrote - cargo nextest run "${NFLAGS[@]}")"
+want nextest-wrote-none-hooked "ours target/nextest/ target/nextest/default/" "$(nextest_wrote - "${NEXTESTOF[@]}")"
+want nextest-wrote-none-config-hooked "ours target/nextest/ target/nextest/default/" "$(nextest_wrote none "${NEXTESTOF[@]}")"
+want nextest-wrote-theirs-flagged "no-record target/nextest/ target/nextest/default/ target/nextest/default/theirs.xml" "$(nextest_wrote theirs cargo nextest run "${NFLAGS[@]}")"
+want nextest-wrote-theirs-hooked "no-record target/nextest/ target/nextest/default/ target/nextest/default/theirs.xml" "$(nextest_wrote theirs "${NEXTESTOF[@]}")"
+want nextest-wrote-profile-flagged "no-record target/nextest/ target/nextest/ci/ target/nextest/ci/theirs.xml" "$(nextest_wrote profile cargo nextest run -P ci "${NFLAGS[@]}")"
+want nextest-wrote-profile-hooked "no-record target/nextest/ target/nextest/ci/ target/nextest/ci/theirs.xml" "$(nextest_wrote profile "${NEXTESTOFP[@]}")"
+want nextest-wrote-profile-env-flagged "no-record target/nextest/ target/nextest/ci/ target/nextest/ci/theirs.xml" "$(NEXTEST_PROFILE=ci nextest_wrote profile cargo nextest run "${NFLAGS[@]}")"
+want nextest-wrote-profile-env-hooked "no-record target/nextest/ target/nextest/ci/ target/nextest/ci/theirs.xml" "$(NEXTEST_PROFILE=ci nextest_wrote profile "${NEXTESTOF[@]}")"
+want nextest-wrote-profile-default-hooked "ours target/nextest/ target/nextest/default/" "$(nextest_wrote profile "${NEXTESTOF[@]}")"
+want nextest-wrote-profile-nojunit-flagged "no-record " "$(nextest_wrote profile-nojunit cargo nextest run -P ci "${NFLAGS[@]}")"
+want nextest-wrote-profile-nojunit-hooked "ours target/nextest/ target/nextest/ci/" "$(nextest_wrote profile-nojunit "${NEXTESTOFP[@]}")"
+want nextest-wrote-config-file-flagged "no-record target/nextest/ target/nextest/default/ target/nextest/default/other.xml" "$(nextest_wrote theirs cargo nextest run --config-file configs/other.toml "${NFLAGS[@]}")"
+want nextest-wrote-config-file-hooked "no-record target/nextest/ target/nextest/default/ target/nextest/default/other.xml" "$(nextest_wrote theirs "${NEXTESTOFC[@]}")"
+want nextest-wrote-store-flagged "no-record " "$(nextest_wrote store cargo nextest run "${NFLAGS[@]}")"
+want nextest-wrote-store-hooked "ours mystore/ mystore/default/" "$(nextest_wrote store "${NEXTESTOF[@]}")"
+want nextest-wrote-absolute-flagged "no-record target/nextest/ target/nextest/default/ theirs-abs.xml" "$(nextest_wrote absolute cargo nextest run "${NFLAGS[@]}")"
+want nextest-wrote-absolute-hooked "no-record target/nextest/ target/nextest/default/ theirs-abs.xml" "$(nextest_wrote absolute "${NEXTESTOF[@]}")"
+# The project's own report is the same with and without the hook, the run id and
+# clocks aside, in every shape above that writes one: the default profile, a
+# profile chosen with -P or NEXTEST_PROFILE, an operator's --config-file, and an
+# absolute path. Each pair runs with -j 1, so the testcases are in one order.
+nextest_theirs() { # nextest_theirs <config> <report> <cmd...>: the project's report after a run, without run id and clocks
+  local cfg="$1" rep="$2"; shift 2
+  nextest_wrote "$cfg" "$@" >/dev/null
+  sed -e 's/ uuid="[^"]*"//' -e 's/ timestamp="[^"]*"//g' -e 's/ time="[^"]*"//g' "report/nextest-junit/$rep"
+}
+nextest_same() { # nextest_same <config> <report> <flagged cmd> -- <hooked cmd>: same|differs
+  local cfg="$1" rep="$2"; shift 2
+  local flagged=() a
+  while [ "$1" != -- ]; do flagged+=("$1"); shift; done; shift
+  a="$(nextest_theirs "$cfg" "$rep" "${flagged[@]}")"
+  if [ -n "$a" ] && [ "$a" = "$(nextest_theirs "$cfg" "$rep" "$@")" ]; then echo same; else echo differs; fi
+}
+reporthook NEXTESTHOOKP rust cargo nextest run -j 1 -P ci
+reporthook NEXTESTHOOKC rust cargo nextest run -j 1 --config-file configs/other.toml
+want nextest-theirs-same-content same "$(nextest_same theirs target/nextest/default/theirs.xml cargo nextest run -j 1 "${NFLAGS[@]}" -- "${NEXTESTHOOK[@]}")"
+want nextest-profile-same-content same "$(nextest_same profile target/nextest/ci/theirs.xml cargo nextest run -j 1 -P ci "${NFLAGS[@]}" -- "${NEXTESTHOOKP[@]}")"
+want nextest-profile-env-same-content same "$(export NEXTEST_PROFILE=ci; nextest_same profile target/nextest/ci/theirs.xml cargo nextest run -j 1 "${NFLAGS[@]}" -- "${NEXTESTHOOK[@]}")"
+want nextest-config-file-same-content same "$(nextest_same theirs target/nextest/default/other.xml cargo nextest run -j 1 --config-file configs/other.toml "${NFLAGS[@]}" -- "${NEXTESTHOOKC[@]}")"
+want nextest-absolute-same-content same "$(nextest_same absolute theirs-abs.xml cargo nextest run -j 1 "${NFLAGS[@]}" -- "${NEXTESTHOOK[@]}")"
+# Why cargo test has no failure hook (its row's Note): libtest writes a record
+# only in its json and junit formats, which stable refuses, and its --logfile,
+# which every test binary of a run rewrites, so it holds the last binary's
+# tests alone (fail/nextest-edge: the library's, the binary's and the
+# integration test's; the log names the last only).
+want cargo-test-junit-format-refused-on-stable 101 "$(cd fail/cargo && cargo test -- --format junit >/dev/null 2>&1; echo $?)"
+want cargo-test-json-format-refused-on-stable 101 "$(cd fail/cargo && cargo test -- -Z unstable-options --format json >/dev/null 2>&1; echo $?)"
+want cargo-test-logfile-keeps-the-last-binary "failed it_fails" "$(cd fail/nextest-edge && rm -f "$DIR/libtest.log"; cargo test --no-fail-fast --lib --bins --tests -- --logfile "$DIR/libtest.log" --skip times_out --skip aborts >/dev/null 2>&1; cat "$DIR/libtest.log")"
 
 # --- report flags: a project config that hides the lines the readers take, run
 # as the project runs it (-hidden) and with the runner row's ReportArgs appended
@@ -587,10 +979,88 @@ fails phpunit-fail.txt vendor/bin/phpunit fail/tests/FTest.php
 (cd report/jest && fails report-jest-shown.txt npx jest f.jest.test.js --reporters=default)
 (cd report/vitest && fails report-vitest-hidden.txt npx vitest run f.vitest.test.mjs)
 (cd report/vitest && fails report-vitest-shown.txt npx vitest run f.vitest.test.mjs --reporter=default)
+# Why vitest's row has no failure hook (its Note in internal/lang/runner.go):
+# corral must never write into a project's file, and no command line keeps
+# vitest's JUnit report out of one. A string --outputFile keeps it out of a
+# config's outputFile, string or object, but a reporter the config names with
+# its own options (`reporters: [['junit', {outputFile}]]`) keeps those options
+# when the command line names the same reporter, and writes the project's file.
+vitest_wrote() { # vitest_wrote <config dir> <vitest args...>: which report files a run wrote
+  local d="$1"; shift
+  rm -rf "$DIR/vitest-ours" "$d/theirs.xml" "$d/theirs.json"; mkdir -p "$DIR/vitest-ours"
+  (cd "$d" && env -u AI_AGENT -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT npx --no-install vitest run "$@" f.vitest.test.mjs >/dev/null 2>&1 || true)
+  local w=""
+  [ -e "$DIR/vitest-ours/rec" ] && w="ours"
+  [ -e "$d/theirs.xml" ] || [ -e "$d/theirs.json" ] && w="${w:+$w+}theirs"
+  echo "${w:-neither}"
+}
+VOURS=(--reporter=default --reporter=junit --outputFile="$DIR/vitest-ours/rec")
+want vitest-outputfile-none ours "$(vitest_wrote report/vitest-outputfile/none "${VOURS[@]}")"
+want vitest-outputfile-string ours "$(vitest_wrote report/vitest-outputfile/string "${VOURS[@]}")"
+want vitest-outputfile-object ours "$(vitest_wrote report/vitest-outputfile/object "${VOURS[@]}")"
+want vitest-outputfile-reporter-options theirs "$(vitest_wrote report/vitest-outputfile/reporter "${VOURS[@]}")"
+want vitest-outputfile-junit-key-string theirs "$(vitest_wrote report/vitest-outputfile/string --reporter=default --reporter=junit --outputFile.junit="$DIR/vitest-ours/rec")"
+want vitest-outputfile-reporter-options-unflagged neither "$(vitest_wrote report/vitest-outputfile/reporter --reporter=default)"
 (cd report/mocha && fails report-mocha-hidden.txt npx mocha f.mocha.js)
 (cd report/mocha && fails report-mocha-shown.txt npx mocha f.mocha.js --reporter spec)
 (cd report/rspec && fails report-rspec-hidden.txt $RSPEC spec/f_spec.rb)
 (cd report/rspec && fails report-rspec-shown.txt $RSPEC spec/f_spec.rb --format progress)
+# The binding rule every failure hook is held to: corral never writes into a
+# project's file. Each directory under report/jest-outputfile and report/rspec-out
+# holds a configuration that asks for a report file of the project's own,
+# theirs.json. Each is run as a graded run ran before the hook (the row's report
+# flag alone, -flagged) and as it runs with the hook (the row's command from
+# scripts/reportcmd, -hooked); "ours" is the record block in the output, "theirs"
+# the project's file. The hook adds "ours" and never adds "theirs"
+# (jest_record.go, rspec_record.go say why for each).
+wrote() { # wrote <dir> <cmd...>: which of ours and theirs a run in <dir> wrote
+  local d="$1"; shift
+  rm -f "$d/theirs.json"
+  local out
+  out="$(cd "$d" && env -u AI_AGENT -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT "$@" 2>&1 || true)"
+  local w=""
+  case "$out" in *"corral-record-begin "*) w="ours" ;; esac
+  [ -e "$d/theirs.json" ] && w="${w:+$w+}theirs"
+  echo "${w:-neither}"
+}
+reporthook JESTOF javascript npx --no-install jest f.jest.test.js
+want jest-wrote-config-flagged neither "$(wrote report/jest-outputfile/config npx --no-install jest f.jest.test.js --reporters=default)"
+want jest-wrote-config-hooked ours "$(wrote report/jest-outputfile/config "${JESTOF[@]}")"
+want jest-wrote-reporter-flagged neither "$(wrote report/jest-outputfile/reporter npx --no-install jest f.jest.test.js --reporters=default)"
+want jest-wrote-reporter-hooked ours "$(wrote report/jest-outputfile/reporter "${JESTOF[@]}")"
+want jest-wrote-package-flagged neither "$(wrote report/jest-outputfile/package npx --no-install jest f.jest.test.js --reporters=default)"
+want jest-wrote-package-hooked ours "$(wrote report/jest-outputfile/package "${JESTOF[@]}")"
+want jest-wrote-processor-flagged theirs "$(wrote report/jest-outputfile/processor npx --no-install jest f.jest.test.js --reporters=default)"
+want jest-wrote-processor-hooked ours+theirs "$(wrote report/jest-outputfile/processor "${JESTOF[@]}")"
+# shellcheck disable=SC2086
+reporthook RSPECOF ruby $RSPEC spec/f_spec.rb
+# Every rspec run here has HOME set to report/rspec-out/home/home, whose .rspec is
+# the global ~/.rspec (the real one is neither read nor touched).
+RHOME="$DIR/report/rspec-out/home/home"
+want rspec-wrote-dotrspec-flagged neither "$(HOME="$RHOME" wrote report/rspec-out/dotrspec $RSPEC spec/f_spec.rb --format progress)"
+want rspec-wrote-dotrspec-hooked ours "$(HOME="$RHOME" wrote report/rspec-out/dotrspec "${RSPECOF[@]}")"
+want rspec-wrote-dotrspec-out-flagged neither "$(HOME="$RHOME" wrote report/rspec-out/dotrspec-out $RSPEC spec/f_spec.rb --format progress)"
+want rspec-wrote-dotrspec-out-hooked ours "$(HOME="$RHOME" wrote report/rspec-out/dotrspec-out "${RSPECOF[@]}")"
+want rspec-wrote-dotrspec-local-flagged neither "$(HOME="$RHOME" wrote report/rspec-out/dotrspec-local $RSPEC spec/f_spec.rb --format progress)"
+want rspec-wrote-dotrspec-local-hooked ours "$(HOME="$RHOME" wrote report/rspec-out/dotrspec-local "${RSPECOF[@]}")"
+want rspec-wrote-home-flagged neither "$(HOME="$RHOME" wrote report/rspec-out/home $RSPEC spec/f_spec.rb --format progress)"
+want rspec-wrote-home-hooked ours "$(HOME="$RHOME" wrote report/rspec-out/home "${RSPECOF[@]}")"
+want rspec-wrote-helper-flagged theirs "$(HOME="$RHOME" wrote report/rspec-out/helper $RSPEC spec/f_spec.rb --format progress)"
+want rspec-wrote-helper-hooked ours+theirs "$(HOME="$RHOME" wrote report/rspec-out/helper "${RSPECOF[@]}")"
+want rspec-wrote-helper-stream-flagged theirs "$(HOME="$RHOME" wrote report/rspec-out/helper-stream $RSPEC spec/f_spec.rb --format progress)"
+want rspec-wrote-helper-stream-hooked ours+theirs "$(HOME="$RHOME" wrote report/rspec-out/helper-stream "${RSPECOF[@]}")"
+# SPEC_OPTS comes after the command line and replaces its formatters, the hook's
+# included: their file is written either way and the record is not.
+want rspec-wrote-specopts-flagged theirs "$(HOME="$RHOME" SPEC_OPTS='--format json --out theirs.json' wrote report/rspec-out/specopts $RSPEC spec/f_spec.rb --format progress)"
+want rspec-wrote-specopts-hooked theirs "$(HOME="$RHOME" SPEC_OPTS='--format json --out theirs.json' wrote report/rspec-out/specopts "${RSPECOF[@]}")"
+want rspec-wrote-specopts-out-flagged theirs "$(HOME="$RHOME" SPEC_OPTS='--out theirs.json' wrote report/rspec-out/specopts $RSPEC spec/f_spec.rb --format progress)"
+want rspec-wrote-specopts-out-hooked theirs "$(HOME="$RHOME" SPEC_OPTS='--out theirs.json' wrote report/rspec-out/specopts "${RSPECOF[@]}")"
+# An operator's own --out binds to the formatter before it (progress, rspec's
+# default), and keeps doing so with the hook's formatters after it.
+# shellcheck disable=SC2086
+reporthook RSPECOPOUT ruby $RSPEC spec/f_spec.rb --out theirs.json
+want rspec-wrote-operator-out-flagged theirs "$(HOME="$RHOME" wrote report/rspec-out/specopts $RSPEC spec/f_spec.rb --out theirs.json --format progress)"
+want rspec-wrote-operator-out-hooked ours+theirs "$(HOME="$RHOME" wrote report/rspec-out/specopts "${RSPECOPOUT[@]}")"
 (cd report/nextest && cargo build --tests -q 2>/dev/null; fails report-cargo-nextest-hidden.txt cargo nextest run)
 (cd report/nextest && fails report-cargo-nextest-shown.txt cargo nextest run --status-level pass --final-status-level flaky)
 
@@ -609,10 +1079,22 @@ want nextest-fail-fast-after-separator-refused 96 "$(cd fail/cargo && cargo next
 # Each killer command (KillerCmd: the failing run's own command, narrowed to the
 # test its failure reader named, no file added) runs that test and nothing else.
 killed() { grep -oE '([0-9]+ examples?, [0-9]+ failures?)|(Tests: [0-9]+, Assertions: [0-9]+, (Failures|Errors): [0-9]+)' | head -1; }
+# A jest title holding the printed separator ` › `: the id the jest hook's record
+# gives (`Sep::a › b`, jest_record.go) runs that test alone; the id the printed
+# heading gave before the hook (`Sep::a::b`) selected none.
+jesttests() { sed -n 's/^Tests: *//p'; }
+want jest-killer-separator-title "1 failed, 7 skipped, 8 total" "$(env -u AI_AGENT -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT npx --no-install jest fail/jest-edge/e.jest.test.js --testNamePattern '^Sep a › b$' 2>&1 | jesttests)"
+want jest-killer-separator-title-printed-id "8 skipped, 8 total" "$(env -u AI_AGENT -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT npx --no-install jest fail/jest-edge/e.jest.test.js --testNamePattern '^Sep a b$' 2>&1 | jesttests)"
 want rspec-killer "1 example, 1 failure" "$($RSPEC fail/spec/f_spec.rb -E '\ACalc adds \(a\+b\)\z' 2>&1 | killed)"
 want rspec-killer-nested "1 example, 1 failure" "$($RSPEC fail/spec/f_spec.rb -E '\AMyApp::Calc top level\z' 2>&1 | killed)"
 want phpunit-killer "Tests: 1, Assertions: 1, Failures: 1" "$(vendor/bin/phpunit fail/tests/FTest.php --filter '/(?:^|\\)FTest::testAdds(?: with data set .*)?$/' 2>&1 | killed)"
 want phpunit-killer-dataset "Tests: 2, Assertions: 2, Failures: 1" "$(vendor/bin/phpunit fail/tests/FTest.php --filter '/(?:^|\\)FTest::testData(?: with data set .*)?$/' 2>&1 | killed)"
+# A failing data set's id (phpFailures, the argument suffix dropped) runs that
+# data set alone. With the suffix kept, the filter selected nothing (PHPUnit
+# 11.5.57: "No tests executed!").
+want phpunit-killer-one-dataset "Tests: 1, Assertions: 1, Failures: 1" "$(vendor/bin/phpunit fail/tests/FTest.php --filter '/(?:^|\\)FTest::testData with data set "two"(?: with data set .*)?$/' 2>&1 | killed)"
+want phpunit-killer-one-dataset-parens "Tests: 1, Assertions: 1, Failures: 1" "$(vendor/bin/phpunit fail/datasets/DTest.php --filter '/(?:^|\\)DTest::testNamed with data set "x \(y\)"(?: with data set .*)?$/' 2>&1 | killed)"
+want phpunit-killer-one-dataset-unnamed "Tests: 1, Assertions: 1, Failures: 1" "$(vendor/bin/phpunit fail/datasets/DTest.php --filter '/(?:^|\\)DTest::testUnnamed with data set #2(?: with data set .*)?$/' 2>&1 | killed)"
 
 # Each skip command names the three failing tests; exactly the one passing test
 # must run, and pass.
@@ -756,6 +1238,7 @@ want pnpm-test-single 1 "$(corepack "pnpm@$PNPM" test -- --testNamePattern '^top
 want composer-test-single 1 "$(composer test -- --filter '/(?:^|\\)CalcTest::testAdds(?: with data set .*)?$/' tests/CalcTest.php 2>&1 | sed -n 's/^OK (\([0-9]*\) test.*/\1/p')"
 
 capture_swift || fail=1
+capture_swift_hook || fail=1
 capture_swift_coverage || fail=1
 
 {

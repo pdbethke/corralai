@@ -564,7 +564,8 @@ func goParseTestList(output string) []string {
 // goFirstFailure names the first test `go test` reported as failing. The
 // runner prints one `--- FAIL: <name> (<elapsed>)` line per failing test,
 // indented one level per subtest depth; the name is taken VERBATIM, so a
-// subtest comes back as `TestA/sub` — the form `go test -run` accepts.
+// subtest comes back as `TestA/sub` — the form `go test -run` accepts. Each
+// line is read by goFailHeading.
 //
 // The FIRST such line in the stream is the answer, whether that turns out to
 // be a parent or one of its subtests: which of the two `go test` flushes
@@ -575,19 +576,59 @@ func goParseTestList(output string) []string {
 // failed to BUILD — names nothing. No test ran, so no test can be blamed.
 func goFirstFailure(output []byte) string {
 	for _, line := range strings.Split(string(output), "\n") {
-		line = strings.TrimSpace(line)
-		rest, ok := strings.CutPrefix(line, "--- FAIL: ")
-		if !ok {
-			continue
-		}
-		if name, _, found := strings.Cut(rest, " "); found {
-			rest = name
-		}
-		if rest = strings.TrimSpace(rest); rest != "" {
-			return rest
+		if name, ok := goFailHeading(line); ok {
+			return name
 		}
 	}
 	return ""
+}
+
+// goFailMidLine is go's heading where it ends a line it does not start:
+// `--- FAIL: `, a name with no space, a space and the elapsed time go prints
+// (`(0.00s)`).
+var goFailMidLine = regexp.MustCompile(`--- FAIL: (\S+) \([0-9]+\.[0-9]+s\)$`)
+
+// goLogLine is the prefix go gives a t.Log or t.Error line,
+// `<file>.go:<line>: `, indented for a subtest.
+var goLogLine = regexp.MustCompile(`^\S+\.go:[0-9]+: `)
+
+// goFailHeading is the test a printed `--- FAIL:` line names, the one rule
+// goFirstFailure and goFailedTests share. go prints a heading right after
+// whatever the test itself wrote, so a test whose own output ends without a
+// newline puts the heading mid-line (`partial--- FAIL: TestX (0.00s)`; for a
+// subtest, the parent's heading follows the subtest's output), and a test
+// that printed a heading-shaped text of its own is followed by go's real one
+// on the same line (capture go-fail.txt, go 1.26.11). So a heading in go's
+// shape that ENDS a line is read wherever it starts, except on a t.Log or
+// t.Error line (goLogLine): go ends each of those with a newline before it
+// prints anything of its own, so a heading there is the test's message. A
+// line that starts with `--- FAIL: ` is read as before, the name up to its
+// first space.
+//
+// What is still read as a failure that go did not report: a line a test
+// printed itself (fmt.Print, not t.Log) that starts with `--- FAIL: `, or
+// that ends in go's heading shape, names the test it spells, whether or not
+// the test failed. The printed lines cannot tell such a line from go's.
+// And the converse, a failure go did report that is not read: a test that
+// printed, with fmt.Print and no final newline, text starting with go's
+// t.Log prefix (`f_test.go:9: `) has go's real heading follow it on that
+// line, which goLogLine takes for a t.Log line, so it names nothing.
+func goFailHeading(line string) (string, bool) {
+	line = strings.TrimSpace(line)
+	if !goLogLine.MatchString(line) {
+		if m := goFailMidLine.FindStringSubmatch(line); m != nil {
+			return m[1], true
+		}
+	}
+	rest, ok := strings.CutPrefix(line, "--- FAIL: ")
+	if !ok {
+		return "", false
+	}
+	name, _, _ := strings.Cut(rest, " ")
+	if name = strings.TrimSpace(name); name == "" {
+		return "", false
+	}
+	return name, true
 }
 
 // isGoBinary reports whether argv0 names the go command: base name go or
@@ -681,12 +722,49 @@ func (goPlugin) CoverageCounts(stdout, modulePath string) (map[string]LineCounts
 	return counts, nil
 }
 
+// goRunFlags and goSkipFlags are every spelling go test reads its name
+// filters in: a single or double dash, with or without the `test.` prefix
+// (each run on go 1.26.7; hasFlag also takes the `=value` forms).
+var (
+	goRunFlags  = []string{"-run", "--run", "-test.run", "--test.run"}
+	goSkipFlags = []string{"-skip", "--skip", "-test.skip", "--test.skip"}
+)
+
+// goBinaryRunFlags and goBinarySkipFlags are the spellings the TEST BINARY
+// reads itself, after -args: only the `test.` ones. A plain `-run` there is
+// a flag the binary does not define ("flag provided but not defined"),
+// which filters nothing (go 1.26.7: after -args, `-test.run=TestB` and
+// `--test.run=TestB` ran TestB, overriding go's own `-run '^TestA$'`, and
+// `-run=TestB` and `--run=TestB` were refused; the same for -test.skip).
+var (
+	goBinaryRunFlags  = []string{"-test.run", "--test.run"}
+	goBinarySkipFlags = []string{"-test.skip", "--test.skip"}
+)
+
+// goFiltersByName reports whether argv, a go test command, already filters
+// by name with one of goFlags among go's own words (before
+// goTestOptionsEnd), or with one of binaryFlags among the words after them,
+// which the test binary reads itself.
+func goFiltersByName(argv, goFlags, binaryFlags []string) bool {
+	end := goTestOptionsEnd(argv, goTestAt(argv))
+	return hasFlag(argv[:end], goFlags...) || hasFlag(argv[end:], binaryFlags...)
+}
+
 // goKillerCmd is argv with `-run` for the one test the failing run named,
 // inserted right after the `test` word. Each `/`-separated part is anchored
 // on its own (`TestX/sub` is `^TestX$/^sub$`), because go test matches a
 // subtest pattern level by level.
+//
+// It declines a command that already filters by name (goFiltersByName):
+// among go's own words in any spelling (goRunFlags), since go takes the
+// last -run given, so an operator's later `-test.run=X` would replace the
+// killer's (go 1.26.7: `-run '^TestB$' -test.run=TestA` ran TestA); and
+// after -args in the spellings the test binary reads (goBinaryRunFlags),
+// which override go's own -run (go 1.26.7: `go test -run '^TestA$' . -args
+// -test.run=TestB` ran TestB). A plain `-run` after -args is a flag the
+// binary does not define, filters nothing, and does not decline.
 func goKillerCmd(argv []string, id string) ([]string, bool) {
-	if id == "" || !narrowable(argv, "-run") || !goTestCmd(argv) {
+	if id == "" || !goTestCmd(argv) || goFiltersByName(argv, goRunFlags, goBinaryRunFlags) {
 		return nil, false
 	}
 	parts := strings.Split(id, "/")

@@ -1,0 +1,121 @@
+Building for debugging...
+[6 / 16] CalcTests-product
+[9 / 15] CalcTests-product
+[13 / 16] CalcTests-product
+[18 / 20] CalcTests-test-runner
+Build complete! (0.81 secs)
+Test Suite 'All tests' started at 2026-11-25 16:34:53.854
+Test Suite 'Debug-linux-x86_64.xctest' started at 2026-11-25 16:34:53.854
+Test Suite 'AdderTests' started at 2026-11-25 16:34:53.854
+Test Case 'AdderTests.testAdds' started at 2026-11-25 16:34:53.854
+Test Case 'AdderTests.testAdds' passed (0.0 seconds)
+Test Case 'AdderTests.testAddsTwice' started at 2026-11-25 16:34:53.855
+Test Case 'AdderTests.testAddsTwice' passed (0.0 seconds)
+Test Case 'AdderTests.testFails' started at 2026-11-25 16:34:53.855
+Test Case 'AdderTests.testFails' passed (0.0 seconds)
+Test Suite 'AdderTests' passed at 2026-11-25 16:34:53.855
+	 Executed 3 tests, with 0 failures (0 unexpected) in 0.001 (0.001) seconds
+Test Suite 'Debug-linux-x86_64.xctest' passed at 2026-11-25 16:34:53.855
+	 Executed 3 tests, with 0 failures (0 unexpected) in 0.001 (0.001) seconds
+Test Suite 'All tests' passed at 2026-11-25 16:34:53.855
+	 Executed 3 tests, with 0 failures (0 unexpected) in 0.001 (0.001) seconds
+Test Suite 'All tests' started at 2026-11-25 16:34:53.861
+Test Suite 'Debug-linux-x86_64.xctest' started at 2026-11-25 16:34:53.862
+Test Suite 'Debug-linux-x86_64.xctest' passed at 2026-11-25 16:34:53.862
+	 Executed 0 tests, with 0 failures (0 unexpected) in 0.0 (0.0) seconds
+Test Suite 'All tests' passed at 2026-11-25 16:34:53.862
+	 Executed 0 tests, with 0 failures (0 unexpected) in 0.0 (0.0) seconds
+◇ Test run started.
+↳ Testing Library Version: 6.4.2 (288a2328ff84644)
+↳ Target Platform: x86_64-unknown-linux-gnu
+✔ Test run with 0 tests in 0 suites passed after 0.001 seconds.
+◇ Test run started.
+↳ Testing Library Version: 6.4.2 (288a2328ff84644)
+↳ Target Platform: x86_64-unknown-linux-gnu
+◇ Test throwsAnError() started.
+◇ Suite Outer started.
+◇ Suite ThrowingInit started.
+◇ Test parsesTwice() started.
+◇ Suite Arithmetic started.
+➜ Test disabledOne() skipped: "off"
+◇ Suite Inner started.
+◇ Test parses() started.
+◇ Test warningOnly() started.
+◇ Test knownIssue() started.
+◇ Test doubles(value:) started.
+◇ Test neverRuns() started.
+◇ Suite "Pretty suite" started.
+◇ Test "adds two numbers" started.
+◇ Test fails() started.
+◇ Test inPretty() started.
+✘ Test badArguments(n:) recorded an issue with 1 argument : Caught error: EdgeError()
+◇ Test nested() started.
+◇ Test case passing 1 argument value → 2 to doubles(value:) started.
+✘ Test neverRuns() recorded an issue at Edge.swift:30:6: Caught error: EdgeError()
+◇ Test case passing 1 argument value → 3 to doubles(value:) started.
+◇ Test case passing 1 argument value → 1 to doubles(value:) started.
+✔ Test parses() passed after 0.001 seconds.
+✘ Test throwsAnError() recorded an issue at Edge.swift:14:2: Caught error: EdgeError()
+✔ Test parsesTwice() passed after 0.001 seconds.
+⚠︎ Test warningOnly() recorded a warning at Edge.swift:37:40: Issue recorded
+↳ just a warning
+✔ Test fails() passed after 0.001 seconds.
+✔ Test "adds two numbers" passed after 0.001 seconds.
+✘ Test neverRuns() failed after 0.001 seconds with 1 issue.
+✘ Test throwsAnError() failed after 0.001 seconds with 1 issue.
+✔ Test warningOnly() passed after 0.001 seconds with 1 warning.
+✘ Suite ThrowingInit failed after 0.001 seconds with 1 issue.
+✔ Test doubles(value:) with 3 test cases passed after 0.001 seconds.
+✘ Test nested() recorded an issue at Edge.swift:20:31: Expectation failed: add(1, 1) == 3
+↳ add(1, 1) == 3 → false
+↳   add(1, 1) → 2
+✘ Test inPretty() recorded an issue at Edge.swift:25:29: Expectation failed: add(1, 1) == 3
+↳ add(1, 1) == 3 → false
+↳   add(1, 1) → 2
+━ Test knownIssue() recorded a known issue at Edge.swift:33:44: Expectation failed: add(1, 1) == 3
+↳ add(1, 1) == 3 → false
+↳   add(1, 1) → 2
+✔ Suite Arithmetic passed after 0.001 seconds.
+✘ Test nested() failed after 0.001 seconds with 1 issue.
+✘ Test inPretty() failed after 0.001 seconds with 1 issue.
+━ Test knownIssue() passed after 0.001 seconds with 1 known issue.
+✘ Suite Inner failed after 0.001 seconds with 1 issue.
+✘ Suite "Pretty suite" failed after 0.001 seconds with 1 issue.
+✘ Suite Outer failed after 0.001 seconds with 1 issue.
+✘ Test run with 12 tests in 5 suites failed after 0.001 seconds with 7 issues (including 1 warning and 1 known issue).
+Note: Some test targets reported failures:
+  - CalcTests (Swift Testing)
+
+corral-record-begin junit
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<testsuites>
+  <testsuite name="TestResults" errors="0" tests="0" failures="0" skipped="0" time="0.000255541">
+
+  </testsuite>
+  <testsuite name="TestResults" errors="0" tests="11" failures="4" skipped="1" time="0.000803881">
+    <testcase classname="CalcTests" name="knownIssue()" time="0.000399911"/>
+    <testcase classname="CalcTests.Pretty" name="inPretty()" time="0.000312938">
+      <failure message="Expectation failed: add(1, 1) == 3 (error)"/>
+    </testcase>
+    <testcase classname="CalcTests" name="disabledOne()">
+      <skipped>off</skipped>
+    </testcase>
+    <testcase classname="CalcTests" name="parsesTwice()" time="0.000208933"/>
+    <testcase classname="CalcTests" name="warningOnly()" time="0.000328598"/>
+    <testcase classname="CalcTests.ThrowingInit" name="neverRuns()" time="0.000209364">
+      <failure message="Caught error: EdgeError() (error)"/>
+    </testcase>
+    <testcase classname="CalcTests" name="parses()" time="0.000139121"/>
+    <testcase classname="CalcTests" name="throwsAnError()" time="0.000374394">
+      <failure message="Caught error: EdgeError() (error)"/>
+    </testcase>
+    <testcase classname="CalcTests.Arithmetic" name="fails()" time="0.000175169"/>
+    <testcase classname="CalcTests.Arithmetic" name="doubles(value:)" time="0.000278022"/>
+    <testcase classname="CalcTests.Arithmetic" name="adds()" time="0.000190228"/>
+    <testcase classname="CalcTests.Outer.Inner" name="nested()" time="0.000284445">
+      <failure message="Expectation failed: add(1, 1) == 3 (error)"/>
+    </testcase>
+  </testsuite>
+</testsuites>
+corral-record-end
+# exit: 1

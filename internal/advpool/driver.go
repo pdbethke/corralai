@@ -2401,8 +2401,12 @@ const writerFailureEnd = 16 << 10
 // because it goes into a prompt: 32 KiB and one line, on every substrate.
 // The failure READERS are not given this: salvage reads the whole captured
 // output.
+//
+// It is what the RUNNER printed (lang.PrintedOutput): the record a record
+// hook prints after the run is corral's reading aid, and it is left out
+// rather than shown to the writer in the runner's place.
 func writerFailureDetail(output string) string {
-	return clip.Ends(output, writerFailureEnd, writerFailureEnd)
+	return clip.Ends(golang.PrintedOutput(output), writerFailureEnd, writerFailureEnd)
 }
 
 // compliantFailureOutput asks the Scorer for the clean-code failure detail,

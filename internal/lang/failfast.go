@@ -56,7 +56,8 @@ func AppendFailFast(cmd, args []string) []string {
 // FailFastArgsFor gives.
 //
 // A runner named in the command gets the flag after its word and before its
-// own `--` (runnerOptionsEnd, the rule ReportCmd uses): appended after that
+// own `--`, or where its row's OptionsEnd says its options end (optionsEnd,
+// the rule ReportCmd uses; go test's end at -args): appended after that
 // separator the flag is a positional argument, a path to pytest or an
 // argument to cargo's test binary, and nextest then refuses the run (exit 96,
 // "failed to parse test binary arguments", cargo-nextest 0.9.148), which the
@@ -75,7 +76,7 @@ func FailFastCmd(p Plugin, inv Invocation) ([]string, bool) {
 	if inv.Script == nil {
 		if r, named := namedRunner(p, inv.detectWords()); named {
 			if at := runnerWordIndex(cmd, r); at >= 0 {
-				end = runnerOptionsEnd(cmd, at)
+				end = optionsEnd(r, cmd, at)
 			}
 		}
 	}
@@ -128,7 +129,8 @@ func FailFastArgsFor(p Plugin, inv Invocation) ([]string, bool) {
 	}
 	// A shell behind a prefix (`env A=1 sh -c pytest`) is a wrapper too, by
 	// the rule ReportCmd uses: the flag would be the script's $1. A row
-	// detected without a word (go test) is checked over the whole command.
+	// detected without a word places its runner through At (go test's is
+	// `test`, goTestAt), and the words before it are checked.
 	if shellWrappedBefore(words, runnerWordIndex(words, r)) {
 		return nil, false
 	}

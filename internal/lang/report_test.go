@@ -16,6 +16,9 @@ import (
 // parameters, its words untouched (the plugin is loaded through the
 // environment, not by a word).
 func unwrapped(cmd []string) ([]string, bool) {
+	if len(cmd) >= 7 && slices.Equal(cmd[:4], []string{"sh", "-c", recordScript, recordArgv0}) {
+		return cmd[7:], true // a record-file hook's: its format, fallback and suffixes after $0
+	}
 	if len(cmd) < 5 || !slices.Equal(cmd[:4], []string{"sh", "-c", pyReportScript, pyReportArgv0}) {
 		return nil, false
 	}
@@ -112,9 +115,11 @@ func TestReportCmdAppliesTheRowsReportArgs(t *testing.T) {
 		{"go test", "go", Cmd([]string{"go", "test", "./..."}), nil},
 		// The other rows with report flags: each placed at its runner's
 		// word, entry script or subcommand, before the runner's own `--`.
-		{"jest", "javascript", Cmd([]string{"npx", "jest"}), []string{"npx", "jest", "--reporters=default"}},
+		// jest's and rspec's record hooks follow their flags
+		// (jest_record_test.go, rspec_record_test.go).
+		{"jest", "javascript", Cmd([]string{"npx", "jest"}), []string{"npx", "jest", "--reporters=default", "--json", "--outputFile=" + recordToken}},
 		{"jest entry script", "typescript", Cmd([]string{"node", "./node_modules/jest/bin/jest.js", "src"}),
-			[]string{"node", "./node_modules/jest/bin/jest.js", "src", "--reporters=default"}},
+			[]string{"node", "./node_modules/jest/bin/jest.js", "src", "--reporters=default", "--json", "--outputFile=" + recordToken}},
 		{"vitest run", "typescript", Cmd([]string{"npx", "vitest", "run"}), []string{"npx", "vitest", "run", "--reporter=default"}},
 		{"vitest entry script", "javascript", Cmd([]string{"node", "./node_modules/vitest/vitest.mjs", "run"}),
 			[]string{"node", "./node_modules/vitest/vitest.mjs", "run", "--reporter=default"}},
@@ -123,7 +128,7 @@ func TestReportCmdAppliesTheRowsReportArgs(t *testing.T) {
 			[]string{"node", "node_modules/mocha/bin/mocha.js", "--reporter", "spec"}},
 		// The operator's own reporter is replaced, as pytest's -r is.
 		{"mocha --reporter dot", "javascript", Cmd([]string{"mocha", "--reporter", "dot"}), []string{"mocha", "--reporter", "dot", "--reporter", "spec"}},
-		{"rspec", "ruby", Cmd([]string{"bundle", "exec", "rspec", "spec"}), []string{"bundle", "exec", "rspec", "spec", "--format", "progress"}},
+		{"rspec", "ruby", Cmd([]string{"bundle", "exec", "rspec", "spec"}), []string{"bundle", "exec", "rspec", "spec", "--format", "progress", "--format", "json", "--out", recordToken}},
 		{"cargo nextest", "rust", Cmd([]string{"cargo", "nextest", "run", "-p", "x", "--", "--exact", "a"}),
 			[]string{"cargo", "nextest", "run", "-p", "x", "--status-level", "pass", "--final-status-level", "flaky", "--", "--exact", "a"}},
 		{"cargo-nextest binary", "rust", Cmd([]string{"cargo-nextest", "nextest", "run"}),
@@ -143,8 +148,8 @@ func TestReportCmdAppliesTheRowsReportArgs(t *testing.T) {
 		{"package script", "python", Invocation{Argv: []string{"npm", "test"}, Script: []string{"pytest"}, Pass: "--", Narrow: true}, nil},
 	}
 	// flagsOnly: want is the whole result, with no wrapper around it.
-	flagsOnly := map[string]bool{"jest": true, "jest entry script": true, "vitest run": true, "vitest entry script": true,
-		"mocha": true, "mocha entry script": true, "mocha --reporter dot": true, "rspec": true, "cargo nextest": true, "cargo-nextest binary": true,
+	flagsOnly := map[string]bool{"vitest run": true, "vitest entry script": true,
+		"mocha": true, "mocha entry script": true, "mocha --reporter dot": true, "cargo nextest": true, "cargo-nextest binary": true,
 		"tox before pytest": true, "nox before pytest": true, "docker before pytest": true,
 		"podman before pytest": true, "python -I": true, "python -E": true, "python -sE cluster": true,
 		"python -IWerror": true, "python -W error -E": true}

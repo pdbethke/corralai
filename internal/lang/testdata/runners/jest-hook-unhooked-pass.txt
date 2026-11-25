@@ -1,0 +1,13 @@
+PASS ./calc.jest.test.js
+  ✓ top level
+  ✓ Calc adds (1 ms)
+  Calc
+    ✓ adds (a+b) (1 ms)
+    ✓ adds (1 ms)
+    neg
+      ✓ adds
+
+Test Suites: 1 passed, 1 total
+Tests:       5 passed, 5 total
+Snapshots:   0 total
+Ran all test suites matching calc.jest.test.js.

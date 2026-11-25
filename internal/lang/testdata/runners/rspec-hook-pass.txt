@@ -1,0 +1,8 @@
+......
+
+6 examples, 0 failures
+
+
+corral-record-begin rspec-json
+{"version":"3.13.6","examples":[{"id":"./spec/calc_spec.rb[1:1]","description":"adds (a+b)","full_description":"Calc adds (a+b)","status":"passed","file_path":"./spec/calc_spec.rb","line_number":3,"run_time":0,"pending_message":null},{"id":"./spec/calc_spec.rb[1:2]","description":"adds","full_description":"Calc adds","status":"passed","file_path":"./spec/calc_spec.rb","line_number":4,"run_time":0,"pending_message":null},{"id":"./spec/calc_spec.rb[1:3]","description":"adds x","full_description":"Calc adds x","status":"passed","file_path":"./spec/calc_spec.rb","line_number":5,"run_time":0,"pending_message":null},{"id":"./spec/calc_spec.rb[1:4:1]","description":"adds","full_description":"Calc neg adds","status":"passed","file_path":"./spec/calc_spec.rb","line_number":6,"run_time":0,"pending_message":null},{"id":"./spec/calc_spec.rb[2:1]","description":"x","full_description":"Calc adds x","status":"passed","file_path":"./spec/calc_spec.rb","line_number":9,"run_time":0,"pending_message":null},{"id":"./spec/calc_spec.rb[3:1]","description":"level","full_description":"top level","status":"passed","file_path":"./spec/calc_spec.rb","line_number":12,"run_time":0,"pending_message":null}],"summary":{"duration":0,"example_count":6,"failure_count":0,"pending_count":0,"errors_outside_of_examples_count":0},"summary_line":"6 examples, 0 failures"}
+corral-record-end

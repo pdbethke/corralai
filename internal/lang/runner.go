@@ -358,12 +358,13 @@ var runners = []Runner{
 		// named on the command line replaces the config's (measured on jest
 		// 30.5.2 with reporters ["summary"] and []).
 		ReportArgs: []string{"--reporters=default"},
+		ReportHook: jestRecordHook,
 		ListCmd:    jestListCmd, ParseList: jestParseList, SingleCmd: jestSingleCmd, ResolveByList: true, Coruns: jestCoruns,
-		FirstFailure: firstOf(jestFailures), FailedTests: jestFailures, DeselectCmd: jestDeselectCmd, FailedUnits: jestFailedUnits, KillerCmd: jestKillerCmd,
+		FirstFailure: firstOf(jestFailedTests), FailedTests: jestFailedTests, DeselectCmd: jestDeselectCmd, FailedUnits: jestFailedUnits, KillerCmd: jestKillerCmd,
 		ListUnits: jestListUnits, ParseUnits: jestParseUnits, UnitCmd: oneUnit(jestUnitsCmd), UnitCoruns: jestUnitCoruns,
 		UnitsCmd: jestUnitsCmd, UnitsCoruns: eachUnitCoruns(jestUnitCoruns), UnitForFile: fileUnitForFile, UnitNoun: "test files",
 		VersionCmd: jestVersionCmd,
-		Note:       "listing, one-test, one-file and several-file runs verified on jest 30.5; --reporters=default verified on jest 30.5.2 against a config whose reporters list hides the failures (testdata/runners/report-jest-*.txt); through a package script corral adds nothing",
+		Note:       "listing, one-test, one-file and several-file runs verified on jest 30.5; --reporters=default verified on jest 30.5.2 against a config whose reporters list hides the failures (testdata/runners/report-jest-*.txt); through a package script corral adds nothing. Every graded run corral can rewrite (the command names jest, is not shell-wrapped or a package script, and names no `--json` or `--outputFile` of its own) goes through `sh -c` with `--json --outputFile=<a temporary file>` added after `--reporters=default`, and corral reads the killing test from jest's JSON record by the id the printed `●` headings give (ancestor titles and title joined by `::`; a title holding ` › `, which the printed heading splits, is whole), then adds the tests the printed headings name that the record does not. Run on jest 30.5.2 on Linux outside the sandbox: exit code unchanged, printed output unchanged but for one more line, `Test results written to: <file>`; and the hook writes no project file: a jest config's `json`/`outputFile` (which are command-line options, not configuration), a package.json `jest` block naming them and a configured reporter with an `outputFile` option are not written, with or without the hook, and a testResultsProcessor writes what it writes either way. Not run: other jest versions, the bubblewrap sandbox, the workspace substrate, macOS. Not wrapped: Windows",
 	},
 	{
 		ListsFullNames: true,
@@ -438,16 +439,17 @@ var runners = []Runner{
 		// command line replaces the file's (measured on rspec-core 3.13.6,
 		// with documentation too).
 		ReportArgs: []string{"--format", "progress"},
+		ReportHook: rspecRecordHook,
 		ListCmd:    rspecListCmd, ParseList: rspecParseList, SingleCmd: rspecSingleCmd, ResolveByList: true, Coruns: lastFullColl,
-		FirstFailure: firstOf(rspecFailures), FailedTests: rspecFailures, DeselectCmd: rspecDeselectCmd, KillerCmd: rspecKillerCmd,
+		FirstFailure: firstOf(rspecFailedTests), FailedTests: rspecFailedTests, DeselectCmd: rspecDeselectCmd, KillerCmd: rspecKillerCmd,
 		ListUnits: rspecListUnits, ParseUnits: rspecParseUnits, UnitCmd: oneUnit(rspecUnitsCmd),
 		UnitsCmd: rspecUnitsCmd, UnitForFile: fileUnitForFile, UnitNoun: "test files",
-		Note: "listing, one-test, one-file and several-file runs verified on rspec-core 3.13 (one-test runs need 3.12 or later); --format progress verified on rspec-core 3.13.6 against an .rspec `--format json`, and it replaces an .rspec `--format documentation` too",
+		Note: "listing, one-test, one-file and several-file runs verified on rspec-core 3.13 (one-test runs need 3.12 or later); --format progress verified on rspec-core 3.13.6 against an .rspec `--format json`, and it replaces an .rspec `--format documentation` too. Every graded run corral can rewrite (the command names rspec and is not shell-wrapped) goes through `sh -c` with `--format json --out <a temporary file>` added after `--format progress`, and corral reads the killing test from rspec's JSON record by its full description, the id the printed `Failed examples:` list gives, then adds the examples that list names that the record does not. Run on rspec-core 3.13.6 on Linux outside the sandbox: printed output and exit code unchanged, and the hook writes no project file: an `--out` in ~/.rspec, .rspec or .rspec-local was already replaced by `--format progress` and is not written with or without the hook, while a SPEC_OPTS naming a formatter, or an `--out` of the operator's or a formatter a spec_helper adds, is written with or without it (a SPEC_OPTS formatter replaces corral's, so there no record is written and the printed lines, if any, are read). Not run: other rspec versions, the bubblewrap sandbox, the workspace substrate, macOS. Not wrapped: Windows",
 	},
 	{
 		Name: "minitest", ID: "minitest", Languages: []string{"ruby"}, Words: []string{"ruby", "rake", "testrb"},
 		FirstFailure: firstOf(minitestFailures), FailedTests: minitestFailures, DeselectCmd: minitestDeselectCmd,
-		Note: "minitest has no list mode and no full-name selector; rspec is the Ruby runner that lists and runs one test; no unit evidence: no listing command; Ruby falls back to name pairing under minitest; no report flags: a reporter the project installs in its own test helper (minitest-reporters, not run here) can replace the printed failures, and no flag undoes it",
+		Note: "minitest has no list mode and no full-name selector; rspec is the Ruby runner that lists and runs one test; no unit evidence: no listing command; Ruby falls back to name pairing under minitest; no report flags: a reporter the project installs in its own test helper (minitest-reporters, not run here) can replace the printed failures, and no flag undoes it; no failure hook: minitest 5.20.0's --help lists no option that writes a record of the run to a file (read from the help text, not run against a project), and a reporter plugin was not looked for, so its failures are read from what it prints",
 	},
 	{
 		Name: "phpunit", ID: "phpunit", Languages: []string{"php"}, Default: true, Words: []string{"phpunit"},

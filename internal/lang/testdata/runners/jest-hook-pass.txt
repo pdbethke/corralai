@@ -1,0 +1,18 @@
+PASS ./calc.jest.test.js
+  ✓ top level
+  ✓ Calc adds
+  Calc
+    ✓ adds (a+b) (2 ms)
+    ✓ adds
+    neg
+      ✓ adds (1 ms)
+
+Test Suites: 1 passed, 1 total
+Tests:       5 passed, 5 total
+Snapshots:   0 total
+Ran all test suites matching calc.jest.test.js.
+Test results written to: <record>
+
+corral-record-begin jest-json
+{"numFailedTestSuites":0,"numFailedTests":0,"numPassedTestSuites":1,"numPassedTests":5,"numPendingTestSuites":0,"numPendingTests":0,"numRuntimeErrorTestSuites":0,"numTodoTests":0,"numTotalTestSuites":1,"numTotalTests":5,"openHandles":[],"snapshot":{"added":0,"didUpdate":false,"failure":false,"filesAdded":0,"filesRemoved":0,"filesRemovedList":[],"filesUnmatched":0,"filesUpdated":0,"matched":0,"total":0,"unchecked":0,"uncheckedKeysByFile":[],"unmatched":0,"updated":0},"startTime":0,"success":true,"testResults":[{"assertionResults":[{"ancestorTitles":["Calc"],"duration":0,"failing":false,"failureDetails":[],"failureMessages":[],"fullName":"Calc adds (a+b)","invocations":1,"location":null,"numPassingAsserts":1,"retryMessages":[],"retryReasons":[],"status":"passed","title":"adds (a+b)","startAt":0},{"ancestorTitles":["Calc"],"duration":0,"failing":false,"failureDetails":[],"failureMessages":[],"fullName":"Calc adds","invocations":1,"location":null,"numPassingAsserts":0,"retryMessages":[],"retryReasons":[],"status":"passed","title":"adds","startAt":0},{"ancestorTitles":["Calc","neg"],"duration":0,"failing":false,"failureDetails":[],"failureMessages":[],"fullName":"Calc neg adds","invocations":1,"location":null,"numPassingAsserts":0,"retryMessages":[],"retryReasons":[],"status":"passed","title":"adds","startAt":0},{"ancestorTitles":[],"duration":0,"failing":false,"failureDetails":[],"failureMessages":[],"fullName":"top level","invocations":1,"location":null,"numPassingAsserts":0,"retryMessages":[],"retryReasons":[],"status":"passed","title":"top level","startAt":0},{"ancestorTitles":[],"duration":0,"failing":false,"failureDetails":[],"failureMessages":[],"fullName":"Calc adds","invocations":1,"location":null,"numPassingAsserts":0,"retryMessages":[],"retryReasons":[],"status":"passed","title":"Calc adds","startAt":0}],"endTime":0,"message":"","name":"$DIR/calc.jest.test.js","startTime":0,"status":"passed","summary":""}],"wasInterrupted":false}
+corral-record-end

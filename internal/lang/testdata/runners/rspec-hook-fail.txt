@@ -1,0 +1,104 @@
+F.FFF.
+An error occurred in an `after(:context)` hook.
+Failure/Error: after(:context) { raise 'teardown' }
+
+RuntimeError:
+  teardown
+# ./fail/rspec-edge/e_spec.rb:7:in `block (2 levels) in <top (required)>'
+F*FF
+
+Pending: (Failures listed here are expected and do not affect your suite's status)
+
+  1) Pending still
+     # not yet
+     Failure/Error: it('still') { pending('not yet'); expect(1).to eq(2) }
+
+       expected: 2
+            got: 1
+
+       (compared using ==)
+     # ./fail/rspec-edge/e_spec.rb:12:in `block (2 levels) in <top (required)>'
+
+Failures:
+
+  1) Calc adds (a+b)
+     Failure/Error: it('adds (a+b)') { expect(1 + 1).to eq(3) }
+
+       expected: 3
+            got: 2
+
+       (compared using ==)
+     # ./fail/spec/f_spec.rb:3:in `block (2 levels) in <top (required)>'
+
+  2) Calc neg adds
+     Failure/Error: describe('neg') { it('adds') { raise 'boom' } }
+
+     RuntimeError:
+       boom
+     # ./fail/spec/f_spec.rb:5:in `block (3 levels) in <top (required)>'
+
+  3) MyApp::Calc top level
+     Failure/Error: it('top level') { expect(1).to eq(2) }
+
+       expected: 2
+            got: 1
+
+       (compared using ==)
+     # ./fail/spec/f_spec.rb:9:in `block (2 levels) in <top (required)>'
+
+  4) BeforeAll one
+     Failure/Error: before(:context) { raise 'setup' }
+
+     RuntimeError:
+       setup
+     # ./fail/rspec-edge/e_spec.rb:3:in `block (2 levels) in <top (required)>'
+
+  5) Pending fixed FIXED
+     Expected pending 'not yet' to fail. No error was raised.
+     # ./fail/rspec-edge/e_spec.rb:11
+
+  6) Agg many
+     Got 2 failures:
+
+     6.1) Failure/Error: it('many', :aggregate_failures) { expect(1).to eq(2); expect(2).to eq(3) }
+
+            expected: 2
+                 got: 1
+
+            (compared using ==)
+          # ./fail/rspec-edge/e_spec.rb:15:in `block (2 levels) in <top (required)>'
+
+     6.2) Failure/Error: it('many', :aggregate_failures) { expect(1).to eq(2); expect(2).to eq(3) }
+
+            expected: 3
+                 got: 2
+
+            (compared using ==)
+          # ./fail/rspec-edge/e_spec.rb:15:in `block (2 levels) in <top (required)>'
+
+  7) Shared behaves like shared in shared
+     Failure/Error: it('in shared') { expect(1).to eq(2) }
+
+       expected: 2
+            got: 1
+
+       (compared using ==)
+     Shared Example Group: "shared" called from ./fail/rspec-edge/e_spec.rb:21
+     # ./fail/rspec-edge/e_spec.rb:18:in `block (2 levels) in <top (required)>'
+
+10 examples, 7 failures, 1 pending, 1 error occurred outside of examples
+
+Failed examples:
+
+rspec ./fail/spec/f_spec.rb:3 # Calc adds (a+b)
+rspec ./fail/spec/f_spec.rb:5 # Calc neg adds
+rspec ./fail/spec/f_spec.rb:9 # MyApp::Calc top level
+rspec ./fail/rspec-edge/e_spec.rb:4 # BeforeAll one
+rspec ./fail/rspec-edge/e_spec.rb:11 # Pending fixed
+rspec ./fail/rspec-edge/e_spec.rb:15 # Agg many
+rspec ./fail/rspec-edge/e_spec.rb:18 # Shared behaves like shared in shared
+
+
+corral-record-begin rspec-json
+{"version":"3.13.6","messages":["\nAn error occurred in an `after(:context)` hook.\nFailure/Error: after(:context) { raise 'teardown' }\n\nRuntimeError:\n  teardown\n# ./fail/rspec-edge/e_spec.rb:7:in `block (2 levels) in <top (required)>'\n"],"examples":[{"id":"./fail/spec/f_spec.rb[1:1]","description":"adds (a+b)","full_description":"Calc adds (a+b)","status":"failed","file_path":"./fail/spec/f_spec.rb","line_number":3,"run_time":0,"pending_message":null,"exception":{"class":"RSpec::Expectations::ExpectationNotMetError","message":"\nexpected: 3\n     got: 2\n\n(compared using ==)\n","backtrace":["./fail/spec/f_spec.rb:3:in `block (2 levels) in <top (required)>'"]}},{"id":"./fail/spec/f_spec.rb[1:2]","description":"ok","full_description":"Calc ok","status":"passed","file_path":"./fail/spec/f_spec.rb","line_number":4,"run_time":0,"pending_message":null},{"id":"./fail/spec/f_spec.rb[1:3:1]","description":"adds","full_description":"Calc neg adds","status":"failed","file_path":"./fail/spec/f_spec.rb","line_number":5,"run_time":0,"pending_message":null,"exception":{"class":"RuntimeError","message":"boom","backtrace":["./fail/spec/f_spec.rb:5:in `block (3 levels) in <top (required)>'"]}},{"id":"./fail/spec/f_spec.rb[2:1]","description":"top level","full_description":"MyApp::Calc top level","status":"failed","file_path":"./fail/spec/f_spec.rb","line_number":9,"run_time":0,"pending_message":null,"exception":{"class":"RSpec::Expectations::ExpectationNotMetError","message":"\nexpected: 2\n     got: 1\n\n(compared using ==)\n","backtrace":["./fail/spec/f_spec.rb:9:in `block (2 levels) in <top (required)>'"]}},{"id":"./fail/rspec-edge/e_spec.rb[1:1]","description":"one","full_description":"BeforeAll one","status":"failed","file_path":"./fail/rspec-edge/e_spec.rb","line_number":4,"run_time":0,"pending_message":null,"exception":{"class":"RuntimeError","message":"setup","backtrace":["./fail/rspec-edge/e_spec.rb:3:in `block (2 levels) in <top (required)>'"]}},{"id":"./fail/rspec-edge/e_spec.rb[2:1]","description":"two","full_description":"AfterAll two","status":"passed","file_path":"./fail/rspec-edge/e_spec.rb","line_number":8,"run_time":0,"pending_message":null},{"id":"./fail/rspec-edge/e_spec.rb[3:1]","description":"fixed","full_description":"Pending fixed","status":"failed","file_path":"./fail/rspec-edge/e_spec.rb","line_number":11,"run_time":0,"pending_message":"not yet","exception":{"class":"RSpec::Core::Pending::PendingExampleFixedError","message":"Expected example to fail since it is pending, but it passed.","backtrace":["./fail/rspec-edge/e_spec.rb:11"]}},{"id":"./fail/rspec-edge/e_spec.rb[3:2]","description":"still","full_description":"Pending still","status":"pending","file_path":"./fail/rspec-edge/e_spec.rb","line_number":12,"run_time":0,"pending_message":"not yet"},{"id":"./fail/rspec-edge/e_spec.rb[4:1]","description":"many","full_description":"Agg many","status":"failed","file_path":"./fail/rspec-edge/e_spec.rb","line_number":15,"run_time":0,"pending_message":null,"exception":{"class":"RSpec::Expectations::MultipleExpectationsNotMetError","message":"Got 2 failures from failure aggregation block:\n\n  1) expected: 2\n          got: 1\n\n     (compared using ==)\n\n     ./fail/rspec-edge/e_spec.rb:15:in `block (2 levels) in <top (required)>'\n\n  2) expected: 3\n          got: 2\n\n     (compared using ==)\n\n     ./fail/rspec-edge/e_spec.rb:15:in `block (2 levels) in <top (required)>'","backtrace":[]}},{"id":"./fail/rspec-edge/e_spec.rb[5:1:1]","description":"in shared","full_description":"Shared behaves like shared in shared","status":"failed","file_path":"./fail/rspec-edge/e_spec.rb","line_number":18,"run_time":0,"pending_message":null,"exception":{"class":"RSpec::Expectations::ExpectationNotMetError","message":"\nexpected: 2\n     got: 1\n\n(compared using ==)\n","backtrace":["./fail/rspec-edge/e_spec.rb:18:in `block (2 levels) in <top (required)>'"]}}],"summary":{"duration":0,"example_count":10,"failure_count":7,"pending_count":1,"errors_outside_of_examples_count":1},"summary_line":"10 examples, 7 failures, 1 pending, 1 error occurred outside of examples"}
+corral-record-end

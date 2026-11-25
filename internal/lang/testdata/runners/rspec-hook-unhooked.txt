@@ -1,0 +1,100 @@
+F.FFF.
+An error occurred in an `after(:context)` hook.
+Failure/Error: after(:context) { raise 'teardown' }
+
+RuntimeError:
+  teardown
+# ./fail/rspec-edge/e_spec.rb:7:in `block (2 levels) in <top (required)>'
+F*FF
+
+Pending: (Failures listed here are expected and do not affect your suite's status)
+
+  1) Pending still
+     # not yet
+     Failure/Error: it('still') { pending('not yet'); expect(1).to eq(2) }
+
+       expected: 2
+            got: 1
+
+       (compared using ==)
+     # ./fail/rspec-edge/e_spec.rb:12:in `block (2 levels) in <top (required)>'
+
+Failures:
+
+  1) Calc adds (a+b)
+     Failure/Error: it('adds (a+b)') { expect(1 + 1).to eq(3) }
+
+       expected: 3
+            got: 2
+
+       (compared using ==)
+     # ./fail/spec/f_spec.rb:3:in `block (2 levels) in <top (required)>'
+
+  2) Calc neg adds
+     Failure/Error: describe('neg') { it('adds') { raise 'boom' } }
+
+     RuntimeError:
+       boom
+     # ./fail/spec/f_spec.rb:5:in `block (3 levels) in <top (required)>'
+
+  3) MyApp::Calc top level
+     Failure/Error: it('top level') { expect(1).to eq(2) }
+
+       expected: 2
+            got: 1
+
+       (compared using ==)
+     # ./fail/spec/f_spec.rb:9:in `block (2 levels) in <top (required)>'
+
+  4) BeforeAll one
+     Failure/Error: before(:context) { raise 'setup' }
+
+     RuntimeError:
+       setup
+     # ./fail/rspec-edge/e_spec.rb:3:in `block (2 levels) in <top (required)>'
+
+  5) Pending fixed FIXED
+     Expected pending 'not yet' to fail. No error was raised.
+     # ./fail/rspec-edge/e_spec.rb:11
+
+  6) Agg many
+     Got 2 failures:
+
+     6.1) Failure/Error: it('many', :aggregate_failures) { expect(1).to eq(2); expect(2).to eq(3) }
+
+            expected: 2
+                 got: 1
+
+            (compared using ==)
+          # ./fail/rspec-edge/e_spec.rb:15:in `block (2 levels) in <top (required)>'
+
+     6.2) Failure/Error: it('many', :aggregate_failures) { expect(1).to eq(2); expect(2).to eq(3) }
+
+            expected: 3
+                 got: 2
+
+            (compared using ==)
+          # ./fail/rspec-edge/e_spec.rb:15:in `block (2 levels) in <top (required)>'
+
+  7) Shared behaves like shared in shared
+     Failure/Error: it('in shared') { expect(1).to eq(2) }
+
+       expected: 2
+            got: 1
+
+       (compared using ==)
+     Shared Example Group: "shared" called from ./fail/rspec-edge/e_spec.rb:21
+     # ./fail/rspec-edge/e_spec.rb:18:in `block (2 levels) in <top (required)>'
+
+10 examples, 7 failures, 1 pending, 1 error occurred outside of examples
+
+Failed examples:
+
+rspec ./fail/spec/f_spec.rb:3 # Calc adds (a+b)
+rspec ./fail/spec/f_spec.rb:5 # Calc neg adds
+rspec ./fail/spec/f_spec.rb:9 # MyApp::Calc top level
+rspec ./fail/rspec-edge/e_spec.rb:4 # BeforeAll one
+rspec ./fail/rspec-edge/e_spec.rb:11 # Pending fixed
+rspec ./fail/rspec-edge/e_spec.rb:15 # Agg many
+rspec ./fail/rspec-edge/e_spec.rb:18 # Shared behaves like shared in shared
+

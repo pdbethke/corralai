@@ -723,8 +723,58 @@ if [ -n "${NODE24:-}" ]; then
   want node24-hook-exit-fail "1 1" "$($NODE24 node --test "${NODEFILES[@]}" >/dev/null 2>&1; echo -n "$? "; $NODE24 "${NODEHOOK[@]}" >/dev/null 2>&1; echo $?)"
   want node24-hook-exit-pass "0 0" "$($NODE24 node --test calc.node.test.js >/dev/null 2>&1; echo -n "$? "; $NODE24 "${NODEHOOKPASS[@]}" >/dev/null 2>&1; echo $?)"
 fi
+# The jest row's failure hook (internal/lang/jest_record.go): the graded command,
+# --json --outputFile and the record wrapper included, is taken from the row
+# (scripts/reportcmd); TestJestHookCaptureIsTheRowsCommand holds these lines to it.
+# fail/jest-edge holds the shapes where jest's JSON record and its printed `●`
+# headings could disagree; -i keeps the files' order the same from run to run.
+# jest names the record file in one printed line, a fresh temporary name, written
+# here as <record>; the record's clock is zeroed: these files are public.
+jestfails() { # jestfails <fixture> <cmd...>: fails, with the record's name and clock taken out
+  fails "$@"
+  sed -i -e 's#^Test results written to: .*#Test results written to: <record>#' \
+    -e 's/"\(startTime\|endTime\|startAt\|start\|end\|runtime\|duration\|loadTestEnvironmentStart\|loadTestEnvironmentEnd\|setupFilesStart\|setupFilesEnd\|setupAfterEnvStart\|setupAfterEnvEnd\)":[0-9][0-9.]*/"\1":0/g' "$OUT/$1"
+}
+JESTFILES=(fail/f.jest.test.js fail/jest-edge/e.jest.test.js fail/broken.jest.test.js)
+reporthook JESTHOOK javascript npx jest -i "${JESTFILES[@]}"
+jestfails jest-hook-fail.txt "${JESTHOOK[@]}"
+# The same files with the row's report flag alone: the hooked capture's printed
+# part, less its `Test results written to` line, must equal it
+# (TestJestHookLeavesThePrintedOutputAlone).
+fails jest-hook-unhooked.txt npx jest -i "${JESTFILES[@]}" --reporters=default
+reporthook JESTHOOKPASS javascript npx jest calc.jest.test.js
+jestfails jest-hook-pass.txt "${JESTHOOKPASS[@]}"
+fails jest-hook-unhooked-pass.txt npx jest calc.jest.test.js --reporters=default
+want jest-hook-exit-fail "1 1" "$(env -u AI_AGENT -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT npx jest -i "${JESTFILES[@]}" --reporters=default >/dev/null 2>&1; echo -n "$? "; env -u AI_AGENT -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT "${JESTHOOK[@]}" >/dev/null 2>&1; echo $?)"
+want jest-hook-exit-pass "0 0" "$(env -u AI_AGENT -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT npx jest calc.jest.test.js --reporters=default >/dev/null 2>&1; echo -n "$? "; env -u AI_AGENT -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT "${JESTHOOKPASS[@]}" >/dev/null 2>&1; echo $?)"
+# When the wrapper cannot make its directory the record goes to /dev/null, and
+# jest writes it there and passes.
+want jest-hook-fallback-exit 0 "$(env -u AI_AGENT -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT TMPDIR="$DIR/no-such-dir" "${JESTHOOKPASS[@]}" >/dev/null 2>&1; echo $?)"
 fails rspec-fail.txt $RSPEC fail/spec/f_spec.rb
 fails rspec-loadfail.txt $RSPEC fail/spec/broken_spec.rb
+# The rspec row's failure hook (internal/lang/rspec_record.go), as jest's above:
+# --format json --out after the row's --format progress, from scripts/reportcmd;
+# TestRSpecHookCaptureIsTheRowsCommand holds these lines to it. fail/rspec-edge
+# holds the shapes where rspec's JSON record and its printed `Failed examples:`
+# list could disagree. The record's timings are zeroed: these files are public.
+rspecfails() { # rspecfails <fixture> <cmd...>: fails, with the record's timings taken out
+  fails "$@"
+  sed -i -e 's/"\(run_time\|duration\|load_time\)":[0-9][0-9.e-]*/"\1":0/g' "$OUT/$1"
+}
+RSPECFILES=(fail/spec/f_spec.rb fail/rspec-edge/e_spec.rb)
+# shellcheck disable=SC2086 # RSPEC may be two words (ruby -S rspec)
+reporthook RSPECHOOK ruby $RSPEC "${RSPECFILES[@]}"
+rspecfails rspec-hook-fail.txt "${RSPECHOOK[@]}"
+# The same files with the row's report flag alone: the hooked capture's printed
+# part must equal it (TestRSpecHookLeavesThePrintedOutputAlone).
+fails rspec-hook-unhooked.txt $RSPEC "${RSPECFILES[@]}" --format progress
+# shellcheck disable=SC2086
+reporthook RSPECHOOKPASS ruby $RSPEC spec/calc_spec.rb
+rspecfails rspec-hook-pass.txt "${RSPECHOOKPASS[@]}"
+fails rspec-hook-unhooked-pass.txt $RSPEC spec/calc_spec.rb --format progress
+want rspec-hook-exit-fail "1 1" "$($RSPEC "${RSPECFILES[@]}" --format progress >/dev/null 2>&1; echo -n "$? "; "${RSPECHOOK[@]}" >/dev/null 2>&1; echo $?)"
+want rspec-hook-exit-pass "0 0" "$($RSPEC spec/calc_spec.rb --format progress >/dev/null 2>&1; echo -n "$? "; "${RSPECHOOKPASS[@]}" >/dev/null 2>&1; echo $?)"
+want rspec-hook-fallback-exit 0 "$(TMPDIR="$DIR/no-such-dir" "${RSPECHOOKPASS[@]}" >/dev/null 2>&1; echo $?)"
 fails minitest-fail.txt ruby fail/f_test.rb
 fails phpunit-fail.txt vendor/bin/phpunit fail/tests/FTest.php
 # Data sets whose printed argument suffix is not their position, with parentheses
@@ -807,6 +857,62 @@ want vitest-outputfile-reporter-options-unflagged neither "$(vitest_wrote report
 (cd report/mocha && fails report-mocha-shown.txt npx mocha f.mocha.js --reporter spec)
 (cd report/rspec && fails report-rspec-hidden.txt $RSPEC spec/f_spec.rb)
 (cd report/rspec && fails report-rspec-shown.txt $RSPEC spec/f_spec.rb --format progress)
+# The binding rule every failure hook is held to: corral never writes into a
+# project's file. Each directory under report/jest-outputfile and report/rspec-out
+# holds a configuration that asks for a report file of the project's own,
+# theirs.json. Each is run as a graded run ran before the hook (the row's report
+# flag alone, -flagged) and as it runs with the hook (the row's command from
+# scripts/reportcmd, -hooked); "ours" is the record block in the output, "theirs"
+# the project's file. The hook adds "ours" and never adds "theirs"
+# (jest_record.go, rspec_record.go say why for each).
+wrote() { # wrote <dir> <cmd...>: which of ours and theirs a run in <dir> wrote
+  local d="$1"; shift
+  rm -f "$d/theirs.json"
+  local out
+  out="$(cd "$d" && env -u AI_AGENT -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT "$@" 2>&1 || true)"
+  local w=""
+  case "$out" in *"corral-record-begin "*) w="ours" ;; esac
+  [ -e "$d/theirs.json" ] && w="${w:+$w+}theirs"
+  echo "${w:-neither}"
+}
+reporthook JESTOF javascript npx --no-install jest f.jest.test.js
+want jest-wrote-config-flagged neither "$(wrote report/jest-outputfile/config npx --no-install jest f.jest.test.js --reporters=default)"
+want jest-wrote-config-hooked ours "$(wrote report/jest-outputfile/config "${JESTOF[@]}")"
+want jest-wrote-reporter-flagged neither "$(wrote report/jest-outputfile/reporter npx --no-install jest f.jest.test.js --reporters=default)"
+want jest-wrote-reporter-hooked ours "$(wrote report/jest-outputfile/reporter "${JESTOF[@]}")"
+want jest-wrote-package-flagged neither "$(wrote report/jest-outputfile/package npx --no-install jest f.jest.test.js --reporters=default)"
+want jest-wrote-package-hooked ours "$(wrote report/jest-outputfile/package "${JESTOF[@]}")"
+want jest-wrote-processor-flagged theirs "$(wrote report/jest-outputfile/processor npx --no-install jest f.jest.test.js --reporters=default)"
+want jest-wrote-processor-hooked ours+theirs "$(wrote report/jest-outputfile/processor "${JESTOF[@]}")"
+# shellcheck disable=SC2086
+reporthook RSPECOF ruby $RSPEC spec/f_spec.rb
+# Every rspec run here has HOME set to report/rspec-out/home/home, whose .rspec is
+# the global ~/.rspec (the real one is neither read nor touched).
+RHOME="$DIR/report/rspec-out/home/home"
+want rspec-wrote-dotrspec-flagged neither "$(HOME="$RHOME" wrote report/rspec-out/dotrspec $RSPEC spec/f_spec.rb --format progress)"
+want rspec-wrote-dotrspec-hooked ours "$(HOME="$RHOME" wrote report/rspec-out/dotrspec "${RSPECOF[@]}")"
+want rspec-wrote-dotrspec-out-flagged neither "$(HOME="$RHOME" wrote report/rspec-out/dotrspec-out $RSPEC spec/f_spec.rb --format progress)"
+want rspec-wrote-dotrspec-out-hooked ours "$(HOME="$RHOME" wrote report/rspec-out/dotrspec-out "${RSPECOF[@]}")"
+want rspec-wrote-dotrspec-local-flagged neither "$(HOME="$RHOME" wrote report/rspec-out/dotrspec-local $RSPEC spec/f_spec.rb --format progress)"
+want rspec-wrote-dotrspec-local-hooked ours "$(HOME="$RHOME" wrote report/rspec-out/dotrspec-local "${RSPECOF[@]}")"
+want rspec-wrote-home-flagged neither "$(HOME="$RHOME" wrote report/rspec-out/home $RSPEC spec/f_spec.rb --format progress)"
+want rspec-wrote-home-hooked ours "$(HOME="$RHOME" wrote report/rspec-out/home "${RSPECOF[@]}")"
+want rspec-wrote-helper-flagged theirs "$(HOME="$RHOME" wrote report/rspec-out/helper $RSPEC spec/f_spec.rb --format progress)"
+want rspec-wrote-helper-hooked ours+theirs "$(HOME="$RHOME" wrote report/rspec-out/helper "${RSPECOF[@]}")"
+want rspec-wrote-helper-stream-flagged theirs "$(HOME="$RHOME" wrote report/rspec-out/helper-stream $RSPEC spec/f_spec.rb --format progress)"
+want rspec-wrote-helper-stream-hooked ours+theirs "$(HOME="$RHOME" wrote report/rspec-out/helper-stream "${RSPECOF[@]}")"
+# SPEC_OPTS comes after the command line and replaces its formatters, the hook's
+# included: their file is written either way and the record is not.
+want rspec-wrote-specopts-flagged theirs "$(HOME="$RHOME" SPEC_OPTS='--format json --out theirs.json' wrote report/rspec-out/specopts $RSPEC spec/f_spec.rb --format progress)"
+want rspec-wrote-specopts-hooked theirs "$(HOME="$RHOME" SPEC_OPTS='--format json --out theirs.json' wrote report/rspec-out/specopts "${RSPECOF[@]}")"
+want rspec-wrote-specopts-out-flagged theirs "$(HOME="$RHOME" SPEC_OPTS='--out theirs.json' wrote report/rspec-out/specopts $RSPEC spec/f_spec.rb --format progress)"
+want rspec-wrote-specopts-out-hooked theirs "$(HOME="$RHOME" SPEC_OPTS='--out theirs.json' wrote report/rspec-out/specopts "${RSPECOF[@]}")"
+# An operator's own --out binds to the formatter before it (progress, rspec's
+# default), and keeps doing so with the hook's formatters after it.
+# shellcheck disable=SC2086
+reporthook RSPECOPOUT ruby $RSPEC spec/f_spec.rb --out theirs.json
+want rspec-wrote-operator-out-flagged theirs "$(HOME="$RHOME" wrote report/rspec-out/specopts $RSPEC spec/f_spec.rb --out theirs.json --format progress)"
+want rspec-wrote-operator-out-hooked ours+theirs "$(HOME="$RHOME" wrote report/rspec-out/specopts "${RSPECOPOUT[@]}")"
 (cd report/nextest && cargo build --tests -q 2>/dev/null; fails report-cargo-nextest-hidden.txt cargo nextest run)
 (cd report/nextest && fails report-cargo-nextest-shown.txt cargo nextest run --status-level pass --final-status-level flaky)
 
@@ -825,6 +931,12 @@ want nextest-fail-fast-after-separator-refused 96 "$(cd fail/cargo && cargo next
 # Each killer command (KillerCmd: the failing run's own command, narrowed to the
 # test its failure reader named, no file added) runs that test and nothing else.
 killed() { grep -oE '([0-9]+ examples?, [0-9]+ failures?)|(Tests: [0-9]+, Assertions: [0-9]+, (Failures|Errors): [0-9]+)' | head -1; }
+# A jest title holding the printed separator ` › `: the id the jest hook's record
+# gives (`Sep::a › b`, jest_record.go) runs that test alone; the id the printed
+# heading gave before the hook (`Sep::a::b`) selected none.
+jesttests() { sed -n 's/^Tests: *//p'; }
+want jest-killer-separator-title "1 failed, 7 skipped, 8 total" "$(env -u AI_AGENT -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT npx --no-install jest fail/jest-edge/e.jest.test.js --testNamePattern '^Sep a › b$' 2>&1 | jesttests)"
+want jest-killer-separator-title-printed-id "8 skipped, 8 total" "$(env -u AI_AGENT -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT npx --no-install jest fail/jest-edge/e.jest.test.js --testNamePattern '^Sep a b$' 2>&1 | jesttests)"
 want rspec-killer "1 example, 1 failure" "$($RSPEC fail/spec/f_spec.rb -E '\ACalc adds \(a\+b\)\z' 2>&1 | killed)"
 want rspec-killer-nested "1 example, 1 failure" "$($RSPEC fail/spec/f_spec.rb -E '\AMyApp::Calc top level\z' 2>&1 | killed)"
 want phpunit-killer "Tests: 1, Assertions: 1, Failures: 1" "$(vendor/bin/phpunit fail/tests/FTest.php --filter '/(?:^|\\)FTest::testAdds(?: with data set .*)?$/' 2>&1 | killed)"

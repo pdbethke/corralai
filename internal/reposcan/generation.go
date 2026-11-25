@@ -595,7 +595,14 @@ package reposcan
 // and the TAP reader used to name, is named by neither source, so a "54"
 // killed_by that named one names the test that failed. On node 23 and
 // later the printed report under the hook is TAP, not spec; the ids are
-// the same. Behaviour bump; the shape is unchanged.
+// the same. Also in "55": every jest and rspec run corral can rewrite
+// writes the runner's JSON record (lang.jestRecordHook, --json
+// --outputFile; lang.rspecRecordHook, --format json --out) and the killing
+// test is read from it by the id the printed lines gave, so an rspec
+// killed_by keeps its form, and so does a jest one except for a test whose
+// title holds jest's printed separator ` › `: "54" split that title
+// (`Sep::a::b`) and the record keeps it whole (`Sep::a › b`), which the
+// killer command now selects. Behaviour bump; the shape is unchanged.
 const VerdictGeneration = "55"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every

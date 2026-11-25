@@ -1,0 +1,235 @@
+FAIL fail/jest-edge/e.jest.test.js
+  ● Sep › a › b
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 2
+    Received: 1
+
+      1 | // Failing fixture for the jest row's failure hook (scripts/capture-runner-fixtures.sh): the shapes where jest's JSON record and its printed `●` headings could disagree.
+    > 2 | describe('Sep', () => { it('a › b', () => { expect(1).toBe(2); }); });
+        |                                                       ^
+      3 | describe('BeforeAll', () => {
+      4 |   beforeAll(() => { throw new Error('setup'); });
+      5 |   it('one', () => {});
+
+      at Object.toBe (fail/jest-edge/e.jest.test.js:2:55)
+
+  ● BeforeAll › one
+
+    setup
+
+      2 | describe('Sep', () => { it('a › b', () => { expect(1).toBe(2); }); });
+      3 | describe('BeforeAll', () => {
+    > 4 |   beforeAll(() => { throw new Error('setup'); });
+        |                           ^
+      5 |   it('one', () => {});
+      6 | });
+      7 | describe('AfterAll', () => {
+
+      at Object.<anonymous> (fail/jest-edge/e.jest.test.js:4:27)
+
+  ● passes unexpectedly
+
+    Failing test passed even though it was supposed to fail. Remove `.failing` to remove error.
+
+      11 | test.todo('later');
+      12 | test.failing('fails as expected', () => { expect(1).toBe(2); });
+    > 13 | test.failing('passes unexpectedly', () => {});
+         |      ^
+      14 | test.each([1, 2])('each %i', (n) => { expect(n).toBe(1); });
+      15 |
+
+      at Object.failing (fail/jest-edge/e.jest.test.js:13:6)
+
+  ● each 2
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 1
+    Received: 2
+
+      12 | test.failing('fails as expected', () => { expect(1).toBe(2); });
+      13 | test.failing('passes unexpectedly', () => {});
+    > 14 | test.each([1, 2])('each %i', (n) => { expect(n).toBe(1); });
+         |                                                 ^
+      15 |
+
+      at toBe (fail/jest-edge/e.jest.test.js:14:49)
+
+
+  ● Test suite failed to run
+
+    teardown
+
+       6 | });
+       7 | describe('AfterAll', () => {
+    >  8 |   afterAll(() => { throw new Error('teardown'); });
+         |                          ^
+       9 |   it('two', () => {});
+      10 | });
+      11 | test.todo('later');
+
+      at Object.<anonymous> (fail/jest-edge/e.jest.test.js:8:26)
+
+FAIL fail/f.jest.test.js
+  ● Calc › adds (a+b)
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 3
+    Received: 2
+
+      1 | // Failing fixture for the runner table (scripts/capture-runner-fixtures.sh): what each runner prints when tests fail, and which tests its skip command leaves.
+      2 | describe('Calc', () => {
+    > 3 |   it('adds (a+b)', () => { expect(1 + 1).toBe(3); });
+        |                                          ^
+      4 |   it('ok', () => {});
+      5 |   describe('neg', () => { it('adds', () => { throw new Error('boom'); }); });
+      6 | });
+
+      at Object.toBe (fail/f.jest.test.js:3:42)
+
+  ● Calc › neg › adds
+
+    boom
+
+      3 |   it('adds (a+b)', () => { expect(1 + 1).toBe(3); });
+      4 |   it('ok', () => {});
+    > 5 |   describe('neg', () => { it('adds', () => { throw new Error('boom'); }); });
+        |                                                    ^
+      6 | });
+      7 | test('top level', () => { expect(1).toBe(2); });
+      8 |
+
+      at Object.<anonymous> (fail/f.jest.test.js:5:52)
+
+  ● top level
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 2
+    Received: 1
+
+      5 |   describe('neg', () => { it('adds', () => { throw new Error('boom'); }); });
+      6 | });
+    > 7 | test('top level', () => { expect(1).toBe(2); });
+        |                                     ^
+      8 |
+
+      at Object.toBe (fail/f.jest.test.js:7:37)
+
+FAIL fail/broken.jest.test.js
+  ● Test suite failed to run
+
+    Jest encountered an unexpected token
+
+    Jest failed to parse a file. This happens e.g. when your code or its dependencies use non-standard JavaScript syntax, or when Jest is not configured to support such syntax.
+
+    Out of the box Jest supports Babel, which will be used to transform your files into valid JS based on your Babel configuration.
+
+    By default "node_modules" folder is ignored by transformers.
+
+    Here's what you can do:
+     • If you are trying to use TypeScript, see https://jestjs.io/docs/getting-started#using-typescript
+     • To have some of your "node_modules" files transformed, you can specify a custom "transformIgnorePatterns" in your config.
+     • If you need a custom transformation, specify a "transform" option in your config.
+     • If you simply want to mock your non-JS modules (e.g. binary assets) you can stub them out with the "moduleNameMapper" config option.
+
+    You'll find more details and examples of these config options in the docs:
+    https://jestjs.io/docs/configuration
+    For information about custom transformations, see:
+    https://jestjs.io/docs/code-transformation
+
+    Details:
+
+    SyntaxError: $DIR/fail/broken.jest.test.js: Unexpected token (4:0)
+
+      2 | describe('Broken', () => {
+      3 |   it('x', () => {});
+    > 4 |
+        | ^
+
+      at constructor (node_modules/@babel/parser/src/parse-error.ts:96:45)
+      at Parser.toParseError [as raise] (node_modules/@babel/parser/src/tokenizer/index.ts:1563:19)
+      at Parser.raise [as unexpected] (node_modules/@babel/parser/src/tokenizer/index.ts:1603:16)
+      at Parser.unexpected [as parseExprAtom] (node_modules/@babel/parser/src/parser/expression.ts:1440:22)
+      at Parser.parseExprAtom [as parseExprSubscripts] (node_modules/@babel/parser/src/parser/expression.ts:788:23)
+      at Parser.parseExprSubscripts [as parseUpdate] (node_modules/@babel/parser/src/parser/expression.ts:767:21)
+      at Parser.parseUpdate [as parseMaybeUnary] (node_modules/@babel/parser/src/parser/expression.ts:729:23)
+      at Parser.parseMaybeUnary [as parseMaybeUnaryOrPrivate] (node_modules/@babel/parser/src/parser/expression.ts:437:14)
+      at Parser.parseMaybeUnaryOrPrivate [as parseExprOps] (node_modules/@babel/parser/src/parser/expression.ts:449:23)
+      at Parser.parseExprOps [as parseMaybeConditional] (node_modules/@babel/parser/src/parser/expression.ts:404:23)
+      at Parser.parseMaybeConditional [as parseMaybeAssign] (node_modules/@babel/parser/src/parser/expression.ts:310:21)
+      at Parser.parseMaybeAssign [as parseExpressionBase] (node_modules/@babel/parser/src/parser/expression.ts:228:23)
+      at parseExpressionBase (node_modules/@babel/parser/src/parser/expression.ts:219:39)
+      at Parser.callback [as allowInAnd] (node_modules/@babel/parser/src/parser/expression.ts:3290:16)
+      at Parser.allowInAnd [as parseExpression] (node_modules/@babel/parser/src/parser/expression.ts:219:17)
+      at Parser.parseExpression [as parseStatementContent] (node_modules/@babel/parser/src/parser/statement.ts:737:23)
+      at Parser.parseStatementContent [as parseStatementLike] (node_modules/@babel/parser/src/parser/statement.ts:522:17)
+      at Parser.parseStatementLike [as parseStatementListItem] (node_modules/@babel/parser/src/parser/statement.ts:471:17)
+      at Parser.parseStatementListItem [as parseBlockOrModuleBlockBody] (node_modules/@babel/parser/src/parser/statement.ts:1504:16)
+      at Parser.parseBlockOrModuleBlockBody [as parseBlockBody] (node_modules/@babel/parser/src/parser/statement.ts:1477:10)
+      at Parser.parseBlockBody [as parseBlock] (node_modules/@babel/parser/src/parser/statement.ts:1445:10)
+      at Parser.parseBlock [as parseFunctionBody] (node_modules/@babel/parser/src/parser/expression.ts:2705:24)
+      at Parser.parseFunctionBody [as parseArrowExpression] (node_modules/@babel/parser/src/parser/expression.ts:2643:10)
+      at Parser.parseArrowExpression [as parseParenAndDistinguishExpression] (node_modules/@babel/parser/src/parser/expression.ts:1931:12)
+      at Parser.parseParenAndDistinguishExpression [as parseExprAtom] (node_modules/@babel/parser/src/parser/expression.ts:1250:21)
+      at Parser.parseExprAtom [as parseExprSubscripts] (node_modules/@babel/parser/src/parser/expression.ts:788:23)
+      at Parser.parseExprSubscripts [as parseUpdate] (node_modules/@babel/parser/src/parser/expression.ts:767:21)
+      at Parser.parseUpdate [as parseMaybeUnary] (node_modules/@babel/parser/src/parser/expression.ts:729:23)
+      at Parser.parseMaybeUnary [as parseMaybeUnaryOrPrivate] (node_modules/@babel/parser/src/parser/expression.ts:437:14)
+      at Parser.parseMaybeUnaryOrPrivate [as parseExprOps] (node_modules/@babel/parser/src/parser/expression.ts:449:23)
+      at Parser.parseExprOps [as parseMaybeConditional] (node_modules/@babel/parser/src/parser/expression.ts:404:23)
+      at Parser.parseMaybeConditional [as parseMaybeAssign] (node_modules/@babel/parser/src/parser/expression.ts:310:21)
+      at parseMaybeAssign (node_modules/@babel/parser/src/parser/expression.ts:259:12)
+      at Parser.callback [as allowInAnd] (node_modules/@babel/parser/src/parser/expression.ts:3295:12)
+      at Parser.allowInAnd [as parseMaybeAssignAllowIn] (node_modules/@babel/parser/src/parser/expression.ts:258:17)
+      at Parser.parseMaybeAssignAllowIn [as parseMaybeAssignAllowInOrVoidPattern] (node_modules/@babel/parser/src/parser/expression.ts:3415:17)
+      at Parser.parseMaybeAssignAllowInOrVoidPattern [as parseExprListItem] (node_modules/@babel/parser/src/parser/expression.ts:2877:18)
+      at Parser.parseExprListItem [as parseCallExpressionArguments] (node_modules/@babel/parser/src/parser/expression.ts:1112:14)
+      at Parser.parseCallExpressionArguments [as parseCoverCallAndAsyncArrowHead] (node_modules/@babel/parser/src/parser/expression.ts:992:29)
+      at Parser.parseCoverCallAndAsyncArrowHead [as parseSubscript] (node_modules/@babel/parser/src/parser/expression.ts:868:19)
+      at Parser.parseSubscript [as parseSubscripts] (node_modules/@babel/parser/src/parser/expression.ts:827:19)
+      at Parser.parseSubscripts [as parseExprSubscripts] (node_modules/@babel/parser/src/parser/expression.ts:794:17)
+      at Parser.parseExprSubscripts [as parseUpdate] (node_modules/@babel/parser/src/parser/expression.ts:767:21)
+      at Parser.parseUpdate [as parseMaybeUnary] (node_modules/@babel/parser/src/parser/expression.ts:729:23)
+      at Parser.parseMaybeUnary [as parseMaybeUnaryOrPrivate] (node_modules/@babel/parser/src/parser/expression.ts:437:14)
+      at Parser.parseMaybeUnaryOrPrivate [as parseExprOps] (node_modules/@babel/parser/src/parser/expression.ts:449:23)
+      at Parser.parseExprOps [as parseMaybeConditional] (node_modules/@babel/parser/src/parser/expression.ts:404:23)
+      at Parser.parseMaybeConditional [as parseMaybeAssign] (node_modules/@babel/parser/src/parser/expression.ts:310:21)
+      at Parser.parseMaybeAssign [as parseExpressionBase] (node_modules/@babel/parser/src/parser/expression.ts:228:23)
+      at parseExpressionBase (node_modules/@babel/parser/src/parser/expression.ts:219:39)
+      at Parser.callback [as allowInAnd] (node_modules/@babel/parser/src/parser/expression.ts:3290:16)
+      at Parser.allowInAnd [as parseExpression] (node_modules/@babel/parser/src/parser/expression.ts:219:17)
+      at Parser.parseExpression [as parseStatementContent] (node_modules/@babel/parser/src/parser/statement.ts:737:23)
+      at Parser.parseStatementContent [as parseStatementLike] (node_modules/@babel/parser/src/parser/statement.ts:522:17)
+      at Parser.parseStatementLike [as parseModuleItem] (node_modules/@babel/parser/src/parser/statement.ts:459:17)
+      at Parser.parseModuleItem [as parseBlockOrModuleBlockBody] (node_modules/@babel/parser/src/parser/statement.ts:1503:16)
+      at Parser.parseBlockOrModuleBlockBody [as parseBlockBody] (node_modules/@babel/parser/src/parser/statement.ts:1477:10)
+      at Parser.parseBlockBody [as parseProgram] (node_modules/@babel/parser/src/parser/statement.ts:241:10)
+      at Parser.parseProgram [as parseTopLevel] (node_modules/@babel/parser/src/parser/statement.ts:215:25)
+      at Parser.parseTopLevel [as parse] (node_modules/@babel/parser/src/parser/index.ts:83:25)
+      at parse (node_modules/@babel/parser/src/index.ts:86:38)
+      at parser (node_modules/@babel/core/src/parser/index.ts:29:19)
+          at parser.next (<anonymous>)
+      at normalizeFile (node_modules/@babel/core/src/transformation/normalize-file.ts:49:24)
+          at normalizeFile.next (<anonymous>)
+      at run (node_modules/@babel/core/src/transformation/index.ts:41:36)
+          at run.next (<anonymous>)
+      at transform (node_modules/@babel/core/src/transform.ts:29:20)
+          at transform.next (<anonymous>)
+      at evaluateSync (node_modules/gensync/index.js:251:28)
+      at sync (node_modules/gensync/index.js:89:14)
+      at fn (node_modules/@babel/core/src/errors/rewrite-stack-trace.ts:99:14)
+      at transformSync (node_modules/@babel/core/src/transform.ts:66:52)
+
+Test Suites: 3 failed, 3 total
+Tests:       7 failed, 1 todo, 4 passed, 12 total
+Snapshots:   0 total
+Ran all test suites matching fail/f.jest.test.js|fail/jest-edge/e.jest.test.js|fail/broken.jest.test.js.
+Test results written to: <record>
+
+corral-record-begin jest-json
+{"numFailedTestSuites":3,"numFailedTests":7,"numPassedTestSuites":0,"numPassedTests":4,"numPendingTestSuites":0,"numPendingTests":0,"numRuntimeErrorTestSuites":2,"numTodoTests":1,"numTotalTestSuites":3,"numTotalTests":12,"openHandles":[],"snapshot":{"added":0,"didUpdate":false,"failure":false,"filesAdded":0,"filesRemoved":0,"filesRemovedList":[],"filesUnmatched":0,"filesUpdated":0,"matched":0,"total":0,"unchecked":0,"uncheckedKeysByFile":[],"unmatched":0,"updated":0},"startTime":0,"success":false,"testResults":[{"assertionResults":[{"ancestorTitles":["Sep"],"duration":0,"failing":false,"failureDetails":[{"matcherResult":{"actual":1,"expected":2,"message":"expect(received).toBe(expected) // Object.is equality\n\nExpected: 2\nReceived: 1","name":"toBe","pass":false}}],"failureMessages":["Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: 2\nReceived: 1\n    at Object.toBe ($DIR/fail/jest-edge/e.jest.test.js:2:55)\n    at Promise.finally.completed ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:1834:28)\n    at new Promise (<anonymous>)\n    at callAsyncCircusFn ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:1774:10)\n    at _callCircusTest ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:1167:40)\n    at _runTestInContext ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:1103:3)\n    at runTestWithContext ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:996:5)\n    at _runTestsForDescribeBlockOnce ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:1008:11)\n    at _runTestsForDescribeBlock ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:824:5)\n    at _runTestsForDescribeBlockOnce ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:1003:11)\n    at _runTestsForDescribeBlock ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:824:5)\n    at run ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:789:3)\n    at runAndTransformResultsToJestFormat ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:2300:21)\n    at jestAdapter ($DIR/node_modules/jest-circus/build/runner.js:111:19)\n    at runTestInternal ($DIR/node_modules/jest-runner/build/index.js:247:16)\n    at runTest ($DIR/node_modules/jest-runner/build/index.js:315:7)"],"fullName":"Sep a › b","invocations":1,"location":null,"numPassingAsserts":0,"retryMessages":[],"retryReasons":[],"status":"failed","title":"a › b","startAt":0},{"ancestorTitles":["BeforeAll"],"duration":0,"failing":false,"failureDetails":[{}],"failureMessages":["Error: setup\n    at Object.<anonymous> ($DIR/fail/jest-edge/e.jest.test.js:4:27)\n    at Promise.finally.completed ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:1834:28)\n    at new Promise (<anonymous>)\n    at callAsyncCircusFn ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:1774:10)\n    at _callCircusHook ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:1136:40)\n    at _runTestsForDescribeBlockOnce ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:941:7)\n    at _runTestsForDescribeBlock ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:824:5)\n    at _runTestsForDescribeBlockOnce ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:1003:11)\n    at _runTestsForDescribeBlock ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:824:5)\n    at run ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:789:3)\n    at runAndTransformResultsToJestFormat ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:2300:21)\n    at jestAdapter ($DIR/node_modules/jest-circus/build/runner.js:111:19)\n    at runTestInternal ($DIR/node_modules/jest-runner/build/index.js:247:16)\n    at runTest ($DIR/node_modules/jest-runner/build/index.js:315:7)"],"fullName":"BeforeAll one","invocations":1,"location":null,"numPassingAsserts":0,"retryMessages":[],"retryReasons":[],"status":"failed","title":"one","startAt":0},{"ancestorTitles":["AfterAll"],"duration":0,"failing":false,"failureDetails":[],"failureMessages":[],"fullName":"AfterAll two","invocations":1,"location":null,"numPassingAsserts":0,"retryMessages":[],"retryReasons":[],"status":"passed","title":"two","startAt":0},{"ancestorTitles":[],"duration":null,"failing":false,"failureDetails":[],"failureMessages":[],"fullName":"later","invocations":1,"location":null,"numPassingAsserts":0,"retryMessages":[],"retryReasons":[],"status":"todo","title":"later","startAt":0},{"ancestorTitles":[],"duration":0,"failing":true,"failureDetails":[],"failureMessages":[],"fullName":"fails as expected","invocations":1,"location":null,"numPassingAsserts":0,"retryMessages":[],"retryReasons":[],"status":"passed","title":"fails as expected","startAt":0},{"ancestorTitles":[],"duration":0,"failing":true,"failureDetails":[{"message":"Failing test passed even though it was supposed to fail. Remove `.failing` to remove error."}],"failureMessages":["Error: Failing test passed even though it was supposed to fail. Remove `.failing` to remove error.\n    at Object.failing ($DIR/fail/jest-edge/e.jest.test.js:13:6)\n    at ModuleExecutor.exec ($DIR/node_modules/jest-runtime/build/index.js:3055:26)\n    at CjsLoader.loadModule ($DIR/node_modules/jest-runtime/build/index.js:440:36)\n    at CjsLoader.requireModule ($DIR/node_modules/jest-runtime/build/index.js:335:12)\n    at Runtime.requireModule ($DIR/node_modules/jest-runtime/build/index.js:4981:27)\n    at jestAdapter ($DIR/node_modules/jest-circus/build/runner.js:96:13)\n    at runTestInternal ($DIR/node_modules/jest-runner/build/index.js:247:16)\n    at runTest ($DIR/node_modules/jest-runner/build/index.js:315:7)"],"fullName":"passes unexpectedly","invocations":1,"location":null,"numPassingAsserts":0,"retryMessages":[],"retryReasons":[],"status":"failed","title":"passes unexpectedly","startAt":0},{"ancestorTitles":[],"duration":0,"failing":false,"failureDetails":[],"failureMessages":[],"fullName":"each 1","invocations":1,"location":null,"numPassingAsserts":1,"retryMessages":[],"retryReasons":[],"status":"passed","title":"each 1","startAt":0},{"ancestorTitles":[],"duration":0,"failing":false,"failureDetails":[{"matcherResult":{"actual":2,"expected":1,"message":"expect(received).toBe(expected) // Object.is equality\n\nExpected: 1\nReceived: 2","name":"toBe","pass":false}}],"failureMessages":["Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: 1\nReceived: 2\n    at toBe ($DIR/fail/jest-edge/e.jest.test.js:14:49)\n    at Object.<anonymous> ($DIR/node_modules/jest-each/build/index.js:80:140)\n    at Promise.finally.completed ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:1834:28)\n    at new Promise (<anonymous>)\n    at callAsyncCircusFn ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:1774:10)\n    at _callCircusTest ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:1167:40)\n    at _runTestInContext ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:1103:3)\n    at runTestWithContext ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:996:5)\n    at _runTestsForDescribeBlockOnce ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:1008:11)\n    at _runTestsForDescribeBlock ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:824:5)\n    at run ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:789:3)\n    at runAndTransformResultsToJestFormat ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:2300:21)\n    at jestAdapter ($DIR/node_modules/jest-circus/build/runner.js:111:19)\n    at runTestInternal ($DIR/node_modules/jest-runner/build/index.js:247:16)\n    at runTest ($DIR/node_modules/jest-runner/build/index.js:315:7)"],"fullName":"each 2","invocations":1,"location":null,"numPassingAsserts":0,"retryMessages":[],"retryReasons":[],"status":"failed","title":"each 2","startAt":0}],"coverage":{},"endTime":0,"message":"  ● Sep › a › b\n\n    expect(received).toBe(expected) // Object.is equality\n\n    Expected: 2\n    Received: 1\n\n      1 | // Failing fixture for the jest row's failure hook (scripts/capture-runner-fixtures.sh): the shapes where jest's JSON record and its printed `●` headings could disagree.\n    > 2 | describe('Sep', () => { it('a › b', () => { expect(1).toBe(2); }); });\n        |                                                       ^\n      3 | describe('BeforeAll', () => {\n      4 |   beforeAll(() => { throw new Error('setup'); });\n      5 |   it('one', () => {});\n\n      at Object.toBe (fail/jest-edge/e.jest.test.js:2:55)\n\n  ● BeforeAll › one\n\n    setup\n\n      2 | describe('Sep', () => { it('a › b', () => { expect(1).toBe(2); }); });\n      3 | describe('BeforeAll', () => {\n    > 4 |   beforeAll(() => { throw new Error('setup'); });\n        |                           ^\n      5 |   it('one', () => {});\n      6 | });\n      7 | describe('AfterAll', () => {\n\n      at Object.<anonymous> (fail/jest-edge/e.jest.test.js:4:27)\n\n  ● passes unexpectedly\n\n    Failing test passed even though it was supposed to fail. Remove `.failing` to remove error.\n\n      11 | test.todo('later');\n      12 | test.failing('fails as expected', () => { expect(1).toBe(2); });\n    > 13 | test.failing('passes unexpectedly', () => {});\n         |      ^\n      14 | test.each([1, 2])('each %i', (n) => { expect(n).toBe(1); });\n      15 |\n\n      at Object.failing (fail/jest-edge/e.jest.test.js:13:6)\n\n  ● each 2\n\n    expect(received).toBe(expected) // Object.is equality\n\n    Expected: 1\n    Received: 2\n\n      12 | test.failing('fails as expected', () => { expect(1).toBe(2); });\n      13 | test.failing('passes unexpectedly', () => {});\n    > 14 | test.each([1, 2])('each %i', (n) => { expect(n).toBe(1); });\n         |                                                 ^\n      15 |\n\n      at toBe (fail/jest-edge/e.jest.test.js:14:49)\n\n\n  ● Test suite failed to run\n\n    teardown\n\n       6 | });\n       7 | describe('AfterAll', () => {\n    >  8 |   afterAll(() => { throw new Error('teardown'); });\n         |                          ^\n       9 |   it('two', () => {});\n      10 | });\n      11 | test.todo('later');\n\n      at Object.<anonymous> (fail/jest-edge/e.jest.test.js:8:26)\n","name":"$DIR/fail/jest-edge/e.jest.test.js","startTime":0,"status":"failed","summary":""},{"assertionResults":[{"ancestorTitles":["Calc"],"duration":0,"failing":false,"failureDetails":[{"matcherResult":{"actual":2,"expected":3,"message":"expect(received).toBe(expected) // Object.is equality\n\nExpected: 3\nReceived: 2","name":"toBe","pass":false}}],"failureMessages":["Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: 3\nReceived: 2\n    at Object.toBe ($DIR/fail/f.jest.test.js:3:42)\n    at Promise.finally.completed ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:1834:28)\n    at new Promise (<anonymous>)\n    at callAsyncCircusFn ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:1774:10)\n    at _callCircusTest ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:1167:40)\n    at _runTestInContext ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:1103:3)\n    at runTestWithContext ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:996:5)\n    at _runTestsForDescribeBlockOnce ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:1008:11)\n    at _runTestsForDescribeBlock ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:824:5)\n    at _runTestsForDescribeBlockOnce ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:1003:11)\n    at _runTestsForDescribeBlock ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:824:5)\n    at run ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:789:3)\n    at runAndTransformResultsToJestFormat ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:2300:21)\n    at jestAdapter ($DIR/node_modules/jest-circus/build/runner.js:111:19)\n    at runTestInternal ($DIR/node_modules/jest-runner/build/index.js:247:16)\n    at runTest ($DIR/node_modules/jest-runner/build/index.js:315:7)"],"fullName":"Calc adds (a+b)","invocations":1,"location":null,"numPassingAsserts":0,"retryMessages":[],"retryReasons":[],"status":"failed","title":"adds (a+b)","startAt":0},{"ancestorTitles":["Calc"],"duration":0,"failing":false,"failureDetails":[],"failureMessages":[],"fullName":"Calc ok","invocations":1,"location":null,"numPassingAsserts":0,"retryMessages":[],"retryReasons":[],"status":"passed","title":"ok","startAt":0},{"ancestorTitles":["Calc","neg"],"duration":0,"failing":false,"failureDetails":[{}],"failureMessages":["Error: boom\n    at Object.<anonymous> ($DIR/fail/f.jest.test.js:5:52)\n    at Promise.finally.completed ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:1834:28)\n    at new Promise (<anonymous>)\n    at callAsyncCircusFn ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:1774:10)\n    at _callCircusTest ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:1167:40)\n    at _runTestInContext ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:1103:3)\n    at runTestWithContext ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:996:5)\n    at _runTestsForDescribeBlockOnce ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:1008:11)\n    at _runTestsForDescribeBlock ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:824:5)\n    at _runTestsForDescribeBlockOnce ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:1003:11)\n    at _runTestsForDescribeBlock ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:824:5)\n    at _runTestsForDescribeBlockOnce ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:1003:11)\n    at _runTestsForDescribeBlock ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:824:5)\n    at run ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:789:3)\n    at runAndTransformResultsToJestFormat ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:2300:21)\n    at jestAdapter ($DIR/node_modules/jest-circus/build/runner.js:111:19)\n    at runTestInternal ($DIR/node_modules/jest-runner/build/index.js:247:16)\n    at runTest ($DIR/node_modules/jest-runner/build/index.js:315:7)"],"fullName":"Calc neg adds","invocations":1,"location":null,"numPassingAsserts":0,"retryMessages":[],"retryReasons":[],"status":"failed","title":"adds","startAt":0},{"ancestorTitles":[],"duration":0,"failing":false,"failureDetails":[{"matcherResult":{"actual":1,"expected":2,"message":"expect(received).toBe(expected) // Object.is equality\n\nExpected: 2\nReceived: 1","name":"toBe","pass":false}}],"failureMessages":["Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: 2\nReceived: 1\n    at Object.toBe ($DIR/fail/f.jest.test.js:7:37)\n    at Promise.finally.completed ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:1834:28)\n    at new Promise (<anonymous>)\n    at callAsyncCircusFn ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:1774:10)\n    at _callCircusTest ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:1167:40)\n    at _runTestInContext ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:1103:3)\n    at runTestWithContext ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:996:5)\n    at _runTestsForDescribeBlockOnce ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:1008:11)\n    at _runTestsForDescribeBlock ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:824:5)\n    at run ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:789:3)\n    at runAndTransformResultsToJestFormat ($DIR/node_modules/jest-circus/build/jestAdapterInit.js:2300:21)\n    at jestAdapter ($DIR/node_modules/jest-circus/build/runner.js:111:19)\n    at runTestInternal ($DIR/node_modules/jest-runner/build/index.js:247:16)\n    at runTest ($DIR/node_modules/jest-runner/build/index.js:315:7)"],"fullName":"top level","invocations":1,"location":null,"numPassingAsserts":0,"retryMessages":[],"retryReasons":[],"status":"failed","title":"top level","startAt":0}],"endTime":0,"message":"  ● Calc › adds (a+b)\n\n    expect(received).toBe(expected) // Object.is equality\n\n    Expected: 3\n    Received: 2\n\n      1 | // Failing fixture for the runner table (scripts/capture-runner-fixtures.sh): what each runner prints when tests fail, and which tests its skip command leaves.\n      2 | describe('Calc', () => {\n    > 3 |   it('adds (a+b)', () => { expect(1 + 1).toBe(3); });\n        |                                          ^\n      4 |   it('ok', () => {});\n      5 |   describe('neg', () => { it('adds', () => { throw new Error('boom'); }); });\n      6 | });\n\n      at Object.toBe (fail/f.jest.test.js:3:42)\n\n  ● Calc › neg › adds\n\n    boom\n\n      3 |   it('adds (a+b)', () => { expect(1 + 1).toBe(3); });\n      4 |   it('ok', () => {});\n    > 5 |   describe('neg', () => { it('adds', () => { throw new Error('boom'); }); });\n        |                                                    ^\n      6 | });\n      7 | test('top level', () => { expect(1).toBe(2); });\n      8 |\n\n      at Object.<anonymous> (fail/f.jest.test.js:5:52)\n\n  ● top level\n\n    expect(received).toBe(expected) // Object.is equality\n\n    Expected: 2\n    Received: 1\n\n      5 |   describe('neg', () => { it('adds', () => { throw new Error('boom'); }); });\n      6 | });\n    > 7 | test('top level', () => { expect(1).toBe(2); });\n        |                                     ^\n      8 |\n\n      at Object.toBe (fail/f.jest.test.js:7:37)\n","name":"$DIR/fail/f.jest.test.js","startTime":0,"status":"failed","summary":""},{"assertionResults":[],"coverage":{},"endTime":0,"message":"  ● Test suite failed to run\n\n    Jest encountered an unexpected token\n\n    Jest failed to parse a file. This happens e.g. when your code or its dependencies use non-standard JavaScript syntax, or when Jest is not configured to support such syntax.\n\n    Out of the box Jest supports Babel, which will be used to transform your files into valid JS based on your Babel configuration.\n\n    By default \"node_modules\" folder is ignored by transformers.\n\n    Here's what you can do:\n     • If you are trying to use TypeScript, see https://jestjs.io/docs/getting-started#using-typescript\n     • To have some of your \"node_modules\" files transformed, you can specify a custom \"transformIgnorePatterns\" in your config.\n     • If you need a custom transformation, specify a \"transform\" option in your config.\n     • If you simply want to mock your non-JS modules (e.g. binary assets) you can stub them out with the \"moduleNameMapper\" config option.\n\n    You'll find more details and examples of these config options in the docs:\n    https://jestjs.io/docs/configuration\n    For information about custom transformations, see:\n    https://jestjs.io/docs/code-transformation\n\n    Details:\n\n    SyntaxError: $DIR/fail/broken.jest.test.js: Unexpected token (4:0)\n\n      2 | describe('Broken', () => {\n      3 |   it('x', () => {});\n    > 4 |\n        | ^\n\n      at constructor (node_modules/@babel/parser/src/parse-error.ts:96:45)\n      at Parser.toParseError [as raise] (node_modules/@babel/parser/src/tokenizer/index.ts:1563:19)\n      at Parser.raise [as unexpected] (node_modules/@babel/parser/src/tokenizer/index.ts:1603:16)\n      at Parser.unexpected [as parseExprAtom] (node_modules/@babel/parser/src/parser/expression.ts:1440:22)\n      at Parser.parseExprAtom [as parseExprSubscripts] (node_modules/@babel/parser/src/parser/expression.ts:788:23)\n      at Parser.parseExprSubscripts [as parseUpdate] (node_modules/@babel/parser/src/parser/expression.ts:767:21)\n      at Parser.parseUpdate [as parseMaybeUnary] (node_modules/@babel/parser/src/parser/expression.ts:729:23)\n      at Parser.parseMaybeUnary [as parseMaybeUnaryOrPrivate] (node_modules/@babel/parser/src/parser/expression.ts:437:14)\n      at Parser.parseMaybeUnaryOrPrivate [as parseExprOps] (node_modules/@babel/parser/src/parser/expression.ts:449:23)\n      at Parser.parseExprOps [as parseMaybeConditional] (node_modules/@babel/parser/src/parser/expression.ts:404:23)\n      at Parser.parseMaybeConditional [as parseMaybeAssign] (node_modules/@babel/parser/src/parser/expression.ts:310:21)\n      at Parser.parseMaybeAssign [as parseExpressionBase] (node_modules/@babel/parser/src/parser/expression.ts:228:23)\n      at parseExpressionBase (node_modules/@babel/parser/src/parser/expression.ts:219:39)\n      at Parser.callback [as allowInAnd] (node_modules/@babel/parser/src/parser/expression.ts:3290:16)\n      at Parser.allowInAnd [as parseExpression] (node_modules/@babel/parser/src/parser/expression.ts:219:17)\n      at Parser.parseExpression [as parseStatementContent] (node_modules/@babel/parser/src/parser/statement.ts:737:23)\n      at Parser.parseStatementContent [as parseStatementLike] (node_modules/@babel/parser/src/parser/statement.ts:522:17)\n      at Parser.parseStatementLike [as parseStatementListItem] (node_modules/@babel/parser/src/parser/statement.ts:471:17)\n      at Parser.parseStatementListItem [as parseBlockOrModuleBlockBody] (node_modules/@babel/parser/src/parser/statement.ts:1504:16)\n      at Parser.parseBlockOrModuleBlockBody [as parseBlockBody] (node_modules/@babel/parser/src/parser/statement.ts:1477:10)\n      at Parser.parseBlockBody [as parseBlock] (node_modules/@babel/parser/src/parser/statement.ts:1445:10)\n      at Parser.parseBlock [as parseFunctionBody] (node_modules/@babel/parser/src/parser/expression.ts:2705:24)\n      at Parser.parseFunctionBody [as parseArrowExpression] (node_modules/@babel/parser/src/parser/expression.ts:2643:10)\n      at Parser.parseArrowExpression [as parseParenAndDistinguishExpression] (node_modules/@babel/parser/src/parser/expression.ts:1931:12)\n      at Parser.parseParenAndDistinguishExpression [as parseExprAtom] (node_modules/@babel/parser/src/parser/expression.ts:1250:21)\n      at Parser.parseExprAtom [as parseExprSubscripts] (node_modules/@babel/parser/src/parser/expression.ts:788:23)\n      at Parser.parseExprSubscripts [as parseUpdate] (node_modules/@babel/parser/src/parser/expression.ts:767:21)\n      at Parser.parseUpdate [as parseMaybeUnary] (node_modules/@babel/parser/src/parser/expression.ts:729:23)\n      at Parser.parseMaybeUnary [as parseMaybeUnaryOrPrivate] (node_modules/@babel/parser/src/parser/expression.ts:437:14)\n      at Parser.parseMaybeUnaryOrPrivate [as parseExprOps] (node_modules/@babel/parser/src/parser/expression.ts:449:23)\n      at Parser.parseExprOps [as parseMaybeConditional] (node_modules/@babel/parser/src/parser/expression.ts:404:23)\n      at Parser.parseMaybeConditional [as parseMaybeAssign] (node_modules/@babel/parser/src/parser/expression.ts:310:21)\n      at parseMaybeAssign (node_modules/@babel/parser/src/parser/expression.ts:259:12)\n      at Parser.callback [as allowInAnd] (node_modules/@babel/parser/src/parser/expression.ts:3295:12)\n      at Parser.allowInAnd [as parseMaybeAssignAllowIn] (node_modules/@babel/parser/src/parser/expression.ts:258:17)\n      at Parser.parseMaybeAssignAllowIn [as parseMaybeAssignAllowInOrVoidPattern] (node_modules/@babel/parser/src/parser/expression.ts:3415:17)\n      at Parser.parseMaybeAssignAllowInOrVoidPattern [as parseExprListItem] (node_modules/@babel/parser/src/parser/expression.ts:2877:18)\n      at Parser.parseExprListItem [as parseCallExpressionArguments] (node_modules/@babel/parser/src/parser/expression.ts:1112:14)\n      at Parser.parseCallExpressionArguments [as parseCoverCallAndAsyncArrowHead] (node_modules/@babel/parser/src/parser/expression.ts:992:29)\n      at Parser.parseCoverCallAndAsyncArrowHead [as parseSubscript] (node_modules/@babel/parser/src/parser/expression.ts:868:19)\n      at Parser.parseSubscript [as parseSubscripts] (node_modules/@babel/parser/src/parser/expression.ts:827:19)\n      at Parser.parseSubscripts [as parseExprSubscripts] (node_modules/@babel/parser/src/parser/expression.ts:794:17)\n      at Parser.parseExprSubscripts [as parseUpdate] (node_modules/@babel/parser/src/parser/expression.ts:767:21)\n      at Parser.parseUpdate [as parseMaybeUnary] (node_modules/@babel/parser/src/parser/expression.ts:729:23)\n      at Parser.parseMaybeUnary [as parseMaybeUnaryOrPrivate] (node_modules/@babel/parser/src/parser/expression.ts:437:14)\n      at Parser.parseMaybeUnaryOrPrivate [as parseExprOps] (node_modules/@babel/parser/src/parser/expression.ts:449:23)\n      at Parser.parseExprOps [as parseMaybeConditional] (node_modules/@babel/parser/src/parser/expression.ts:404:23)\n      at Parser.parseMaybeConditional [as parseMaybeAssign] (node_modules/@babel/parser/src/parser/expression.ts:310:21)\n      at Parser.parseMaybeAssign [as parseExpressionBase] (node_modules/@babel/parser/src/parser/expression.ts:228:23)\n      at parseExpressionBase (node_modules/@babel/parser/src/parser/expression.ts:219:39)\n      at Parser.callback [as allowInAnd] (node_modules/@babel/parser/src/parser/expression.ts:3290:16)\n      at Parser.allowInAnd [as parseExpression] (node_modules/@babel/parser/src/parser/expression.ts:219:17)\n      at Parser.parseExpression [as parseStatementContent] (node_modules/@babel/parser/src/parser/statement.ts:737:23)\n      at Parser.parseStatementContent [as parseStatementLike] (node_modules/@babel/parser/src/parser/statement.ts:522:17)\n      at Parser.parseStatementLike [as parseModuleItem] (node_modules/@babel/parser/src/parser/statement.ts:459:17)\n      at Parser.parseModuleItem [as parseBlockOrModuleBlockBody] (node_modules/@babel/parser/src/parser/statement.ts:1503:16)\n      at Parser.parseBlockOrModuleBlockBody [as parseBlockBody] (node_modules/@babel/parser/src/parser/statement.ts:1477:10)\n      at Parser.parseBlockBody [as parseProgram] (node_modules/@babel/parser/src/parser/statement.ts:241:10)\n      at Parser.parseProgram [as parseTopLevel] (node_modules/@babel/parser/src/parser/statement.ts:215:25)\n      at Parser.parseTopLevel [as parse] (node_modules/@babel/parser/src/parser/index.ts:83:25)\n      at parse (node_modules/@babel/parser/src/index.ts:86:38)\n      at parser (node_modules/@babel/core/src/parser/index.ts:29:19)\n          at parser.next (<anonymous>)\n      at normalizeFile (node_modules/@babel/core/src/transformation/normalize-file.ts:49:24)\n          at normalizeFile.next (<anonymous>)\n      at run (node_modules/@babel/core/src/transformation/index.ts:41:36)\n          at run.next (<anonymous>)\n      at transform (node_modules/@babel/core/src/transform.ts:29:20)\n          at transform.next (<anonymous>)\n      at evaluateSync (node_modules/gensync/index.js:251:28)\n      at sync (node_modules/gensync/index.js:89:14)\n      at fn (node_modules/@babel/core/src/errors/rewrite-stack-trace.ts:99:14)\n      at transformSync (node_modules/@babel/core/src/transform.ts:66:52)\n","name":"$DIR/fail/broken.jest.test.js","startTime":0,"status":"failed","summary":""}],"wasInterrupted":false}
+corral-record-end

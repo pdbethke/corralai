@@ -381,7 +381,7 @@ var runners = []Runner{
 		// on its command line (measured on mocha 11.8.0), so `mocha <file>`
 		// runs every configured spec as well, and argv cannot show whether
 		// a config names one.
-		Note: "listing and one-test runs verified on mocha 11.8 and 12.0 (listing needs mocha 9 or later); --reporter spec verified on mocha 12.0.3 against a .mocharc json reporter; no unit evidence: its config's spec list is always added to the files on its command line, so it has no one-file run",
+		Note: "listing and one-test runs verified on mocha 11.8 and 12.0 (listing needs mocha 9 or later); --reporter spec verified on mocha 12.0.3 against a .mocharc json reporter; no unit evidence: its config's spec list is always added to the files on its command line, so it has no one-file run; no failure hook: mocha runs one reporter, the last one named (on mocha 12.0.3, `--reporter spec --reporter xunit` printed none of spec's lines), so a record reporter would replace the spec lines corral reads and the operator sees",
 	},
 	{
 		// Detect adds vitest's entry script to the word; a shell-wrapped
@@ -449,7 +449,7 @@ var runners = []Runner{
 	{
 		Name: "minitest", ID: "minitest", Languages: []string{"ruby"}, Words: []string{"ruby", "rake", "testrb"},
 		FirstFailure: firstOf(minitestFailures), FailedTests: minitestFailures, DeselectCmd: minitestDeselectCmd,
-		Note: "minitest has no list mode and no full-name selector; rspec is the Ruby runner that lists and runs one test; no unit evidence: no listing command; Ruby falls back to name pairing under minitest; no report flags: a reporter the project installs in its own test helper (minitest-reporters, not run here) can replace the printed failures, and no flag undoes it; no failure hook: minitest 5.20.0's --help lists no option that writes a record of the run to a file (read from the help text, not run against a project), and a reporter plugin was not looked for, so its failures are read from what it prints",
+		Note: "minitest has no list mode and no full-name selector; rspec is the Ruby runner that lists and runs one test; no unit evidence: no listing command; Ruby falls back to name pairing under minitest; no report flags: a reporter the project installs in its own test helper (minitest-reporters, not run here) can replace the printed failures, and no flag undoes it; no failure hook: no option minitest 5.20.0 lists (the --help of the fixture's test file, run) writes a record of the run to a file, and a reporter gem that writes one (minitest-reporters' JUnit reporter, not run) is installed by the project's own test helper, which no command-line word does, so its failures are read from what it prints",
 	},
 	{
 		Name: "phpunit", ID: "phpunit", Languages: []string{"php"}, Default: true, Words: []string{"phpunit"},
@@ -461,8 +461,10 @@ var runners = []Runner{
 		Note: "listing, one-test, one-file and several-file runs verified on PHPUnit 11.5; the test-file listing (`--list-tests`, with PHP naming each test class's file) also on 9.6, 10.5 and 12.5, where one-file runs were run as well; PHPUnit 9 and 10 ignore `--group` and `--exclude-group` when listing, so a command carrying one gets no test-file listing there. Every graded run corral can rewrite (the command names phpunit and is not shell-wrapped or a composer script) goes through `sh -c` with `--log-junit <a temporary file>` added after PHPUnit's options, and corral reads the killing test from that JUnit record, errors first as PHPUnit prints them, so a phpunit.xml with testdox=\"true\" (which replaces the printed `N) Class::method` lines) does not hide it; the tests the printed lines name that the record leaves out (a throwing setUpBeforeClass or data provider) are added after the record's, and the printed lines are the whole answer when the record is missing, cut short or not well-formed. Run on PHPUnit 11.5.57 on Linux outside the sandbox: printed output and exit code unchanged, and a `--log-junit` in the command or a `<junit>` logging entry in phpunit.xml is not written on a graded run (PHPUnit writes one JUnit file, the last named). Not run: PHPUnit 9, 10 and 12, the bubblewrap sandbox, the workspace substrate, macOS. Not wrapped: Windows",
 	},
 	{
-		// FirstFailure and Flaky read the grammar off the output, not the
-		// command (rustGrammarOf), so both cargo rows share them.
+		// The readers read the grammar off the output, not the command
+		// (rustGrammarOf). This row reads its failure hook's JUnit record
+		// first and the printed lines second (nextestFailedTests); the
+		// cargo test row, which has no hook, reads the printed lines.
 		Name: "cargo nextest", ID: "cargo-nextest", Languages: []string{"rust"}, Detect: isNextest, At: nextestIndex,
 		// A .config/nextest.toml profile with status-level and
 		// final-status-level "none" drops the FAIL lines the readers take.
@@ -470,6 +472,7 @@ var runners = []Runner{
 		// prints exactly what it did, retry lines included (measured on
 		// cargo-nextest 0.9.148).
 		ReportArgs: []string{"--status-level", "pass", "--final-status-level", "flaky"},
+		ReportHook: nextestRecordHook,
 		ListCmd:    nextestListCmd, ParseList: nextestParseList, SingleCmd: nextestSingleCmd, ResolveByList: true,
 		// --fail-fast is nextest's default, so it changes a run only where a
 		// profile or the command turned it off (`fail-fast = false`,
@@ -478,12 +481,12 @@ var runners = []Runner{
 		// cargo test has no such flag: libtest has none, and cargo already
 		// stops at the first failing test binary unless told otherwise.
 		FailFast:     []string{"--fail-fast"},
-		FirstFailure: rustFirstFailure, Flaky: rustFlakyTests, KillerCmd: nextestKillerCmd,
-		FailedTests: rustFailedTests, DeselectCmd: nextestDeselectCmd, SelectCmd: nextestSelectCmd,
+		FirstFailure: firstOf(nextestFailedTests), Flaky: nextestFlakyTests, KillerCmd: nextestKillerCmd,
+		FailedTests: nextestFailedTests, DeselectCmd: nextestDeselectCmd, SelectCmd: nextestSelectCmd,
 		Disclose: nextestDisclose, PreflightBin: nextestPreflightBin,
 		ListUnits: nextestListUnits, ParseUnits: nextestParseUnits, UnitCmd: oneUnit(nextestUnitsCmd),
 		UnitsCmd: nextestUnitsCmd, UnitForFile: nextestUnitForFile, UnitNoun: "test targets",
-		Note: "one-binary and several-binary runs (one `-E 'binary_id(=...)'` each) and their `list` listing verified on cargo-nextest 0.9.148; --status-level pass --final-status-level flaky (nextest's own defaults) verified on 0.9.148 against a profile with both set to none; a command with its own filterset or a partition has no unit form",
+		Note: "one-binary and several-binary runs (one `-E 'binary_id(=...)'` each) and their `list` listing verified on cargo-nextest 0.9.148; --status-level pass --final-status-level flaky (nextest's own defaults) verified on 0.9.148 against a profile with both set to none; a command with its own filterset or a partition has no unit form. Every graded run corral can rewrite (a `cargo nextest run` that is not shell-wrapped and names no `--tool-config-file` of its own) goes through `sh -c` with `--tool-config-file corral:<a temporary file>` added after its options: a nextest config corral writes in its own temporary directory, setting only `[profile.default.junit] path` (which every profile inherits) to another temporary file. corral reads the killing test from nextest's JUnit record by the id the printed FAIL lines give (`<binary id> <test>`), then adds the tests the printed lines name that the record does not; the record also names a test that failed every retry, aborted or timed out, which the printed lines show as `TRY n FAIL`, `SIGABRT` and `TIMEOUT` and the printed reader does not take. Run on cargo-nextest 0.9.148 on Linux outside the sandbox: printed output and exit code unchanged, on a failing run and a passing one; 0.9.50, 0.9.70 and 0.9.100 were run by hand on one failing crate (exit code and printed lines unchanged, record written) and not captured. The hook writes no project file (report/nextest-junit): a JUnit path the project's own config sets for the profile in use (the default profile, one chosen with -P or NEXTEST_PROFILE, an absolute path, an operator's --config-file) wins, and is written with and without the hook, with the same content, while no record of corral's is written and the printed lines are read; but with a JUnit report configured nextest creates the profile's store directory (target/nextest/<profile>, or <store.dir>/<profile>) when it is missing, so a graded run can leave that directory, empty, where the run without the hook would not. Not run: the bubblewrap sandbox, the workspace substrate, macOS. Not wrapped: Windows",
 	},
 	{
 		Name: "cargo test", ID: "cargo-test", Languages: []string{"rust"}, Default: true, Words: []string{"cargo"},
@@ -493,7 +496,7 @@ var runners = []Runner{
 		Disclose: libtestDisclose, PreflightBin: libtestPreflightBin,
 		ListUnits: cargoListUnits, ParseUnits: cargoParseUnits, UnitCmd: oneUnit(cargoUnitsCmd),
 		UnitsCmd: cargoUnitsCmd, UnitsCoruns: cargoUnitsCoruns, UnitForFile: cargoUnitForFile, UnitNoun: "test targets",
-		Note: "libtest has no retries; flaky tests are named when the output is nextest's (a wrapper that runs nextest under another command); one-target runs (`-p <package>` with `--lib`, `--test` or `--bin`, in place of the command's own package and target selection) verified on cargo 1.90; a run of several targets runs each named target in every named package, since cargo selects targets across the packages it is given (measured on cargo 1.90); doc tests, examples and benches are no unit",
+		Note: "libtest has no retries; flaky tests are named when the output is nextest's (a wrapper that runs nextest under another command); one-target runs (`-p <package>` with `--lib`, `--test` or `--bin`, in place of the command's own package and target selection) verified on cargo 1.90; a run of several targets runs each named target in every named package, since cargo selects targets across the packages it is given (measured on cargo 1.90); doc tests, examples and benches are no unit; no failure hook: libtest writes a record of the run only in its json and junit formats, which stable refuses (on cargo 1.90 `-- --format junit` and `-- -Z unstable-options --format json` exit 101), and to its --logfile, which every test binary of the run rewrites, so it held the last binary's tests alone (three test binaries, cargo 1.90); its failures are read from what it prints, and cargo-nextest is the Rust runner with the hook",
 	},
 	{
 		Name: "swift test", ID: "swift-test", Languages: []string{"swift"}, Default: true, Words: []string{"swift"},

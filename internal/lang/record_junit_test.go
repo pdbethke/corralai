@@ -171,7 +171,7 @@ func TestPHPUnitHookCaptureIsTheRowsCommand(t *testing.T) {
 	p, _ := ByName("php")
 	operator := []string{"vendor/bin/phpunit", "fail/tests/FTest.php", "fail/datasets/DTest.php", "fail/ns/NTest.php"}
 	got, ok := ReportCmd(p, Cmd(operator), operator)
-	want := append([]string{"sh", "-c", recordScript, recordArgv0, recordJUnit, "null", ""}, append(slices.Clone(operator), "--log-junit", recordToken)...)
+	want := append([]string{"sh", "-c", recordScript, recordArgv0, recordJUnit, "null", "", "", ""}, append(slices.Clone(operator), "--log-junit", recordToken)...)
 	if !ok || !slices.Equal(got, want) {
 		t.Fatalf("ReportCmd(%q) = %q ok=%v, want %q", operator, got, ok, want)
 	}

@@ -35,7 +35,7 @@ func TestNodeHookWrapsANodeTestRun(t *testing.T) {
 		at := slices.Index(operator, "--test") + 1
 		got, ok := ReportCmd(p, Cmd(operator), operator)
 		inner := append(append(slices.Clone(operator[:at]), nodeHookWords...), operator[at:]...)
-		want := append([]string{"sh", "-c", recordScript, recordArgv0, recordJUnit, "drop:" + strconv.Itoa(at) + ":4", ""}, inner...)
+		want := append([]string{"sh", "-c", recordScript, recordArgv0, recordJUnit, "drop:" + strconv.Itoa(at) + ":4", "", "", ""}, inner...)
 		if !ok || !slices.Equal(got, want) {
 			t.Errorf("ReportCmd(%q) = %q ok=%v, want the record wrapper around %q", operator, got[min(len(got), 5):], ok, inner)
 		}
@@ -44,7 +44,7 @@ func TestNodeHookWrapsANodeTestRun(t *testing.T) {
 	if !ok {
 		t.Fatal("no deselect command")
 	}
-	if got, ok := ReportCmd(p, Cmd(derived), derived); !ok || !slices.Equal(got[7:13], append([]string{"node", "--test"}, nodeHookWords...)) {
+	if got, ok := ReportCmd(p, Cmd(derived), derived); !ok || !slices.Equal(got[9:15], append([]string{"node", "--test"}, nodeHookWords...)) {
 		t.Errorf("deselect command graded as %q ok=%v, want it hooked after --test", got, ok)
 	}
 }
@@ -250,7 +250,7 @@ func TestNodeHookCaptureIsTheRowsCommand(t *testing.T) {
 	files := []string{"fail/f.node.test.js", "fail/node-edge/e.node.test.js", "broken.node.test.js"}
 	operator := append([]string{"node", "--test"}, files...)
 	got, ok := ReportCmd(p, Cmd(operator), operator)
-	want := append([]string{"sh", "-c", recordScript, recordArgv0, recordJUnit, "drop:2:4", "", "node", "--test"}, append(slices.Clone(nodeHookWords), files...)...)
+	want := append([]string{"sh", "-c", recordScript, recordArgv0, recordJUnit, "drop:2:4", "", "", "", "node", "--test"}, append(slices.Clone(nodeHookWords), files...)...)
 	if !ok || !slices.Equal(got, want) {
 		t.Fatalf("ReportCmd(%q) = %q ok=%v", operator, got, ok)
 	}

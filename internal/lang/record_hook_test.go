@@ -22,9 +22,12 @@ import (
 // b and rc as the runner inherited them. --derived=P writes the record to P
 // with "-st" inserted before its extension (as swift-testing 6.4.2 does with
 // --xunit-output), and --both=P writes <derived/> there and <plain/> to P
-// itself.
+// itself. --cfg=P stands for a runner that reads a config file the hook
+// wrote (cargo-nextest's --tool-config-file): it prints the file, one
+// `cfg:` line per line, and writes its record to the path the file's
+// `out=` line names.
 const fakeRecordRunner = `echo ran
-log= code=0 nl= empty= unreadable= both=
+log= code=0 nl= empty= unreadable= both= cfg=
 while [ $# -gt 0 ]; do
   printf 'arg:%s\n' "$1"
   case $1 in
@@ -32,6 +35,7 @@ while [ $# -gt 0 ]; do
     --out=*) log=${1#--out=} ;;
     --derived=*) log=${1#--derived=}; log=${log%.xml}-st.xml ;;
     --both=*) both=${1#--both=} ;;
+    --cfg=*) cfg=${1#--cfg=}; sed 's/^/cfg:/' "$cfg"; log=$(sed -n 's/^out=//p' "$cfg") ;;
     exit=*) code=${1#exit=} ;;
     nl) nl=1 ;;
     empty) empty=1 ;;
@@ -486,6 +490,123 @@ func TestFileRecordHookAtRefusesWhatItCannotKeep(t *testing.T) {
 				}
 			}()
 			build()
+		})
+	}
+}
+
+// companionFile is the companion a test hook writes: a config file whose
+// `out=` line names the record, beside constant text a shell would read
+// (quotes, `$`, a backquote, a glob), which must reach the file as written.
+var companionFile = RecordFile{
+	Suffixes:      []string{".xml"},
+	DropWhenUnset: true,
+	Companion: Companion{
+		Suffix:  ".cfg",
+		Content: "# it's \"$HOME\" `id` *\nout=" + recordToken + ".xml\n",
+	},
+}
+
+// A hook may write a file of its own before the command runs, for a runner
+// that is told where its record goes by a config file rather than by a word
+// (cargo-nextest's --tool-config-file): the companion is written in the
+// hook's own directory, its text exactly as the row gives it with the token
+// replaced by the record's path, and removed with the directory. The run is
+// what it always is: once, with its own exit code, and the record read.
+func TestFileRecordHookWritesItsCompanionFile(t *testing.T) {
+	dir := withFakeRecordRowAt(t, companionFile, "--cfg="+recordToken+".cfg")
+	for _, code := range []int{0, 1} {
+		exit := map[int]string{0: "exit=0", 1: "exit=1"}[code]
+		out, got := runIn(t, dir, graded(t, []string{"sh", "fakerunner", exit}))
+		if got != code {
+			t.Fatalf("exit %d, want the runner's %d:\n%s", got, code, out)
+		}
+		if n := strings.Count(out, "ran\n"); n != 1 {
+			t.Errorf("the runner ran %d times, want once:\n%s", n, out)
+		}
+		args := argLines(out)
+		if len(args) != 2 || !strings.HasPrefix(args[1], "--cfg=/") || !strings.HasSuffix(args[1], ".cfg") || strings.Contains(args[1], recordToken) {
+			t.Fatalf("runner's words = %q, want %s, --cfg=<a path in the hook's directory>", args, exit)
+		}
+		cfg := strings.TrimPrefix(args[1], "--cfg=")
+		base := strings.TrimSuffix(cfg, ".cfg")
+		want := []string{"cfg:# it's \"$HOME\" `id` *", "cfg:out=" + base + ".xml"}
+		var lines []string
+		for _, l := range strings.Split(out, "\n") {
+			if strings.HasPrefix(l, "cfg:") {
+				lines = append(lines, l)
+			}
+		}
+		if !slices.Equal(lines, want) {
+			t.Errorf("the companion read %q, want %q", lines, want)
+		}
+		if format, body, ok := RecordBlock(out); !ok || format != "junit" || body != "<xml/>" {
+			t.Errorf("RecordBlock = %q, %q, %v, want the record the companion named:\n%s", format, body, ok, out)
+		}
+		if _, err := os.Stat(cfg); !os.IsNotExist(err) {
+			t.Errorf("the companion %s outlived the run: %v", cfg, err)
+		}
+	}
+}
+
+// The companion's text is a config file in the runner's own syntax, so the
+// record's path must be one that syntax carries whatever it is: the wrapper
+// writes it only for an absolute path made of letters, digits and `/._-`.
+// Any other (here a temporary directory whose name holds a quote and a
+// space) is a hook that could not be set up: nothing is written, the hook's
+// words are left out, the directory it made is removed, and the run is the
+// operator's command, once, with its own exit code, saying so.
+func TestFileRecordHookWritesNoCompanionForAPathItCannotCarry(t *testing.T) {
+	dir := withFakeRecordRowAt(t, companionFile, "--cfg="+recordToken+".cfg")
+	tmp := filepath.Join(t.TempDir(), "it's here")
+	if err := os.Mkdir(tmp, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, code := range []int{0, 1} {
+		exit := map[int]string{0: "exit=0", 1: "exit=1"}[code]
+		out, got := runIn(t, dir, graded(t, []string{"sh", "fakerunner", exit}), "TMPDIR="+tmp)
+		if got != code {
+			t.Fatalf("exit %d, want the runner's %d:\n%s", got, code, out)
+		}
+		if args := argLines(out); !slices.Equal(args, []string{exit}) {
+			t.Errorf("runner's words = %q, want the operator's alone", args)
+		}
+		if strings.Contains(out, "cfg:") || strings.Contains(out, recordBegin) {
+			t.Errorf("a companion was read or a block printed:\n%s", out)
+		}
+		if !strings.Contains(out, "could not write the file its runner reads") {
+			t.Errorf("the fallback is not said:\n%s", out)
+		}
+		if left, _ := os.ReadDir(tmp); len(left) != 0 {
+			t.Errorf("the hook left %v in the temporary directory", left)
+		}
+	}
+	// Without a directory at all, as for any hook that drops its words.
+	out, got := runIn(t, dir, graded(t, []string{"sh", "fakerunner", "exit=1"}), "TMPDIR="+filepath.Join(dir, "does-not-exist"))
+	if got != 1 || !slices.Equal(argLines(out), []string{"exit=1"}) || !strings.Contains(out, "could not make a temporary directory") {
+		t.Errorf("exit %d, words %q, want the operator's alone and the fallback said:\n%s", got, argLines(out), out)
+	}
+}
+
+// What a companion may be is checked when the hook is built: its suffix is
+// a file name's tail like a record suffix, it is not one of them (the
+// record would be read from the companion), and the hook drops its words
+// on fallback, since a /dev/null fallback would name a companion that was
+// never written.
+func TestFileRecordHookAtRefusesACompanionItCannotKeep(t *testing.T) {
+	c := Companion{Suffix: ".cfg", Content: "x"}
+	for name, f := range map[string]RecordFile{
+		"no drop on fallback":    {Companion: c},
+		"a suffix with a slash":  {DropWhenUnset: true, Companion: Companion{Suffix: "a/b", Content: "x"}},
+		"a record suffix":        {DropWhenUnset: true, Suffixes: []string{".cfg"}, Companion: c},
+		"the record path itself": {DropWhenUnset: true, Companion: Companion{Suffix: "", Content: "x"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("FileRecordHookAt accepted a companion with %s", name)
+				}
+			}()
+			FileRecordHookAt(func() []string { return nil }, "junit", "", f)
 		})
 	}
 }

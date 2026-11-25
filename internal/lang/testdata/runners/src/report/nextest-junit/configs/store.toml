@@ -1,0 +1,3 @@
+# The store directory moved into the checkout, with no JUnit report.
+[store]
+dir = "mystore"

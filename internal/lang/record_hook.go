@@ -63,10 +63,11 @@ const (
 
 // recordScript is the wrapper a graded run of a record-file runner goes
 // through. Like pyReportScript it holds only corral's own text: its first
-// three positional parameters are corral's constants (the record's format,
-// the fallback, `null` or `drop:<from>:<n>`, and the record's suffixes
-// joined by "/", RecordFile), the rest is the command, run as `"$@"` and never spliced into
-// the script, so the shell never re-reads a word of it.
+// five positional parameters are corral's constants (the record's format,
+// the fallback, `null` or `drop:<from>:<n>`, the record's suffixes joined
+// by "/", and the companion file's suffix and text, both empty for none,
+// RecordFile), the rest is the command, run as `"$@"` and never spliced
+// into the script, so the shell never re-reads a word of it.
 //
 // The token is replaced word by word with the `for a do shift; …; set --
 // "$@" "$a"; done` rotation: `for` expands the word list once, before the
@@ -77,14 +78,17 @@ const (
 // itself is only ever the subject of a match: a space, quote, `$` or `*` in
 // it is never read by the shell, and a word without the token is put back
 // exactly as it was. Every occurrence in a word is replaced (`--x=TOKEN`
-// becomes `--x=<path>`).
+// becomes `--x=<path>`). The companion's text is rewritten by the same
+// function (`__corral_sub`) before the command runs, and written with
+// printf '%s', so it too is only ever the subject of a match.
 //
 // THE GUARANTEE, as pytest's hook: the hook never changes what the run's
 // exit code would have been without it.
 //
 //   - The command runs once, and its exit code is the script's.
 //   - If the temporary directory cannot be made (no mktemp, an unwritable
-//     temporary directory), the token becomes /dev/null, one line on stderr
+//     temporary directory), or a hook's companion file cannot be written
+//     there (Companion), the token becomes /dev/null, one line on stderr
 //     says so, and no block is printed: the runner writes its record where
 //     nothing keeps it, and its failures are read from what it printed, as
 //     they were before this hook existed. /dev/null and not the token's
@@ -124,7 +128,9 @@ const (
 const recordScript = `__corral_fmt=$1
 __corral_fb=$2
 __corral_sfx=$3
-shift 3
+__corral_cs=$4
+__corral_cc=$5
+shift 5
 __corral_from=0 __corral_n=0 __corral_i=0
 case $__corral_fb in
   drop:*:*)
@@ -133,16 +139,39 @@ case $__corral_fb in
     __corral_from=${__corral_from%%:*}
     __corral_fb=drop ;;
 esac
-if __corral_d=$(mktemp -d 2>/dev/null) && [ -n "$__corral_d" ]; then
-  trap 'rm -rf "$__corral_d"' EXIT
+__corral_sub() {
+  __corral_b=
+  while :; do
+    case $__corral_a in
+      *` + recordToken + `*) __corral_b="$__corral_b${__corral_a%%` + recordToken + `*}$__corral_r"; __corral_a=${__corral_a#*` + recordToken + `} ;;
+      *) break ;;
+    esac
+  done
+  __corral_b=$__corral_b$__corral_a
+}
+__corral_d= __corral_why='make a temporary directory'
+if __corral_t=$(mktemp -d 2>/dev/null) && [ -n "$__corral_t" ]; then
+  trap 'rm -rf "$__corral_t"' EXIT
+  __corral_d=$__corral_t
   __corral_r="$__corral_d/corral-record"
-else
-  __corral_d=
+  if [ -n "$__corral_cs" ]; then
+    __corral_a=$__corral_cc
+    __corral_sub
+    case $__corral_r in
+      /*[!A-Za-z0-9/._-]*|[!/]*) false ;;
+      *) printf '%s' "$__corral_b" > "$__corral_r$__corral_cs" ;;
+    esac || {
+      rm -rf "$__corral_t"
+      __corral_d= __corral_why='write the file its runner reads beside the record'
+    }
+  fi
+fi
+if [ -z "$__corral_d" ]; then
   __corral_r=/dev/null
   if [ "$__corral_fb" = drop ]; then
-    echo 'corral: its record hook could not make a temporary directory, so it leaves its record option out of the command and failures are read from what the runner printed' >&2
+    echo "corral: its record hook could not $__corral_why, so it leaves its record option out of the command and failures are read from what the runner printed" >&2
   else
-    echo 'corral: its record hook could not make a temporary directory, so the record goes to /dev/null and failures are read from what the runner printed' >&2
+    echo "corral: its record hook could not $__corral_why, so the record goes to /dev/null and failures are read from what the runner printed" >&2
   fi
 fi
 for __corral_a do
@@ -151,14 +180,8 @@ for __corral_a do
   if [ -z "$__corral_d" ] && [ "$__corral_fb" = drop ] && [ "$__corral_i" -gt "$__corral_from" ] && [ "$__corral_i" -le $((__corral_from + __corral_n)) ]; then
     continue
   fi
-  __corral_b=
-  while :; do
-    case $__corral_a in
-      *` + recordToken + `*) __corral_b="$__corral_b${__corral_a%%` + recordToken + `*}$__corral_r"; __corral_a=${__corral_a#*` + recordToken + `} ;;
-      *) break ;;
-    esac
-  done
-  set -- "$@" "$__corral_b$__corral_a"
+  __corral_sub
+  set -- "$@" "$__corral_b"
 done
 "$@"
 __corral_rc=$?
@@ -235,9 +258,41 @@ func FileRecordHook(args func() []string, format string, says string) *ReportHoo
 // reporter unpaired (ERR_INVALID_ARG_VALUE, measured on node 22.23.5).
 // Wrap finds the words where ReportCmd put them (the last run of them in
 // the command) and hands the wrapper their place.
+//
+// Companion is a file the wrapper writes before the command runs, for a
+// runner that is told where its record goes by a file it reads rather than
+// by a word: cargo-nextest takes a config file (`--tool-config-file
+// <tool>:<absolute path>`) whose junit path names the record, and no option
+// names the record itself. The zero Companion is none.
 type RecordFile struct {
 	Suffixes      []string
 	DropWhenUnset bool
+	Companion     Companion
+}
+
+// Companion is a file a record-file hook writes in its own directory before
+// the command runs: at the record path plus Suffix, holding Content with
+// every recordToken replaced by the record path, exactly as the row gives
+// it otherwise. A hook's args name it the same way, by the token plus
+// Suffix (cargo-nextest's `corral:<token>.toml`).
+//
+// THE SAME GUARANTEE as the record's. Content is corral's own constant
+// text, handed to the wrapper as a positional parameter and written with
+// printf, so the shell reads none of it; no word of the operator's command
+// ever reaches it. The file goes in the directory made for this run alone
+// and is removed with it. Because Content is a file in the runner's own
+// syntax (TOML for nextest), the record's path must be one that syntax
+// carries as it stands: the wrapper writes the companion only when the
+// path is absolute and made of letters, digits and `/._-`, which a
+// temporary directory's path is unless TMPDIR names an unusual one. Any
+// other path, or a companion it could not write, is a hook that could not
+// be set up, handled as when mktemp fails: the directory is removed, the
+// hook's words are left out (a Companion requires DropWhenUnset, since a
+// /dev/null fallback would name a companion that was never written), one
+// line on stderr says so, and the run is the operator's command.
+type Companion struct {
+	Suffix  string
+	Content string
 }
 
 // recordSuffix is what a RecordFile suffix may hold.
@@ -259,6 +314,20 @@ func FileRecordHookAt(args func() []string, format, says string, f RecordFile) *
 			panic("lang: record suffix " + strconv.Quote(sfx) + " is not a file name's tail")
 		}
 	}
+	if c := f.Companion; c != (Companion{}) {
+		records := f.Suffixes
+		if len(records) == 0 {
+			records = []string{""} // the record is the path itself
+		}
+		switch {
+		case !f.DropWhenUnset:
+			panic("lang: a record hook with a companion file must drop its words on fallback")
+		case c.Suffix == "" || !recordSuffix.MatchString(c.Suffix):
+			panic("lang: companion suffix " + strconv.Quote(c.Suffix) + " is not a file name's tail")
+		case slices.Contains(records, c.Suffix):
+			panic("lang: companion suffix " + strconv.Quote(c.Suffix) + " is a record's: the record would be read from the companion")
+		}
+	}
 	suffixes := strings.Join(f.Suffixes, "/")
 	return &ReportHook{
 		Args: args,
@@ -268,7 +337,7 @@ func FileRecordHookAt(args func() []string, format, says string, f RecordFile) *
 				from, n := hookWordsAt(cmd, args())
 				fallback = "drop:" + strconv.Itoa(from) + ":" + strconv.Itoa(n)
 			}
-			return append([]string{"sh", "-c", recordScript, recordArgv0, format, fallback, suffixes}, cmd...)
+			return append([]string{"sh", "-c", recordScript, recordArgv0, format, fallback, suffixes, f.Companion.Suffix, f.Companion.Content}, cmd...)
 		},
 		Says: says,
 	}

@@ -602,7 +602,17 @@ package reposcan
 // killed_by keeps its form, and so does a jest one except for a test whose
 // title holds jest's printed separator ` › `: "54" split that title
 // (`Sep::a::b`) and the record keeps it whole (`Sep::a › b`), which the
-// killer command now selects. Behaviour bump; the shape is unchanged.
+// killer command now selects. Also in "55": every `cargo nextest run`
+// corral can rewrite writes nextest's JUnit record (lang.nextestRecordHook,
+// --tool-config-file naming a config corral writes) and the killing test is
+// read from it, by the id the printed FAIL lines gave (`<binary id>
+// <test>`), so a nextest killed_by keeps its form; but the record also names
+// a test that failed every retry, aborted or timed out (printed as `TRY n
+// FAIL`, `SIGABRT`, `TIMEOUT`, which the printed reader never took), and the
+// first failure is the record's first, in its order, not the first printed,
+// so a "54" nextest killed_by that was empty, or named another failing test
+// of the same run, can now name such a test. Behaviour bump; the shape is
+// unchanged.
 const VerdictGeneration = "55"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every

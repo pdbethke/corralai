@@ -1,0 +1,3 @@
+# A profile of the project's own with no JUnit report.
+[profile.ci]
+retries = 0

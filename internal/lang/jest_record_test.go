@@ -33,15 +33,15 @@ func TestJestHookWrapsAJestRun(t *testing.T) {
 	} {
 		got, ok := ReportCmd(p, Cmd(operator), operator)
 		inner := append(append(slices.Clone(operator), "--reporters=default"), jestHookWords...)
-		want := append([]string{"sh", "-c", recordScript, recordArgv0, recordJestJSON, "null", ""}, inner...)
+		want := append([]string{"sh", "-c", recordScript, recordArgv0, recordJestJSON, "null", "", "", ""}, inner...)
 		if !ok || !slices.Equal(got, want) {
-			t.Errorf("ReportCmd(%q) = %q ok=%v, want the record wrapper around %q", operator, got[min(len(got), 7):], ok, inner)
+			t.Errorf("ReportCmd(%q) = %q ok=%v, want the record wrapper around %q", operator, got[min(len(got), 9):], ok, inner)
 		}
 	}
 	// The operator's own --reporters=default last: the flag is not added
 	// twice, and the hook still follows it.
 	own := []string{"npx", "jest", "a.test.js", "--reporters=default"}
-	if got, ok := ReportCmd(p, Cmd(own), own); !ok || !slices.Equal(got[7:], append(slices.Clone(own), jestHookWords...)) {
+	if got, ok := ReportCmd(p, Cmd(own), own); !ok || !slices.Equal(got[9:], append(slices.Clone(own), jestHookWords...)) {
 		t.Errorf("ReportCmd(%q) = %q ok=%v", own, got, ok)
 	}
 	for name, derived := range map[string]func() ([]string, bool){
@@ -218,7 +218,7 @@ func TestJestHookCaptureIsTheRowsCommand(t *testing.T) {
 	p, _ := ByName("javascript")
 	operator := append([]string{"npx", "jest", "-i"}, jestHookCaptureFiles...)
 	got, ok := ReportCmd(p, Cmd(operator), operator)
-	want := append([]string{"sh", "-c", recordScript, recordArgv0, recordJestJSON, "null", ""}, append(append(slices.Clone(operator), "--reporters=default"), jestHookWords...)...)
+	want := append([]string{"sh", "-c", recordScript, recordArgv0, recordJestJSON, "null", "", "", ""}, append(append(slices.Clone(operator), "--reporters=default"), jestHookWords...)...)
 	if !ok || !slices.Equal(got, want) {
 		t.Fatalf("ReportCmd(%q) = %q ok=%v", operator, got, ok)
 	}

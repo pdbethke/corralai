@@ -1,0 +1,4 @@
+# A profile of the project's own, ci, writes target/nextest/ci/theirs.xml
+# (chosen with -P ci or NEXTEST_PROFILE=ci); the default profile writes none.
+[profile.ci.junit]
+path = "theirs.xml"

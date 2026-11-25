@@ -16,8 +16,8 @@ import (
 // parameters, its words untouched (the plugin is loaded through the
 // environment, not by a word).
 func unwrapped(cmd []string) ([]string, bool) {
-	if len(cmd) >= 7 && slices.Equal(cmd[:4], []string{"sh", "-c", recordScript, recordArgv0}) {
-		return cmd[7:], true // a record-file hook's: its format, fallback and suffixes after $0
+	if len(cmd) >= 9 && slices.Equal(cmd[:4], []string{"sh", "-c", recordScript, recordArgv0}) {
+		return cmd[9:], true // a record-file hook's: its format, fallback, suffixes and companion after $0
 	}
 	if len(cmd) < 5 || !slices.Equal(cmd[:4], []string{"sh", "-c", pyReportScript, pyReportArgv0}) {
 		return nil, false
@@ -130,11 +130,11 @@ func TestReportCmdAppliesTheRowsReportArgs(t *testing.T) {
 		{"mocha --reporter dot", "javascript", Cmd([]string{"mocha", "--reporter", "dot"}), []string{"mocha", "--reporter", "dot", "--reporter", "spec"}},
 		{"rspec", "ruby", Cmd([]string{"bundle", "exec", "rspec", "spec"}), []string{"bundle", "exec", "rspec", "spec", "--format", "progress", "--format", "json", "--out", recordToken}},
 		{"cargo nextest", "rust", Cmd([]string{"cargo", "nextest", "run", "-p", "x", "--", "--exact", "a"}),
-			[]string{"cargo", "nextest", "run", "-p", "x", "--status-level", "pass", "--final-status-level", "flaky", "--", "--exact", "a"}},
+			[]string{"cargo", "nextest", "run", "-p", "x", "--status-level", "pass", "--final-status-level", "flaky", "--tool-config-file", "corral:" + recordToken + ".toml", "--", "--exact", "a"}},
 		{"cargo-nextest binary", "rust", Cmd([]string{"cargo-nextest", "nextest", "run"}),
-			[]string{"cargo-nextest", "nextest", "run", "--status-level", "pass", "--final-status-level", "flaky"}},
+			[]string{"cargo-nextest", "nextest", "run", "--status-level", "pass", "--final-status-level", "flaky", "--tool-config-file", "corral:" + recordToken + ".toml"}},
 		// cargo test, minitest and go test have none (node --test's record
-		// hook: node_record_test.go).
+		// hook: node_record_test.go; cargo nextest's: nextest_record_test.go).
 		{"cargo test", "rust", Cmd([]string{"cargo", "test"}), nil},
 		{"minitest", "ruby", Cmd([]string{"ruby", "-Itest", "test/a_test.rb"}), nil},
 		// Through a package script nothing is added.
@@ -149,7 +149,7 @@ func TestReportCmdAppliesTheRowsReportArgs(t *testing.T) {
 	}
 	// flagsOnly: want is the whole result, with no wrapper around it.
 	flagsOnly := map[string]bool{"vitest run": true, "vitest entry script": true,
-		"mocha": true, "mocha entry script": true, "mocha --reporter dot": true, "cargo nextest": true, "cargo-nextest binary": true,
+		"mocha": true, "mocha entry script": true, "mocha --reporter dot": true,
 		"tox before pytest": true, "nox before pytest": true, "docker before pytest": true,
 		"podman before pytest": true, "python -I": true, "python -E": true, "python -sE cluster": true,
 		"python -IWerror": true, "python -W error -E": true}

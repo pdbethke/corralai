@@ -1,0 +1,146 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s
+────────────
+    Starting 8 tests across 3 binaries
+     SIGABRT [   1.073s] (1/8) nextest-edge tests::aborts
+  stdout ───
+
+    running 1 test
+
+    (test aborted with signal 6: SIGABRT)
+
+  TRY 1 FAIL [   0.003s] (───) nextest-edge tests::fails_every_try
+  stdout ───
+
+    running 1 test
+    test tests::fails_every_try ... FAILED
+
+    failures:
+
+    failures:
+        tests::fails_every_try
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+  stderr ───
+
+    thread 'tests::fails_every_try' panicked at src/lib.rs:22:9:
+    fails on try 1
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+  TRY 2 FAIL [   0.003s] (2/8) nextest-edge tests::fails_every_try
+  stdout ───
+
+    running 1 test
+    test tests::fails_every_try ... FAILED
+
+    failures:
+
+    failures:
+        tests::fails_every_try
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+  stderr ───
+
+    thread 'tests::fails_every_try' panicked at src/lib.rs:22:9:
+    fails on try 2
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        FAIL [   0.003s] (3/8) nextest-edge tests::lib_fails
+  stdout ───
+
+    running 1 test
+    test tests::lib_fails ... FAILED
+
+    failures:
+
+    failures:
+        tests::lib_fails
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+  stderr ───
+
+    thread 'tests::lib_fails' panicked at src/lib.rs:14:9:
+    assertion `left == right` failed
+      left: 2
+     right: 3
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        PASS [   0.003s] (4/8) nextest-edge tests::passes
+  TRY 1 FAIL [   0.003s] (───) nextest-edge tests::passes_on_retry
+  stdout ───
+
+    running 1 test
+    test tests::passes_on_retry ... FAILED
+
+    failures:
+
+    failures:
+        tests::passes_on_retry
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+  stderr ───
+
+    thread 'tests::passes_on_retry' panicked at src/lib.rs:18:9:
+    fails on its first try
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+  TRY 2 PASS [   0.002s] (5/8) nextest-edge tests::passes_on_retry
+ TERMINATING [>  1.000s] (───) nextest-edge tests::times_out
+     TIMEOUT [   1.002s] (6/8) nextest-edge tests::times_out
+  stdout ───
+
+    running 1 test
+
+    (test timed out)
+
+        FAIL [   0.004s] (7/8) nextest-edge::it it_fails
+  stdout ───
+
+    running 1 test
+    test it_fails ... FAILED
+
+    failures:
+
+    failures:
+        it_fails
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+  stderr ───
+
+    thread 'it_fails' panicked at tests/it.rs:5:5:
+    assertion failed: false
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        FAIL [   0.004s] (8/8) nextest-edge::bin/edge-bin tests::bin_fails
+  stdout ───
+
+    running 1 test
+    test tests::bin_fails ... FAILED
+
+    failures:
+
+    failures:
+        tests::bin_fails
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+  stderr ───
+
+    thread 'tests::bin_fails' panicked at src/main.rs:9:9:
+    assertion failed: false
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+────────────
+     Summary [   2.103s] 8 tests run: 2 passed (1 flaky), 5 failed, 1 timed out, 0 skipped
+   FLAKY 2/2 [   0.002s] (5/8) nextest-edge tests::passes_on_retry
+     SIGABRT [   1.073s] (1/8) nextest-edge tests::aborts
+  TRY 2 FAIL [   0.003s] (2/8) nextest-edge tests::fails_every_try
+        FAIL [   0.003s] (3/8) nextest-edge tests::lib_fails
+     TIMEOUT [   1.002s] (6/8) nextest-edge tests::times_out
+        FAIL [   0.004s] (7/8) nextest-edge::it it_fails
+        FAIL [   0.004s] (8/8) nextest-edge::bin/edge-bin tests::bin_fails
+error: test run failed

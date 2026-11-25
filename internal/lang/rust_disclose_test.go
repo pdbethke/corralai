@@ -40,8 +40,10 @@ func TestRustRunnerDisclosures(t *testing.T) {
 	}
 	for _, dir := range []string{bare, withCfg} {
 		got := RunDisclosures(p, dir, Cmd([]string{"cargo", "nextest", "run", "-p", "warp_core"}))
-		// The FLAKY line, then the report flags corral adds.
-		if len(got) != 2 || !strings.Contains(got[0], "FLAKY") || !strings.Contains(got[0], "graded as passed") || !strings.HasPrefix(got[1], "cargo nextest: corral adds --status-level pass --final-status-level flaky") {
+		// The FLAKY line, then the report flags corral adds, then its
+		// failure hook (TestRunDisclosuresSayWhenTheNextestHookWraps).
+		if len(got) != 3 || !strings.Contains(got[0], "FLAKY") || !strings.Contains(got[0], "graded as passed") || !strings.HasPrefix(got[1], "cargo nextest: corral adds --status-level pass --final-status-level flaky") ||
+			!strings.HasPrefix(got[2], "cargo nextest: corral runs every graded run through `sh -c`") {
 			t.Errorf("nextest: %q", got)
 		}
 	}

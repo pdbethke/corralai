@@ -35,13 +35,13 @@ func TestRSpecHookWrapsAnRSpecRun(t *testing.T) {
 	} {
 		got, ok := ReportCmd(p, Cmd(operator), operator)
 		inner := append(append(slices.Clone(operator), "--format", "progress"), rspecHookWords...)
-		want := append([]string{"sh", "-c", recordScript, recordArgv0, recordRSpecJSON, "null", ""}, inner...)
+		want := append([]string{"sh", "-c", recordScript, recordArgv0, recordRSpecJSON, "null", "", "", ""}, inner...)
 		if !ok || !slices.Equal(got, want) {
-			t.Errorf("ReportCmd(%q) = %q ok=%v, want the record wrapper around %q", operator, got[min(len(got), 7):], ok, inner)
+			t.Errorf("ReportCmd(%q) = %q ok=%v, want the record wrapper around %q", operator, got[min(len(got), 9):], ok, inner)
 		}
 	}
 	own := []string{"rspec", "spec", "--format", "progress"}
-	if got, ok := ReportCmd(p, Cmd(own), own); !ok || !slices.Equal(got[7:], append(slices.Clone(own), rspecHookWords...)) {
+	if got, ok := ReportCmd(p, Cmd(own), own); !ok || !slices.Equal(got[9:], append(slices.Clone(own), rspecHookWords...)) {
 		t.Errorf("ReportCmd(%q) = %q ok=%v", own, got, ok)
 	}
 	for name, derived := range map[string]func() ([]string, bool){
@@ -163,7 +163,7 @@ func TestRSpecHookCaptureIsTheRowsCommand(t *testing.T) {
 	p, _ := ByName("ruby")
 	operator := append([]string{"rspec"}, rspecHookCaptureFiles...)
 	got, ok := ReportCmd(p, Cmd(operator), operator)
-	want := append([]string{"sh", "-c", recordScript, recordArgv0, recordRSpecJSON, "null", ""}, append(append(slices.Clone(operator), "--format", "progress"), rspecHookWords...)...)
+	want := append([]string{"sh", "-c", recordScript, recordArgv0, recordRSpecJSON, "null", "", "", ""}, append(append(slices.Clone(operator), "--format", "progress"), rspecHookWords...)...)
 	if !ok || !slices.Equal(got, want) {
 		t.Fatalf("ReportCmd(%q) = %q ok=%v", operator, got, ok)
 	}

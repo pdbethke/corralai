@@ -1,0 +1,11 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s
+────────────
+    Starting 6 tests across 5 binaries
+        PASS [   0.002s] (1/6) units-a tests::adds
+        PASS [   0.002s] (2/6) units-a tests::adds_more
+        PASS [   0.002s] (3/6) units-a::it integrates
+        PASS [   0.002s] (4/6) units-a::bin/units-a tests::runs
+        PASS [   0.002s] (5/6) units-b tests::negates
+        PASS [   0.002s] (6/6) units-b::it integrates
+────────────
+     Summary [   0.014s] 6 tests run: 6 passed, 0 skipped

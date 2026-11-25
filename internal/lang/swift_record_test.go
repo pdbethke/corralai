@@ -26,7 +26,7 @@ func TestSwiftHookWrapsASwiftTestRun(t *testing.T) {
 		{"xcrun", "swift", "test", "-c", "release"},
 	} {
 		got, ok := ReportCmd(p, Cmd(operator), operator)
-		want := append([]string{"sh", "-c", recordScript, recordArgv0, recordJUnit, "drop:" + strconv.Itoa(len(operator)) + ":1", "-swift-testing.xml/.xml"},
+		want := append([]string{"sh", "-c", recordScript, recordArgv0, recordJUnit, "drop:" + strconv.Itoa(len(operator)) + ":1", "-swift-testing.xml/.xml", "", ""},
 			append(slices.Clone(operator), "--xunit-output="+recordToken+".xml")...)
 		if !ok || !slices.Equal(got, want) {
 			t.Errorf("ReportCmd(%q) = %q ok=%v, want the record wrapper with --xunit-output appended", operator, got[min(len(got), 5):], ok)

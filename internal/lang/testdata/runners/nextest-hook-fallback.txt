@@ -1,0 +1,52 @@
+corral: its record hook could not make a temporary directory, so it leaves its record option out of the command and failures are read from what the runner printed
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s
+────────────
+    Starting 3 tests across 1 binary
+        FAIL [   0.002s] (1/3) fail-cargo tests::a_fails
+  stdout ───
+
+    running 1 test
+    test tests::a_fails ... FAILED
+
+    failures:
+
+    failures:
+        tests::a_fails
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+  stderr ───
+
+    thread 'tests::a_fails' panicked at src/lib.rs:11:9:
+    assertion `left == right` failed
+      left: 2
+     right: 3
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        FAIL [   0.002s] (2/3) fail-cargo tests::b_fails
+  stdout ───
+
+    running 1 test
+    test tests::b_fails ... FAILED
+
+    failures:
+
+    failures:
+        tests::b_fails
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+  stderr ───
+
+    thread 'tests::b_fails' panicked at src/lib.rs:15:9:
+    assertion `left == right` failed
+      left: 2
+     right: 4
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        PASS [   0.002s] (3/3) fail-cargo tests::c_passes
+────────────
+     Summary [   0.006s] 3 tests run: 1 passed, 2 failed, 0 skipped
+        FAIL [   0.002s] (1/3) fail-cargo tests::a_fails
+        FAIL [   0.002s] (2/3) fail-cargo tests::b_fails
+error: test run failed

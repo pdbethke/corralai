@@ -668,6 +668,11 @@ fails vitest-fail.txt npx vitest run fail/f.vitest.test.mjs
 fails vitest-suitefail.txt npx vitest run fail/broken.vitest.test.mjs
 fails mocha-fail.txt npx mocha fail/f.mocha.js
 fails mocha-hookfail.txt npx mocha fail/hook.mocha.js
+# Why mocha has no failure hook (its row's Note): mocha runs one reporter, the
+# last one named, so a record reporter (xunit, to a file) beside spec replaces
+# the spec lines the readers take, and the operator sees nothing. The counts are
+# spec's `N passing` and `N failing` lines, without and with xunit after spec.
+want mocha-one-reporter-per-run "2 0" "$(a=$(npx mocha --reporter spec fail/f.mocha.js 2>/dev/null | grep -cE '^ +[0-9]+ (passing|failing)'); b=$(npx mocha --reporter spec --reporter xunit --reporter-option output="$DIR/mocha-xunit.xml" fail/f.mocha.js 2>/dev/null | grep -cE '^ +[0-9]+ (passing|failing)'); echo "$a $b")"
 fails node-fail.txt node --test fail/f.node.test.js
 # node 23+ prints the spec reporter off a TTY too (measured on node 24.22); node
 # 22's --test-reporter=spec prints the same tree.
@@ -776,6 +781,10 @@ want rspec-hook-exit-fail "1 1" "$($RSPEC "${RSPECFILES[@]}" --format progress >
 want rspec-hook-exit-pass "0 0" "$($RSPEC spec/calc_spec.rb --format progress >/dev/null 2>&1; echo -n "$? "; "${RSPECHOOKPASS[@]}" >/dev/null 2>&1; echo $?)"
 want rspec-hook-fallback-exit 0 "$(TMPDIR="$DIR/no-such-dir" "${RSPECHOOKPASS[@]}" >/dev/null 2>&1; echo $?)"
 fails minitest-fail.txt ruby fail/f_test.rb
+# Why minitest has no failure hook (its row's Note): no option its --help lists
+# writes a record of the run to a file; the count is the option names that
+# mention one (junit, xml, json, out, log, file, report).
+want minitest-no-record-option 0 "$(ruby fail/f_test.rb --help 2>&1 | grep -cE -- '--[a-z-]*(junit|xml|json|out|log|file|report)')"
 fails phpunit-fail.txt vendor/bin/phpunit fail/tests/FTest.php
 # Data sets whose printed argument suffix is not their position, with parentheses
 # and quotes in a name and in an argument: phpFailures drops the suffix.
@@ -822,6 +831,112 @@ want phpunit-config-junit-unhooked present "$(junit_written report/phpunit-junit
 want phpunit-config-junit-hooked absent "$(junit_written report/phpunit-junit/project-junit.xml "${PHPHOOKCFGLOG[@]}")"
 (cd fail/cargo && cargo build --tests -q 2>/dev/null; fails cargo-test-fail.txt cargo test)
 (cd fail/cargo && fails cargo-nextest-fail.txt cargo nextest run)
+# The cargo-nextest row's failure hook (internal/lang/nextest_record.go): the
+# graded command, --tool-config-file and the record wrapper included, is taken
+# from the row (scripts/reportcmd), never copied here;
+# TestNextestHookCaptureIsTheRowsCommand holds these lines to it. The wrapper
+# writes the nextest config the option names (its Companion) in its own
+# temporary directory. -j 1 keeps the order of the printed lines the same from
+# run to run. fail/nextest-edge holds the shapes where nextest's JUnit record and
+# its printed lines could disagree; units/cargo is a passing workspace. The
+# record's run id and clocks are taken out: these files are public.
+nextestfails() { # nextestfails <fixture> <cmd...>: fails, with the record's run id and clocks taken out
+  fails "$@"
+  sed -i -e 's/ uuid="[^"]*"//' -e 's/ timestamp="[^"]*"//g' -e 's/ time="[^"]*"/ time="0"/g' "$OUT/$1"
+}
+reporthook NEXTESTHOOK rust cargo nextest run -j 1
+(cd fail/nextest-edge && cargo build --tests -q 2>/dev/null || true)
+(cd units/cargo && cargo build --workspace --tests -q 2>/dev/null || true)
+(cd fail/cargo && nextestfails nextest-hook-fail.txt "${NEXTESTHOOK[@]}")
+# The same runs with the row's report flags alone: the hooked capture's printed
+# part must equal it, durations aside (TestNextestHookLeavesThePrintedOutputAlone).
+(cd fail/cargo && fails nextest-hook-unhooked.txt cargo nextest run -j 1 --status-level pass --final-status-level flaky)
+(cd fail/nextest-edge && nextestfails nextest-hook-edge.txt "${NEXTESTHOOK[@]}")
+(cd fail/nextest-edge && fails nextest-hook-edge-unhooked.txt cargo nextest run -j 1 --status-level pass --final-status-level flaky)
+(cd units/cargo && nextestfails nextest-hook-pass.txt "${NEXTESTHOOK[@]}")
+(cd units/cargo && fails nextest-hook-unhooked-pass.txt cargo nextest run -j 1 --status-level pass --final-status-level flaky)
+# The hook keeps nextest's exit code, on a failing run and a passing one, and
+# when it cannot make its directory it leaves its two words out (pointed at
+# /dev/null, nextest would be handed a config file that does not exist).
+want nextest-hook-exit-fail "100 100" "$(cd fail/cargo && cargo nextest run -j 1 --status-level pass --final-status-level flaky >/dev/null 2>&1; echo -n "$? "; "${NEXTESTHOOK[@]}" >/dev/null 2>&1; echo $?)"
+want nextest-hook-exit-pass "0 0" "$(cd units/cargo && cargo nextest run -j 1 --status-level pass --final-status-level flaky >/dev/null 2>&1; echo -n "$? "; "${NEXTESTHOOK[@]}" >/dev/null 2>&1; echo $?)"
+(cd fail/cargo && nextestfails nextest-hook-fallback.txt env TMPDIR="$DIR/no-such-dir" "${NEXTESTHOOK[@]}")
+want nextest-hook-fallback-exit 100 "$(cd fail/cargo && TMPDIR="$DIR/no-such-dir" "${NEXTESTHOOK[@]}" >/dev/null 2>&1; echo $?)"
+# The binding rule every failure hook is held to: corral never writes into a
+# project's file. report/nextest-junit is one crate; each run copies one of its
+# configs/ to .config/nextest.toml (none: no config at all) and starts with no
+# target/nextest or mystore. A run is the row's report flags alone (-flagged, the
+# graded run before the hook) or the row's command from scripts/reportcmd
+# (-hooked). nextest_wrote prints "ours" when the run printed corral's record
+# (else "no-record"), then every path the run added to the checkout or whose
+# content it changed (a directory with a trailing /), cargo's build output
+# (target/debug, target/.rustc_info.json) aside. A JUnit path of the project's (the default profile's, a profile chosen
+# with -P or NEXTEST_PROFILE, an absolute one, an operator's --config-file) is
+# written with and without the hook, and corral's record is then not written.
+# What the hook adds is never a file: with a JUnit report configured nextest makes
+# the profile's store directory (target/nextest/<profile>, or <store.dir>/<profile>)
+# when it is missing, and leaves it empty; nextest_record.go and the disclosure
+# say so.
+# target/.rustc_info.json is cargo's cache of the compiler's version, which cargo
+# rewrites when it pleases, with or without the hook (a flagged run rewrote it).
+nextest_snap() { # nextest_snap <dir>: every path under <dir> but cargo's build output, a file with its checksum
+  (cd "$1" && find . \( -path ./target/debug -o -path ./target/.rustc_info.json \) -prune -o -print | LC_ALL=C sort | while read -r p; do
+    if [ -f "$p" ]; then echo "$p $(cksum < "$p" | cut -d' ' -f1)"; else echo "$p/"; fi
+  done)
+}
+nextest_wrote() { # nextest_wrote <config|-> <cmd...>: what a run in report/nextest-junit wrote
+  local d=report/nextest-junit cfg="$1"; shift
+  rm -rf "$d/target/nextest" "$d/mystore" "$d/.config" "$d/theirs-abs.xml"
+  if [ "$cfg" = absolute ]; then
+    mkdir -p "$d/.config"; printf '[profile.default.junit]\npath = "%s"\n' "$DIR/$d/theirs-abs.xml" > "$d/.config/nextest.toml"
+  elif [ "$cfg" != - ]; then
+    mkdir -p "$d/.config"; cp "$d/configs/$cfg.toml" "$d/.config/nextest.toml"
+  fi
+  local before after out w
+  before="$(nextest_snap "$d")"
+  out="$(cd "$d" && env -u AI_AGENT -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT "$@" 2>&1 || true)"
+  after="$(nextest_snap "$d")"
+  case "$out" in *"corral-record-begin "*) w=ours ;; *) w=no-record ;; esac
+  echo "$w $(LC_ALL=C comm -13 <(echo "$before") <(echo "$after") | sed -e 's#^\./##' -e 's/ [0-9]*$//' | tr '\n' ' ' | sed 's/ $//')"
+}
+(cd report/nextest-junit && cargo build --tests -q 2>/dev/null || true)
+NFLAGS=(--status-level pass --final-status-level flaky)
+reporthook NEXTESTOF rust cargo nextest run
+reporthook NEXTESTOFP rust cargo nextest run -P ci
+reporthook NEXTESTOFC rust cargo nextest run --config-file configs/other.toml
+want nextest-wrote-none-flagged "no-record " "$(nextest_wrote - cargo nextest run "${NFLAGS[@]}")"
+want nextest-wrote-none-hooked "ours target/nextest/ target/nextest/default/" "$(nextest_wrote - "${NEXTESTOF[@]}")"
+want nextest-wrote-none-config-hooked "ours target/nextest/ target/nextest/default/" "$(nextest_wrote none "${NEXTESTOF[@]}")"
+want nextest-wrote-theirs-flagged "no-record target/nextest/ target/nextest/default/ target/nextest/default/theirs.xml" "$(nextest_wrote theirs cargo nextest run "${NFLAGS[@]}")"
+want nextest-wrote-theirs-hooked "no-record target/nextest/ target/nextest/default/ target/nextest/default/theirs.xml" "$(nextest_wrote theirs "${NEXTESTOF[@]}")"
+want nextest-wrote-profile-flagged "no-record target/nextest/ target/nextest/ci/ target/nextest/ci/theirs.xml" "$(nextest_wrote profile cargo nextest run -P ci "${NFLAGS[@]}")"
+want nextest-wrote-profile-hooked "no-record target/nextest/ target/nextest/ci/ target/nextest/ci/theirs.xml" "$(nextest_wrote profile "${NEXTESTOFP[@]}")"
+want nextest-wrote-profile-env-flagged "no-record target/nextest/ target/nextest/ci/ target/nextest/ci/theirs.xml" "$(NEXTEST_PROFILE=ci nextest_wrote profile cargo nextest run "${NFLAGS[@]}")"
+want nextest-wrote-profile-env-hooked "no-record target/nextest/ target/nextest/ci/ target/nextest/ci/theirs.xml" "$(NEXTEST_PROFILE=ci nextest_wrote profile "${NEXTESTOF[@]}")"
+want nextest-wrote-profile-default-hooked "ours target/nextest/ target/nextest/default/" "$(nextest_wrote profile "${NEXTESTOF[@]}")"
+want nextest-wrote-profile-nojunit-flagged "no-record " "$(nextest_wrote profile-nojunit cargo nextest run -P ci "${NFLAGS[@]}")"
+want nextest-wrote-profile-nojunit-hooked "ours target/nextest/ target/nextest/ci/" "$(nextest_wrote profile-nojunit "${NEXTESTOFP[@]}")"
+want nextest-wrote-config-file-flagged "no-record target/nextest/ target/nextest/default/ target/nextest/default/other.xml" "$(nextest_wrote theirs cargo nextest run --config-file configs/other.toml "${NFLAGS[@]}")"
+want nextest-wrote-config-file-hooked "no-record target/nextest/ target/nextest/default/ target/nextest/default/other.xml" "$(nextest_wrote theirs "${NEXTESTOFC[@]}")"
+want nextest-wrote-store-flagged "no-record " "$(nextest_wrote store cargo nextest run "${NFLAGS[@]}")"
+want nextest-wrote-store-hooked "ours mystore/ mystore/default/" "$(nextest_wrote store "${NEXTESTOF[@]}")"
+want nextest-wrote-absolute-flagged "no-record target/nextest/ target/nextest/default/ theirs-abs.xml" "$(nextest_wrote absolute cargo nextest run "${NFLAGS[@]}")"
+want nextest-wrote-absolute-hooked "no-record target/nextest/ target/nextest/default/ theirs-abs.xml" "$(nextest_wrote absolute "${NEXTESTOF[@]}")"
+# The project's own report is the same with and without the hook, the run id and
+# clocks aside.
+nextest_theirs() { # nextest_theirs <cmd...>: the theirs shape's report after a run, without run id and clocks
+  nextest_wrote theirs "$@" >/dev/null
+  sed -e 's/ uuid="[^"]*"//' -e 's/ timestamp="[^"]*"//g' -e 's/ time="[^"]*"//g' report/nextest-junit/target/nextest/default/theirs.xml
+}
+want nextest-theirs-same-content same "$([ "$(nextest_theirs cargo nextest run -j 1 "${NFLAGS[@]}")" = "$(nextest_theirs "${NEXTESTHOOK[@]}")" ] && echo same || echo differs)"
+# Why cargo test has no failure hook (its row's Note): libtest writes a record
+# only in its json and junit formats, which stable refuses, and its --logfile,
+# which every test binary of a run rewrites, so it holds the last binary's
+# tests alone (fail/nextest-edge: the library's, the binary's and the
+# integration test's; the log names the last only).
+want cargo-test-junit-format-refused-on-stable 101 "$(cd fail/cargo && cargo test -- --format junit >/dev/null 2>&1; echo $?)"
+want cargo-test-json-format-refused-on-stable 101 "$(cd fail/cargo && cargo test -- -Z unstable-options --format json >/dev/null 2>&1; echo $?)"
+want cargo-test-logfile-keeps-the-last-binary "failed it_fails" "$(cd fail/nextest-edge && rm -f "$DIR/libtest.log"; cargo test --no-fail-fast --lib --bins --tests -- --logfile "$DIR/libtest.log" --skip times_out --skip aborts >/dev/null 2>&1; cat "$DIR/libtest.log")"
 
 # --- report flags: a project config that hides the lines the readers take, run
 # as the project runs it (-hidden) and with the runner row's ReportArgs appended

@@ -27,9 +27,9 @@ var phpunitRecordHook = FileRecordHook(
 // phpunitRecordedFailures is phpFailures' answer from the run's JUnit
 // record: ok is false when the output carries no complete record block, the
 // block is not JUnit, or the JUnit is not well-formed (junitFailures), and
-// the printed lines are then read instead. A complete record that names no
-// failing test is the answer "PHPUnit reported none", not a reason to read
-// the printed lines.
+// the printed lines are then read instead. With a record, phpFailures adds
+// the printed names the record leaves out (errors outside a test method);
+// its doc comment says which and why that is safe.
 //
 // The ids are what phpFailures reads from the printed lines of the same run:
 // the testcase's `class` attribute (the backslashed name PHPUnit prints and

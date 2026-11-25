@@ -596,6 +596,29 @@ fails phpunit-hook-fail.txt "${PHPHOOK[@]}"
 want phpunit-hook-exit "2 2" "$(vendor/bin/phpunit fail/tests/FTest.php fail/datasets/DTest.php fail/ns/NTest.php >/dev/null 2>&1; echo -n "$? "; "${PHPHOOK[@]}" >/dev/null 2>&1; echo $?)"
 phphook PHPHOOKTESTDOX vendor/bin/phpunit -c report/phpunit/phpunit.xml fail/tests/FTest.php
 fails report-phpunit-testdox-hooked.txt "${PHPHOOKTESTDOX[@]}"
+# The same files unhooked: the hooked capture's printed part must equal it
+# (TestPHPUnitHookLeavesThePrintedOutputAlone).
+fails phpunit-hook-unhooked.txt vendor/bin/phpunit fail/tests/FTest.php fail/datasets/DTest.php fail/ns/NTest.php
+# What the record leaves out (fail/edge): a setUpBeforeClass that throws and a
+# data provider that throws are printed as numbered errors and are not in the
+# JUnit record; a risky test is printed in its own numbered section and is a
+# plain testcase in the record. FTest gives the record failures of its own.
+phphook PHPHOOKEDGE vendor/bin/phpunit fail/tests/FTest.php fail/edge/SetupTest.php fail/edge/ProviderTest.php fail/edge/RiskyTest.php
+fails phpunit-hook-edge.txt "${PHPHOOKEDGE[@]}"
+# What the disclosure says the hook costs: PHPUnit writes one JUnit file, so an
+# operator's own --log-junit, and a phpunit.xml <junit> entry, are written
+# without the hook and not with it.
+junit_written() { # junit_written <file> <cmd...>: present|absent after running cmd
+  local f="$1"; shift
+  rm -f "$f"; "$@" >/dev/null 2>&1 || true
+  if [ -e "$f" ]; then echo present; else echo absent; fi
+}
+phphook PHPHOOKOPLOG vendor/bin/phpunit --log-junit operator-junit.xml fail/tests/FTest.php
+want phpunit-operator-junit-unhooked present "$(junit_written operator-junit.xml vendor/bin/phpunit --log-junit operator-junit.xml fail/tests/FTest.php)"
+want phpunit-operator-junit-hooked absent "$(junit_written operator-junit.xml "${PHPHOOKOPLOG[@]}")"
+phphook PHPHOOKCFGLOG vendor/bin/phpunit -c report/phpunit-junit/phpunit.xml fail/tests/FTest.php
+want phpunit-config-junit-unhooked present "$(junit_written report/phpunit-junit/project-junit.xml vendor/bin/phpunit -c report/phpunit-junit/phpunit.xml fail/tests/FTest.php)"
+want phpunit-config-junit-hooked absent "$(junit_written report/phpunit-junit/project-junit.xml "${PHPHOOKCFGLOG[@]}")"
 (cd fail/cargo && cargo build --tests -q 2>/dev/null; fails cargo-test-fail.txt cargo test)
 (cd fail/cargo && fails cargo-nextest-fail.txt cargo nextest run)
 

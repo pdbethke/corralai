@@ -1,0 +1,3 @@
+<?xml version="1.0"?>
+<!-- A project's own JUnit log: on a graded run, corral's own JUnit option replaces it. -->
+<phpunit><logging><junit outputFile="project-junit.xml"/></logging></phpunit>

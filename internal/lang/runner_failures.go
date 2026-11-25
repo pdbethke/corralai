@@ -298,19 +298,56 @@ func minitestFailures(out string) []string {
 	return ids
 }
 
-// phpFailures is every test PHPUnit reported failing or erroring, errors
-// first, in the id form phpFailureID gives (see phpFirstFailure).
+// phpFailures is every test PHPUnit reported failing or erroring, in the id
+// form phpFailureID gives (see phpFirstFailure).
 //
-// It reads the run's own record when the output carries one: the JUnit
-// block the PHPUnit row's failure hook prints (phpunitRecordedFailures).
-// Only where there is no complete, well-formed JUnit block (a command corral
-// does not wrap, output recorded before the hook existed, a block the output
-// cap cut, a record PHPUnit did not write) does it read the printed "N)
-// Class::method" lines of PHPUnit's failure and error sections.
+// Two sources, both read. The run's own record, when the output carries a
+// complete, well-formed JUnit block (the PHPUnit row's failure hook,
+// phpunitRecordedFailures), comes first, errors then failures. Then every
+// name PHPUnit's printed "N) Class::method" lines give that the record does
+// not, in printed order; the printed lines are read with the record block
+// left out (withoutRecordBlock), so a line inside the record is never read
+// as a printed one. With no record (a command corral does not wrap, output
+// recorded before the hook existed, a block the output cap cut, a record
+// PHPUnit did not write or that is not well-formed) the printed lines are
+// the whole answer, as they were before the hook.
+//
+// The union is there because the record is not a superset of the printed
+// lines (PHPUnit 11.5.57, capture-runner-fixtures.sh phpunit-hook-edge.txt):
+// a setUpBeforeClass that throws is printed as `N) Class` and a data
+// provider that throws as `N) Class::method` (a "PHPUnit error"), and
+// neither is in the JUnit record at all, so a record read alone would name
+// fewer tests than the printed lines did, and a run killed only by such an
+// error would name no killing test. Adding the printed names is safe in the
+// way the printed lines always were: a name here is only a candidate, and a
+// kill is credited to it only when it, run alone, fails on the fault and
+// passes on the clean code (adequacy's kill confirmation); a salvage that
+// deselects a name too many narrows the exam, never widens it. That
+// includes the one name the union adds which is not a failure: the printed
+// reader takes every numbered section, so a risky test (PHPUnit 11's
+// default strictness reports a test with no assertion as risky, in a
+// numbered section of its own) is named, as it was before the hook. The
+// record lists that test as a plain, passing testcase, never as an <error>
+// (measured), so the record adds no name the printed lines do not consider
+// failing, and nothing is dropped from it: under a testdox configuration the
+// printed lines name nothing at all and the record is the only source.
 func phpFailures(out string) []string {
-	if ids, ok := phpunitRecordedFailures(out); ok {
-		return ids
+	printed := phpPrintedFailures(withoutRecordBlock(out))
+	ids, ok := phpunitRecordedFailures(out)
+	if !ok {
+		return printed
 	}
+	for _, id := range printed {
+		if !slices.Contains(ids, id) {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// phpPrintedFailures is every "N) Class::method" line of PHPUnit's printed
+// numbered sections, in printed order.
+func phpPrintedFailures(out string) []string {
 	var ids []string
 	for _, line := range strings.Split(out, "\n") {
 		if id, ok := phpFailureID(line); ok {

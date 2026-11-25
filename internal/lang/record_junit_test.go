@@ -83,6 +83,7 @@ func TestJUnitFailuresRefusesMalformedXML(t *testing.T) {
 		"text only":        "FTest::testAdds",
 		"bad entity":       `<testsuites><testsuite name="a &bogus;"/></testsuites>`,
 		"two roots, cut":   `<testsuites></testsuites><testsuites><testsuite name="a">`,
+		"two whole roots":  `<testsuites><testsuite name="a"><testcase name="t" class="C"><failure/></testcase></testsuite></testsuites><testsuites/>`,
 	} {
 		if got, err := junitFailures(body); err == nil {
 			t.Errorf("%s: read %+v, want an error", name, got)
@@ -181,12 +182,19 @@ func TestPHPUnitHookCaptureIsTheRowsCommand(t *testing.T) {
 		`go run ./scripts/reportcmd php "$@"`,
 		`fails phpunit-hook-fail.txt "${PHPHOOK[@]}"`,
 		`fails report-phpunit-testdox-hooked.txt "${PHPHOOKTESTDOX[@]}"`,
+		"fails phpunit-hook-unhooked.txt " + strings.Join(operator, " "),
+		"phphook PHPHOOKEDGE vendor/bin/phpunit fail/tests/FTest.php fail/edge/SetupTest.php fail/edge/ProviderTest.php fail/edge/RiskyTest.php",
+		`fails phpunit-hook-edge.txt "${PHPHOOKEDGE[@]}"`,
+		`want phpunit-operator-junit-hooked absent "$(junit_written operator-junit.xml "${PHPHOOKOPLOG[@]}")"`,
+		`want phpunit-config-junit-hooked absent "$(junit_written report/phpunit-junit/project-junit.xml "${PHPHOOKCFGLOG[@]}")"`,
+		"phphook PHPHOOKOPLOG vendor/bin/phpunit --log-junit operator-junit.xml fail/tests/FTest.php",
+		"phphook PHPHOOKCFGLOG vendor/bin/phpunit -c report/phpunit-junit/phpunit.xml fail/tests/FTest.php",
 	} {
 		if !strings.Contains(script, line) {
 			t.Errorf("the capture script has no %q", line)
 		}
 	}
-	for _, f := range []string{"phpunit-hook-fail.txt", "report-phpunit-testdox-hooked.txt"} {
+	for _, f := range []string{"phpunit-hook-fail.txt", "report-phpunit-testdox-hooked.txt", "phpunit-hook-edge.txt"} {
 		if out := readFixture(t, f); !strings.Contains(out, "PHPUnit 11.5.57") || !strings.Contains(out, "\n"+recordEnd) {
 			t.Errorf("%s: not a PHPUnit 11.5.57 run with a complete record block", f)
 		}
@@ -216,5 +224,70 @@ func TestRunDisclosuresSayWhenThePHPUnitHookWraps(t *testing.T) {
 		if has(argv) {
 			t.Errorf("%q: the hook is disclosed though corral does not wrap it", argv)
 		}
+	}
+}
+
+// What PHPUnit 11.5.57's JUnit record leaves out, captured under the hook
+// (capture-runner-fixtures.sh phpunit-hook-edge.txt): a setUpBeforeClass
+// that throws (printed `N) SetupTest`, in the errors) and a data provider
+// that throws (printed `N) ProviderTest::testP`, a "PHPUnit error") are not
+// in the record at all; a risky test (no assertion, PHPUnit 11's default
+// strictness) is printed in its own numbered section and is a plain,
+// passing testcase in the record. The readers take the record's failures
+// first and then every name the printed lines give that the record does not,
+// so the hook never names fewer tests than the printed lines did.
+func TestPHPUnitReadersTakeWhatTheRecordOmits(t *testing.T) {
+	const fixture = "phpunit-hook-edge.txt"
+	out := readFixture(t, fixture)
+	recorded, ok := phpunitRecordedFailures(out)
+	if want := []string{"FTest::testBoom", "FTest::testAdds", `FTest::testData with data set "two"`}; !ok || !slices.Equal(recorded, want) {
+		t.Fatalf("record: %q ok=%v, want %q", recorded, ok, want)
+	}
+	cases, err := junitFailures(hookedRecord(t, fixture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range cases {
+		if c.Class == "RiskyTest" || c.Class == "SetupTest" || c.Class == "ProviderTest" {
+			t.Errorf("the record lists %+v as failing; the fixture no longer shows what it omits", c)
+		}
+	}
+	if body := hookedRecord(t, fixture); !strings.Contains(body, `name="testNothing"`) {
+		t.Error("the record has no testcase for the risky test")
+	}
+	printed := phpFailures(printedPart(t, fixture))
+	if want := []string{"ProviderTest::testP", "FTest::testBoom", "SetupTest", "FTest::testAdds", `FTest::testData with data set "two"`, "RiskyTest::testNothing"}; !slices.Equal(printed, want) {
+		t.Fatalf("printed: %q, want %q", printed, want)
+	}
+	want := []string{"FTest::testBoom", "FTest::testAdds", `FTest::testData with data set "two"`, "ProviderTest::testP", "SetupTest", "RiskyTest::testNothing"}
+	if got := phpFailures(out); !slices.Equal(got, want) {
+		t.Errorf("phpFailures = %q, want %q", got, want)
+	}
+	if got := phpFirstFailure([]byte(out)); got != "FTest::testBoom" {
+		t.Errorf("phpFirstFailure = %q, want the record's first, FTest::testBoom", got)
+	}
+}
+
+// The hook changes nothing PHPUnit prints: the hooked capture, up to its
+// record block, is the unhooked run of the same files (both PHPUnit
+// 11.5.57, the Time line removed from both by the capture script).
+func TestPHPUnitHookLeavesThePrintedOutputAlone(t *testing.T) {
+	hooked := strings.TrimRight(printedPart(t, "phpunit-hook-fail.txt"), "\n")
+	plain := strings.TrimRight(readFixture(t, "phpunit-hook-unhooked.txt"), "\n")
+	if hooked != plain {
+		t.Errorf("printed output differs with the hook:\n--- hooked\n%s\n--- unhooked\n%s", hooked, plain)
+	}
+}
+
+// A line inside the record that looks like a printed failure (a failure
+// message a test wrote, carried in the JUnit body) is not read as one.
+func TestPHPUnitPrintedReaderSkipsTheRecordBlock(t *testing.T) {
+	out := "There was 1 failure:\n\n1) FTest::testAdds\nboom\n\n" + recordBegin + " junit\n" +
+		`<testsuites><testsuite name="FTest"><testcase name="testAdds" class="FTest"><failure>FTest::testAdds` + "\n2) Fake::fromTheMessage\n" + `</failure></testcase></testsuite></testsuites>` + "\n" + recordEnd + "\n"
+	if got := phpFailures(out); !slices.Equal(got, []string{"FTest::testAdds"}) {
+		t.Errorf("phpFailures = %q, want only FTest::testAdds", got)
+	}
+	if got := withoutRecordBlock(out); strings.Contains(got, recordBegin) || strings.Contains(got, "Fake") || !strings.Contains(got, "1) FTest::testAdds") {
+		t.Errorf("withoutRecordBlock left %q", got)
 	}
 }

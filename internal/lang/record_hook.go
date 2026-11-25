@@ -179,6 +179,30 @@ func RecordBlock(out string) (format, body string, ok bool) {
 	}, recordEnd)
 }
 
+// withoutRecordBlock is out with the block RecordBlock reads (begin and end
+// lines included) taken out, so a reader of the runner's printed lines does
+// not read the record's lines as printed ones; out itself when RecordBlock
+// finds no block.
+func withoutRecordBlock(out string) string {
+	if _, _, ok := RecordBlock(out); !ok {
+		return out
+	}
+	lines := strings.Split(out, "\n")
+	end := -1
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.TrimSuffix(lines[i], "\r") == recordEnd {
+			end = i
+			break
+		}
+	}
+	for j := end - 1; j >= 0; j-- {
+		if f, found := strings.CutPrefix(strings.TrimSuffix(lines[j], "\r"), recordBegin+" "); found && f != "" {
+			return strings.Join(append(lines[:j:j], lines[end+1:]...), "\n")
+		}
+	}
+	return out
+}
+
 // lastCompleteBlock is the one "last complete block between begin and end"
 // rule; pytest's reader and RecordBlock both use it.
 //

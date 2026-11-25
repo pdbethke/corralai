@@ -45,8 +45,9 @@ const (
 // junitFailures is every testcase of a JUnit XML record that failed or
 // errored, in document order, nested <testsuite>s included.
 //
-// It is all or nothing: a record that is not well-formed XML, or holds no
-// <testsuites> or <testsuite> element at its top, is an error, and no
+// It is all or nothing: a record that is not well-formed XML, holds no
+// <testsuites> or <testsuite> element at its top, or holds a second
+// top-level element after it, is an error, and no
 // partial list is returned. The caller then reads the runner's printed lines
 // instead, as it would with no record at all. A record cut short is the case
 // this guards: its failures so far are not every failure, and a list that
@@ -73,6 +74,9 @@ func junitFailures(body string) ([]junitCase, error) {
 			depth++
 			name := t.Name.Local
 			if depth == 1 {
+				if root {
+					return nil, fmt.Errorf("junit record: a second top-level element <%s>", name)
+				}
 				if name != "testsuites" && name != "testsuite" {
 					return nil, fmt.Errorf("junit record: top element is <%s>, not <testsuites> or <testsuite>", name)
 				}

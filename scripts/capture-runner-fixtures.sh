@@ -274,6 +274,15 @@ capture_swift_hook() (
   want "swift-killer-suite-$v" "1 1" "$(swiftran < "$OUT/swift-killer-suite-$v.txt") $(exitof "swift-killer-suite-$v.txt")"
   CORRAL_FAIL_TESTING=1 hookrun "swift-killer-param-$v.txt" swift test --filter '^CalcTests\.Arithmetic/doubles\(value:\)(?:/|$)'
   want "swift-killer-param-$v" "1 1" "$(swiftran < "$OUT/swift-killer-param-$v.txt") $(exitof "swift-killer-param-$v.txt")"
+  # Salvage (swiftDeselectCmd): both frameworks failing, rerun skipping the
+  # four failures by what swiftFailedTests names (three record ids, XCTest's
+  # Class.method in any target): the other four tests run and pass; with the
+  # unit filter a unit pass carries, the two left in that target.
+  local skips=(--skip '^CalcTests\.Arithmetic/adds\(\)(?:/|$)' --skip '^CalcTests\.Arithmetic/doubles\(value:\)(?:/|$)' --skip '^CalcTests\.Arithmetic/fails\(\)(?:/|$)' --skip '^[^.]+\.AdderTests/testFails(?:/|$)')
+  CORRAL_FAIL_TESTING=1 CORRAL_FAIL_XCTEST=1 hookrun "swift-salvage-$v.txt" swift test "${skips[@]}"
+  want "swift-salvage-$v" "4 0" "$(swiftran < "$OUT/swift-salvage-$v.txt") $(exitof "swift-salvage-$v.txt")"
+  CORRAL_FAIL_TESTING=1 CORRAL_FAIL_XCTEST=1 hookrun "swift-salvage-unit-$v.txt" swift test --filter '^(?:CalcTests)\.' "${skips[@]}"
+  want "swift-salvage-unit-$v" "2 0" "$(swiftran < "$OUT/swift-salvage-unit-$v.txt") $(exitof "swift-salvage-unit-$v.txt")"
   return "$fail"
 )
 

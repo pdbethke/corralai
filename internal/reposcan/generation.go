@@ -656,7 +656,12 @@ package reposcan
 // unmeasured (the whole suite failing again on the original code for
 // another, flaky test).
 // Overloaded parameterised tests share one id, so their "alone" run runs
-// each overload. "55" has reached main, so this is its own generation.
+// each overload. Also in "56": swift test salvages an authored test
+// whose cases partly fail on the unmutated code (lang.Runner.FailedTests and
+// DeselectCmd: a --skip per failure the record names, and per XCTest
+// Class.method in any target), as every other language does; a "55" Swift
+// verdict discarded such a test whole, so its passing cases proved nothing.
+// "55" has reached main, so this is its own generation.
 // Behaviour bump; the shape is unchanged.
 const VerdictGeneration = "56"
 

@@ -144,6 +144,60 @@ func swiftRecordedID(name string) bool {
 	return ok && module != "" && !strings.Contains(module, "/")
 }
 
+// xctestPrintedName is the Class.method XCTest prints for a failing test
+// on Linux (xctestFailed), simple identifiers only.
+var xctestPrintedName = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)$`)
+
+// swiftFailedTests is the row's salvage reader: the failing tests swiftFailures
+// names that swiftDeselectCmd can skip. When swift-testing's record was read,
+// that is its ids and XCTest's printed Class.method; a swift-testing name the
+// printed lines give besides is left out, since the record names every
+// swift-testing failure but those of a crashed test process and the printed
+// twin of a test with a display name, and neither can be skipped by its
+// printed name. A failure left out is not skipped, so the rerun fails again
+// and nothing is salvaged. With no record, the printed names are the answer
+// as they are, and swiftDeselectCmd refuses the swift-testing ones.
+func swiftFailedTests(out string) []string {
+	names := swiftFailures(out)
+	if _, ok := swiftRecordedFailures(out); !ok {
+		return names
+	}
+	return slices.DeleteFunc(names, func(n string) bool { return !swiftRecordedID(n) && !xctestPrintedName.MatchString(n) })
+}
+
+// swiftDeselectCmd reruns argv without the tests ids, one `--skip` each: a
+// swift-testing record id by the one-test pattern (swiftFilterFor), an
+// XCTest Class.method as `^[^.]+\.Class/method(?:/|$)`, the method in that
+// class in any target, since the printed name carries none (a passing test
+// of the same name in another target is skipped too, which only makes the
+// rerun run less; so is every overload sharing a record id, see
+// swiftKillerCmd). Any other name (a printed swift-testing name, which has
+// no suite or module) refuses the rerun. swift test applies every --skip,
+// and after a --filter, so a unit filter argv carries stays (measured on
+// Swift 6.3.2 and 6.4.2, swift-salvage-*.txt, on the bare command; the
+// hook's wrapper, which a graded rerun goes through, was measured apart to
+// leave a run's printed output and exit as they are).
+func swiftDeselectCmd(argv, ids []string) ([]string, bool) {
+	if len(ids) == 0 {
+		return nil, false
+	}
+	if _, ok := swiftTestAt(argv); !ok || hasFlag(argv, "--list-tests", "-l") {
+		return nil, false
+	}
+	out := slices.Clone(argv)
+	for _, id := range ids {
+		switch m := xctestPrintedName.FindStringSubmatch(id); {
+		case swiftRecordedID(id):
+			out = append(out, "--skip", swiftFilterFor(id))
+		case m != nil:
+			out = append(out, "--skip", `^[^.]+\.`+regexp.QuoteMeta(m[1])+"/"+regexp.QuoteMeta(m[2])+"(?:/|$)")
+		default:
+			return nil, false
+		}
+	}
+	return out, true
+}
+
 // swiftCoruns: the pattern for id also selects every listed id that extends
 // it by "/" (a suite id and the tests inside it), because the pattern ends at
 // "/". `swift test list` lists tests, not suites, so two listed ids do not

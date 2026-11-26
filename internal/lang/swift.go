@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 
@@ -336,11 +337,49 @@ func (swiftPlugin) ImportNote(module string, ok bool) string {
 // See Plugin.WorkspaceRunEnv.
 func (swiftPlugin) WorkspaceRunEnv() (env []string, cleanup func()) { return nil, func() {} }
 
-// ConcatTests merges nothing yet: what a merged Swift file is has not been
-// settled (top-level names in a module must be unique, so a merge would have to
-// wrap the tests in one type). It refuses every part rather than guess; ConcatAuthored then delivers each
-// proven test as its own file, with this reason, which is the contract's
-// answer for a language that cannot merge precisely (see TestConcatenator).
-func (swiftPlugin) ConcatTests([]AuthoredPart) (string, error) {
-	return "", errors.New("lang: swift authored tests are not merged yet, so each proven test stays its own file")
+var (
+	swiftImportRe = regexp.MustCompile(`^(?:@testable\s+|@_implementationOnly\s+)?import\s+\w`)
+	// swiftTypeRe names a top-level type declaration, with any attributes
+	// and modifiers on the same line (`@MainActor final class X: XCTestCase`).
+	swiftTypeRe = regexp.MustCompile(`^(?:@\w+(?:\([^)]*\))?\s+)*(?:(?:public|internal|private|fileprivate|open|final)\s+)*(?:class|struct|enum|actor)\s+([A-Za-z_]\w*)`)
+	// swiftOtherDeclRe names the other top-level declarations a part may
+	// carry against the prompt's rule (an extension, a function, a binding),
+	// so a collision on one is seen and refused rather than merged into a
+	// redeclaration.
+	swiftOtherDeclRe = regexp.MustCompile(`^(?:@\w+(?:\([^)]*\))?\s+)*(?:(?:public|internal|private|fileprivate)\s+)*(?:extension|func|let|var|typealias)\s+([A-Za-z_][\w.]*)`)
+)
+
+// ConcatTests folds several proven Swift test files into one: import lines
+// hoisted and de-duplicated, and a top-level TYPE that two or more parts
+// declare suffixed in each with its mutant id, everywhere the part names it
+// outside a string or comment. Any other top-level name two parts declare
+// (an extension, a function, a binding) is refused, as a colliding helper is
+// in every language (see TestConcatenator): renaming an extension's type or
+// a function changes what the proven test called.
+//
+// The type is the one that always collides: the writer prompt has each
+// proven test put everything in ONE type named after the file it was written
+// as, and every top-level name in a test target is shared, so all of one
+// file's proven tests declare the same type and only one of them could be
+// added to the target. Renaming it is safe because nothing outside the part
+// names it: XCTest and swift-testing find a test type by its declaration
+// (an XCTestCase subclass, an @Suite or a type holding @Test functions), not
+// by its name or its file's. A mention inside a string interpolation
+// ("\(T.self)") is inside a literal and keeps the old name, which the merged
+// file's one run on the unmodified code (authored_together) reports.
+func (swiftPlugin) ConcatTests(parts []AuthoredPart) (string, error) {
+	types := map[string]bool{}
+	for _, part := range parts {
+		for _, line := range strings.Split(part.Source, "\n") {
+			if m := swiftTypeRe.FindStringSubmatch(strings.TrimRight(line, " \t")); m != nil {
+				types[m[1]] = true
+			}
+		}
+	}
+	return mergeParts(parts, concatSpec{
+		isHeader:          swiftImportRe.MatchString,
+		declRes:           []*regexp.Regexp{swiftTypeRe, swiftOtherDeclRe},
+		renameOnCollision: func(name string) bool { return types[name] },
+		literals:          literalSyntax{quotes: `"`, tripleQuotes: true, lineComments: []string{"//"}, blockComment: [2]string{"/*", "*/"}},
+	}, "", func(headers []string) string { return strings.Join(headers, "\n") })
 }

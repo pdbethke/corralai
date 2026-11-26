@@ -138,7 +138,8 @@ func TestMeasureRebuildReportsARestoreItCouldNotComplete(t *testing.T) {
 // times is over it is NOT refused: the cap sits at the ceiling, as it does for
 // a slow baseline, and a mutant cut off there is confirmed as a kill only by
 // the rebuild probe finishing in the same budget (RebuildProbeJail), so the
-// thinner margin can leave a mutant unmeasured but cannot credit a kill.
+// thinner margin can stop the file's grading partway (a re-probe that also
+// runs out of time fails the report) but cannot credit a kill.
 // (Until 2026-11-26 the refusal was at three times the run, which, once every
 // language made a rebuild run, would have stopped grading every suite slower
 // than 100 s that grades today.)

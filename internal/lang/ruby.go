@@ -403,12 +403,14 @@ func (rubyPlugin) VersionCmd() []string { return []string{"ruby", "--version"} }
 // line, or the second after a shebang.
 var rubyEncodingComment = regexp.MustCompile(`^#.*coding[:=]`)
 
-// KeepFirstLine is FirstLineKeeper for Ruby: a magic encoding comment stays
+// KeptLines is FirstLineKeeper for Ruby: a magic encoding comment stays
 // the first line, because on the second it is an ordinary comment (ruby 3.3:
 // `# encoding: ascii-8bit` then `puts __ENCODING__` printed ASCII-8BIT alone
 // and UTF-8 after a comment line, run 2026-11-26). frozen_string_literal is
 // read anywhere in the first comment section, so it needs nothing (same run).
-func (rubyPlugin) KeepFirstLine(body string) (bool, error) {
-	first, _, _ := strings.Cut(body, "\n")
-	return rubyEncodingComment.MatchString(strings.ToLower(first)), nil
+func (rubyPlugin) KeptLines(body string) (int, error) {
+	if first, _, _ := strings.Cut(body, "\n"); rubyEncodingComment.MatchString(strings.ToLower(first)) {
+		return 1, nil
+	}
+	return 0, nil
 }

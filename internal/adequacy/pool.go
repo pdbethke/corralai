@@ -816,8 +816,10 @@ var ErrRebuildOverCeiling = errors.New("the rebuild run is too slow for corral's
 // under the ceiling whose floor (mutantTimeoutMultiple x took) is over it is
 // graded with the cap at the ceiling, as a slow baseline is: a mutant cut off
 // there is credited as a kill only when the rebuild probe finishes in the
-// same budget (RebuildProbeJail), so the thinner margin can leave a mutant
-// unmeasured, never credit a kill it did not earn.
+// same budget (RebuildProbeJail), so the thinner margin can stop the file's
+// grading partway (a mutant whose re-probe also runs out of time fails the
+// report, as a slow baseline's already could), never credit a kill it did
+// not earn.
 //
 // Until 2026-11-26 this refused at the floor, three times the run. That was
 // safe only while the re-probe ran the cheap unmutated code, and with every

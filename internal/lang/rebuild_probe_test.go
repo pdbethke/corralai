@@ -30,7 +30,7 @@ func TestEveryLanguageRebuildProbeIsALeadingLineComment(t *testing.T) {
 		// First, unless the language keeps its first line (PHP's open tag):
 		// then second.
 		if k, ok := p.(FirstLineKeeper); ok {
-			if keep, _ := k.KeepFirstLine(src); keep {
+			if kept, _ := k.KeptLines(src); kept == 1 {
 				first, _, _ := strings.Cut(src, "\n")
 				if at != len(first)+1 {
 					t.Errorf("%s: probe at byte %d, want right after the kept first line", n, at)
@@ -90,7 +90,7 @@ func TestPHPRebuildProbeGoesAfterTheOpenTag(t *testing.T) {
 			t.Errorf("%q: probe = %q, want %q", first, got, want)
 		}
 	}
-	for _, src := range []string{"<html><?php echo 1; ?>\n", "<?php echo 1;"} {
+	for _, src := range []string{"<html><?php echo 1; ?>\n", "<?php echo 1;", "<?php echo 1; ?>\n<p>page</p>\n"} {
 		if got, err := RebuildProbe(php, src); err == nil {
 			t.Errorf("probed %q into %q, want a refusal", src, got)
 		}
@@ -127,4 +127,23 @@ func mustByName(t *testing.T, name string) Plugin {
 		t.Fatalf("no plugin %q", name)
 	}
 	return p
+}
+
+// Python: a PEP 263 coding cookie is read on the first or second line only,
+// so the probe goes after it; a probe before a second-line cookie pushed it to
+// the third, where a latin-1 file stops compiling (review, 2026-11-26).
+func TestPythonRebuildProbeKeepsACodingCookieWhereItCounts(t *testing.T) {
+	py := mustByName(t, "python")
+	probe := "# " + rebuildProbeText + "\n"
+	for _, c := range []struct{ src, want string }{
+		{"# -*- coding: latin-1 -*-\nx = 1\n", "# -*- coding: latin-1 -*-\n" + probe + "x = 1\n"},
+		{"# a module\n# vim: set fileencoding=latin-1 :\nx = 1\n", "# a module\n# vim: set fileencoding=latin-1 :\n" + probe + "x = 1\n"},
+		{"x = 1\n# coding: latin-1\n", probe + "x = 1\n# coding: latin-1\n"},
+		{"import os\n", probe + "import os\n"},
+	} {
+		got, err := RebuildProbe(py, c.src)
+		if err != nil || got != c.want {
+			t.Errorf("RebuildProbe(%q) = %q, %v; want %q", c.src, got, err, c.want)
+		}
+	}
 }

@@ -648,8 +648,12 @@ package reposcan
 // jail's. A timed-out mutant's kill is now confirmed by re-running that
 // probe, which pays the rebuild the mutant paid, where "55" re-ran the
 // unmutated code, which on Swift skips the relink (adequacy.RebuildProbeJail),
-// so a box too slow to finish a rebuild in the budget leaves the mutant
-// unmeasured instead of crediting a kill. (A go test command without
+// so a box too slow to finish a rebuild in the budget fails the file's
+// grading with the reason instead of crediting a kill; the kill
+// confirmation's repeat, when it times out, is judged on the probe the same
+// way and leaves the mutant unmeasured, where "55" called it repeated on the
+// cheap unmutated run. A Python file's coding cookie and a Ruby file's
+// encoding comment stay where they are read, after which the probe goes. (A go test command without
 // -count=1 replays a cached result for the probe as for the unmutated code,
 // go 1.26.7, so for Go this changes the cap and the re-probe by nothing.) A rebuild run is refused only when it is itself slower than the
 // five-minute ceiling, where "55" refused one whose three times was, so a

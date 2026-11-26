@@ -1122,6 +1122,28 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 		}
 		return mutantTimeoutCap(d, warm, floor)
 	}
+	// rebuildReprobe is the code a timed-out mutant's run is judged against:
+	// whether the box can finish a run in the budget the mutant ran out of
+	// is asked of a run that pays the build work the mutant paid. Where the
+	// jail made a rebuild run of this file (RebuildProbeJail) that is its
+	// probe, since a mutant can pay work the unmutated code does not (SwiftPM
+	// relinks a mutant and not the unchanged file), and a box that finishes
+	// the cheap unmutated run but not a rebuild would otherwise credit the
+	// rebuild's slowness as a kill. Otherwise it is the compliant code. The
+	// probe is the compliant code with one comment line added; a test that
+	// asserts a line number of this file (an authored one, say: the rebuild
+	// run ran only the developer's) fails on it, and that re-probe then
+	// fails the report, as a failing compliant re-probe does: it errs toward
+	// grading nothing, never toward a kill. It does not cover go test
+	// without -count=1 on the workspace substrate, which replays a cached
+	// result for the probe as for the unmutated code (go 1.26.7,
+	// 2026-11-26) while a mutant runs its tests.
+	reprobeCode, reprobeWhat := compliantCode, "the compliant baseline"
+	if rp, ok := j.(RebuildProbeJail); ok {
+		if path, compliant, probed := rp.RebuildProbe(); probed != "" && path == codePath && compliant == compliantCode {
+			reprobeCode, reprobeWhat = probed, "the compliant baseline's rebuild probe"
+		}
+	}
 	perMutant := cfg.mutantTimeout
 	if CapFloorApplies(cfg.mutantTimeout) {
 		perMutant = clamp(baseDur)
@@ -1583,24 +1605,8 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 				// (b3307bbbb5e6#R3). The question is whether THIS command
 				// finishes on compliant code right now; only it can answer.
 				//
-				// AND PAYING THE MUTANT'S REBUILD. Where the jail made a
-				// rebuild run of this file (RebuildProbeJail), the re-probe
-				// runs that probe, not the compliant code: a mutant can pay
-				// build work the unmutated code does not (SwiftPM relinks a
-				// mutant and not the unchanged file), and a box that finishes
-				// the cheap unmutated run but not a rebuild would otherwise
-				// credit the rebuild's slowness as a kill. The probe is the
-				// compliant code with one comment line added, so its tests
-				// behave as the compliant code's. It does not cover go test
-				// without -count=1 on the workspace substrate, which replays
-				// a cached result for the probe as for the unmutated code
-				// (go 1.26.7, 2026-11-26) while a mutant runs its tests.
-				reCode, reWhat := compliantCode, "the compliant baseline"
-				if rp, ok := j.(RebuildProbeJail); ok {
-					if path, compliant, probed := rp.RebuildProbe(); probed != "" && path == codePath && compliant == compliantCode {
-						reCode, reWhat = probed, "the compliant baseline's rebuild probe"
-					}
-				}
+				// AND PAYING THE MUTANT'S REBUILD (rebuildReprobe above).
+				reCode, reWhat := reprobeCode, reprobeWhat
 				bctx, bcancel := context.WithTimeout(ctx, mutantCap)
 				bpassed, berr := runCmd(bctx, reCode, gradeCmd)
 				bcancel()
@@ -1711,8 +1717,13 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 			}
 		}
 
-		// Step B: the grading command again, on an idle run.
-		mp, _, err := confirmRun(mutantCode, o.gradeCmd, budget)
+		// Step B: the grading command again, on an idle run. A repeat that
+		// timed out did not repeat the failure, so whether the box could
+		// have finished it is asked of a run that pays the mutant's rebuild
+		// (rebuildReprobe), as the first timeout's re-probe is; the cheap
+		// unmutated run would pass and call a failure repeated that never
+		// was (TestARepeatThatTimesOutIsJudgedOnTheRebuildProbe).
+		mp, mto, err := confirmRun(mutantCode, o.gradeCmd, budget)
 		if err != nil {
 			return err
 		}
@@ -1722,7 +1733,11 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 			g.KillConfirmation = KillNotRepeated
 			return nil
 		}
-		cp, cto, err := confirmRun(compliantCode, o.gradeCmd, budget)
+		againCode := compliantCode
+		if mto {
+			againCode = reprobeCode
+		}
+		cp, cto, err := confirmRun(againCode, o.gradeCmd, budget)
 		if err != nil {
 			return err
 		}
@@ -1736,6 +1751,9 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 		g.KilledBy = ""
 		o.unmeasured = true
 		o.unmeasuredReason = fmt.Sprintf("kill not confirmed: the grading command also failed on the unmutated code when re-run alone, so the suite is not stable enough for this mutant's failure to be evidence (command: %s)", ShellJoin(o.gradeCmd))
+		if mto {
+			o.unmeasuredReason = fmt.Sprintf("kill not confirmed: the mutant's repeat ran out of its %s budget, and %s did not pass in the same budget, so the box could not show it finishes such a run (command: %s)", budget, reprobeWhat, ShellJoin(o.gradeCmd))
+		}
 		return nil
 	}
 

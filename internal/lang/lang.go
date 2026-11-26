@@ -272,16 +272,16 @@ func RebuildProbe(p Plugin, src string) (string, error) {
 	}
 	at := 0
 	if k, ok := p.(FirstLineKeeper); ok {
-		keep, err := k.KeepFirstLine(body)
+		n, err := k.KeptLines(body)
 		if err != nil {
 			return "", err
 		}
-		if keep {
-			nl := strings.IndexByte(body, '\n')
+		for range n {
+			nl := strings.IndexByte(body[at:], '\n')
 			if nl < 0 {
-				return "", errors.New("its first line must stay first and it has no second line")
+				return "", errors.New("its first lines must stay first and nothing follows them")
 			}
-			at = nl + 1
+			at += nl + 1
 		}
 	}
 	probed := body[:at] + p.LineComment() + " " + rebuildProbeText + "\n" + body[at:]
@@ -292,11 +292,11 @@ func RebuildProbe(p Plugin, src string) (string, error) {
 }
 
 // FirstLineKeeper is the OPTIONAL plugin capability RebuildProbe asks about a
-// file's first line: keep is true when that line must stay first, and the
-// probe goes after it instead; an error is a file the probe cannot go into
-// at all. body is the file without a byte-order mark.
+// file's first lines: n is how many must stay where they are, and the probe
+// goes after them; an error is a file the probe cannot go into at all. body
+// is the file without a byte-order mark.
 type FirstLineKeeper interface {
-	KeepFirstLine(body string) (keep bool, err error)
+	KeptLines(body string) (n int, err error)
 }
 
 // rebuildProbeText is the comment RebuildProbe writes: what the line is, for

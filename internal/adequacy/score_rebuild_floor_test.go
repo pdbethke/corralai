@@ -208,3 +208,64 @@ func TestATimedOutMutantIsConfirmedByTheRebuildProbe(t *testing.T) {
 		}
 	}
 }
+
+// failThenHangJail fails the mutant's first run quickly, so it is a kill
+// candidate, and lets every later mutant run hang past its budget; the
+// probe hangs too, as a rebuild would. The compliant code passes at once.
+type failThenHangJail struct {
+	mu         sync.Mutex
+	mutantRuns int
+	probeRuns  int
+}
+
+func (j *failThenHangJail) RunTest(ctx context.Context, files map[string]string, cmd []string) (bool, error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	switch files["a.py"] {
+	case CanaryCode:
+		return false, nil
+	case warmCapMutantCode:
+		j.mutantRuns++
+		if j.mutantRuns == 1 {
+			return false, nil
+		}
+		return false, fmt.Errorf("%w: hung", ErrTestTimeout)
+	case warmCapProbeCode:
+		j.probeRuns++
+		return false, fmt.Errorf("%w: the probe hung", ErrTestTimeout)
+	}
+	return true, nil
+}
+
+func (j *failThenHangJail) WarmDuration() time.Duration { return time.Second }
+
+func (j *failThenHangJail) RebuildProbe() (codePath, compliant, probed string) {
+	return "a.py", warmCapCode, warmCapProbeCode
+}
+
+// The kill confirmation's repeat (Step B) re-runs the mutant; when that run
+// times out, whether the box could finish it is asked of a run that pays the
+// same rebuild, as the first timeout's re-probe is, and never of the cheap
+// unmutated run. Here the repeat and the probe both hang, so the kill is not
+// confirmed; re-running the compliant code would have passed and called the
+// failure repeated though it never repeated.
+func TestARepeatThatTimesOutIsJudgedOnTheRebuildProbe(t *testing.T) {
+	j := &failThenHangJail{}
+	rep, err := Score(context.Background(), j, nil, "a.py", warmCapCode,
+		[]Mutant{{ID: "m", Search: "x = 0\n", Replace: warmCapMutantCode}}, []string{"pytest", "-q"})
+	if err != nil {
+		t.Fatalf("Score: %v", err)
+	}
+	if j.mutantRuns < 2 {
+		t.Fatalf("the mutant ran %d time(s); want its kill confirmed by a repeat", j.mutantRuns)
+	}
+	if hasID(rep.Killed, "m") {
+		t.Fatalf("m confirmed as %q though its repeat and the probe both timed out", rep.PerMutant["m"].KillConfirmation)
+	}
+	if j.probeRuns == 0 {
+		t.Errorf("the repeat's timeout was judged without running the probe")
+	}
+	if !hasID(rep.Unmeasured, "m") || !strings.Contains(rep.UnmeasuredReasons["m"], "rebuild probe") {
+		t.Errorf("Unmeasured = %v, reason %q; want m unmeasured, naming the rebuild probe", rep.Unmeasured, rep.UnmeasuredReasons["m"])
+	}
+}

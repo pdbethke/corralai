@@ -641,7 +641,14 @@ package reposcan
 // salvage -skip declines the same, and `-test.skip` / `--test.skip` after
 // -args. Behaviour bump;
 // the shape is unchanged.
-const VerdictGeneration = "55"
+// "60" (2026-11-26): a minitest kill is confirmed by running the killing
+// test alone (lang.minitestKillerCmd: `--name /\A<Class#method>\z/` after
+// the test file, for a `ruby <file.rb>` command), as rspec's is, where "55"
+// confirmed it by repeating the whole grading run; a kill whose test passes
+// alone is now refuted that way rather than repeated. "60" because #579 to
+// #582 take "56" to "59", and any of them may reach main first. Behaviour
+// bump; the shape is unchanged.
+const VerdictGeneration = "60"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

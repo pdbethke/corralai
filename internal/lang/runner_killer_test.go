@@ -48,6 +48,11 @@ func TestKillerCmdNarrowsTheRunByName(t *testing.T) {
 		{"ruby", "rspec", []string{"bundle", "exec", "rspec", "spec"}, "Calc adds (a+b)",
 			[]string{"bundle", "exec", "rspec", "spec", "-E", `\ACalc adds \(a\+b\)\z`}},
 		{"ruby", "rspec", []string{"rspec"}, "MyApp::Calc top level", []string{"rspec", "-E", `\AMyApp::Calc top level\z`}},
+		// minitest: --name after the test file, anchored on Class#method.
+		{"ruby", "minitest", []string{"ruby", "-Itest", "test/calc_test.rb"}, "CalcTest#test_adds",
+			[]string{"ruby", "-Itest", "test/calc_test.rb", "--name", `/\ACalcTest#test_adds\z/`}},
+		{"ruby", "minitest", []string{"ruby", "test/calc_test.rb", "-v"}, "MyApp::NegTest#test_x?",
+			[]string{"ruby", "test/calc_test.rb", "-v", "--name", `/\AMyApp::NegTest#test_x\?\z/`}},
 		// cargo test: libtest's --exact, after the binaries' `--`.
 		{"rust", "cargo-test", []string{"cargo", "test", "--workspace"}, "tests::adds",
 			[]string{"cargo", "test", "--workspace", "--", "--exact", "tests::adds"}},
@@ -90,6 +95,16 @@ func TestKillerCmdRefusesAFilteredArgv(t *testing.T) {
 		{"ruby", "rspec", []string{"rspec", "-e", "adds"}, "Calc adds"},
 		{"ruby", "rspec", []string{"rspec", "--example", "adds"}, "Calc adds"},
 		{"ruby", "rspec", []string{"rspec"}, ""},
+		// minitest: a filter of its own, a launcher that passes no test
+		// arguments (rake, testrb, ruby -S), or an id that is not Class#method.
+		{"ruby", "minitest", []string{"ruby", "test/a_test.rb", "-n", "test_y"}, "ATest#test_x"},
+		{"ruby", "minitest", []string{"ruby", "test/a_test.rb", "--name=/y/"}, "ATest#test_x"},
+		{"ruby", "minitest", []string{"ruby", "test/a_test.rb", "--exclude", "/y/"}, "ATest#test_x"},
+		{"ruby", "minitest", []string{"rake", "test"}, "ATest#test_x"},
+		{"ruby", "minitest", []string{"testrb", "test/a_test.rb"}, "ATest#test_x"},
+		{"ruby", "minitest", []string{"ruby", "-S", "rake", "test"}, "ATest#test_x"},
+		{"ruby", "minitest", []string{"ruby", "test/a_test.rb"}, "test_x"},
+		{"ruby", "minitest", []string{"ruby", "test/a_test.rb"}, ""},
 		{"php", "phpunit", []string{"vendor/bin/phpunit", "--filter", "x"}, "FTest::testAdds"},
 		{"php", "phpunit", []string{"vendor/bin/phpunit"}, "FTest"},
 		{"php", "phpunit", []string{"vendor/bin/phpunit"}, ""},
@@ -134,9 +149,9 @@ func TestStripPyPositionalsKeepsOptionsAndTheirValues(t *testing.T) {
 }
 
 func TestKillerCmdForIsNilWithoutARow(t *testing.T) {
-	p, _ := ByName("ruby")
-	if KillerCmdFor(p, Invocation{Argv: []string{"ruby", "-Itest", "test/a_test.rb"}}) != nil {
-		t.Error("minitest has no KillerCmd, KillerCmdFor must be nil")
+	p, _ := ByName("javascript")
+	if KillerCmdFor(p, Invocation{Argv: []string{"npx", "mocha", "test"}}) != nil {
+		t.Error("mocha has no KillerCmd, KillerCmdFor must be nil")
 	}
 }
 
@@ -202,6 +217,8 @@ func TestKillerFiltersAreTheOnesTheCaptureScriptRan(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, c := range []struct{ lang, runner, id string }{
+		{"ruby", "minitest", "CalcTest#test_adds"},
+		{"ruby", "minitest", "MyApp::NegTest#test_x"},
 		{"ruby", "rspec", "Calc adds (a+b)"},
 		{"ruby", "rspec", "MyApp::Calc top level"},
 		{"php", "phpunit", "FTest::testAdds"},
@@ -209,8 +226,11 @@ func TestKillerFiltersAreTheOnesTheCaptureScriptRan(t *testing.T) {
 		{"rust", "cargo-nextest", "units-a::it integrates"},
 	} {
 		argv := []string{c.runner}
-		if c.runner == "cargo-nextest" {
+		switch c.runner {
+		case "cargo-nextest":
 			argv = []string{"cargo", "nextest", "run", "--workspace"}
+		case "minitest":
+			argv = []string{"ruby", "fail/f_test.rb"}
 		}
 		cmd, ok := killerRow(t, c.lang, c.runner).KillerCmd(argv, c.id)
 		if !ok {
@@ -257,5 +277,21 @@ func TestPHPUnitKillerRunsTheFailingDataSetAlone(t *testing.T) {
 		if !ran {
 			t.Errorf("%q: the capture script saw no %s run exactly one test", c.id, filter)
 		}
+	}
+}
+
+// The scorer asks through KillerCmdFor, never the row: an operator's
+// `ruby -Itest <file>` command resolves to the minitest row and narrows.
+func TestKillerCmdForNarrowsAMinitestCommand(t *testing.T) {
+	p, _ := ByName("ruby")
+	inv := Invocation{Argv: []string{"ruby", "-Itest", "test/a_test.rb"}}
+	killer := KillerCmdFor(p, inv)
+	if killer == nil {
+		t.Fatal("KillerCmdFor is nil for a minitest command")
+	}
+	got, ok := killer(inv.Argv, "ATest#test_x")
+	want := []string{"ruby", "-Itest", "test/a_test.rb", "--name", `/\AATest#test_x\z/`}
+	if !ok || !slices.Equal(got, want) {
+		t.Fatalf("got %q ok=%v, want %q", got, ok, want)
 	}
 }

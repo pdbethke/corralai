@@ -486,14 +486,37 @@ func rspecDeselectCmd(argv, ids []string) ([]string, bool) {
 
 var minitestFilters = []string{"-n", "--name", "-e", "--exclude"}
 
-// minitestDeselectCmd passes --exclude to the test file, which only `ruby
-// <file.rb>` hands it: rake and testrb take no arguments for the tests.
+// minitestNarrowable reports whether a name filter added at the end of argv
+// reaches minitest: only `ruby <file.rb>` hands the words after the file to
+// the test file's ARGV, which minitest/autorun reads; rake and testrb take no
+// arguments for the tests. It declines an argv that names a filter already,
+// which the added one would replace or be ORed with.
+func minitestNarrowable(argv []string) bool {
+	return len(argv) >= 2 && filepath.Base(argv[0]) == "ruby" && narrowable(argv, minitestFilters...) &&
+		slices.ContainsFunc(argv[1:], func(a string) bool { return strings.HasSuffix(a, ".rb") })
+}
+
+// minitestDeselectCmd passes --exclude to the test file (minitestNarrowable).
 func minitestDeselectCmd(argv, ids []string) ([]string, bool) {
-	if len(ids) == 0 || len(argv) < 2 || filepath.Base(argv[0]) != "ruby" || !narrowable(argv, minitestFilters...) ||
-		!slices.ContainsFunc(argv[1:], func(a string) bool { return strings.HasSuffix(a, ".rb") }) {
+	if len(ids) == 0 || !minitestNarrowable(argv) {
 		return nil, false
 	}
 	return append(slices.Clone(argv), "--exclude", `/\A(?:`+alternation(ids, regexQuoter.Replace)+`)\z/`), true
+}
+
+// minitestKillerCmd narrows argv to the test minitestFailures named,
+// `Class#method`, with --name. minitest (5.20.0, runnable.rb) matches a
+// --name pattern against each method's bare name and against
+// `Class#method`, so the anchored full id selects that one test: it cannot
+// match a bare method name, which holds no `#`, nor another class's test.
+// A subclass that inherits the method runs it under its own class name, and
+// is not selected. An id minitestFailures could not read (a spec's method
+// name holds spaces) never reaches here, since FirstFailure names none.
+func minitestKillerCmd(argv []string, id string) ([]string, bool) {
+	if !strings.Contains(id, "#") || !minitestNarrowable(argv) {
+		return nil, false
+	}
+	return append(slices.Clone(argv), "--name", `/\A`+regexQuoter.Replace(id)+`\z/`), true
 }
 
 // phpunitDeselectCmd uses --exclude-filter (PHPUnit 10 or later) over

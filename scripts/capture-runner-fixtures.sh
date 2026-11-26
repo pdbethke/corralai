@@ -74,6 +74,22 @@ want() { # want <runner> <expected> <got>
   if [ "$2" = "$3" ]; then echo "ok   $1: ran $3"; else echo "FAIL $1: ran $3, want $2"; fail=1; fi
 }
 
+# swiftran: the tests a run executed, from its own summaries: every
+# swift-testing "Test run with N tests" plus every XCTest run's total, the
+# "Executed N tests" that closes its outermost suite (the suites nested in
+# it repeat their part). Swift 6.4.2 under swiftbuild runs each test product
+# on its own and prints one summary of each framework per product, so they
+# are summed; reading the last of each counted 5 where 8 ran. The same
+# count as swiftRan in internal/lang/swift_runner_test.go.
+swiftran() {
+  awk '
+    /^Test Suite .* started at / { depth++; next }
+    /^Test Suite .* (passed|failed) at / { depth--; outer = (depth == 0); next }
+    /^[ \t]*Executed [0-9]+ tests?, with/ { if (outer) n += $2; outer = 0; next }
+    /Test run with [0-9]+ tests? / { s = $0; sub(/.*Test run with /, "", s); sub(/ .*/, "", s); n += s }
+    END { print n + 0 }'
+}
+
 # --- swift test (internal/lang/swift_runner.go) ----------------------------
 # The package in src/swift has two test targets: CalcTests (swift-testing,
 # five tests) and CalcXCTests (XCTest, three). Run from DIR/swift; $SWIFT may
@@ -87,21 +103,6 @@ capture_swift() (
   swiftout() {
     local f="$1"; shift
     "$@" 2>&1 | sed -e "s#$pdir#\$DIR/swift#g" > "$OUT/$f" || true
-  }
-  # swiftran: the tests a run executed, from its own summaries: every
-  # swift-testing "Test run with N tests" plus every XCTest run's total, the
-  # "Executed N tests" that closes its outermost suite (the suites nested in
-  # it repeat their part). Swift 6.4.2 under swiftbuild runs each test product
-  # on its own and prints one summary of each framework per product, so they
-  # are summed; reading the last of each counted 5 where 8 ran. The same
-  # count as swiftRan in internal/lang/swift_runner_test.go.
-  swiftran() {
-    awk '
-      /^Test Suite .* started at / { depth++; next }
-      /^Test Suite .* (passed|failed) at / { depth--; outer = (depth == 0); next }
-      /^[ \t]*Executed [0-9]+ tests?, with/ { if (outer) n += $2; outer = 0; next }
-      /Test run with [0-9]+ tests? / { s = $0; sub(/.*Test run with /, "", s); sub(/ .*/, "", s); n += s }
-      END { print n + 0 }'
   }
   # swiftcmd <fixture> <argv> <cmd...>: `# argv:` the operator's command, `$ `
   # the row's command (cmd, whose first word is swift), the run of cmd under
@@ -265,6 +266,14 @@ capture_swift_hook() (
   CORRAL_FAIL_TESTING=1 hookrun "swift-hook-crash-$v.txt" "${GRADED[@]}"
   rm Tests/CalcTests/Crash.swift
   want "swift-hook-crash-exit-$v" 1 "$(exitof "swift-hook-crash-$v.txt")"
+  # The killer command (swiftKillerCmd): the failing run narrowed to one id
+  # its record gave, by the one-test --filter, runs that test alone and
+  # fails: one in a suite with a display name, and a parameterised one (one
+  # test, three cases, one failing).
+  CORRAL_FAIL_TESTING=1 hookrun "swift-killer-suite-$v.txt" swift test --filter '^CalcTests\.Arithmetic/adds\(\)(?:/|$)'
+  want "swift-killer-suite-$v" "1 1" "$(swiftran < "$OUT/swift-killer-suite-$v.txt") $(exitof "swift-killer-suite-$v.txt")"
+  CORRAL_FAIL_TESTING=1 hookrun "swift-killer-param-$v.txt" swift test --filter '^CalcTests\.Arithmetic/doubles\(value:\)(?:/|$)'
+  want "swift-killer-param-$v" "1 1" "$(swiftran < "$OUT/swift-killer-param-$v.txt") $(exitof "swift-killer-param-$v.txt")"
   return "$fail"
 )
 

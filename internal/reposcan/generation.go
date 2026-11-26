@@ -536,7 +536,10 @@ package reposcan
 // by repeating the whole grading run. A kill the test alone does not repeat
 // is still confirmed by the repeat, so a count can only stay or move to the
 // stricter reading; the recorded confirmation differs. Behaviour bump; the
-// shape is unchanged.
+// shape is unchanged. (Corrected 2026-11-26: the count can also rise. The
+// test alone can confirm a kill the repeat would have left unmeasured, when
+// the whole suite fails on the original code again for another, flaky test
+// while the killing test alone passes on it.)
 // "53" (2026-11-23): cargo test and cargo-nextest salvage an authored test
 // whose cases partly fail on the unmutated code (lang.Runner.FailedTests and
 // DeselectCmd: libtest's `--exact --skip`, and a nextest filterset excluding
@@ -641,7 +644,21 @@ package reposcan
 // salvage -skip declines the same, and `-test.skip` / `--test.skip` after
 // -args. Behaviour bump;
 // the shape is unchanged.
-const VerdictGeneration = "55"
+// "56" (2026-11-26): swift test confirms a kill by running the killing test
+// alone (lang.Runner.KillerCmd: the one-test --filter, built only from an id
+// swift-testing's own record gives), as every other language does; a "55"
+// Swift verdict confirmed every kill by repeating the whole grading run. A
+// kill named from the printed lines only (XCTest's Class.method, a
+// swift-testing test the record omits) is still confirmed by the repeat. As
+// with "52", the recorded confirmation differs, and a count can stay or
+// rise: a kill the test alone does not repeat falls to the repeat as before,
+// and the test alone can confirm a kill the repeat would have left
+// unmeasured (the whole suite failing again on the original code for
+// another, flaky test).
+// Overloaded parameterised tests share one id, so their "alone" run runs
+// each overload. "55" has reached main, so this is its own generation.
+// Behaviour bump; the shape is unchanged.
+const VerdictGeneration = "56"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

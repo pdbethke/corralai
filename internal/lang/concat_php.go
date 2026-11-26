@@ -11,8 +11,9 @@ import (
 
 // phpSyntax is PHP's string and comment syntax for maskedSpans. `#` is not a
 // line comment here, because `#[...]` is an attribute and code may follow it
-// on the line; a `# comment` is then read as code, which can only make a
-// part refused (an unnamed member), never merged wrongly.
+// on the line; a part with a `#` comment is refused instead
+// (readPHPClassFile), since its text would be read as code: a `/*` in one
+// opened a block comment that swallowed a whole method (review of a1d9bdf4).
 var phpSyntax = literalSyntax{quotes: `"'`, lineComments: []string{"//"}, blockComment: [2]string{"/*", "*/"}}
 
 var (
@@ -22,6 +23,12 @@ var (
 	phpPropRe      = regexp.MustCompile(`\$([A-Za-z_]\w*)`)
 	phpTraitUseRe  = regexp.MustCompile(`^\s*use\s+([^;{]+)`)
 	phpTestAttrRe  = regexp.MustCompile(`#\[\s*\\?(?:PHPUnit\\Framework\\Attributes\\)?Test\s*[\](]|@test\b`)
+	phpPublicRe    = regexp.MustCompile(`\bpublic\b`)
+	phpPrivateRe   = regexp.MustCompile(`\b(?:private|protected)\b`)
+	phpHashRe      = regexp.MustCompile(`#[^\[]|#$`)
+	// phpImportRe reads a `use` import: its kind (function, const or a
+	// class), the name it imports and the alias it binds.
+	phpImportRe = regexp.MustCompile(`^use\s+(function\s+|const\s+)?([\\\w]+)(?:\s+as\s+(\w+))?\s*;$`)
 )
 
 // phpClassFile is one proven PHPUnit file read as the one class it must be.
@@ -87,6 +94,7 @@ func (phpPlugin) ConcatTests(parts []AuthoredPart) (string, error) {
 	}
 	var members []phpMember
 	byKey := map[string]phpMember{}
+	bound := map[string]string{}
 	names := map[string]bool{}
 	for i, f := range files {
 		id := parts[i].MutantID
@@ -100,6 +108,9 @@ func (phpPlugin) ConcatTests(parts []AuthoredPart) (string, error) {
 			addOnce(&declares, d)
 		}
 		for _, u := range f.uses {
+			if err := bindImport(bound, u); err != nil {
+				return "", fmt.Errorf("php: proven test %s cannot be merged: %w", id, err)
+			}
 			addOnce(&uses, u)
 		}
 		for _, m := range f.members {
@@ -109,18 +120,24 @@ func (phpPlugin) ConcatTests(parts []AuthoredPart) (string, error) {
 			case prev.text == m.text:
 				continue
 			case m.isTest && prev.isTest:
+				// Renamed only when nothing else in the part names it: a
+				// #[Depends('testX')], an @depends or a string would stay on
+				// the other part's test (review of a1d9bdf4).
+				if n := len(wordRe(m.name).FindAllStringIndex(parts[i].Source, -1)); n != 1 {
+					return "", fmt.Errorf("php: proven test %s names its test %s %d times, so renaming it to keep both would change what the other mentions run", id, m.name, n)
+				}
 				renamed := m.name + "_" + idSuffix(id)
-				if names[renamed] {
+				if names[strings.ToLower(renamed)] {
 					return "", fmt.Errorf("php: proven test %s: %s and its renamed %s are both taken", id, m.name, renamed)
 				}
 				m.text = renameOnce(m.text, phpMethodRe, m.name, renamed)
-				m.key, m.name = "method "+renamed, renamed
+				m.key, m.name = "method "+strings.ToLower(renamed), renamed
 			default:
 				return "", fmt.Errorf("php: proven test %s writes %s differently from an earlier proven test, and it is not a test, so it cannot be renamed safely", id, m.key)
 			}
 			byKey[m.key] = m
 			if m.name != "" {
-				names[m.name] = true
+				names[strings.ToLower(m.name)] = true
 			}
 			members = append(members, m)
 		}
@@ -158,6 +175,11 @@ func readPHPClassFile(src string) (phpClassFile, error) {
 		return f, errors.New("it does not open with <?php")
 	}
 	code := maskLiterals(body, phpSyntax)
+	for _, line := range strings.Split(code, "\n") {
+		if phpHashRe.MatchString(line) {
+			return f, errors.New("it holds a # comment, which this merge does not read as one")
+		}
+	}
 	loc := phpClassLineRe.FindStringIndex(code)
 	if loc == nil {
 		return f, errors.New("it declares no class")
@@ -266,11 +288,22 @@ func phpMemberOf(text, code string) (phpMember, error) {
 		m.key = "use " + strings.TrimSpace(phpTraitUseRe.FindStringSubmatch(head)[1])
 	case phpMethodRe.MatchString(head):
 		m.name = phpMethodRe.FindStringSubmatch(head)[1]
-		m.key = "method " + m.name
-		m.isTest = strings.HasPrefix(strings.ToLower(m.name), "test") || phpTestAttrRe.MatchString(text[:len(head)])
+		// PHP method names are case-insensitive: testA and testa are one.
+		m.key = "method " + strings.ToLower(m.name)
+		// A test is what PHPUnit runs: a PUBLIC method named test... or
+		// marked as one. A private testValue() is a helper.
+		decl := head[:phpMethodRe.FindStringIndex(head)[0]]
+		m.isTest = (phpPublicRe.MatchString(decl) || !phpPrivateRe.MatchString(decl)) &&
+			(strings.HasPrefix(strings.ToLower(m.name), "test") || phpTestAttrRe.MatchString(text[:len(head)]))
 	case phpConstRe.MatchString(head):
+		if strings.Count(head, "=") > 1 {
+			return m, fmt.Errorf("its class declares several constants in one statement (%q)", strings.TrimSpace(text))
+		}
 		m.key = "const " + phpConstRe.FindStringSubmatch(head)[1]
 	case phpPropRe.MatchString(head):
+		if len(phpPropRe.FindAllString(head, -1)) > 1 {
+			return m, fmt.Errorf("its class declares several properties in one statement (%q)", strings.TrimSpace(text))
+		}
 		m.key = "property " + phpPropRe.FindStringSubmatch(head)[1]
 	default:
 		return m, fmt.Errorf("its class holds a member this merge cannot name (%q)", strings.TrimSpace(text))
@@ -324,4 +357,37 @@ func renameOnce(text string, re *regexp.Regexp, name, renamed string) string {
 func lastLine(s string) string {
 	s = strings.TrimRight(s, "\n")
 	return s[strings.LastIndexByte(s, '\n')+1:]
+}
+
+// bindImport records the name a `use` import binds, refusing a second import
+// that binds the same name to something else: PHP refuses it ("Cannot use X
+// as Y because the name is already in use"). Class, function and const
+// imports bind in separate tables; class names are case-insensitive.
+func bindImport(bound map[string]string, line string) error {
+	m := phpImportRe.FindStringSubmatch(line)
+	if m == nil {
+		if strings.HasPrefix(line, "use ") {
+			return fmt.Errorf("its import %q is not one this merge reads (a group or several names in one line)", line)
+		}
+		return nil // require / include
+	}
+	kind, target, alias := strings.TrimSpace(m[1]), strings.TrimPrefix(m[2], "\\"), m[3]
+	if alias == "" {
+		alias = target[strings.LastIndexByte(target, '\\')+1:]
+	}
+	key := kind + " " + alias
+	if kind != "const" {
+		key, target = strings.ToLower(key), strings.ToLower(target)
+	}
+	if prev, ok := bound[key]; ok && prev != target {
+		return fmt.Errorf("it imports %s as %s, which an earlier proven test imports from %s", m[2], alias, prev)
+	}
+	bound[key] = target
+	return nil
+}
+
+// wordRe matches name as a whole word, case-insensitively, as PHP reads a
+// method name.
+func wordRe(name string) *regexp.Regexp {
+	return regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(name) + `\b`)
 }

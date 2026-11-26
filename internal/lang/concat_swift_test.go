@@ -75,3 +75,38 @@ func TestSwiftMergeHandlesASuiteStruct(t *testing.T) {
 		t.Errorf("suite types not suffixed under their attribute:\n%s", merged)
 	}
 }
+
+// Each of these merged into a file that did not build (review of a1d9bdf4,
+// confirmed with swift build on swift:6.3.2-noble), and is now suffixed or
+// refused as the rule says.
+func TestSwiftMergeHandlesWhatReviewFoundMergedWrongly(t *testing.T) {
+	pair := func(a, b string) []AuthoredPart {
+		return []AuthoredPart{{MutantID: "s0/m1", Source: a}, {MutantID: "s0/m2", Source: b}}
+	}
+	// A type whose attribute has nested parentheses, and modifiers the list
+	// lacked, are still the file's type: suffixed in both parts.
+	for _, decl := range []string{"@Suite(.tags(.fast)) struct", "package final class", "nonisolated struct", "indirect enum", "@MainActor @Suite(.serialized) final class"} {
+		src := "import Testing\n\n" + decl + " Calc_corralTests {\n}\n"
+		merged, extra := ConcatAuthored(swiftPlugin{}, pair(src, src))
+		if len(extra) != 0 || !strings.Contains(merged, "Calc_corralTests_s0_m1 {") || !strings.Contains(merged, "Calc_corralTests_s0_m2 {") {
+			t.Errorf("%q: extra %+v, merged:\n%s", decl, extra, merged)
+		}
+	}
+	// Refused: a protocol both declare (a redeclaration), an import inside
+	// #if (hoisting lifts it out of its condition), and a part that only
+	// extends the type another part declares (renaming it would extend a
+	// type that does not exist).
+	for name, parts := range map[string][]AuthoredPart{
+		"a protocol":   pair("import XCTest\nprotocol Source { func v() -> Int }\n", "import XCTest\nprotocol Source { func v() -> Int }\n"),
+		"#if import":   pair("#if canImport(Darwin)\nimport Darwin\n#endif\nimport XCTest\nfinal class A_corralTests: XCTestCase {}\n", "import XCTest\nfinal class A_corralTests: XCTestCase {}\n"),
+		"an extension": pair("import XCTest\nfinal class A_corralTests: XCTestCase {}\n", "import XCTest\nextension A_corralTests {\n    func testB() {}\n}\n"),
+	} {
+		_, extra := ConcatAuthored(swiftPlugin{}, parts)
+		if len(extra) != 1 || extra[0].MutantID != "s0/m2" || extra[0].Reason == "" {
+			if name == "#if import" && len(extra) == 1 && extra[0].MutantID == "s0/m1" {
+				continue // the first part is the one holding #if; it is the one refused
+			}
+			t.Errorf("%s: extra = %+v, want one part carried out with a reason", name, extra)
+		}
+	}
+}

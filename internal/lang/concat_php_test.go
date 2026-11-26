@@ -83,3 +83,42 @@ func TestPHPMergeOfOnePartIsThatPart(t *testing.T) {
 		t.Fatalf("merged = %q, extra = %+v", merged, extra)
 	}
 }
+
+// Each of these merged into a file that did not parse or that tested
+// something else (review of a1d9bdf4, each confirmed with php -l or PHPUnit
+// 11.5.57); each is now refused, and the second part carried out.
+func TestPHPMergeRefusesWhatReviewFoundMergedWrongly(t *testing.T) {
+	src := func(uses, members string) AuthoredPart {
+		return AuthoredPart{Source: "<?php\nnamespace App\\Tests;\n\nuse PHPUnit\\Framework\\TestCase;\n" + uses + "\nfinal class InvoiceTest extends TestCase\n{\n" + members + "}\n"}
+	}
+	for name, c := range map[string][2]AuthoredPart{
+		// Two imports of one short name from different namespaces.
+		"one short name imported twice": {src("use InvalidArgumentException;\n", "    public function testA(): void {}\n"), src("use App\\InvalidArgumentException;\n", "    public function testB(): void {}\n")},
+		// A private method named test... is a helper, not a test: renaming
+		// it would leave its callers on the other part's version.
+		"private helper named test": {src("", "    private function testValue(): int { return 1; }\n    public function testA(): void { $this->assertSame(1, $this->testValue()); }\n"), src("", "    private function testValue(): int { return 2; }\n    public function testB(): void { $this->assertSame(2, $this->testValue()); }\n")},
+		// One statement declaring several names.
+		"several properties in one statement": {src("", "    private int $a = 1, $b = 2;\n    public function testA(): void {}\n"), src("", "    private int $b = 2;\n    public function testB(): void {}\n")},
+		// A # comment is not masked, so its /* opened a block comment.
+		"a hash comment": {src("", "    public function testA(): void { $this->assertTrue(true); }\n"), src("", "    # reads fixtures/*.json\n    public function testA(): void { $this->assertFalse(false); }\n    /** doc */\n    public function addsALine(): void {}\n")},
+		// A renamed test another member names (#[Depends], @depends, a
+		// string) would leave that reference on the other part's test.
+		"a renamed test named elsewhere": {src("", "    public function testTotal(): int { $this->assertTrue(true); return 1; }\n"), src("", "    public function testTotal(): int { $this->assertTrue(true); return 2; }\n\n    #[\\PHPUnit\\Framework\\Attributes\\Depends('testTotal')]\n    public function testUses(int $t): void { $this->assertSame(2, $t); }\n")},
+	} {
+		a, b := c[0], c[1]
+		a.MutantID, b.MutantID = "s0/m1", "s0/m2"
+		merged, extra := ConcatAuthored(phpPlugin{}, []AuthoredPart{a, b})
+		if len(extra) != 1 || extra[0].MutantID != "s0/m2" || extra[0].Reason == "" {
+			t.Errorf("%s: extra = %+v, want the second part carried out with a reason; merged:\n%s", name, extra, merged)
+		}
+	}
+	// PHP method names are case-insensitive: testTotal and testtotal are one
+	// method, which was redeclared. They now collide, and the second, a
+	// test, is renamed.
+	a, b := src("", "    public function testTotal(): void { $this->assertTrue(true); }\n"), src("", "    public function testtotal(): void { $this->assertFalse(false); }\n")
+	a.MutantID, b.MutantID = "s0/m1", "s0/m2"
+	merged, extra := ConcatAuthored(phpPlugin{}, []AuthoredPart{a, b})
+	if len(extra) != 0 || !strings.Contains(merged, "function testtotal_s0_m2()") || !strings.Contains(merged, "function testTotal()") {
+		t.Errorf("case collision: extra %+v, merged:\n%s", extra, merged)
+	}
+}

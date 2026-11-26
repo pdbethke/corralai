@@ -340,14 +340,21 @@ func (swiftPlugin) WorkspaceRunEnv() (env []string, cleanup func()) { return nil
 var (
 	swiftImportRe = regexp.MustCompile(`^(?:@testable\s+|@_implementationOnly\s+)?import\s+\w`)
 	// swiftTypeRe names a top-level type declaration, with any attributes
-	// and modifiers on the same line (`@MainActor final class X: XCTestCase`).
-	swiftTypeRe = regexp.MustCompile(`^(?:@\w+(?:\([^)]*\))?\s+)*(?:(?:public|internal|private|fileprivate|open|final)\s+)*(?:class|struct|enum|actor)\s+([A-Za-z_]\w*)`)
+	// (one level of nested parentheses: `@Suite(.tags(.fast))`) and
+	// modifiers on the same line (`@MainActor final class X: XCTestCase`).
+	swiftTypeRe = regexp.MustCompile(`^` + swiftDeclPrefix + `(?:class|struct|enum|actor)\s+([A-Za-z_]\w*)`)
 	// swiftOtherDeclRe names the other top-level declarations a part may
-	// carry against the prompt's rule (an extension, a function, a binding),
-	// so a collision on one is seen and refused rather than merged into a
-	// redeclaration.
-	swiftOtherDeclRe = regexp.MustCompile(`^(?:@\w+(?:\([^)]*\))?\s+)*(?:(?:public|internal|private|fileprivate)\s+)*(?:extension|func|let|var|typealias)\s+([A-Za-z_][\w.]*)`)
+	// carry against the prompt's rule (an extension, a protocol, a function,
+	// a binding), so a collision on one is seen and refused rather than
+	// merged into a redeclaration.
+	swiftOtherDeclRe = regexp.MustCompile(`^` + swiftDeclPrefix + `(?:extension|protocol|func|let|var|typealias|macro)\s+([A-Za-z_][\w.]*)`)
+	swiftExtensionRe = regexp.MustCompile(`^` + swiftDeclPrefix + `extension\s+([A-Za-z_]\w*)`)
+	swiftIfRe        = regexp.MustCompile(`^\s*#if\b`)
 )
+
+// swiftDeclPrefix is the attributes and modifiers a top-level declaration may
+// carry before its keyword.
+const swiftDeclPrefix = `(?:@\w+(?:\((?:[^()]|\([^()]*\))*\))?\s+)*(?:(?:public|package|internal|private|fileprivate|open|final|nonisolated|indirect|dynamic)\s+)*`
 
 // ConcatTests folds several proven Swift test files into one: import lines
 // hoisted and de-duplicated, and a top-level TYPE that two or more parts
@@ -355,7 +362,11 @@ var (
 // outside a string or comment. Any other top-level name two parts declare
 // (an extension, a function, a binding) is refused, as a colliding helper is
 // in every language (see TestConcatenator): renaming an extension's type or
-// a function changes what the proven test called.
+// a function changes what the proven test called. A part with an #if block
+// is refused, since hoisting its imports would lift them out of their
+// condition, and so is a part that extends a type another part declares
+// without declaring it (review of the first version, each confirmed with
+// swift build).
 //
 // The type is the one that always collides: the writer prompt has each
 // proven test put everything in ONE type named after the file it was written
@@ -369,10 +380,28 @@ var (
 // file's one run on the unmodified code (authored_together) reports.
 func (swiftPlugin) ConcatTests(parts []AuthoredPart) (string, error) {
 	types := map[string]bool{}
-	for _, part := range parts {
+	declares := make([]map[string]bool, len(parts))
+	for i, part := range parts {
+		declares[i] = map[string]bool{}
 		for _, line := range strings.Split(part.Source, "\n") {
+			// An import inside #if would be lifted out of its condition
+			// (`#if canImport(Darwin)` then `import Darwin` broke Linux),
+			// so a part with any #if is not merged.
+			if swiftIfRe.MatchString(line) {
+				return "", fmt.Errorf("lang: swift proven test %s holds an #if block, whose imports this merge would lift out of it", part.MutantID)
+			}
 			if m := swiftTypeRe.FindStringSubmatch(strings.TrimRight(line, " \t")); m != nil {
 				types[m[1]] = true
+				declares[i][m[1]] = true
+			}
+		}
+	}
+	// A part that extends a type another part declares, without declaring it
+	// itself, would have the extension renamed to a type nothing declares.
+	for i, part := range parts {
+		for _, line := range strings.Split(part.Source, "\n") {
+			if m := swiftExtensionRe.FindStringSubmatch(line); m != nil && types[m[1]] && !declares[i][m[1]] {
+				return "", fmt.Errorf("lang: swift proven test %s extends %s, which another proven test declares, so it cannot be renamed with it", part.MutantID, m[1])
 			}
 		}
 	}

@@ -3,7 +3,9 @@
 package lang
 
 import (
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 )
@@ -21,21 +23,21 @@ func TestLockfileForNamesTheLockfileBesideTheManifest(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(pkg, "Package.swift"), []byte(remoteManifest), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if rel, ok := LockfileFor(swift, pkg); !ok || rel != "Package.resolved" {
+	if rel, ok := LockfileFor(swift, pkg, ""); !ok || rel != "Package.resolved" {
 		t.Errorf("manifest at the root: got %q, %v; want Package.resolved", rel, ok)
 	}
 	sub := filepath.Join(pkg, "Sources", "Calc")
 	if err := os.MkdirAll(sub, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if rel, ok := LockfileFor(swift, sub); !ok || rel != "../../Package.resolved" {
+	if rel, ok := LockfileFor(swift, sub, ""); !ok || rel != "../../Package.resolved" {
 		t.Errorf("manifest above the root: got %q, %v; want ../../Package.resolved", rel, ok)
 	}
-	if rel, ok := LockfileFor(swift, t.TempDir()); ok {
+	if rel, ok := LockfileFor(swift, t.TempDir(), ""); ok {
 		t.Errorf("no manifest: got %q, want nothing", rel)
 	}
 	py, _ := ByName("python")
-	if rel, ok := LockfileFor(py, pkg); ok {
+	if rel, ok := LockfileFor(py, pkg, ""); ok {
 		t.Errorf("a language that declares no lockfile: got %q, want nothing", rel)
 	}
 }
@@ -109,7 +111,7 @@ func TestLockfileForAsksOnlyForAManifestWithSomethingToPin(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		if _, ok := LockfileFor(swift, dir); ok != c.want {
+		if _, ok := LockfileFor(swift, dir, ""); ok != c.want {
 			t.Errorf("%s: LockfileFor asks = %v, want %v", c.name, ok, c.want)
 		}
 	}
@@ -128,6 +130,158 @@ func TestEveryLockfileDeclarationIsComplete(t *testing.T) {
 		d := l.Lockfile()
 		if d.Name == "" || d.Manifest == "" || d.SearchDepth < 1 {
 			t.Errorf("%s: incomplete lockfile declaration %+v", n, d)
+		}
+	}
+}
+
+// cargo keeps Cargo.lock at the workspace root, not beside a member's
+// Cargo.toml, and LockfileFor asks cargo where that root is
+// (`cargo locate-project --workspace`) rather than reading members, exclude
+// and globs a second time. Measured on cargo 1.90, building each case: a
+// member's lockfile is written at the root; `package.workspace = "<path>"`
+// puts it there; a package in workspace.exclude keeps its own.
+func TestRustLockfileIsWhereCargoKeepsIt(t *testing.T) {
+	if _, err := exec.LookPath("cargo"); err != nil {
+		t.Skip("SKIP: no cargo on PATH; the cargo-backed lockfile location cannot be checked here")
+	}
+	rust, _ := ByName("rust")
+	const pkg = "[package]\nname = \"%s\"\nversion = \"0.1.0\"\nedition = \"2021\"\n%s[dependencies]\nitoa = \"1\"\n"
+	write := func(t *testing.T, root string, files map[string]string) {
+		t.Helper()
+		for rel, body := range files {
+			p := filepath.Join(root, filepath.FromSlash(rel))
+			if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for _, c := range []struct {
+		name  string
+		files map[string]string
+		root  string // relative to the temp dir: the pool's root
+		code  string // the audited file, relative to root
+		want  string
+	}{
+		{"a crate of its own", map[string]string{"Cargo.toml": fmt.Sprintf(pkg, "a", ""), "src/lib.rs": ""}, ".", "", "Cargo.lock"},
+		{"the workspace root", map[string]string{"Cargo.toml": "[workspace]\nmembers = [\"crates/*\"]\nresolver = \"2\"\n", "crates/m/Cargo.toml": fmt.Sprintf(pkg, "m", ""), "crates/m/src/lib.rs": ""}, ".", "", "Cargo.lock"},
+		{"a member, by a glob", map[string]string{"Cargo.toml": "[workspace]\nmembers = [\"crates/*\"]\nresolver = \"2\"\n", "crates/m/Cargo.toml": fmt.Sprintf(pkg, "m", ""), "crates/m/src/lib.rs": ""}, "crates/m", "", "../../Cargo.lock"},
+		{"package.workspace names the root", map[string]string{"root/Cargo.toml": "[workspace]\nmembers = [\"../pkg\"]\nresolver = \"2\"\n", "pkg/Cargo.toml": fmt.Sprintf(pkg, "p", "workspace = \"../root\"\n"), "pkg/src/lib.rs": ""}, "pkg", "", "../root/Cargo.lock"},
+		{"excluded from the workspace above", map[string]string{"Cargo.toml": "[workspace]\nexclude = [\"ex\"]\n", "ex/Cargo.toml": fmt.Sprintf(pkg, "ex", ""), "ex/src/lib.rs": ""}, "ex", "", "Cargo.lock"},
+		// From a root with a manifest, root's lockfile, whatever file is
+		// audited: a member's, or a path dependency's that pins nothing
+		// itself (its lockfile is the one the root's build writes).
+		{"a member's file, from the workspace root", map[string]string{"Cargo.toml": "[workspace]\nmembers = [\"crates/*\"]\nresolver = \"2\"\n", "crates/m/Cargo.toml": fmt.Sprintf(pkg, "m", ""), "crates/m/src/lib.rs": ""}, ".", "crates/m/src/lib.rs", "Cargo.lock"},
+		{"a path dependency's file", map[string]string{"Cargo.toml": fmt.Sprintf(pkg, "a", "") + "helper = { path = \"helper\" }\n", "src/lib.rs": "", "helper/Cargo.toml": "[package]\nname = \"helper\"\nversion = \"0.1.0\"\nedition = \"2021\"\n", "helper/src/lib.rs": ""}, ".", "helper/src/lib.rs", "Cargo.lock"},
+		// From a root with no manifest, the audited file's crate.
+		{"a crate below a root with no manifest", map[string]string{"rust/Cargo.toml": fmt.Sprintf(pkg, "r", ""), "rust/src/lib.rs": ""}, ".", "rust/src/lib.rs", "rust/Cargo.lock"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			write(t, dir, c.files)
+			if rel, ok := LockfileFor(rust, filepath.Join(dir, filepath.FromSlash(c.root)), c.code); !ok || rel != c.want {
+				t.Errorf("got %q, %v; want %q", rel, ok, c.want)
+			}
+		})
+	}
+}
+
+// cargo prints the workspace root with symlinks resolved, so a checkout
+// reached through a symlinked path (macOS's /var, a linked home) is compared
+// with its own symlinks resolved too: the member's lockfile is still
+// "../../Cargo.lock", never a path through the link's target.
+func TestRustLockfileThroughASymlinkedCheckout(t *testing.T) {
+	if _, err := exec.LookPath("cargo"); err != nil {
+		t.Skip("SKIP: no cargo on PATH; the cargo-backed lockfile location cannot be checked here")
+	}
+	rust, _ := ByName("rust")
+	real := t.TempDir()
+	for rel, body := range map[string]string{
+		"Cargo.toml":          "[workspace]\nmembers = [\"crates/*\"]\nresolver = \"2\"\n",
+		"crates/m/Cargo.toml": "[package]\nname = \"m\"\nversion = \"0.1.0\"\nedition = \"2021\"\n[dependencies]\nitoa = \"1\"\n",
+		"crates/m/src/lib.rs": "",
+	} {
+		p := filepath.Join(real, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	if rel, ok := LockfileFor(rust, filepath.Join(link, "crates", "m"), ""); !ok || rel != "../../Cargo.lock" {
+		t.Errorf("member through a link: got %q, %v; want ../../Cargo.lock", rel, ok)
+	}
+	if rel, ok := LockfileFor(rust, link, "crates/m/src/lib.rs"); !ok || rel != "Cargo.lock" {
+		t.Errorf("root through a link: got %q, %v; want Cargo.lock", rel, ok)
+	}
+}
+
+// When cargo cannot say where the workspace root is (no cargo, or a manifest
+// cargo refuses), LockfileFor names the lockfile beside the nearest manifest:
+// a file a member's tree does not hold, so the pool is one tree, never trees
+// that could resolve different versions.
+func TestRustLockfileWithoutCargosAnswerStaysBesideTheManifest(t *testing.T) {
+	rust, _ := ByName("rust")
+	dir := t.TempDir()
+	member := filepath.Join(dir, "m")
+	if err := os.MkdirAll(member, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "Cargo.toml"), []byte("[workspace]\nmembers = [\"m\"]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(member, "Cargo.toml"), []byte("[package]\nname = \"m\"\nversion = \"0.1.0\"\n[dependencies]\nitoa = \"1\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", t.TempDir())
+	if rel, ok := LockfileFor(rust, member, ""); !ok || rel != "Cargo.lock" {
+		t.Errorf("got %q, %v; want Cargo.lock beside the member's manifest", rel, ok)
+	}
+}
+
+// A Cargo.toml pins something when it declares any dependency table
+// ([dependencies], [dev-dependencies], [build-dependencies], a target's,
+// a dotted key) or is a workspace, whose members are not read here. A plain
+// package with none has nothing for Cargo.lock to pin, so its trees agree
+// without one. What cannot be read counts as pinning.
+func TestRustManifestPins(t *testing.T) {
+	rust, _ := ByName("rust")
+	l := rust.(Lockfiler)
+	const head = "[package]\nname = \"a\"\nversion = \"0.1.0\"\n"
+	for _, c := range []struct {
+		name, manifest string
+		want           bool
+	}{
+		{"no dependency", head, false},
+		{"no dependency, other tables", head + "[lib]\npath = \"src/lib.rs\"\n[features]\ndefault = []\n", false},
+		{"dependencies", head + "[dependencies]\nitoa = \"1\"\n", true},
+		{"dev-dependencies", head + "[dev-dependencies]\nitoa = \"1\"\n", true},
+		{"build-dependencies", head + "[build-dependencies]\ncc = \"1\"\n", true},
+		{"a target's dependencies", head + "[target.'cfg(unix)'.dependencies]\nlibc = \"0.2\"\n", true},
+		{"one dependency as a table", head + "[dependencies.itoa]\nversion = \"1\"\n", true},
+		{"a dotted key", head + "dependencies.itoa = \"1\"\n", true},
+		{"an inline table under target", head + "target = { 'cfg(unix)' = { dependencies = { libc = \"0.2\" } } }\n", true},
+		{"a byte-order mark before [dependencies]", "\ufeff[dependencies]\nitoa = \"1\"\n[package]\nname = \"a\"\n", true},
+		{"a byte-order mark before [workspace]", "\ufeff[workspace]\nmembers = []\n", true},
+		{"a workspace", "[workspace]\nmembers = [\"m\"]\n", true},
+		{"a package that is also a workspace", head + "[workspace]\n", true},
+		{"no manifest", "", true},
+	} {
+		dir := t.TempDir()
+		if c.manifest != "" {
+			if err := os.WriteFile(filepath.Join(dir, "Cargo.toml"), []byte(c.manifest), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if got := l.ManifestPins(dir); got != c.want {
+			t.Errorf("%s: ManifestPins = %v, want %v", c.name, got, c.want)
 		}
 	}
 }

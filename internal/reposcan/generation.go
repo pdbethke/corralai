@@ -641,7 +641,13 @@ package reposcan
 // salvage -skip declines the same, and `-test.skip` / `--test.skip` after
 // -args. Behaviour bump;
 // the shape is unchanged.
-const VerdictGeneration = "55"
+// "59" (2026-11-26): vitest's row stops each mutant run at the first failing
+// test (--bail=1, lang.FailFastArgsFor), as jest's and mocha's do, where
+// "55" ran every selected test of a vitest mutant; the graded command
+// changes, as it did for a script's runner in "26". "59" because #579, #580
+// and the PHP/Swift merge take "56" to "58", and any of them may reach main
+// first. Behaviour bump; the shape is unchanged.
+const VerdictGeneration = "59"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

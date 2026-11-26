@@ -1076,6 +1076,18 @@ want nextest-profile-no-fail-fast 3 "$(cd fail/cargo && cargo nextest run -j 1 -
 want nextest-fail-fast-before-separator 1 "$(cd fail/cargo && cargo nextest run -j 1 --fail-fast -- tests:: 2>&1 | nextran_of)"
 want nextest-fail-fast-after-separator-refused 96 "$(cd fail/cargo && cargo nextest run -j 1 -- tests:: --fail-fast >/dev/null 2>&1; echo $?)"
 
+# --- fail-fast: vitest's row adds --bail=1 to mutant runs (FailFastCmd). Two
+# files each fail one test; without the flag both fail, with it the run stops
+# after the first (vitest 5 reports the other file in the total, neither
+# passed nor failed), and a passing run still exits 0 with it. The flag is
+# placed where the row places it; --no-file-parallelism after it makes the
+# count exact, as -j 1 does for nextest above.
+# TestVitestFailFastIsTheRowsCommand holds the commands equal to the row's.
+vfailed() { sed 's/\x1b\[[0-9;]*m//g' | grep -oE 'Test Files +[0-9]+ failed' | grep -oE '[0-9]+' | head -1; }
+want vitest-bail-off 2 "$(cd "$DIR" && npx --no-install vitest run failfast/vitest 2>&1 | vfailed)"
+want vitest-bail 1 "$(cd "$DIR" && npx --no-install vitest run failfast/vitest --bail=1 --no-file-parallelism 2>&1 | vfailed)"
+want vitest-bail-passing-exit 0 "$(cd "$DIR" && npx --no-install vitest run calc.vitest.test.mjs --bail=1 >/dev/null 2>&1; echo $?)"
+
 # Each killer command (KillerCmd: the failing run's own command, narrowed to the
 # test its failure reader named, no file added) runs that test and nothing else.
 killed() { grep -oE '([0-9]+ examples?, [0-9]+ failures?)|(Tests: [0-9]+, Assertions: [0-9]+, (Failures|Errors): [0-9]+)' | head -1; }

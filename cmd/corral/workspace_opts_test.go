@@ -134,6 +134,34 @@ func TestWorkspaceRunnerOptsCarryRustsLockfile(t *testing.T) {
 	}
 }
 
+// Ruby: a Gemfile.lock git ignores is copied into each tree, said with the
+// file; with none in the checkout the pool is one tree, said with the file;
+// a committed one keeps the trees and says nothing.
+func TestWorkspaceRunnerOptsCarryRubysLockfile(t *testing.T) {
+	ruby, _ := lang.ByName("ruby")
+	const gemfile = "source \"https://rubygems.org\"\ngem \"rspec\"\n"
+	for _, c := range []struct {
+		name  string
+		files map[string]string
+		trees int
+		named bool // the note names Gemfile.lock
+	}{
+		{"Gemfile.lock ignored", map[string]string{"Gemfile": gemfile, "lib/a.rb": "", "Gemfile.lock": "", ".gitignore": "Gemfile.lock\n"}, 2, true},
+		{"Gemfile.lock ignored and missing", map[string]string{"Gemfile": gemfile, "lib/a.rb": "", ".gitignore": "Gemfile.lock\n"}, 1, true},
+		{"Gemfile.lock committed", map[string]string{"Gemfile": gemfile, "lib/a.rb": "", "Gemfile.lock": ""}, 2, false},
+	} {
+		root := committedCheckout(t, c.files)
+		p, d, err := adequacy.NewWorkspacePool(context.Background(), root, 2, time.Minute, workspaceRunnerOpts(ruby, 2, root, "lib/a.rb")...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p.Close()
+		if d.Trees != c.trees || c.named != strings.Contains(d.Note, "Gemfile.lock") {
+			t.Errorf("%s: want %d tree(s), note naming Gemfile.lock %v, got %+v", c.name, c.trees, c.named, d)
+		}
+	}
+}
+
 // A Python file in a repository that also builds a Rust extension (maturin's
 // layout: Cargo.toml and a target/ git does not ignore) keeps its trees and
 // is told nothing about target/, because its test command does not build

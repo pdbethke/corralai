@@ -28,9 +28,7 @@ type Lockfile struct {
 // it even when git ignores it, and is one tree when the checkout has none to
 // copy (adequacy.WithLockfile); the disclosure names the file either way.
 //
-// Swift and Rust implement it. Ruby could, with one declaration: an ignored
-// Gemfile.lock lets each tree's bundler resolve the Gemfile again; whether
-// trees then disagree was not measured.
+// Swift, Rust and Ruby implement it.
 //
 // The languages whose dependency directory is linked into every tree, read
 // only (SharedDependencies: .venv, node_modules, vendor), resolve nothing in a

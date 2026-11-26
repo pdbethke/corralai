@@ -285,3 +285,27 @@ func TestRustManifestPins(t *testing.T) {
 		}
 	}
 }
+
+// Bundler keeps Gemfile.lock beside the Gemfile, found at or above the root
+// as Bundler looks; every Gemfile counts as pinning, since it is Ruby code
+// this does not read.
+func TestRubyLockfileIsBesideTheGemfile(t *testing.T) {
+	ruby, _ := ByName("ruby")
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "Gemfile"), []byte("source \"https://rubygems.org\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(dir, "lib")
+	if err := os.MkdirAll(sub, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if rel, ok := LockfileFor(ruby, dir, "lib/a.rb"); !ok || rel != "Gemfile.lock" {
+		t.Errorf("Gemfile at the root: got %q, %v; want Gemfile.lock", rel, ok)
+	}
+	if rel, ok := LockfileFor(ruby, sub, ""); !ok || rel != "../Gemfile.lock" {
+		t.Errorf("Gemfile above the root: got %q, %v; want ../Gemfile.lock", rel, ok)
+	}
+	if rel, ok := LockfileFor(ruby, t.TempDir(), ""); ok {
+		t.Errorf("no Gemfile: got %q, want nothing", rel)
+	}
+}

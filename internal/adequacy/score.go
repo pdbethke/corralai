@@ -98,7 +98,7 @@ func CapFloorApplies(mutantTimeout time.Duration) bool { return mutantTimeout <=
 // (RunCacheJail.WarmDuration: the one run that paid for a full build), or,
 // on the workspace substrate, the run WorkspacePool.MeasureRebuild timed
 // with the file changed so it must recompile and relink
-// (lang.PerRunBuilder). Zero (no run cache, never warmed, no rebuild run)
+// (lang.RebuildProbe). Zero (no run cache, never warmed, no rebuild run)
 // changes nothing, and a cap can only grow from it. This is the ONE place a
 // cap is derived from a baseline; every budget in Score comes from it or
 // from a cap it returned.
@@ -1582,8 +1582,27 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 				// on a healthy box aborted the file's report as "too loaded"
 				// (b3307bbbb5e6#R3). The question is whether THIS command
 				// finishes on compliant code right now; only it can answer.
+				//
+				// AND PAYING THE MUTANT'S REBUILD. Where the jail made a
+				// rebuild run of this file (RebuildProbeJail), the re-probe
+				// runs that probe, not the compliant code: a mutant can pay
+				// build work the unmutated code does not (SwiftPM relinks a
+				// mutant and not the unchanged file), and a box that finishes
+				// the cheap unmutated run but not a rebuild would otherwise
+				// credit the rebuild's slowness as a kill. The probe is the
+				// compliant code with one comment line added, so its tests
+				// behave as the compliant code's. It does not cover go test
+				// without -count=1 on the workspace substrate, which replays
+				// a cached result for the probe as for the unmutated code
+				// (go 1.26.7, 2026-11-26) while a mutant runs its tests.
+				reCode, reWhat := compliantCode, "the compliant baseline"
+				if rp, ok := j.(RebuildProbeJail); ok {
+					if path, compliant, probed := rp.RebuildProbe(); probed != "" && path == codePath && compliant == compliantCode {
+						reCode, reWhat = probed, "the compliant baseline's rebuild probe"
+					}
+				}
 				bctx, bcancel := context.WithTimeout(ctx, mutantCap)
-				bpassed, berr := runCmd(bctx, compliantCode, gradeCmd)
+				bpassed, berr := runCmd(bctx, reCode, gradeCmd)
 				bcancel()
 				if berr == nil {
 					// THE RE-PROBE MUST PASS, not merely return. This read
@@ -1595,7 +1614,7 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 					// evidence the environment is wrong, not that the mutant
 					// was caught.
 					if !bpassed {
-						outcomes[i] = outcome{err: fmt.Errorf("mutant %s: run timed out, and the compliant baseline FAILED when re-run under the same budget (%s) — the suite is not stable right now, so nothing is inferred from this mutant", m.ID, mutantCap)}
+						outcomes[i] = outcome{err: fmt.Errorf("mutant %s: run timed out, and %s FAILED when re-run under the same budget (%s) — the suite is not stable right now, so nothing is inferred from this mutant", m.ID, reWhat, mutantCap)}
 						return
 					}
 					// The re-probe IS this kill's confirmation: the
@@ -1606,7 +1625,7 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 					return
 				}
 				if errors.Is(berr, ErrTestTimeout) {
-					outcomes[i] = outcome{err: fmt.Errorf("mutant %s: run timed out AND the compliant baseline timed out under the same budget (%s) — the machine is too loaded to grade this mutant; nothing is inferred from it", m.ID, mutantCap)}
+					outcomes[i] = outcome{err: fmt.Errorf("mutant %s: run timed out AND %s timed out under the same budget (%s) — the machine is too loaded to grade this mutant; nothing is inferred from it", m.ID, reWhat, mutantCap)}
 					return
 				}
 				outcomes[i] = outcome{err: berr}

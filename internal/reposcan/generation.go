@@ -641,7 +641,26 @@ package reposcan
 // salvage -skip declines the same, and `-test.skip` / `--test.skip` after
 // -args. Behaviour bump;
 // the shape is unchanged.
-const VerdictGeneration = "55"
+// "57" (2026-11-26): every language makes the workspace substrate's rebuild
+// run (lang.RebuildProbe), where only Swift did, so a Go, Python, Ruby,
+// JavaScript, TypeScript, PHP or Rust file graded there has its per-mutant
+// cap floored at three times a run on the probe, as "44" floored a warmed
+// jail's. A timed-out mutant's kill is now confirmed by re-running that
+// probe, which pays the rebuild the mutant paid, where "55" re-ran the
+// unmutated code, which on Swift skips the relink (adequacy.RebuildProbeJail),
+// so a box too slow to finish a rebuild in the budget leaves the mutant
+// unmeasured instead of crediting a kill. (A go test command without
+// -count=1 replays a cached result for the probe as for the unmutated code,
+// go 1.26.7, so for Go this changes the cap and the re-probe by nothing.) A rebuild run is refused only when it is itself slower than the
+// five-minute ceiling, where "55" refused one whose three times was, so a
+// Swift file whose rebuild run took 100 s to 5 min, not graded under "55",
+// is now graded with its cap at the ceiling. A "55" verdict from the
+// workspace substrate may hold a timeout kill this generation would not
+// credit, or a cap it would floor, so it is re-measured rather than reused.
+// "57", not "56", because the Swift kill-confirmation branch (#579) takes
+// "56" and either may reach main first. Behaviour bump; the shape is
+// unchanged.
+const VerdictGeneration = "57"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

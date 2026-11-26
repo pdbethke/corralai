@@ -5,6 +5,7 @@ package adequacy
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -92,8 +93,8 @@ func TestScoreFloorsTheCapAtAMeasuredRebuildRun(t *testing.T) {
 }
 
 // A jail that reports no warm duration gets the cap it got before: the 30 s
-// floor, a timeout, and a kill credited by the re-probe. Every language that
-// does not implement lang.PerRunBuilder is this jail.
+// floor, a timeout, and a kill credited by the re-probe. Every jail that made
+// no rebuild run (any but a WorkspacePool after MeasureRebuild) is this one.
 func TestScoreWithoutARebuildRunKeepsTheCapItHad(t *testing.T) {
 	inner := &rebuildFloorJail{mutantTakes: 40 * time.Second, mutantPasses: true}
 	var j Jail = plainSlowMutantJail{inner}
@@ -129,5 +130,81 @@ func TestCapFloorAppliesOnlyWithoutAnExplicitTimeout(t *testing.T) {
 	}
 	if b := j.mutantBudgets(); len(b) == 0 || !near(b[0], 45*time.Second) {
 		t.Fatalf("budgets = %v, want the explicit 45s, not the 60s floor", b)
+	}
+}
+
+// probedRebuildJail is rebuildFloorJail reporting the rebuild probe it ran
+// (RebuildProbeJail), as a WorkspacePool does once MeasureRebuild has passed.
+// The probe "takes" probeTakes the way the mutant takes mutantTakes: it pays
+// the same rebuild, which is the point of it.
+type probedRebuildJail struct {
+	*rebuildFloorJail
+	path, compliant, probed string
+	probeTakes              time.Duration
+	probeRuns               int
+}
+
+func (j *probedRebuildJail) RunTest(ctx context.Context, files map[string]string, cmd []string) (bool, error) {
+	if files["a.py"] != j.probed {
+		return j.rebuildFloorJail.RunTest(ctx, files, cmd)
+	}
+	j.mu.Lock()
+	j.probeRuns++
+	j.mu.Unlock()
+	if dl, ok := ctx.Deadline(); ok && time.Until(dl) < j.probeTakes {
+		return false, fmt.Errorf("%w: the probe ran past its budget", ErrTestTimeout)
+	}
+	return true, nil
+}
+
+func (j *probedRebuildJail) RebuildProbe() (codePath, compliant, probed string) {
+	return j.path, j.compliant, j.probed
+}
+
+const warmCapProbeCode = "# corral rebuild probe\n" + warmCapCode
+
+// A timed-out mutant is confirmed as a kill by re-running the unmutated code
+// under the same budget. Where the mutant pays a rebuild the unmutated code
+// does not (the reason a rebuild floor exists), that run must pay it too, or
+// a box that cannot finish a REBUILD in the budget still finishes the cheap
+// unmutated run, and a slow rebuild is credited as a kill. So when the jail
+// ran a rebuild probe of this file, the re-probe runs the probe: here the
+// probe takes as long as the mutant, the budget is shorter than both, and the
+// mutant is not credited; with a fast probe it is, exactly as before.
+func TestATimedOutMutantIsConfirmedByTheRebuildProbe(t *testing.T) {
+	mutants := []Mutant{{ID: "m", Search: "x = 0\n", Replace: warmCapMutantCode}}
+	for _, c := range []struct {
+		name       string
+		path       string
+		probeTakes time.Duration
+		wantKill   bool
+		wantProbe  bool
+	}{
+		{"probe pays the mutant's rebuild", "a.py", 40 * time.Second, false, true},
+		{"probe is fast", "a.py", time.Second, true, true},
+		// A probe of another file says nothing about this one: the
+		// unmutated code is re-run, as before.
+		{"probe of another file", "b.py", 40 * time.Second, true, false},
+	} {
+		j := &probedRebuildJail{
+			rebuildFloorJail: &rebuildFloorJail{warm: time.Second, mutantTakes: 40 * time.Second, mutantPasses: true},
+			path:             c.path, compliant: warmCapCode, probed: warmCapProbeCode, probeTakes: c.probeTakes,
+		}
+		rep, err := Score(context.Background(), j, nil, "a.py", warmCapCode, mutants, []string{"pytest", "-q"})
+		if got := j.probeRuns > 0; got != c.wantProbe {
+			t.Errorf("%s: probe ran %d time(s), want ran = %v", c.name, j.probeRuns, c.wantProbe)
+		}
+		if c.wantKill {
+			if err != nil || rep.PerMutant["m"].KillConfirmation != KillConfirmedReprobed {
+				t.Errorf("%s: err %v, m = %+v, want a kill confirmed by the re-probe", c.name, err, rep.PerMutant["m"])
+			}
+			continue
+		}
+		if err == nil && hasID(rep.Killed, "m") {
+			t.Errorf("%s: m credited as a kill (%q) though the probe, which pays its rebuild, did not finish in the budget either", c.name, rep.PerMutant["m"].KillConfirmation)
+		}
+		if err == nil || !strings.Contains(err.Error(), "rebuild probe") {
+			t.Errorf("%s: err = %v, want the report failed naming the rebuild probe that timed out", c.name, err)
+		}
 	}
 }

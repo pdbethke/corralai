@@ -19,7 +19,7 @@ func TestMeasureRebuildSetsTheFloorAndRestoresTheFile(t *testing.T) {
 	// Sleeps only when the probe is on disk, so the duration proves it ran
 	// against the probed file.
 	cmd := []string{"sh", "-c", `head -n 1 a.txt | grep -q PROBE && sleep 0.3; exit 0`}
-	took, err := p.MeasureRebuild(context.Background(), nil, "a.txt", "PROBE\nORIGINAL\n", cmd)
+	took, err := p.MeasureRebuild(context.Background(), nil, "a.txt", "ORIGINAL\n", "PROBE\nORIGINAL\n", cmd)
 	if err != nil {
 		t.Fatalf("MeasureRebuild: %v", err)
 	}
@@ -28,6 +28,12 @@ func TestMeasureRebuildSetsTheFloorAndRestoresTheFile(t *testing.T) {
 	}
 	if got := p.WarmDuration(); got != took {
 		t.Fatalf("WarmDuration = %v, want the measured %v", got, took)
+	}
+	// The probe is reported with the file and the code it was built from, so
+	// Score can confirm a timed-out mutant's kill on a run that pays the
+	// same rebuild (RebuildProbeJail).
+	if path, compliant, probed := p.RebuildProbe(); path != "a.txt" || compliant != "ORIGINAL\n" || probed != "PROBE\nORIGINAL\n" {
+		t.Fatalf("RebuildProbe() = %q, %q, %q; want the file, its code and the probe", path, compliant, probed)
 	}
 	if got := read(t, root, "a.txt"); got != "ORIGINAL\n" {
 		t.Fatalf("a.txt left as %q after the rebuild run", got)
@@ -42,7 +48,7 @@ func TestMeasureRebuildRestoresWhenTheRunFails(t *testing.T) {
 	root := wsTree(t, map[string]string{"a.txt": "ORIGINAL\n"})
 	p := onePool(t, root, 30*time.Second)
 
-	_, err := p.MeasureRebuild(context.Background(), nil, "a.txt", "PROBE\nORIGINAL\n", []string{"false"})
+	_, err := p.MeasureRebuild(context.Background(), nil, "a.txt", "ORIGINAL\n", "PROBE\nORIGINAL\n", []string{"false"})
 	if err == nil {
 		t.Fatal("a rebuild run whose suite failed returned no error")
 	}
@@ -51,6 +57,9 @@ func TestMeasureRebuildRestoresWhenTheRunFails(t *testing.T) {
 	}
 	if got := p.WarmDuration(); got != 0 {
 		t.Fatalf("WarmDuration = %v after a failed run, want 0 (no floor)", got)
+	}
+	if _, _, probed := p.RebuildProbe(); probed != "" {
+		t.Fatalf("RebuildProbe() reported %q after a failed run, want none", probed)
 	}
 	if got := read(t, root, "a.txt"); got != "ORIGINAL\n" {
 		t.Fatalf("a.txt left as %q after a failed rebuild run", got)
@@ -61,7 +70,7 @@ func TestMeasureRebuildRestoresWhenTheRunTimesOut(t *testing.T) {
 	root := wsTree(t, map[string]string{"a.txt": "ORIGINAL\n"})
 	p := onePool(t, root, 100*time.Millisecond)
 
-	_, err := p.MeasureRebuild(context.Background(), nil, "a.txt", "PROBE\nORIGINAL\n", []string{"sleep", "30"})
+	_, err := p.MeasureRebuild(context.Background(), nil, "a.txt", "ORIGINAL\n", "PROBE\nORIGINAL\n", []string{"sleep", "30"})
 	if !errors.Is(err, ErrTestTimeout) {
 		t.Fatalf("err = %v, want ErrTestTimeout", err)
 	}
@@ -95,7 +104,7 @@ func TestMeasureRebuildRestoresWhenTheRunPanics(t *testing.T) {
 				t.Fatal("the panic did not propagate")
 			}
 		}()
-		_, _ = p.MeasureRebuild(context.Background(), nil, "a.txt", "PROBE\nORIGINAL\n", []string{"true"})
+		_, _ = p.MeasureRebuild(context.Background(), nil, "a.txt", "ORIGINAL\n", "PROBE\nORIGINAL\n", []string{"true"})
 	}()
 	if got := read(t, root, "a.txt"); got != "ORIGINAL\n" {
 		t.Fatalf("a.txt left as %q after a panicking rebuild run", got)
@@ -113,7 +122,7 @@ func TestMeasureRebuildReportsARestoreItCouldNotComplete(t *testing.T) {
 	root := wsTree(t, map[string]string{"a.txt": "ORIGINAL\n"})
 	p := onePool(t, root, 30*time.Second)
 
-	_, err := p.MeasureRebuild(context.Background(), nil, "a.txt", "PROBE\nORIGINAL\n",
+	_, err := p.MeasureRebuild(context.Background(), nil, "a.txt", "ORIGINAL\n", "PROBE\nORIGINAL\n",
 		[]string{"sh", "-c", "rm a.txt && mkdir a.txt"})
 	if !isRestoreError(err) {
 		t.Fatalf("err = %v, want a *RestoreError", err)
@@ -123,16 +132,24 @@ func TestMeasureRebuildReportsARestoreItCouldNotComplete(t *testing.T) {
 	}
 }
 
-// The ceiling: a floor that would put the cap above maxMutantTimeout cannot be
-// honoured, because the ceiling would cut every mutant short of the margin
-// the cap gives any other run, and one mutant timing out past it fails the
-// whole file's grading mid-run. Refused before any mutant is spent on.
+// The ceiling: a rebuild run slower than maxMutantTimeout cannot be graded
+// under it, because every mutant pays that rebuild and would be cut off.
+// Refused before any mutant is spent on. A run under the ceiling whose three
+// times is over it is NOT refused: the cap sits at the ceiling, as it does for
+// a slow baseline, and a mutant cut off there is confirmed as a kill only by
+// the rebuild probe finishing in the same budget (RebuildProbeJail), so the
+// thinner margin can leave a mutant unmeasured but cannot credit a kill.
+// (Until 2026-11-26 the refusal was at three times the run, which, once every
+// language made a rebuild run, would have stopped grading every suite slower
+// than 100 s that grades today.)
 func TestRebuildFloorOverTheCeilingIsRefused(t *testing.T) {
-	at := maxMutantTimeout / mutantTimeoutMultiple
-	if err := rebuildFloorRefusal(at); err != nil {
-		t.Fatalf("a floor exactly at the ceiling was refused: %v", err)
+	if err := rebuildFloorRefusal(maxMutantTimeout / mutantTimeoutMultiple * 2); err != nil {
+		t.Fatalf("a run whose three times is over the ceiling was refused: %v", err)
 	}
-	err := rebuildFloorRefusal(at + time.Second)
+	if err := rebuildFloorRefusal(maxMutantTimeout); err != nil {
+		t.Fatalf("a run exactly at the ceiling was refused: %v", err)
+	}
+	err := rebuildFloorRefusal(maxMutantTimeout + time.Second)
 	if !errors.Is(err, ErrRebuildOverCeiling) {
 		t.Fatalf("err = %v, want ErrRebuildOverCeiling", err)
 	}
@@ -157,7 +174,7 @@ esac`}
 		root := wsTree(t, map[string]string{"a.txt": "ORIGINAL"})
 		p := onePool(t, root, 30*time.Second)
 		if measured {
-			if _, err := p.MeasureRebuild(context.Background(), nil, "a.txt", "PROBE\nORIGINAL", cmd); err != nil {
+			if _, err := p.MeasureRebuild(context.Background(), nil, "a.txt", "ORIGINAL", "PROBE\nORIGINAL", cmd); err != nil {
 				t.Fatalf("MeasureRebuild: %v", err)
 			}
 		}

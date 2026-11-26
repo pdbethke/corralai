@@ -146,15 +146,27 @@ type WorkspacePool struct {
 	// trees.
 	note string
 
-	// warmDur is the rebuild run MeasureRebuild timed, in nanoseconds; zero
-	// until one passed. Written once before scoring and read by every
-	// concurrent cap Score derives, hence atomic.
-	warmDur atomic.Int64
+	// rebuild is the rebuild run MeasureRebuild timed and the probe it ran;
+	// nil until one passed. Written once before scoring and read by every
+	// concurrent cap and re-probe Score makes, hence atomic, and one pointer
+	// so the duration and the probe are never read from two different runs.
+	rebuild atomic.Pointer[rebuildRun]
+}
+
+// rebuildRun is one passing rebuild run (MeasureRebuild): how long it took,
+// and the probe it ran, with the file and the code it was built from.
+type rebuildRun struct {
+	took                    time.Duration
+	path, compliant, probed string
 }
 
 // The pool reports a warm duration, so Score reads a measured rebuild run
 // through the same door it reads a warmed run cache's (WarmDurationJail).
 var _ WarmDurationJail = (*WorkspacePool)(nil)
+
+// And the probe that run made, so Score confirms a timed-out mutant's kill on
+// a run that pays the same rebuild (RebuildProbeJail).
+var _ RebuildProbeJail = (*WorkspacePool)(nil)
 
 // The pool must be substitutable for a WorkspaceRunner everywhere one is used
 // today, so every interface a caller may assert is asserted here at COMPILE
@@ -790,28 +802,37 @@ func (p *WorkspacePool) EnumerateDetailed(ctx context.Context, files map[string]
 	return r.EnumerateDetailed(ctx, files, cmd)
 }
 
-// ErrRebuildOverCeiling is a rebuild run whose floor puts the per-mutant cap
-// above maxMutantTimeout: the ceiling would cut every mutant's run short of
-// the margin any other cap gives, and one mutant that ran past it fails the
+// ErrRebuildOverCeiling is a rebuild run slower than maxMutantTimeout: every
+// mutant pays that rebuild, so the ceiling would cut every mutant's run off,
+// and a mutant cut off with a probe that cannot finish either fails the
 // file's grading partway through. The file is not graded (rebuildFloorRefusal).
 // A rebuild run cut off at the runner's timeout is this error too
 // (MeasureRebuild): it is slower than any run that finished.
 var ErrRebuildOverCeiling = errors.New("the rebuild run is too slow for corral's per-mutant ceiling")
 
 // rebuildFloorRefusal is ErrRebuildOverCeiling, with both durations, when a
-// rebuild run of took floors the cap above the ceiling; nil otherwise. The
-// floor is mutantTimeoutCap's own term for it (mutantTimeoutMultiple x took),
-// so the refusal and the cap cannot disagree about where the ceiling bites.
+// rebuild run of took is itself slower than the per-mutant ceiling, so every
+// mutant, which pays that rebuild, would be cut off; nil otherwise. A run
+// under the ceiling whose floor (mutantTimeoutMultiple x took) is over it is
+// graded with the cap at the ceiling, as a slow baseline is: a mutant cut off
+// there is credited as a kill only when the rebuild probe finishes in the
+// same budget (RebuildProbeJail), so the thinner margin can leave a mutant
+// unmeasured, never credit a kill it did not earn.
+//
+// Until 2026-11-26 this refused at the floor, three times the run. That was
+// safe only while the re-probe ran the cheap unmutated code, and with every
+// language making a rebuild run it would have stopped grading every suite
+// slower than 100 s on the workspace substrate, which grades today.
 func rebuildFloorRefusal(took time.Duration) error {
-	if floor := took * mutantTimeoutMultiple; floor > maxMutantTimeout {
-		return fmt.Errorf("%w: it took %s, so each mutant would need %s (%d times that run), over the %s ceiling", ErrRebuildOverCeiling, took.Round(time.Millisecond), floor.Round(time.Millisecond), mutantTimeoutMultiple, maxMutantTimeout)
+	if took > maxMutantTimeout {
+		return fmt.Errorf("%w: it took %s, longer than the %s each mutant, which pays the same rebuild, is given", ErrRebuildOverCeiling, took.Round(time.Millisecond), maxMutantTimeout)
 	}
 	return nil
 }
 
 // MeasureRebuild runs testCmd once with codePath holding probed, a copy of the
 // file changed so its module must recompile and relink and its tests behave
-// as before (lang.PerRunBuilder), and keeps how long that run took as the
+// as before (lang.RebuildProbe), and keeps how long that run took as the
 // pool's WarmDuration: the floor Score puts under every per-mutant cap, so a
 // mutant is given the time its own rebuild takes.
 //
@@ -836,7 +857,7 @@ func rebuildFloorRefusal(took time.Duration) error {
 //
 // took is the run's wall clock whatever the outcome, so the time it cost is
 // accounted even when it yields no floor.
-func (p *WorkspacePool) MeasureRebuild(ctx context.Context, base map[string]string, codePath, probed string, testCmd []string) (took time.Duration, err error) {
+func (p *WorkspacePool) MeasureRebuild(ctx context.Context, base map[string]string, codePath, compliant, probed string, testCmd []string) (took time.Duration, err error) {
 	files := Overlay{Base: base, CodePath: codePath}.With(probed)
 	start := time.Now()
 	pass, err := p.RunTest(ctx, files, testCmd)
@@ -853,13 +874,28 @@ func (p *WorkspacePool) MeasureRebuild(ctx context.Context, base map[string]stri
 	if rerr := rebuildFloorRefusal(took); rerr != nil {
 		return took, rerr
 	}
-	p.warmDur.Store(int64(took))
+	p.rebuild.Store(&rebuildRun{took: took, path: codePath, compliant: compliant, probed: probed})
 	return took, nil
 }
 
 // WarmDuration is WarmDurationJail.WarmDuration: the rebuild run
 // MeasureRebuild timed, zero until one passed.
-func (p *WorkspacePool) WarmDuration() time.Duration { return time.Duration(p.warmDur.Load()) }
+func (p *WorkspacePool) WarmDuration() time.Duration {
+	if r := p.rebuild.Load(); r != nil {
+		return r.took
+	}
+	return 0
+}
+
+// RebuildProbe is RebuildProbeJail.RebuildProbe: the probe the passing
+// rebuild run ran, with its file and the code it was built from; "" until one
+// passed.
+func (p *WorkspacePool) RebuildProbe() (codePath, compliant, probed string) {
+	if r := p.rebuild.Load(); r != nil {
+		return r.path, r.compliant, r.probed
+	}
+	return "", "", ""
+}
 
 // Verify pre-flights every tree, so a copy that failed to materialise is
 // caught before the first job wastes time discovering it.

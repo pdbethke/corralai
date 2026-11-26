@@ -139,13 +139,13 @@ var Capabilities = []Capability{
 	rowCapability("run-cache", "Share a build cache between sandboxed runs", runRowCache),
 	// The language measures one run that pays a mutant's rebuild, on the
 	// workspace substrate, and floors each mutant's time cap at three times
-	// it (PerRunBuilder; adequacy.WorkspacePool.MeasureRebuild). Judged on
-	// the interface the wiring asserts, so the page cannot claim a run the
-	// code does not make. Go's floor in the sandbox comes from the run
-	// cache's warming run, a different capability (run-cache); its
-	// exemption here says so, because this table has one answer per
-	// language and not one per substrate.
-	{Key: "rebuild-floor", Title: "Floor each mutant's time limit at three times a measured rebuild run (workspace substrate)", Has: func(p Plugin) bool { _, ok := p.(PerRunBuilder); return ok }},
+	// it (RebuildProbe; adequacy.WorkspacePool.MeasureRebuild). Judged by
+	// probing the language's sample file with the function the wiring
+	// calls, so the page cannot claim a run the code does not make.
+	{Key: "rebuild-floor", Title: "Floor each mutant's time limit at three times a measured rebuild run (workspace substrate)", Has: func(p Plugin) bool {
+		_, err := RebuildProbe(p, paritySamples[p.Name()].src)
+		return err == nil
+	}},
 	// The language names the lockfile every workspace tree must hold for the
 	// trees to resolve the same dependency versions (Lockfiler;
 	// adequacy.WithLockfile). Judged on the interface the wiring asserts.
@@ -237,11 +237,4 @@ var ParityExemptions = []Exemption{
 	{"javascript", "lockfile", "not built: node_modules is linked into every tree, so the trees share one installed set and resolve none of it; a test command that installs packages itself was not considered"},
 	{"typescript", "lockfile", "not built: node_modules is linked into every tree, so the trees share one installed set and resolve none of it; a test command that installs packages itself was not considered"},
 	{"php", "lockfile", "not built: vendor/ is linked into every tree (its autoload files are copied, so each tree loads its own code), so the trees share one installed set and resolve none of it"},
-	{"go", "rebuild-floor", "not built, and not measured: on the workspace substrate no rebuild run is made, and whether a Go mutant there pays build work that the unmutated baseline does not has not been timed. In the sandbox, when the build cache is shared (\"Share a build cache between sandboxed runs\"), each mutant's time limit is floored at three times the run that warmed the cache, under the five-minute ceiling: the rule this row applies to a measured rebuild run"},
-	{"rust", "rebuild-floor", "not built, because on the one crate measured the baseline already pays the mutant's rebuild: every run on the workspace substrate writes the audited file back, and cargo rebuilds a file whose timestamp changed. Measured 2026-11-19 on regex-syntax 0.8.5 (cargo 1.90, one 32-core machine, outside the sandbox, three runs each, as cargo's Finished line timed them), `cargo test --lib --no-run` took 0.44 to 0.51 s after src/hir/translate.rs was rewritten with its own bytes and 0.47 to 0.57 s after a one-line change to it; with a comment line put first, 0.61 s in one run. In the sandbox the copy each run gets leaves the checkout's target/ out, the baseline's and a mutant's alike. Other crates were not measured"},
-	{"python", "rebuild-floor", "not measured: the time a mutant's run spends on work the unmutated baseline's does not was not compared. On the workspace substrate each run is given a fresh, empty bytecode cache directory, the baseline's included"},
-	{"ruby", "rebuild-floor", "not measured: the time a mutant's run spends on work the unmutated baseline's does not was not compared"},
-	{"javascript", "rebuild-floor", "not measured: the time a mutant's run spends on work the unmutated baseline's does not (a transform cache, for one) was not compared"},
-	{"typescript", "rebuild-floor", "not measured: the time a mutant's run spends on work the unmutated baseline's does not (transpiling, a transform cache) was not compared"},
-	{"php", "rebuild-floor", "not measured: the time a mutant's run spends on work the unmutated baseline's does not was not compared"},
 }

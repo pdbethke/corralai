@@ -4,6 +4,8 @@ package lang
 
 import (
 	"path/filepath"
+	"regexp"
+	"strings"
 
 	"github.com/pdbethke/corralai/internal/pairing"
 )
@@ -395,3 +397,18 @@ func (rubyPlugin) DependencyDirs() []DepDir { return []DepDir{{Name: ".bundle"}}
 
 // VersionCmd: see Plugin.VersionCmd.
 func (rubyPlugin) VersionCmd() []string { return []string{"ruby", "--version"} }
+
+// rubyEncodingComment is Ruby's magic encoding comment (`# encoding: x`,
+// `# coding: x`, `# -*- coding: x -*-`), which Ruby reads only on the first
+// line, or the second after a shebang.
+var rubyEncodingComment = regexp.MustCompile(`^#.*coding[:=]`)
+
+// KeepFirstLine is FirstLineKeeper for Ruby: a magic encoding comment stays
+// the first line, because on the second it is an ordinary comment (ruby 3.3:
+// `# encoding: ascii-8bit` then `puts __ENCODING__` printed ASCII-8BIT alone
+// and UTF-8 after a comment line, run 2026-11-26). frozen_string_literal is
+// read anywhere in the first comment section, so it needs nothing (same run).
+func (rubyPlugin) KeepFirstLine(body string) (bool, error) {
+	first, _, _ := strings.Cut(body, "\n")
+	return rubyEncodingComment.MatchString(strings.ToLower(first)), nil
+}

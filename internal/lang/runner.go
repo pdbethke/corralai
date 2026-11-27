@@ -469,6 +469,7 @@ var runners = []Runner{
 		// first and the printed lines second (nextestFailedTests); the
 		// cargo test row, which has no hook, reads the printed lines.
 		Name: "cargo nextest", ID: "cargo-nextest", Languages: []string{"rust"}, Detect: isNextest, At: nextestIndex,
+		EvidenceCache: cargoRunCache, RunCacheArgs: cargoRunCacheArgs,
 		// A .config/nextest.toml profile with status-level and
 		// final-status-level "none" drops the FAIL lines the readers take.
 		// These are nextest's own defaults, so an unconfigured project
@@ -493,6 +494,7 @@ var runners = []Runner{
 	},
 	{
 		Name: "cargo test", ID: "cargo-test", Languages: []string{"rust"}, Default: true, Words: []string{"cargo"},
+		EvidenceCache: cargoRunCache, RunCacheArgs: cargoRunCacheArgs,
 		ListCmd: libtestListCmd, ParseList: libtestParseList, SingleCmd: libtestSingleCmd, ResolveByList: true,
 		FirstFailure: rustFirstFailure, Flaky: rustFlakyTests, KillerCmd: cargoKillerCmd,
 		FailedTests: rustFailedTests, DeselectCmd: cargoDeselectCmd, SelectCmd: cargoSelectCmd,

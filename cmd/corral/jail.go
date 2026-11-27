@@ -54,7 +54,7 @@ type gradingRunCache struct {
 	// row's RunCache is final(jail), read when the file's run ends.
 	Record string
 	// warmRejected is set by the warm check when the dev pass's own command
-	// is one the rewrite cannot give the flag that forbids a cached result,
+	// is one the row cannot read as forbidding a cached result,
 	// the one reason a decided-shared cache goes unwarmed with a dev pass.
 	// nil unless the cache is decided shared.
 	warmRejected *atomic.Bool
@@ -91,7 +91,7 @@ func (gc gradingRunCache) unwarmed(j adequacy.Jail) (why string, unwarmed bool) 
 	}
 	reason := "no dev pass ran"
 	if gc.warmRejected != nil && gc.warmRejected.Load() {
-		reason = "the dev suite's command could not be given the flag that forbids a cached result"
+		reason = "the dev suite's command could not be read as one that forbids a cached result"
 	}
 	return "never warmed (" + reason + ")", true
 }
@@ -124,7 +124,7 @@ func newGradingJail(iso sandbox.Isolator, timeout time.Duration, depBinds []adeq
 	}
 	if _, state := lang.RunCacheCmd(plug, inv, baseline); state != lang.RunCacheRewritten {
 		return newRunJail(iso, timeout, depBinds), gradingRunCache{
-			Record: "unshared: the test command cannot be given the flag that forbids a cached result (" + state.String() + ")",
+			Record: "unshared: the test command cannot be read as one that forbids a cached result (" + state.String() + ")",
 		}
 	}
 	jail := newRunJail(iso, timeout, depBinds, adequacy.WithRunCache(env))

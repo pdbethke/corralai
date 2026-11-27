@@ -528,3 +528,66 @@ func nextestUnitsCmd(argv []string, units []string) ([]string, bool) {
 	}
 	return append(cmd, tail...), true
 }
+
+// cargoRunCache is the cargo rows' EvidenceCache: one target directory
+// (CARGO_TARGET_DIR) that a pass's runs share, warmed by its first run and
+// frozen for the rest, as go's GOCACHE is. What it saves is the build of the
+// crate's dependencies, which a frozen run does not repeat: in the jail, a
+// crate whose one vendored dependency (regex-syntax 0.8.5) took a fresh run
+// 1.05 s ran in 0.075 to 0.085 s per frozen run (cargo 1.90, measured
+// 2026-11-27). The project's own crates are rebuilt in every run, since
+// their files are written after the warm build (runInJailCache's order).
+//
+// cargo prefers CARGO_TARGET_DIR to a project's build.target-dir and
+// prefers --target-dir to the variable (both measured on cargo 1.90), so a
+// command naming its own --target-dir would build where the cache is not;
+// such a command shares none (cargoTargetDirNamed).
+var cargoRunCache = &EvidenceCache{Name: "cargo's target directory", Env: "CARGO_TARGET_DIR", Unsupported: cargoTargetDirNamed}
+
+// cargoTargetDirNamed is cargoRunCache's Unsupported: why argv would not
+// build in the shared directory, or "" when it would. Only cargo's own
+// words count: after "--" they are the test binaries'.
+func cargoTargetDirNamed(argv []string, _ func(rel string) ([]byte, error)) string {
+	head, _ := splitAtDashDash(argv)
+	if hasFlag(head, "--target-dir") {
+		return "the command names its own --target-dir, which cargo uses in place of CARGO_TARGET_DIR"
+	}
+	return ""
+}
+
+// cargoRunCacheArgs is the cargo rows' RunCacheArgs. cargo keeps no test
+// results: every `cargo test` and `cargo nextest run` runs the test binaries
+// it built, so there is no result for a shared target directory to replay,
+// and a command that runs tests already forbids one. It is returned as it
+// stands, RunCacheRewritten in RunCacheCmd's terms (cmd "already did").
+// `cargo build`, `cargo check` and `cargo test --no-run` run no test. Every
+// other shape (a shell wrapper, an env prefix, another subcommand) is
+// RunCacheUnreadable, as go's rows treat what they cannot read: the warming
+// command must be one corral has read.
+func cargoRunCacheArgs(cmd []string) ([]string, RunCacheRewrite) {
+	if len(cmd) < 2 || filepath.Base(cmd[0]) != "cargo" {
+		return cmd, RunCacheUnreadable
+	}
+	sub := 1
+	if strings.HasPrefix(cmd[1], "+") {
+		sub = 2
+	}
+	if sub >= len(cmd) {
+		return cmd, RunCacheUnreadable
+	}
+	head, _ := splitAtDashDash(cmd)
+	switch cmd[sub] {
+	case "build", "b", "check", "c":
+		return cmd, RunCacheNoTest
+	case "test", "t":
+		if hasFlag(head, "--no-run") {
+			return cmd, RunCacheNoTest
+		}
+		return cmd, RunCacheRewritten
+	case "nextest":
+		if sub+1 < len(cmd) && cmd[sub+1] == "run" {
+			return cmd, RunCacheRewritten
+		}
+	}
+	return cmd, RunCacheUnreadable
+}

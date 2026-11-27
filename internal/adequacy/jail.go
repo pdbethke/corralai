@@ -263,6 +263,14 @@ func (c *runCache) shared() sandbox.SharedCache {
 	return sandbox.SharedCache{Target: sandbox.CacheTarget}
 }
 
+// issuedWarm reports whether a warming run has been granted the cache
+// writable (it may still be running).
+func (c *runCache) issuedWarm() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.warmed
+}
+
 // acquire returns the mount one run sees (nil when the cache is unshared or
 // closed) and the release the run must call when it ends. A frozen run holds
 // the read side, the warming run the write side. Closed is checked after the
@@ -593,17 +601,28 @@ func (j bwrapJail) runInJailCache(ctx context.Context, files map[string]string, 
 	if len(cmd) == 0 {
 		return sandbox.Result{}, errors.New("adequacy: empty command")
 	}
+	// The cache is taken BEFORE the workspace is written, so a frozen run's
+	// files are written after the warming run has released it: newer than
+	// every object that build left. cargo decides a path crate's build is
+	// still good by its source files' mtimes, so a mutant written while the
+	// warm build was still running (and blocked here until it ended) was
+	// older than that build's object of the original file, and cargo reused
+	// it: the mutant was graded as the original
+	// (TestACargoRunIssuedDuringTheWarmBuildIsGradedOnItsOwnCode). go
+	// compares content hashes and was never exposed; the order costs it
+	// nothing.
+	var mount *sandbox.CacheMount
+	if j.runCache != nil {
+		m, release := j.runCache.acquire(j.backend, !warm)
+		defer release()
+		mount = m
+	}
 	dir, err := j.writeWorkspace(files)
 	if err != nil {
 		return sandbox.Result{}, err
 	}
 	defer os.RemoveAll(dir) // #nosec G104 -- best-effort cleanup of our own disposable temp dir
-	ws := runWorkspace{dir: dir}
-	if j.runCache != nil {
-		mount, release := j.runCache.acquire(j.backend, !warm)
-		defer release()
-		ws.cache = mount
-	}
+	ws := runWorkspace{dir: dir, cache: mount}
 	start := time.Now()
 	res, err := j.runIn(ctx, ws, cmd, maxOutput, keepTail, keepHead)
 	took := time.Since(start)

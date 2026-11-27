@@ -716,7 +716,17 @@ package reposcan
 // refuted that way rather than repeated. "61" because #579 to #582 and the
 // minitest killer take "56" to "60", and any of them may reach main first.
 // Behaviour bump; the shape is unchanged.
-const VerdictGeneration = "61"
+// "62" (2026-11-27): a Rust file's grading in the sandbox shares one cargo
+// target directory (CARGO_TARGET_DIR, the cargo rows' EvidenceCache),
+// warmed by the unmutated run and frozen for every other, as go's GOCACHE
+// is, so its per-mutant time cap is now floored at three times that warming
+// run, and its file row records RunCache; the unit evidence pass shares it
+// among its units. Every jailed run now takes its cache before writing its
+// workspace (cargo judges a build by mtimes, and a mutant written during the
+// warm build was graded as the original). "62" because #579 to #582 and the
+// minitest and mocha killers take "56" to "61", and any of them may reach
+// main first. Behaviour bump; the shape is unchanged.
+const VerdictGeneration = "62"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

@@ -312,7 +312,7 @@ func TestAWarmCommandWeCannotRewriteSharesNoCache(t *testing.T) {
 			repoDir, seed := goCacheModule(t)
 			w := wireGo(t, fake, repoDir, &seed, tc.argv, "go")
 			defer w.cleanup()
-			want := "unshared: the test command cannot be given the flag that forbids a cached result (" + tc.state + ")"
+			want := "unshared: the test command cannot be read as one that forbids a cached result (" + tc.state + ")"
 			if w.runCache != want {
 				t.Errorf("recorded run cache = %q, want %q", w.runCache, want)
 			}

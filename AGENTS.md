@@ -273,6 +273,18 @@ the cache, `unshared: never warmed (<why>)` if it was mounted and never filled,
 result and not of the `Verdict`, whose shape is pinned to the verdict cache. `internal/adequacy/run_cache_replay_test.go`
 runs the safety argument against the real jail.
 
+**A Rust file's grading shares cargo's target directory by the same mechanism, and its trap is mtimes, not results.**
+The cargo rows declare `CARGO_TARGET_DIR` as their cache (`cargoRunCache` in `internal/lang/rust_units.go`). cargo stores no
+test result, so their `RunCacheArgs` rewrite nothing: a `cargo test` or `cargo nextest run` corral can read is
+`RunCacheRewritten` as it stands, and anything else is `unreadable` and shares nothing, as for go. What a shared target/
+holds is build output, and cargo decides a path crate's build is still good by comparing its source files' mtimes with
+the build's. So `runInJailCache` takes the cache BEFORE it writes a run's workspace: a frozen run's files are then always
+newer than the warm build, and the project's own crates are rebuilt in every run while the vendored dependencies are not.
+Before that order, a mutant written while the warm build was still running was graded as the original
+(`TestACargoRunIssuedDuringTheWarmBuildIsGradedOnItsOwnCode`; the backdated-mutant control beside it shows the hazard).
+A command naming its own `--target-dir`, which cargo prefers to the variable, shares none. `internal/adequacy/run_cache_cargo_test.go`
+runs this argument against the real jail.
+
 ## Trying it quickly
 
 `corral demo --writer-model <m> --mutant-model <m> --critic-model <m>` writes a

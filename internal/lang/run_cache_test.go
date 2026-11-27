@@ -8,9 +8,10 @@ import (
 	"testing"
 )
 
-// The cache grading shares is the go rows' GOCACHE and nobody else's: every
-// other runner has no row that declares one, so grading hands it none.
-func TestRunCacheForIsGoOnly(t *testing.T) {
+// The caches grading shares are the go rows' GOCACHE and the cargo rows'
+// CARGO_TARGET_DIR: every other runner has no row that declares one, so
+// grading hands it none.
+func TestRunCacheForIsGoAndCargoOnly(t *testing.T) {
 	g, _ := ByName("go")
 	for _, argv := range [][]string{
 		{"go", "test", "./..."},
@@ -29,7 +30,6 @@ func TestRunCacheForIsGoOnly(t *testing.T) {
 		{"javascript", []string{"node", "./node_modules/jest/bin/jest.js"}},
 		{"ruby", []string{"bundle", "exec", "rspec"}},
 		{"php", []string{"vendor/bin/phpunit"}},
-		{"rust", []string{"cargo", "test"}},
 	} {
 		p, _ := ByName(c.lang)
 		if env, ok := RunCacheFor(p, Invocation{Argv: c.argv}); ok {
@@ -180,10 +180,72 @@ func TestRunCacheIsAParityCapability(t *testing.T) {
 			}
 		}
 		switch {
-		case n == "go" && (!cap.Has(p) || reason != ""):
-			t.Errorf("go must have run-cache and no exemption (has=%v, reason=%q)", cap.Has(p), reason)
-		case n != "go" && (cap.Has(p) || len(reason) < 40):
+		case (n == "go" || n == "rust") && (!cap.Has(p) || reason != ""):
+			t.Errorf("%s must have run-cache and no exemption (has=%v, reason=%q)", n, cap.Has(p), reason)
+		case n != "go" && n != "rust" && (cap.Has(p) || len(reason) < 40):
 			t.Errorf("%s: has=%v, reason=%q; want exempted with a written reason", n, cap.Has(p), reason)
+		}
+	}
+}
+
+// cargo's rows share its target directory: every `cargo test` and `cargo
+// nextest run` points CARGO_TARGET_DIR at it, which cargo prefers to a
+// project's build.target-dir (measured on cargo 1.90). A command naming its
+// own --target-dir, which cargo prefers to the variable, shares none.
+func TestCargoRowsShareTheTargetDirectory(t *testing.T) {
+	r, _ := ByName("rust")
+	for _, argv := range [][]string{
+		{"cargo", "test"},
+		{"cargo", "+nightly", "test", "--workspace"},
+		{"cargo", "nextest", "run"},
+		{"cargo", "test", "--", "--target-dir", "x"}, // a test binary's argument, not cargo's
+	} {
+		env, ok := RunCacheFor(r, Invocation{Argv: argv})
+		if !ok || env != "CARGO_TARGET_DIR" {
+			t.Errorf("%v: RunCacheFor = %q, %v; want CARGO_TARGET_DIR, true", argv, env, ok)
+		}
+	}
+	for _, argv := range [][]string{
+		{"cargo", "test", "--target-dir", "out"},
+		{"cargo", "test", "--target-dir=out"},
+		{"cargo", "nextest", "run", "--target-dir", "out"},
+	} {
+		if env, ok := RunCacheFor(r, Invocation{Argv: argv}); ok {
+			t.Errorf("%v: RunCacheFor = %q, true; want no cache: cargo uses --target-dir in place of CARGO_TARGET_DIR", argv, env)
+		}
+	}
+}
+
+// cargo stores no test result, so a cargo command that runs tests already
+// forbids a replay and is returned as it stands (rewritten, in RunCacheCmd's
+// terms); one that runs none is no-test; anything corral cannot read as cargo
+// is unreadable and, as the baseline, shares no cache.
+func TestCargoRunCacheCmdChangesNothingAndReadsTheCommand(t *testing.T) {
+	r, _ := ByName("rust")
+	inv := Invocation{Argv: []string{"cargo", "test"}}
+	nx := Invocation{Argv: []string{"cargo", "nextest", "run"}}
+	for _, c := range []struct {
+		inv   Invocation
+		cmd   []string
+		state RunCacheRewrite
+	}{
+		{inv, []string{"cargo", "test"}, RunCacheRewritten},
+		{inv, []string{"cargo", "t", "--lib"}, RunCacheRewritten},
+		{inv, []string{"cargo", "+stable", "test", "--", "--exact", "tests::adds"}, RunCacheRewritten},
+		{inv, []string{"/usr/local/cargo/bin/cargo", "test", "--", "--skip", "a"}, RunCacheRewritten},
+		{nx, []string{"cargo", "nextest", "run", "-E", "test(=a)"}, RunCacheRewritten},
+		{inv, []string{"cargo", "test", "--no-run"}, RunCacheNoTest},
+		{inv, []string{"cargo", "build"}, RunCacheNoTest},
+		{inv, []string{"cargo", "check", "--tests"}, RunCacheNoTest},
+		{inv, []string{"sh", "-c", "cargo test"}, RunCacheUnreadable},
+		{inv, []string{"env", "RUSTFLAGS=-Dwarnings", "cargo", "test"}, RunCacheUnreadable},
+		{inv, []string{"cargo", "run"}, RunCacheUnreadable},
+		{inv, []string{"cargo"}, RunCacheUnreadable},
+		{inv, []string{"make", "test"}, RunCacheUnreadable},
+	} {
+		got, state := RunCacheCmd(r, c.inv, c.cmd)
+		if state != c.state || !slices.Equal(got, c.cmd) {
+			t.Errorf("%v: got %v, %v; want the command unchanged, %v", c.cmd, got, state, c.state)
 		}
 	}
 }

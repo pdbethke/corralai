@@ -24,7 +24,7 @@ import (
 // NULL for a file with nothing to say.
 func TestRunCacheSurvivesTheLedgerAndTheWarehouse(t *testing.T) {
 	const unshared = "unshared: sandbox backend bwrap cannot overlay a directory on the filesystem of /tmp"
-	const neverWarmed = "unshared: never warmed (the dev suite's command could not be given the flag that forbids a cached result)"
+	const neverWarmed = "unshared: never warmed (the dev suite's command could not be read as one that forbids a cached result)"
 	results := []reposcan.FileResult{
 		{Job: reposcan.Job{Path: "a.go", Lang: "go"}, Gradable: true, RunCache: "shared"},
 		{Job: reposcan.Job{Path: "b.go", Lang: "go"}, Gradable: true, RunCache: unshared},
@@ -135,12 +135,13 @@ func TestExecuteRecordsTheRunCacheAndSaysWhenItIsNotShared(t *testing.T) {
 // nothing.
 func TestTheScanSaysOnceWhichLanguagesShareARunCache(t *testing.T) {
 	iso := overlayingGoJailOrSkip(t)
-	jobs := []reposcan.Job{{Path: "a.go", Lang: "go"}, {Path: "b.go", Lang: "go"}, {Path: "c.py", Lang: "python"}}
+	jobs := []reposcan.Job{{Path: "a.go", Lang: "go"}, {Path: "b.go", Lang: "go"}, {Path: "c.py", Lang: "python"}, {Path: "src/d.rs", Lang: "rust"}}
 	var buf bytes.Buffer
 	printRunDisclosures(&buf, &localExecutor{repoDir: t.TempDir(), iso: iso}, jobs)
 	const line = "  build cache: grading runs for go share a frozen GOCACHE, warmed by the unmutated run\n"
-	if strings.Count(buf.String(), line) != 1 || strings.Count(buf.String(), "build cache") != 1 {
-		t.Errorf("want exactly the go line once, got:\n%s", buf.String())
+	const rustLine = "  build cache: grading runs for rust share a frozen CARGO_TARGET_DIR, warmed by the unmutated run\n"
+	if strings.Count(buf.String(), line) != 1 || strings.Count(buf.String(), rustLine) != 1 || strings.Count(buf.String(), "build cache") != 2 {
+		t.Errorf("want the go line and the rust line once each, got:\n%s", buf.String())
 	}
 	buf.Reset()
 	printRunDisclosures(&buf, &localExecutor{repoDir: t.TempDir(), substrate: substrateWorkspace, iso: iso}, jobs)

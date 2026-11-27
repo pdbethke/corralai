@@ -178,8 +178,14 @@ NEXTEST_SHA256=223ba936714cc861a9cdedad5a8eb664dfdd69d6fbdf6cea6aa8184f523290dc
 	curl -fsSL "$url/rustup-init" -o "$tmp/rustup-init"
 	echo "$(curl -fsSL "$url/rustup-init.sha256" | cut -d' ' -f1)  $tmp/rustup-init" | sha256sum -c -
 	chmod +x "$tmp/rustup-init"
+	# llvm-tools: the llvm-profdata and llvm-cov Rust's coverage runs, from the
+	# toolchain's own sysroot, so their LLVM is the one this rustc writes
+	# profiles with. The coverage script looks there before PATH, so these,
+	# and never a Swift or distro LLVM on PATH, are what it uses
+	# (the format mismatch below is what a PATH LLVM did). Without them every
+	# Rust coverage run in the jail was "unavailable" and its tests skipped.
 	sudo env RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo \
-		"$tmp/rustup-init" -y --no-modify-path --profile minimal --default-toolchain "$RUST_VERSION"
+		"$tmp/rustup-init" -y --no-modify-path --profile minimal --default-toolchain "$RUST_VERSION" -c llvm-tools
 	curl -fsSL "https://get.nexte.st/$NEXTEST_VERSION/linux" -o "$tmp/nextest.tgz"
 	echo "$NEXTEST_SHA256  $tmp/nextest.tgz" | sha256sum -c -
 	sudo tar -xzf "$tmp/nextest.tgz" -C /usr/local/cargo/bin

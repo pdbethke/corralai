@@ -141,7 +141,7 @@ cloned at be0c5fdc9e046b529bff2b588bf4cc2c32a2ff8a with
 into a scratch directory $S, and swift was run as
   SW="docker run --rm -u $(id -u):$(id -g) -e HOME=/tmp -v $S:$S -w $S/lariat corral-swift-spike swift"
 
-- The rebuild probe (lang.PerRunBuilder's comment in internal/lang/lang.go):
+- The rebuild probe (lang.RebuildProbe's comment in internal/lang/lang.go):
   `$SW build --build-tests` after each change to
   Sources/LassoParser/Evaluator.swift (rewritten with its own bytes; a
   `// corral rebuild probe` line appended at the end; the same line put
@@ -162,7 +162,8 @@ into a scratch directory $S, and swift was run as
 - The llvm-cov reducer reading Lariat's export (internal/lang/llvmcov.go):
   the notes give the export's size and the times under mawk and gawk, but
   not the command that timed them.
-- Rust (the rebuild-floor exemption for rust in internal/lang/parity.go):
+- Rust (the rebuild-floor exemption for rust in internal/lang/parity.go, removed
+  2026-11-26 when every language got the rebuild run):
   `cargo test --lib --no-run`, cargo 1.90.0, outside the sandbox, on
   regex-syntax 0.8.5 copied from ~/.cargo/registry/src/*/regex-syntax-0.8.5
   into a scratch directory, after each change to src/hir/translate.rs,

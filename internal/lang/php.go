@@ -4,6 +4,7 @@ package lang
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -785,4 +786,20 @@ func (phpPlugin) LineComment() string { return "//" }
 // directory, so each private tree needs its own (see DepDir.CopyPerTree).
 func (phpPlugin) DependencyDirs() []DepDir {
 	return []DepDir{{Name: "vendor", CopyPerTree: []string{"autoload.php", "composer"}}}
+}
+
+// KeptLines is FirstLineKeeper for PHP: the rebuild probe goes after the
+// `<?php` line, because text before the open tag is output, and a
+// declare(strict_types=1) after such text is a fatal error ("strict_types
+// declaration must be the very first statement in the script", PHP 8, run
+// 2026-11-26). A file that does not open with the tag (a template), or whose
+// first line closes it again, is not probed: a line after `?>` is output too.
+func (phpPlugin) KeptLines(body string) (int, error) {
+	if len(body) < 5 || !strings.EqualFold(body[:5], "<?php") {
+		return 0, errors.New("it does not open with <?php, and a line before the open tag would be output")
+	}
+	if first, _, _ := strings.Cut(body, "\n"); strings.Contains(first, "?>") {
+		return 0, errors.New("its first line closes the <?php tag, and a line after it would be output")
+	}
+	return 1, nil
 }

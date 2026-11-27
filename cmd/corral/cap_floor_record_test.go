@@ -153,7 +153,7 @@ func TestCapFloorOfNamesTheRunThatSetTheFloor(t *testing.T) {
 	if got := capFloorOf(pool); got != "" {
 		t.Errorf("a pool with no rebuild run: %q, want empty", got)
 	}
-	if _, err := pool.MeasureRebuild(context.Background(), nil, codeKey, "// probe\nOK\n", cmd); err != nil {
+	if _, err := pool.MeasureRebuild(context.Background(), nil, codeKey, "OK\n", "// probe\nOK\n", cmd); err != nil {
 		t.Fatal(err)
 	}
 	if got := capFloorOf(pool); !strings.HasPrefix(got, "rebuild run, ") {

@@ -87,7 +87,8 @@ func jestCacheJail(t *testing.T) (RunCacheJail, lang.Plugin) {
 	backend := overlayJailOrSkip(t)
 	t.Setenv("TMPDIR", t.TempDir())
 	js, _ := lang.ByName("javascript")
-	cache, ok := lang.RunCacheFor(js, lang.Invocation{Argv: jestBase})
+	cache, _ := lang.RunCacheFor(js, lang.Invocation{Argv: jestBase}, lang.NoTree)
+	ok := cache != nil
 	if !ok || cache.Env != "" || cache.Args == nil {
 		t.Fatalf("the jest row's run cache = %+v, %v; want one named by the command", cache, ok)
 	}
@@ -167,7 +168,7 @@ func TestAJestTransformerKeyedOnTheNameAloneGradesAMutantAsTheOriginal(t *testin
 func TestJestOnlyFailuresOverASharedCacheRunsNoTest(t *testing.T) {
 	j, js := jestCacheJail(t)
 	only := append(append([]string{}, jestBase...), "--onlyFailures")
-	if _, ok := lang.RunCacheFor(js, lang.Invocation{Argv: only}); ok {
+	if c, _ := lang.RunCacheFor(js, lang.Invocation{Argv: only}, lang.NoTree); c != nil {
 		t.Fatalf("lang offers %v a shared cache", only)
 	}
 	cmd := jestCached(t, js, jestBase)
@@ -261,5 +262,43 @@ func TestJestCoverageOverASharedCacheReportsTheSameEvidence(t *testing.T) {
 	}
 	if !strings.Contains(warm.Output, "corral-transformed calc.js") || strings.Contains(frozen.Output, "corral-transformed") {
 		t.Errorf("want the warming run to transform and the frozen run to transform nothing:\nwarm   %s\nfrozen %s", warm.Output, frozen.Output)
+	}
+}
+
+// TypeScript through babel-jest, the TypeScript projects lang shares a
+// cache with (one that uses ts-jest shares none, lang.jestUsesTSJest):
+// Babel compiles each file on its own, so an import's value is read at run
+// time, not compiled into the importer, and a mutant of the imported file
+// fails over the shared cache though the importer's cached output is
+// unchanged. The mutant is the one that ts-jest 26.5.6 graded as the
+// original over a warm cache: a const enum member changed in the imported
+// file. Needs @babel/preset-typescript and @babel/preset-env beside jest
+// (the runner-fixture pins).
+func TestASharedJestCacheGradesABabelTypeScriptImportOnItsOwnCode(t *testing.T) {
+	j, js := jestCacheJail(t)
+	nm := os.Getenv("CORRALAI_JEST_NODE_MODULES")
+	for _, p := range []string{"@babel/preset-typescript", "@babel/preset-env"} {
+		if _, err := os.Stat(nm + "/" + p + "/package.json"); err != nil {
+			t.Fatalf("CORRALAI_JEST_NODE_MODULES=%s holds no %s (scripts/npm-pins/runner-fixtures pins it): %v", nm, p, err)
+		}
+	}
+	files := func(member string) map[string]string {
+		return map[string]string{
+			"package.json":    `{"name":"p","private":true}` + "\n",
+			"babel.config.js": "module.exports = { presets: [['@babel/preset-env', { targets: { node: 'current' } }], '@babel/preset-typescript'] };\n",
+			"e.ts":            "export const enum E { A = " + member + " }\n",
+			"f.ts":            "import { E } from './e';\nexport function f(): number { return E.A; }\n",
+			"f.test.ts":       "import { f } from './f';\ntest('f', () => { expect(f()).toBe(1); });\n",
+		}
+	}
+	cmd := jestCached(t, js, jestBase)
+	if ok, out, err := j.WarmRun(context.Background(), files("1"), cmd); err != nil || !ok {
+		t.Fatalf("warm run: ok=%v err=%v\n%s", ok, err, out)
+	}
+	for i, member := range []string{"2", "1", "3", "1"} {
+		ok, out := jestRun(t, j, files(member), cmd)
+		if want := member == "1"; ok != want {
+			t.Fatalf("frozen run %d (A = %s): passed=%v, want %v: the run was not graded on its own code\n%s", i, member, ok, want, out)
+		}
 	}
 }

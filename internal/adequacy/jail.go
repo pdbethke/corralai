@@ -708,6 +708,19 @@ func (j bwrapJail) runIn(ctx context.Context, ws runWorkspace, cmd []string, max
 // node_modules/<pkg> -> .pnpm/...) is followed and one that leaves it is
 // refused. A rel in neither is fs.ErrNotExist.
 func (j bwrapJail) ReadTreeFile(files map[string]string, rel string) ([]byte, error) {
+	return TreeFileReader(files, j.binds)(rel)
+}
+
+// TreeFileReader is ReadTreeFile for a tree not yet in a jail: files, then
+// the dependency directories binds mounts into it. It is how a caller asks a
+// row's lang.EvidenceCache.Unsupported about the tree before it builds the
+// grading jail (cmd/corral newGradingJail), by the same rule the jail reads
+// it with.
+func TreeFileReader(files map[string]string, binds []DepBind) func(rel string) ([]byte, error) {
+	return func(rel string) ([]byte, error) { return readTreeFile(files, binds, rel) }
+}
+
+func readTreeFile(files map[string]string, binds []DepBind, rel string) ([]byte, error) {
 	clean, ok := lang.TreeRel(rel)
 	if !ok {
 		return nil, fmt.Errorf("adequacy: %q is not a path inside the tree", rel)
@@ -719,10 +732,10 @@ func (j bwrapJail) ReadTreeFile(files map[string]string, rel string) ([]byte, er
 	// binds only directories below it (rel != "."), and a root bind would
 	// be the whole tree, which the seed holds instead.
 	var bind *DepBind
-	for i, b := range j.binds {
+	for i, b := range binds {
 		r := path.Clean(b.Rel)
 		if (clean == r || strings.HasPrefix(clean, r+"/")) && (bind == nil || len(r) > len(path.Clean(bind.Rel))) {
-			bind = &j.binds[i]
+			bind = &binds[i]
 		}
 	}
 	if bind == nil {

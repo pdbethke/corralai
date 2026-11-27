@@ -3,6 +3,7 @@
 package lang
 
 import (
+	"io/fs"
 	"slices"
 	"strings"
 	"testing"
@@ -18,7 +19,7 @@ func TestRunCacheForIsGoCargoAndJestOnly(t *testing.T) {
 		{"go", "test", "./..."},
 		{"gotestsum", "--", "./..."},
 	} {
-		env, ok := RunCacheFor(g, Invocation{Argv: argv})
+		env, ok := runCacheOK(g, Invocation{Argv: argv})
 		if !ok || env.Env != "GOCACHE" {
 			t.Errorf("%v: RunCacheFor = %+v, %v; want GOCACHE, true", argv, env, ok)
 		}
@@ -26,7 +27,7 @@ func TestRunCacheForIsGoCargoAndJestOnly(t *testing.T) {
 	for _, n := range []string{"javascript", "typescript"} {
 		p, _ := ByName(n)
 		for _, argv := range [][]string{{"npx", "jest"}, {"node", "./node_modules/jest/bin/jest.js", "src"}} {
-			c, ok := RunCacheFor(p, Invocation{Argv: argv})
+			c, ok := runCacheOK(p, Invocation{Argv: argv})
 			if !ok || c.Env != "" || c.Args == nil || c.Label() != "jest cache directory" {
 				t.Errorf("%s %v: RunCacheFor = %+v, %v; want jest's cache directory, named by the command", n, argv, c, ok)
 			}
@@ -44,7 +45,7 @@ func TestRunCacheForIsGoCargoAndJestOnly(t *testing.T) {
 		{"php", []string{"vendor/bin/phpunit"}},
 	} {
 		p, _ := ByName(c.lang)
-		if env, ok := RunCacheFor(p, Invocation{Argv: c.argv}); ok {
+		if env, ok := runCacheOK(p, Invocation{Argv: c.argv}); ok {
 			t.Errorf("%v: RunCacheFor = %+v, true; want no cache", c.argv, env)
 		}
 	}
@@ -213,7 +214,7 @@ func TestCargoRowsShareTheTargetDirectory(t *testing.T) {
 		{"cargo", "nextest", "run"},
 		{"cargo", "test", "--", "--target-dir", "x"}, // a test binary's argument, not cargo's
 	} {
-		env, ok := RunCacheFor(r, Invocation{Argv: argv})
+		env, ok := runCacheOK(r, Invocation{Argv: argv})
 		if !ok || env.Env != "CARGO_TARGET_DIR" {
 			t.Errorf("%v: RunCacheFor = %+v, %v; want CARGO_TARGET_DIR, true", argv, env, ok)
 		}
@@ -223,7 +224,7 @@ func TestCargoRowsShareTheTargetDirectory(t *testing.T) {
 		{"cargo", "test", "--target-dir=out"},
 		{"cargo", "nextest", "run", "--target-dir", "out"},
 	} {
-		if env, ok := RunCacheFor(r, Invocation{Argv: argv}); ok {
+		if env, ok := runCacheOK(r, Invocation{Argv: argv}); ok {
 			t.Errorf("%v: RunCacheFor = %+v, true; want no cache: cargo uses --target-dir in place of CARGO_TARGET_DIR", argv, env)
 		}
 	}
@@ -322,12 +323,60 @@ func TestJestCommandsThatSetOrSelectFromTheCacheShareNone(t *testing.T) {
 		{"npx", "jest", "--changedSince=main"},
 		{"npx", "jest", "--findRelatedTests", "src/calc.js"},
 	} {
-		if c, ok := RunCacheFor(js, Invocation{Argv: argv}); ok {
+		if c, ok := runCacheOK(js, Invocation{Argv: argv}); ok {
 			t.Errorf("%v: RunCacheFor = %+v, true; want no shared cache", argv, c)
 		}
 	}
 	// Words before jest's are not jest's.
-	if _, ok := RunCacheFor(js, Invocation{Argv: []string{"node", "--no-cache", "./node_modules/jest/bin/jest.js"}}); !ok {
+	if _, ok := runCacheOK(js, Invocation{Argv: []string{"node", "--no-cache", "./node_modules/jest/bin/jest.js"}}); !ok {
 		t.Error("node's own option was read as jest's")
+	}
+}
+
+// runCacheOK is RunCacheFor over a tree with no file, as a bool: the
+// command's words alone decide.
+func runCacheOK(p Plugin, inv Invocation) (*EvidenceCache, bool) {
+	c, _ := RunCacheFor(p, inv, NoTree)
+	return c, c != nil
+}
+
+// ts-jest keys a file's cached output on its own bytes, never the files it
+// imports, and TypeScript compiles an import's value (a const enum member)
+// into the importing file, so over a shared cache an unchanged importer is
+// served the original's value and a mutant can be graded as the original
+// (jest 26.6.3, ts-jest 26.5.6). A project that uses it shares no cache,
+// whether package.json names it or node_modules holds it; one that does
+// neither shares one.
+func TestJestSharesNoCacheInAProjectThatUsesTSJest(t *testing.T) {
+	js, _ := ByName("typescript")
+	inv := Invocation{Argv: []string{"npx", "jest"}}
+	tree := func(files map[string]string) func(string) ([]byte, error) {
+		return func(rel string) ([]byte, error) {
+			if b, ok := files[rel]; ok {
+				return []byte(b), nil
+			}
+			return nil, fs.ErrNotExist
+		}
+	}
+	for _, c := range []struct {
+		name  string
+		files map[string]string
+		share bool
+	}{
+		{"devDependencies", map[string]string{"package.json": `{"devDependencies":{"jest":"26.6.3","ts-jest":"26.5.6"}}`}, false},
+		{"dependencies", map[string]string{"package.json": `{"dependencies":{"ts-jest":"29"}}`}, false},
+		{"installed, not named", map[string]string{"package.json": `{"devDependencies":{"jest":"30"}}`, "node_modules/ts-jest/package.json": `{"name":"ts-jest"}`}, false},
+		{"unparseable manifest naming it", map[string]string{"package.json": `{"devDependencies":{"ts-jest":`}, false},
+		{"babel-jest only", map[string]string{"package.json": `{"devDependencies":{"jest":"30","babel-jest":"30"}}`}, true},
+		{"a script that mentions it", map[string]string{"package.json": `{"scripts":{"echo":"ts-jest is not used"}}`}, true},
+		{"no manifest", nil, true},
+	} {
+		cache, why := RunCacheFor(js, inv, tree(c.files))
+		if (cache != nil) != c.share {
+			t.Errorf("%s: RunCacheFor = %+v, %q; want shared=%v", c.name, cache, why, c.share)
+		}
+		if !c.share && !strings.Contains(why, "ts-jest") {
+			t.Errorf("%s: the reason %q does not name ts-jest", c.name, why)
+		}
 	}
 }

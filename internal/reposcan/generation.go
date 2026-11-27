@@ -656,7 +656,9 @@ package reposcan
 // named on the command by --cacheDirectory, which RunCacheCmd adds), warmed
 // by the unmutated run and frozen for every other, so its per-mutant time
 // cap is floored at three times that warming run and its file row records
-// RunCache; the unit evidence pass shares it among its units. Stacked on
+// RunCache; the unit evidence pass shares it among its units, and only for a
+// command grading would share it with. A project that uses ts-jest shares
+// none (its cache key leaves out the files a file imports). Stacked on
 // "62". Behaviour bump; the shape is unchanged.
 const VerdictGeneration = "63"
 

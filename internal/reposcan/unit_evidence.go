@@ -255,7 +255,7 @@ func CollectUnitEvidence(ctx context.Context, runner commandRunner, files map[st
 		// A cache whose tool would not take its options (an installed
 		// version that predates them) is not asked for: the seed shares
 		// none, and the pass says why below.
-		asked, unsupported := askedCache(cache, inv.Argv, treeFileReader(runner, files))
+		asked, unsupported := askedCache(p, inv, cache, treeFileReader(runner, files))
 		s, err := sr.Seed(files, asked)
 		switch {
 		case err == nil:
@@ -381,11 +381,29 @@ func (w warmingRunner) EnumerateDetailed(ctx context.Context, files map[string]s
 // version that predates them, or one that cannot be read): cache itself
 // when it has no Unsupported or Unsupported gives no reason, else nil and
 // that reason. read is the tree as the jail will see it (treeFileReader).
-func askedCache(cache *lang.EvidenceCache, argv []string, read func(rel string) ([]byte, error)) (*lang.EvidenceCache, string) {
-	if cache == nil || cache.Unsupported == nil {
+//
+// A cache named by the command (Args, jest's --cacheDirectory) is asked for
+// only when grading would share it too: the operator's command must be one
+// lang.RunCacheCmd reads (RunCacheRewritten), as newGradingJail requires of
+// the baseline. Otherwise the pass would add the cache's words to unit
+// commands built from a command it cannot read: after a package script's
+// words, where the script's own --cacheDirectory made jest 30.5.2 crash
+// (`TypeError: filePath.startsWith is not a function`) and every unit fail,
+// or after a `--`, where they are a test path pattern; and Unsupported,
+// which reads the command's own words, would never see the script's.
+func askedCache(p lang.Plugin, inv lang.Invocation, cache *lang.EvidenceCache, read func(rel string) ([]byte, error)) (*lang.EvidenceCache, string) {
+	if cache == nil {
+		return nil, ""
+	}
+	if cache.Args != nil {
+		if _, state := lang.RunCacheCmd(p, inv, inv.Argv); state != lang.RunCacheRewritten {
+			return nil, "the test command cannot be given the cache's options (" + state.String() + ")"
+		}
+	}
+	if cache.Unsupported == nil {
 		return cache, ""
 	}
-	if why := cache.Unsupported(argv, read); why != "" {
+	if why := cache.Unsupported(inv.Argv, read); why != "" {
 		return nil, why
 	}
 	return cache, ""

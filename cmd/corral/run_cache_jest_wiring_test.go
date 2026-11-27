@@ -100,3 +100,44 @@ func TestJestGradingRunsShareAFrozenCacheDirectory(t *testing.T) {
 		t.Errorf("warm runs = %d, frozen runs = %d; want exactly one warming run (the baseline) and at least one frozen jest run", warm, frozen)
 	}
 }
+
+// A project that uses ts-jest gets no shared jest cache through the real
+// wiring, and its record says why: the reason is read from the tree the jail
+// will see, here a node_modules bind that holds ts-jest while package.json
+// does not name it (a workspace root's install).
+func TestJestGradingInATSJestProjectSharesNoCache(t *testing.T) {
+	repoDir := t.TempDir()
+	nm := t.TempDir()
+	mustWrite(t, filepath.Join(nm, "ts-jest", "package.json"), `{"name":"ts-jest","version":"26.5.6"}`+"\n")
+	files := map[string]string{
+		"package.json": `{"name":"p","private":true,"jest":{"preset":"ts-jest"}}` + "\n",
+		"calc.ts":      "export function add(a: number, b: number): number { return a + b; }\n",
+		"calc.test.ts": "import { add } from './calc';\ntest('adds', () => { expect(add(1, 2)).toBe(3); });\n",
+	}
+	for rel, body := range files {
+		mustWrite(t, filepath.Join(repoDir, rel), body)
+	}
+	seed := repoSeed{seedDir: repoDir, files: files, cleanup: func() {},
+		binds: []adequacy.DepBind{{Host: nm, Rel: "node_modules"}}}
+	argv := []string{"node", "./node_modules/jest/bin/jest.js"}
+	w, err := buildJailWiring(context.Background(), jailWiringInput{
+		timeout:  time.Minute,
+		codePath: "calc.ts", testPath: "calc.test.ts", repoDir: repoDir, langName: "typescript",
+		fsPath:    func(q string) string { return filepath.Join(repoDir, q) },
+		code:      []byte(files["calc.ts"]),
+		devTest:   []byte(files["calc.test.ts"]),
+		checkArgv: argv, inv: lang.Cmd(argv),
+		stdout: io.Discard, seed: &seed,
+	})
+	if err != nil {
+		t.Fatalf("buildJailWiring: %v", err)
+	}
+	defer w.cleanup()
+	const want = "unshared: the project uses ts-jest, whose cache key leaves out the files a file imports"
+	if w.runCache != want {
+		t.Errorf("recorded run cache = %q, want %q", w.runCache, want)
+	}
+	if strings.Contains(strings.Join(w.scorer.CommandRewrite(argv), " "), "--cacheDirectory") {
+		t.Errorf("a ts-jest project's graded command names a cache: %v", w.scorer.CommandRewrite(argv))
+	}
+}

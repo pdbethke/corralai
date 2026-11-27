@@ -3,6 +3,8 @@
 package lang
 
 import (
+	"bytes"
+	"encoding/json"
 	"slices"
 )
 
@@ -26,7 +28,17 @@ import (
 //     again. A project transformer whose getCacheKey ignores the file's
 //     bytes would hand a mutant the original's code, and the mutant would be
 //     graded as the original (a survivor, never a false kill); jest's own
-//     runs on the developer's machine would serve it the same way.
+//     runs on the developer's machine would serve it the same way. ts-jest
+//     is one such for every file but the mutated one: its key (ts-jest
+//     26.5.6, ts-jest-transformer.js getCacheKey) hashes a file's own bytes
+//     and path and the config, never the files it imports, and TypeScript
+//     compiles an import's value into a file (a const enum's members), so
+//     an unchanged file that imports the mutated one is served the
+//     original's compiled value. Measured outside the sandbox with jest 26.6.3: `export const
+//     enum E { A = 1 }` mutated to `A = 2`, a test of a file returning E.A
+//     passed over the warm cache and failed over a fresh one. A project
+//     that uses ts-jest therefore shares none (jestUsesTSJest); newer
+//     ts-jest versions were not run.
 //   - haste-map-*: each file's module metadata, reused for a file whose mtime
 //     has not changed. Every run's workspace is written after the warming run
 //     ends (runInJailCache takes the cache first), so its files are newer
@@ -60,7 +72,7 @@ var jestSelectingOptions = []string{
 
 // jestCacheUnsupported is jestRunCache's Unsupported: why argv's jest would
 // not share the cache, or "" when it would. Only words after jest's own count.
-func jestCacheUnsupported(argv []string, _ func(rel string) ([]byte, error)) string {
+func jestCacheUnsupported(argv []string, read func(rel string) ([]byte, error)) string {
 	at := jestIndex(argv)
 	if at < 0 {
 		return ""
@@ -71,8 +83,40 @@ func jestCacheUnsupported(argv []string, _ func(rel string) ([]byte, error)) str
 		return "the command sets jest's cache itself"
 	case hasFlag(words, jestSelectingOptions...) || shortBundleSets(words, jestShortFlags, "fo"):
 		return "the command chooses its tests from jest's records of earlier runs or from version control"
+	case jestUsesTSJest(read):
+		return "the project uses ts-jest, whose cache key leaves out the files a file imports"
 	}
 	return ""
+}
+
+// jestUsesTSJest reports whether the tree read shows (the tree as the jail
+// will see it) uses ts-jest: package.json names it among its dependencies of
+// any kind, or node_modules holds it (installed by a workspace root or as
+// another package's dependency, and named by a config package.json does not
+// hold). A package.json that does not parse as JSON counts as naming it if
+// its text holds the name: refusing a cache costs time, sharing one wrongly
+// costs a verdict.
+func jestUsesTSJest(read func(rel string) ([]byte, error)) bool {
+	if _, err := read("node_modules/ts-jest/package.json"); err == nil {
+		return true
+	}
+	b, err := read("package.json")
+	if err != nil {
+		return false
+	}
+	var pkg map[string]json.RawMessage
+	if json.Unmarshal(b, &pkg) != nil {
+		return bytes.Contains(b, []byte("ts-jest"))
+	}
+	for _, k := range []string{"dependencies", "devDependencies", "peerDependencies", "optionalDependencies"} {
+		var deps map[string]json.RawMessage
+		if json.Unmarshal(pkg[k], &deps) == nil {
+			if _, ok := deps["ts-jest"]; ok {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // jestNoTestOptions make jest run no test: it lists, prints its config or

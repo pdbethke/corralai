@@ -110,16 +110,23 @@ func (gc gradingRunCache) unwarmed(j adequacy.Jail) (why string, unwarmed bool) 
 // that runs no test — gets no cache and no rewrite: today's run, with the
 // reason on the record. A jail that then reports its cache unshared (a backend
 // that cannot overlay, a directory that cannot be made) drops the rewrite too.
+// So does a cache the row's Unsupported refuses for this command over this
+// tree (read, the tree as the jail will see it: the seed, then the
+// dependency directories): jest's in a project that uses ts-jest, whose
+// cache key leaves out the files a file imports.
 //
 // The caller closes a returned jail that is an adequacy.RunCacheJail when the
 // file's run ends (it removes the cache directory); closing a jail with no
 // cache is a no-op.
-func newGradingJail(iso sandbox.Isolator, timeout time.Duration, depBinds []adequacy.DepBind, plug lang.Plugin, inv lang.Invocation, baseline []string) (adequacy.Jail, gradingRunCache) {
+func newGradingJail(iso sandbox.Isolator, timeout time.Duration, depBinds []adequacy.DepBind, plug lang.Plugin, inv lang.Invocation, baseline []string, read func(rel string) ([]byte, error)) (adequacy.Jail, gradingRunCache) {
 	if plug == nil {
 		return newRunJail(iso, timeout, depBinds), gradingRunCache{}
 	}
-	cache, ok := lang.RunCacheFor(plug, inv)
-	if !ok {
+	cache, why := lang.RunCacheFor(plug, inv, read)
+	if why != "" {
+		return newRunJail(iso, timeout, depBinds), gradingRunCache{Record: "unshared: " + why}
+	}
+	if cache == nil {
 		return newRunJail(iso, timeout, depBinds), gradingRunCache{}
 	}
 	if _, state := lang.RunCacheCmd(plug, inv, baseline); state != lang.RunCacheRewritten {

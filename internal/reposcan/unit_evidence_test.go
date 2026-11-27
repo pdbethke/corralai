@@ -1345,20 +1345,48 @@ func TestUnitPassCacheHelpers(t *testing.T) {
 	noGate := &lang.EvidenceCache{Env: "TC"}
 	takes := &lang.EvidenceCache{Name: "c", Unsupported: gate("")}
 	refuses := &lang.EvidenceCache{Name: "c", Unsupported: gate("tool 0.9 is older than 1.0")}
-	if asked, why := askedCache(nil, argv, read); asked != nil || why != "" {
+	if asked, why := askedCache(nil, lang.Cmd(argv), nil, read); asked != nil || why != "" {
 		t.Errorf("askedCache(nil) = %+v, %q; want nil, \"\"", asked, why)
 	}
-	if asked, why := askedCache(noGate, argv, read); asked != noGate || why != "" {
+	if asked, why := askedCache(nil, lang.Cmd(argv), noGate, read); asked != noGate || why != "" {
 		t.Errorf("no Unsupported: askedCache = %+v, %q; want the cache, \"\"", asked, why)
 	}
-	if asked, why := askedCache(takes, argv, read); asked != takes || why != "" {
+	if asked, why := askedCache(nil, lang.Cmd(argv), takes, read); asked != takes || why != "" {
 		t.Errorf("Unsupported gives \"\": askedCache = %+v, %q; want the cache, \"\"", asked, why)
 	}
-	if asked, why := askedCache(refuses, argv, read); asked != nil || why != "tool 0.9 is older than 1.0" {
+	if asked, why := askedCache(nil, lang.Cmd(argv), refuses, read); asked != nil || why != "tool 0.9 is older than 1.0" {
 		t.Errorf("Unsupported gives a reason: askedCache = %+v, %q; want nil and the reason", asked, why)
 	}
 	if !slices.Equal(gotArgv, argv) || reads != 2 {
 		t.Errorf("Unsupported saw argv %q and read %d times, want %q and 2", gotArgv, reads, argv)
+	}
+
+	// A cache named by the command is asked for only when grading would
+	// share it: the command is one lang.RunCacheCmd reads. A package
+	// script (whose words Unsupported never sees) and a `--` are not.
+	js, _ := lang.ByName("javascript")
+	jestCache := lang.EvidenceCacheFor(js, lang.Cmd([]string{"npx", "jest"}))
+	if jestCache == nil || jestCache.Args == nil {
+		t.Fatalf("the jest row's cache = %+v, want one named by the command", jestCache)
+	}
+	pkg := func(rel string) ([]byte, error) {
+		if rel == "package.json" {
+			return []byte(`{"scripts":{"test":"jest --onlyFailures"}}`), nil
+		}
+		return nil, fs.ErrNotExist
+	}
+	for _, c := range []struct {
+		inv  lang.Invocation
+		want bool
+	}{
+		{lang.Cmd([]string{"npx", "jest"}), true},
+		{lang.Invocation{Argv: []string{"npm", "test"}, Script: []string{"jest", "--onlyFailures"}}, false},
+		{lang.Cmd([]string{"npx", "jest", "--", "src"}), false},
+	} {
+		asked, why := askedCache(js, c.inv, lang.EvidenceCacheFor(js, c.inv), pkg)
+		if (asked != nil) != c.want || (asked == nil && why == "") {
+			t.Errorf("%+v: askedCache = %+v, %q; want asked=%v, with a reason when not", c.inv, asked, why, c.want)
+		}
 	}
 }
 

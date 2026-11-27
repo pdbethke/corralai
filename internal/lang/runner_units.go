@@ -205,24 +205,29 @@ func runRowCache(r Runner) bool {
 }
 
 // RunCacheFor is the cache a sandboxed run of argv's runner shares (its Env,
-// GOCACHE, is what the jail sets; its Args are added by RunCacheCmd);
-// ok=false when the row
-// declares none, or declares one its Unsupported reason says this command
-// cannot take. Unsupported is asked of the command alone, with a tree that
-// reads as empty: no row that declares a cache has such a reason today, and
-// one that does would need this signature to carry the tree.
-func RunCacheFor(p Plugin, inv Invocation) (*EvidenceCache, bool) {
+// GOCACHE, is what the jail sets; its Args are added by RunCacheCmd) and
+// ""; or nil and why not: "" when the row declares none, else the reason its
+// Unsupported gives for this command over this tree (read: the tree as the
+// jail will see it, EvidenceCache.Unsupported's read; jest's reads the
+// project's package.json and node_modules for ts-jest). There is no default
+// tree: a caller with none passes a reader that finds nothing, and says so.
+func RunCacheFor(p Plugin, inv Invocation, read func(rel string) ([]byte, error)) (*EvidenceCache, string) {
 	r, found := RunnerFor(p, inv)
 	if !found || !runRowCache(r) {
-		return nil, false
+		return nil, ""
 	}
 	if u := r.EvidenceCache.Unsupported; u != nil {
-		if u(inv.Argv, func(string) ([]byte, error) { return nil, fs.ErrNotExist }) != "" {
-			return nil, false
+		if why := u(inv.Argv, read); why != "" {
+			return nil, why
 		}
 	}
-	return r.EvidenceCache, true
+	return r.EvidenceCache, ""
 }
+
+// NoTree is a tree reader that finds no file, for a caller asking
+// RunCacheFor about a command with no tree to read (a test of the command's
+// words alone, the single-file scaffold, which holds no manifest).
+func NoTree(string) ([]byte, error) { return nil, fs.ErrNotExist }
 
 // RunCacheRewrite says what RunCacheCmd did with a command.
 type RunCacheRewrite int

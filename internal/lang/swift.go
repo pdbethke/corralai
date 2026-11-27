@@ -116,6 +116,10 @@ func (swiftPlugin) Lockfile() Lockfile {
 	return Lockfile{Name: "Package.resolved", Manifest: "Package.swift", SearchDepth: swiftPackageSearchDepth}
 }
 
+// LockfileDir is manifestDir: SwiftPM keeps Package.resolved beside the root
+// package's Package.swift, and the nearest manifest is the root package.
+func (swiftPlugin) LockfileDir(manifestDir string) string { return manifestDir }
+
 // ManifestPins: see Lockfiler.
 func (swiftPlugin) ManifestPins(manifestDir string) bool {
 	return swiftManifestPins(manifestDir)

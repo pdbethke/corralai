@@ -46,3 +46,13 @@ func TestStringValue(t *testing.T) {
 		}
 	}
 }
+
+// Paths names every header and every key by its full path, so a caller can
+// ask whether a text declares something as a table or as a key alike.
+func TestPaths(t *testing.T) {
+	text := "# top\nname = \"x\"\n[package]\nversion = \"1\" # v\n[target.'cfg(unix)'.dependencies]\nlibc = \"0.2\"\n[[bin]]\nname = \"b\"\ndependencies.itoa = \"1\"\nnot a key\n"
+	want := []string{"name", "package", "package.version", "target.cfg(unix).dependencies", "target.cfg(unix).dependencies.libc", "bin", "bin.name", "bin.dependencies.itoa"}
+	if got := Paths(text); !slices.Equal(got, want) {
+		t.Errorf("Paths = %q\nwant    %q", got, want)
+	}
+}

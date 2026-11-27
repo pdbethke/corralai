@@ -346,10 +346,16 @@ var runners = []Runner{
 		ListCmd:  pyListCmd, ParseList: pyParseTestList, SingleCmd: pySingleCmd,
 		Note: "listing and one-test runs use pytest, which collects unittest suites; they need pytest installed",
 	},
-	// jest and mocha take --bail. vitest is left without one deliberately:
-	// its bail spelling has changed across major versions, and an
-	// unrecognised flag would make every mutant exit non-zero and read as a
-	// kill. node --test has no such flag.
+	// jest and mocha take --bail, and vitest --bail=1 (it takes a count).
+	// vitest was left without one because its spelling was said to have
+	// changed across major versions, and an unrecognised flag makes every
+	// mutant exit non-zero, which reads as a kill. Measured 2026-11-26:
+	// vitest 1.6.1, 2.1.9, 3.2.7, 5.1.0 and 5.1.2 all take --bail=1, stop after the
+	// first failing test, and exit 0 with it on a passing suite (vitest 4 was
+	// not installed: npm failed). A vitest that refuses it (0.x before 0.29
+	// had no --bail) fails the baseline re-run adequacy makes with the flag
+	// before trusting it, so the flag is then dropped, never read as kills.
+	// node --test has no such flag.
 	{
 		// Detect adds jest's entry script (node ./node_modules/jest/bin/jest.js,
 		// the form AGENTS.md gives for the jail) to the word.
@@ -389,7 +395,7 @@ var runners = []Runner{
 	{
 		// Detect adds vitest's entry script to the word; a shell-wrapped
 		// script is still read through Words.
-		Name: "vitest", ID: "vitest", Languages: []string{"javascript", "typescript"}, Words: []string{"vitest"},
+		Name: "vitest", ID: "vitest", Languages: []string{"javascript", "typescript"}, Words: []string{"vitest"}, FailFast: []string{"--bail=1"},
 		Detect: func(argv []string) bool { return vitestIndex(argv) >= 0 },
 		At:     vitestIndex,
 		// A reporters list in the project's vitest config (json, junit)
@@ -414,7 +420,7 @@ var runners = []Runner{
 		EvidenceArgs:   vitestEvidenceArgs,
 		VersionCmd:     vitestVersionCmd,
 		UnitNoCoverage: "no worker coverage: the run's V8 coverage named no project file, though corral ran the unit with --pool=threads; that is what vitest's forks pool gives (measured on vitest 3.2.7 and 5.0.3), so check whether the test file itself forces another pool",
-		Note:           "listing, one-test, one-file and several-file runs verified on vitest 3.2 and 5.1, salvage on 5.1; --reporter=default verified on vitest 5.1.0 against a config whose reporters list (json) hides the failures; the unit evidence pass runs each file with --pool=threads, because the forks pool wrote no worker coverage (measured on vitest 3.2.7 and 5.0.3); unit evidence counted through corral's vm source-map preload on vitest 3.2.7 and 5.0.3; vitest 1, 2 and 4 were not run. vitest has no failure hook, because corral must never write into a project's file and no command line keeps vitest's JUnit report out of one (measured on vitest 5.1.0, report/vitest-outputfile): `--outputFile=<file>` keeps it out of a config's `outputFile`, a string or an object, but a reporter the config names with options, `reporters: [['junit', {outputFile}]]`, keeps them when the command line names the same reporter, and the report goes to the project's file (`--outputFile.junit=<file>` loses to a config's string `outputFile` as well); so the killing test is read from the printed ` FAIL ` lines alone",
+		Note:           "listing, one-test, one-file and several-file runs verified on vitest 3.2 and 5.1, salvage on 5.1; --bail=1 on mutant runs verified on vitest 1.6.1, 2.1.9, 3.2.7, 5.1.0 and 5.1.2 (two failing files: one failed, where 2 fail without it; a passing run exits 0 with it), not on vitest 4; --reporter=default verified on vitest 5.1.0 against a config whose reporters list (json) hides the failures; the unit evidence pass runs each file with --pool=threads, because the forks pool wrote no worker coverage (measured on vitest 3.2.7 and 5.0.3); unit evidence counted through corral's vm source-map preload on vitest 3.2.7 and 5.0.3; vitest 1, 2 and 4 were not run. vitest has no failure hook, because corral must never write into a project's file and no command line keeps vitest's JUnit report out of one (measured on vitest 5.1.0, report/vitest-outputfile): `--outputFile=<file>` keeps it out of a config's `outputFile`, a string or an object, but a reporter the config names with options, `reporters: [['junit', {outputFile}]]`, keeps them when the command line names the same reporter, and the report goes to the project's file (`--outputFile.junit=<file>` loses to a config's string `outputFile` as well); so the killing test is read from the printed ` FAIL ` lines alone",
 	},
 	{
 		Name: "node --test", ID: "node-test", Languages: []string{"javascript", "typescript"}, Default: true,

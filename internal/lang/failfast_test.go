@@ -30,7 +30,8 @@ func TestFailFastArgsAreTheRunnersOwn(t *testing.T) {
 		{"javascript", []string{"npx", "jest"}, "--bail"},
 		{"javascript", []string{"npx", "mocha", "test/"}, "--bail"},
 		{"javascript", []string{"node", "--test"}, ""},
-		{"javascript", []string{"npx", "vitest", "run"}, ""},
+		{"javascript", []string{"npx", "vitest", "run"}, "--bail=1"},
+		{"typescript", []string{"npx", "vitest", "run"}, "--bail=1"},
 		{"typescript", []string{"npx", "jest"}, "--bail"},
 		{"typescript", []string{"node", "--experimental-strip-types", "--test"}, ""},
 		{"ruby", []string{"bundle", "exec", "rspec"}, "--fail-fast"},
@@ -444,5 +445,42 @@ func TestGoBinaryReadsTestRunAfterArgs(t *testing.T) {
 	out = run([]string{"go", "test", "-run", "^TestA$", "-count=1", "-v", ".", "-args", "-run=TestB"})
 	if !strings.Contains(out, "not defined") {
 		t.Errorf("want the binary to refuse a plain -run after -args:\n%s", out)
+	}
+}
+
+// vitest's row stops at the first failing test with --bail=1, the spelling
+// vitest 1.6.1, 2.1.9, 3.2.7, 5.1.0 (the capture's pin) and 5.1.2 all took (measured 2026-11-26: with
+// two failing files, "1 failed | 1 skipped (2)" on 1.6.1 and "1 failed (2)"
+// on the others, where a run without it reports 2 failed, and a passing
+// suite still exits 0 with it). The capture runs the row's own command, and
+// a vitest that refuses the flag is caught by the baseline re-run adequacy
+// makes WITH the flag before trusting it.
+func TestVitestFailFastIsTheRowsCommand(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "scripts", "capture-runner-fixtures.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(b)
+	for _, lang := range []string{"javascript", "typescript"} {
+		p, _ := ByName(lang)
+		base := []string{"npx", "--no-install", "vitest", "run", "failfast/vitest"}
+		if args, ok := FailFastArgsFor(p, Cmd(base)); !ok || strings.Join(args, " ") != "--bail=1" {
+			t.Fatalf("%s: FailFastArgsFor(%q) = %q, %v; want --bail=1", lang, base, args, ok)
+		}
+		placed, ok := FailFastCmd(p, Cmd(base))
+		if !ok {
+			t.Fatalf("%s: no fail-fast command for %q", lang, base)
+		}
+		for name, cmd := range map[string][]string{"vitest-bail-off": base, "vitest-bail": placed} {
+			var line string
+			for _, l := range strings.Split(script, "\n") {
+				if strings.HasPrefix(l, "want "+name+" ") {
+					line = l
+				}
+			}
+			if want := "&& " + strings.Join(cmd, " ") + " "; !strings.Contains(line, want) {
+				t.Errorf("%s %s: capture line %q does not run %q", lang, name, line, strings.Join(cmd, " "))
+			}
+		}
 	}
 }

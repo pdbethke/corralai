@@ -14,7 +14,7 @@ func TestPageNamesTheRunnerBehindANonDefaultCapability(t *testing.T) {
 	page := render(false)
 	for _, line := range strings.Split(page, "\n") {
 		if strings.HasPrefix(line, "| Stop at the first failure |") {
-			if !strings.Contains(line, "✓ (rspec)") || !strings.Contains(line, "✓ (jest, mocha)") {
+			if !strings.Contains(line, "✓ (rspec)") || !strings.Contains(line, "✓ (jest, mocha, vitest)") {
 				t.Errorf("fail-fast row does not name the runners: %s", line)
 			}
 		}

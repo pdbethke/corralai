@@ -686,7 +686,17 @@ package reposcan
 // "57", not "56", because the Swift kill-confirmation branch (#579) takes
 // "56" and either may reach main first. Behaviour bump; the shape is
 // unchanged.
-const VerdictGeneration = "57"
+// "58" (2026-11-26): proven PHPUnit tests are merged into the one class the
+// file is named after (lang.phpPlugin.ConcatTests), where "55" handed back
+// the first as the file and every other as a file of its own, and proven
+// Swift tests are merged with each part's type suffixed by its mutant id
+// (lang.swiftPlugin.ConcatTests), where "55" merged none. A "55" verdict for
+// a PHP or Swift file with two or more proven tests carries the authored
+// test and extras of the old shape and no together run of a merged file, so
+// it is re-measured rather than reused. "58" because #579 takes "56" and
+// #580 "57", and any of them may reach main first. Behaviour bump; the
+// shape is unchanged.
+const VerdictGeneration = "58"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

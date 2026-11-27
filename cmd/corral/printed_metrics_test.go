@@ -692,6 +692,7 @@ var printedMetrics = map[string]printedRow{
 	"internal/gate/config.go:ParsePolicy":                                {Exempt: "policy text naming the maximum gate timeout, a limit constant"},
 	"internal/lang/concat.go:idSuffix":                                   {Exempt: "identifier suffix: a hex code point in a renamed test identifier"},
 	"internal/lang/concat.go:mergeParts":                                 {Exempt: "error message: the numbers are limits, ids, exit codes, offsets and counts inside a failure text, not an audit measurement"},
+	"internal/lang/concat_php.go:ConcatTests":                            {Exempt: "merge refusal reason: how many times a proven PHP test names the test it would rename, carried as the part's Reason, not an audit measurement"},
 	"internal/lang/corralcov.go:Error":                                   {Exempt: "error message: how many files the coverage reducer disclosed it could not count"},
 	"internal/lang/corralcov.go:Summary":                                 {Exempt: "error summary: how many files the coverage reducer disclosed it could not count"},
 	"internal/lang/corralcov.go:corralReportBody":                        {Exempt: "error message: the numbers are limits, ids, exit codes, offsets and counts inside a failure text, not an audit measurement"},

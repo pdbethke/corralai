@@ -1,0 +1,30 @@
+[0/1] Planning build
+Building for debugging...
+[0/11] Write sources
+[1/11] Write swift-version-24593BA9C3E375BF.txt
+[3/11] Emitting module CalcTests
+[4/11] Compiling CalcTests CalcTests.swift
+[5/12] $DIR/swift/.build/x86_64-unknown-linux-gnu/debug/CalcPackageDiscoveredTests.derived/all-discovered-tests.swift
+[6/13] Write sources
+[7/13] Wrapping AST for CalcTests for debugging
+[9/17] Compiling CalcPackageDiscoveredTests all-discovered-tests.swift
+[10/17] Compiling CalcPackageDiscoveredTests CalcTests.swift
+[11/17] Emitting module CalcPackageDiscoveredTests
+[12/17] Compiling CalcPackageDiscoveredTests CalcXCTests.swift
+[14/17] Emitting module CalcPackageTests
+[15/17] Write Objects.LinkFileList
+[16/17] Linking CalcPackageTests.xctest
+Build complete! (0.73s)
+Test Suite 'Selected tests' started at 2026-11-26 13:33:18.799
+Test Suite 'Selected tests' passed at 2026-11-26 13:33:18.801
+	 Executed 0 tests, with 0 failures (0 unexpected) in 0.0 (0.0) seconds
+◇ Test run started.
+↳ Testing Library Version: 6.3.2 (70eff261d7f462c)
+↳ Target Platform: x86_64-unknown-linux-gnu
+◇ Suite Arithmetic started.
+◇ Test "adds two numbers" started.
+✘ Test "adds two numbers" recorded an issue at CalcTests.swift:22:9: Expectation failed: (add(2, 3) → 5) == ((planted ? 6 : 5) → 6)
+✘ Test "adds two numbers" failed after 0.001 seconds with 1 issue.
+✘ Suite Arithmetic failed after 0.001 seconds with 1 issue.
+✘ Test run with 1 test in 1 suite failed after 0.001 seconds with 1 issue.
+# exit: 1

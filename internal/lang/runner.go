@@ -379,12 +379,12 @@ var runners = []Runner{
 		// (measured on mocha 12.0.3).
 		ReportArgs: []string{"--reporter", "spec"},
 		ListCmd:    mochaListCmd, ParseList: mochaParseList, SingleCmd: mochaSingleCmd, ResolveByList: true, Coruns: lastFullColl,
-		FirstFailure: firstOf(mochaFailures), FailedTests: mochaFailures, DeselectCmd: mochaDeselectCmd,
+		FirstFailure: firstOf(mochaFailures), FailedTests: mochaFailures, DeselectCmd: mochaDeselectCmd, KillerCmd: mochaKillerCmd,
 		// No unit form: mocha ADDS a configured spec (.mocharc) to the files
 		// on its command line (measured on mocha 11.8.0), so `mocha <file>`
 		// runs every configured spec as well, and argv cannot show whether
 		// a config names one.
-		Note: "listing and one-test runs verified on mocha 11.8 and 12.0 (listing needs mocha 9 or later); --reporter spec verified on mocha 12.0.3 against a .mocharc json reporter; no unit evidence: its config's spec list is always added to the files on its command line, so it has no one-file run; no failure hook: mocha runs one reporter, the last one named (on mocha 12.0.3, `--reporter spec --reporter xunit` printed none of spec's lines), so a record reporter would replace the spec lines corral reads and the operator sees",
+		Note: "listing and one-test runs verified on mocha 11.8 and 12.0 (listing needs mocha 9 or later); a killing test is run alone by `--grep ^<full title>$` added to the failing run's own command, run on mocha 12.0.3 for a nested test, one whose title holds regex characters and a top-level one, one test each (two tests sharing a full title both run); --reporter spec verified on mocha 12.0.3 against a .mocharc json reporter; no unit evidence: its config's spec list is always added to the files on its command line, so it has no one-file run; no failure hook: mocha runs one reporter, the last one named (on mocha 12.0.3, `--reporter spec --reporter xunit` printed none of spec's lines), so a record reporter would replace the spec lines corral reads and the operator sees",
 	},
 	{
 		// Detect adds vitest's entry script to the word; a shell-wrapped

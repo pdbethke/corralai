@@ -1078,6 +1078,7 @@ want nextest-fail-fast-after-separator-refused 96 "$(cd fail/cargo && cargo next
 
 # Each killer command (KillerCmd: the failing run's own command, narrowed to the
 # test its failure reader named, no file added) runs that test and nothing else.
+mochakilled() { grep -oE '[0-9]+ (passing|failing)' | paste -sd' '; }
 killed() { grep -oE '([0-9]+ examples?, [0-9]+ failures?)|(Tests: [0-9]+, Assertions: [0-9]+, (Failures|Errors): [0-9]+)' | head -1; }
 # A jest title holding the printed separator ` › `: the id the jest hook's record
 # gives (`Sep::a › b`, jest_record.go) runs that test alone; the id the printed
@@ -1087,6 +1088,11 @@ want jest-killer-separator-title "1 failed, 7 skipped, 8 total" "$(env -u AI_AGE
 want jest-killer-separator-title-printed-id "8 skipped, 8 total" "$(env -u AI_AGENT -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT npx --no-install jest fail/jest-edge/e.jest.test.js --testNamePattern '^Sep a b$' 2>&1 | jesttests)"
 want rspec-killer "1 example, 1 failure" "$($RSPEC fail/spec/f_spec.rb -E '\ACalc adds \(a\+b\)\z' 2>&1 | killed)"
 want rspec-killer-nested "1 example, 1 failure" "$($RSPEC fail/spec/f_spec.rb -E '\AMyApp::Calc top level\z' 2>&1 | killed)"
+# mocha's killer: --grep over the full title, anchored; each of the fixture's
+# three failures (nested, with regex characters, top level) runs alone.
+want mocha-killer "0 passing 1 failing" "$(npx --no-install mocha fail/f.mocha.js --grep '^Calc adds \(a\+b\)$' 2>&1 | mochakilled)"
+want mocha-killer-nested "0 passing 1 failing" "$(npx --no-install mocha fail/f.mocha.js --grep '^Calc neg adds$' 2>&1 | mochakilled)"
+want mocha-killer-top-level "0 passing 1 failing" "$(npx --no-install mocha fail/f.mocha.js --grep '^top level$' 2>&1 | mochakilled)"
 want phpunit-killer "Tests: 1, Assertions: 1, Failures: 1" "$(vendor/bin/phpunit fail/tests/FTest.php --filter '/(?:^|\\)FTest::testAdds(?: with data set .*)?$/' 2>&1 | killed)"
 want phpunit-killer-dataset "Tests: 2, Assertions: 2, Failures: 1" "$(vendor/bin/phpunit fail/tests/FTest.php --filter '/(?:^|\\)FTest::testData(?: with data set .*)?$/' 2>&1 | killed)"
 # A failing data set's id (phpFailures, the argument suffix dropped) runs that

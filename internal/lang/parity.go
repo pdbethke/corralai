@@ -139,13 +139,13 @@ var Capabilities = []Capability{
 	rowCapability("run-cache", "Share a build cache between sandboxed runs", runRowCache),
 	// The language measures one run that pays a mutant's rebuild, on the
 	// workspace substrate, and floors each mutant's time cap at three times
-	// it (PerRunBuilder; adequacy.WorkspacePool.MeasureRebuild). Judged on
-	// the interface the wiring asserts, so the page cannot claim a run the
-	// code does not make. Go's floor in the sandbox comes from the run
-	// cache's warming run, a different capability (run-cache); its
-	// exemption here says so, because this table has one answer per
-	// language and not one per substrate.
-	{Key: "rebuild-floor", Title: "Floor each mutant's time limit at three times a measured rebuild run (workspace substrate)", Has: func(p Plugin) bool { _, ok := p.(PerRunBuilder); return ok }},
+	// it (RebuildProbe; adequacy.WorkspacePool.MeasureRebuild). Judged by
+	// probing the language's sample file with the function the wiring
+	// calls, so the page cannot claim a run the code does not make.
+	{Key: "rebuild-floor", Title: "Floor each mutant's time limit at three times a measured rebuild run (workspace substrate)", Has: func(p Plugin) bool {
+		_, err := RebuildProbe(p, paritySamples[p.Name()].src)
+		return err == nil
+	}},
 	// The language names the lockfile every workspace tree must hold for the
 	// trees to resolve the same dependency versions (Lockfiler;
 	// adequacy.WithLockfile). Judged on the interface the wiring asserts.
@@ -219,27 +219,14 @@ var ParityExemptions = []Exemption{
 
 	{"go", "failure-hook", "not built, by decision: corral reads go test's printed `--- FAIL:` lines. The hook exists to read a test's failure where a project setting hides the printed lines, and no project file changes what go test prints, so a project cannot hide them. go test's own record of each test, `go test -json`, has no file form (no flag writes it to a file; `go help test` and `go help testflag` on go 1.26.11) and replaces the printed output on stdout, and corral keeps only the last 64 KiB of a graded run's output, or the first 16 KiB, as it is captured in the sandbox, before any reader sees it: on go 1.26.11 a package of 600 tests that each log one line, one failing, printed 109 bytes plainly and 433,573 bytes under -json, with the failure's event 419,342 bytes from the end. Reading the stream would therefore need a JSON decoder inside the sandbox between go and the capture; an awk one was prototyped on go 1.26.7 and decoded exactly only under gawk or mawk with LC_ALL=C (busybox awk dropped NUL bytes), and the plain text it printed back was not byte-identical to go test's own (a test's direct writes and its t.Log lines are one stream in -json, and invalid UTF-8 is already replaced there), which the operator, the test writer and the ledger would read in its place"},
 
-	{"swift", "confirm-alone", "not built: the failure line swift-testing prints names a failing test by its function or display name alone (`✘ Test fails() failed after ...`), not its suite or target, and XCTest's names the class and method (`Test Case 'AdderTests.testFails' failed`) but not the target the class is in (measured on Swift 6.3.2); XCTest's `error:` line before it carries the test file's path, `Tests/CalcXCTests/CalcXCTests.swift` in that run. So the killing test cannot be narrowed by name to exactly one test; kills are confirmed by repeating the grading run. The failure hook now names a swift-testing failure by the id `swift test list` prints, from swift-testing's own record (Swift 6.3.2 and 6.4.2), which the row's one-test --filter takes; a killer command built from it has not been built or run, and an XCTest failure, read from its printed line, still names no target"},
-
 	{"swift", "fail-fast", "`swift test` has no option to stop at the first failure: the --help of Swift 6.3.2 lists none"},
 
 	{"swift", "readable-failures", "not built: the --help of Swift 6.3.2 names no project file that sets `swift test`'s options, so no project setting is known to hide the lines corral reads; this was read from the help text, not tested against a project that tried"},
 
-	{"swift", "salvage", "not built: `swift test --help` (Swift 6.3.2) lists a `--skip` option, which was not run, and the failure lines name a swift-testing test without its suite or target and an XCTest test by class and method without its target (measured on Swift 6.3.2), so a skip built from them could leave out a passing test of the same name elsewhere and narrow the run. swift-testing's own record (the failure hook) names its failures by listed id, but a deselection built from one has not been built or run"},
-
 	{"swift", "run-cache", "not built: corral's sandbox does not run Swift, and before a build directory is shared between runs we must settle how one mutant's build output is kept from being read by another's run. What sharing would save a grading run has not been measured; the one Swift timing taken is the free `--dry-run --evidence` on taplin/Lariat at be0c5fd on 2026-11-19 (workspace substrate, Swift 6.3.2 in a container, not in the sandbox), whose unit pass builds under coverage: 1 m 17.8 s for the whole dry run with that first build, and 14.3 s re-run on the built tree with `--no-selection-cache` (the evidence-pairing page)"},
 	{"go", "lockfile", "not built, and not measured: Go keeps the modules it downloads outside the checkout, in a module cache every tree reads, and a build uses the versions go.mod names, so no tree has a lockfile of its own to lack; whether trees can still differ was not measured"},
-	{"rust", "lockfile", "not built: cargo builds each tree's own target/, and a tree without the checkout's Cargo.lock resolves the dependencies afresh, so Rust needs this. But a cargo workspace keeps Cargo.lock at the workspace root, not beside a member crate's Cargo.toml, and finding that root is not built yet"},
 	{"python", "lockfile", "not built: dependencies in .venv, venv or site-packages are linked into every tree, so the trees share one installed set and resolve none of it. A suite run through tox builds its own .tox in each tree; whether those resolve the same versions was not measured"},
-	{"ruby", "lockfile", "not measured: a tree without the checkout's Gemfile.lock lets bundler resolve the Gemfile again, and whether trees then build on different versions was not measured"},
 	{"javascript", "lockfile", "not built: node_modules is linked into every tree, so the trees share one installed set and resolve none of it; a test command that installs packages itself was not considered"},
 	{"typescript", "lockfile", "not built: node_modules is linked into every tree, so the trees share one installed set and resolve none of it; a test command that installs packages itself was not considered"},
 	{"php", "lockfile", "not built: vendor/ is linked into every tree (its autoload files are copied, so each tree loads its own code), so the trees share one installed set and resolve none of it"},
-	{"go", "rebuild-floor", "not built, and not measured: on the workspace substrate no rebuild run is made, and whether a Go mutant there pays build work that the unmutated baseline does not has not been timed. In the sandbox, when the build cache is shared (\"Share a build cache between sandboxed runs\"), each mutant's time limit is floored at three times the run that warmed the cache, under the five-minute ceiling: the rule this row applies to a measured rebuild run"},
-	{"rust", "rebuild-floor", "not built, because on the one crate measured the baseline already pays the mutant's rebuild: every run on the workspace substrate writes the audited file back, and cargo rebuilds a file whose timestamp changed. Measured 2026-11-19 on regex-syntax 0.8.5 (cargo 1.90, one 32-core machine, outside the sandbox, three runs each, as cargo's Finished line timed them), `cargo test --lib --no-run` took 0.44 to 0.51 s after src/hir/translate.rs was rewritten with its own bytes and 0.47 to 0.57 s after a one-line change to it; with a comment line put first, 0.61 s in one run. In the sandbox the copy each run gets leaves the checkout's target/ out, the baseline's and a mutant's alike. Other crates were not measured"},
-	{"python", "rebuild-floor", "not measured: the time a mutant's run spends on work the unmutated baseline's does not was not compared. On the workspace substrate each run is given a fresh, empty bytecode cache directory, the baseline's included"},
-	{"ruby", "rebuild-floor", "not measured: the time a mutant's run spends on work the unmutated baseline's does not was not compared"},
-	{"javascript", "rebuild-floor", "not measured: the time a mutant's run spends on work the unmutated baseline's does not (a transform cache, for one) was not compared"},
-	{"typescript", "rebuild-floor", "not measured: the time a mutant's run spends on work the unmutated baseline's does not (transpiling, a transform cache) was not compared"},
-	{"php", "rebuild-floor", "not measured: the time a mutant's run spends on work the unmutated baseline's does not was not compared"},
 }

@@ -2086,10 +2086,11 @@ func poolDuration(d *adequacy.Disclosure) time.Duration {
 var measureRebuild = (*adequacy.WorkspacePool).MeasureRebuild
 
 // rebuildFloor gives the file's grading runs a measured rebuild run to floor
-// the per-mutant cap on (adequacy.WorkspacePool.MeasureRebuild), when the
-// language's mutant pays a relink its baseline does not (lang.PerRunBuilder).
-// It runs nothing for any other language, and nothing when the operator named
-// --test-timeout (testTimeout), a cap no floor reaches.
+// the per-mutant cap on (adequacy.WorkspacePool.MeasureRebuild), in every
+// language: the run is made on lang.RebuildProbe's change to the file, and
+// the pool keeps that probe for the re-probe that confirms a timed-out
+// mutant's kill (adequacy.RebuildProbeJail). It runs nothing when the
+// operator named --test-timeout (testTimeout), a cap no floor reaches.
 //
 // took is the run's wall clock (0 when none ran), for the pool phase of the
 // file's timing. record is the file row's CapFloor: the run that set the
@@ -2102,15 +2103,14 @@ var measureRebuild = (*adequacy.WorkspacePool).MeasureRebuild
 // off at its timeout included: it is slower than any that finished) or the
 // checkout was not put back.
 func rebuildFloor(ctx context.Context, pool *adequacy.WorkspacePool, plug lang.Plugin, codeKey string, code []byte, cmd []string, testTimeout time.Duration) (took time.Duration, record string, err error) {
-	pb, ok := plug.(lang.PerRunBuilder)
-	if !ok || !adequacy.CapFloorApplies(testTimeout) || len(cmd) == 0 {
+	if !adequacy.CapFloorApplies(testTimeout) || len(cmd) == 0 {
 		return 0, "", nil
 	}
-	probed, ok := pb.RebuildProbe(codeKey, string(code))
-	if !ok {
-		return 0, "none: its first line must stay first (a shebang), so no rebuild run was made", nil
+	probed, perr := lang.RebuildProbe(plug, string(code))
+	if perr != nil {
+		return 0, "none: " + perr.Error() + ", so no rebuild run was made", nil
 	}
-	took, err = measureRebuild(pool, ctx, map[string]string{}, codeKey, probed, cmd)
+	took, err = measureRebuild(pool, ctx, map[string]string{}, codeKey, string(code), probed, cmd)
 	var re *adequacy.RestoreError
 	switch {
 	case err == nil:
@@ -2793,7 +2793,15 @@ func jobRebuildFloor(ctx context.Context, in jailWiringInput, pool *adequacy.Wor
 	if !ok {
 		return nil
 	}
-	took, record, err := rebuildFloor(ctx, pool, plug, codeKey, in.code, in.checkArgv, in.testTimeout)
+	// The run goes through the rewrite every grading run on this pool takes
+	// (the report flags and the failure hook, built as the scorer's below):
+	// a door that runs a command on the grading jail must, or the floor is
+	// timed on a command no mutant runs.
+	cmd := in.checkArgv
+	if rewrite := gradingRewrite(gradingPlugin(in.langName), in.inv, in.checkArgv, nil); rewrite != nil && len(cmd) > 0 {
+		cmd = rewrite(cmd)
+	}
+	took, record, err := rebuildFloor(ctx, pool, plug, codeKey, in.code, cmd, in.testTimeout)
 	if in.concurrency != nil {
 		in.concurrency.RebuildDuration = took
 	}
@@ -2816,9 +2824,10 @@ func (h *workspacePool) close() {
 // workspaceRunnerOpts is the option list a workspace pool of trees trees on
 // the checkout at repoDir is built with, for the language plug: its per-run
 // env, and when there is more than one tree its per-tree env, the lockfile
-// every tree must hold when the language declares one (lang.LockfileFor),
+// every tree must hold when the language declares one (lang.LockfileFor, for
+// the audited file codePath; asked only then, since Rust's asks cargo),
 // and the language's build directories (lang.BuildDirer).
-func workspaceRunnerOpts(plug lang.Plugin, trees int, repoDir string) []adequacy.WorkspaceOption {
+func workspaceRunnerOpts(plug lang.Plugin, trees int, repoDir, codePath string) []adequacy.WorkspaceOption {
 	opts := []adequacy.WorkspaceOption{adequacy.WithPerRunEnv(plug.WorkspaceRunEnv)}
 	// WithTreeEnv is per-TREE and therefore only meaningful once there is
 	// more than one: it gives a copy its own import path (Python) and its
@@ -2839,8 +2848,10 @@ func workspaceRunnerOpts(plug lang.Plugin, trees int, repoDir string) []adequacy
 			return te.TreeEnv(tree, share)
 		}))
 	}
-	if rel, ok := lang.LockfileFor(plug, repoDir); ok && trees > 1 {
-		opts = append(opts, adequacy.WithLockfile(rel))
+	if trees > 1 {
+		if rel, ok := lang.LockfileFor(plug, repoDir, codePath); ok {
+			opts = append(opts, adequacy.WithLockfile(rel))
+		}
 	}
 	// The audited language's build directories, and only its own: see
 	// adequacy.WithBuildDirs. A language that declares none passes none.
@@ -3024,7 +3035,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 			// rather than failing the whole audit over it.
 			var runnerOpts []adequacy.WorkspaceOption
 			if plug, ok := lang.ByName(in.langName); ok {
-				runnerOpts = workspaceRunnerOpts(plug, trees, in.repoDir)
+				runnerOpts = workspaceRunnerOpts(plug, trees, in.repoDir, in.codePath)
 			}
 
 			built, disc, perr := newWorkspacePool(ctx, in.repoDir, trees, in.timeout, runnerOpts...)

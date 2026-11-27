@@ -51,15 +51,6 @@ func (swiftPlugin) VersionCmd() []string { return []string{"swift", "--version"}
 // LineComment is the swift line-comment marker.
 func (swiftPlugin) LineComment() string { return "//" }
 
-// RebuildProbe is PerRunBuilder's one rule in Swift's comment marker. SwiftPM
-// recompiles a file whose timestamp changed but relinks only when the
-// compiled object changed, so the unmutated baseline relinks nothing and a
-// mutant relinks every product that links the module; see PerRunBuilder for
-// the measurement.
-func (p swiftPlugin) RebuildProbe(_, src string) (string, bool) {
-	return leadingCommentProbe(p.LineComment(), src)
-}
-
 // DependencyDirs declares the two directories SwiftPM writes beside a
 // package, both RunWrites.
 //
@@ -116,6 +107,10 @@ func (swiftPlugin) BuildDirs() []BuildDir {
 func (swiftPlugin) Lockfile() Lockfile {
 	return Lockfile{Name: "Package.resolved", Manifest: "Package.swift", SearchDepth: swiftPackageSearchDepth}
 }
+
+// LockfileDir is manifestDir: SwiftPM keeps Package.resolved beside the root
+// package's Package.swift, and the nearest manifest is the root package.
+func (swiftPlugin) LockfileDir(manifestDir string) string { return manifestDir }
 
 // ManifestPins: see Lockfiler.
 func (swiftPlugin) ManifestPins(manifestDir string) bool {

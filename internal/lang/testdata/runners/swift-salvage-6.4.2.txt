@@ -1,0 +1,26 @@
+Building for debugging...
+Build complete! (0.26 secs)
+Test Suite 'Selected tests' started at 2026-11-26 13:48:44.337
+Test Suite 'AdderTests' started at 2026-11-26 13:48:44.338
+Test Case 'AdderTests.testAdds' started at 2026-11-26 13:48:44.338
+Test Case 'AdderTests.testAdds' passed (0.0 seconds)
+Test Case 'AdderTests.testAddsTwice' started at 2026-11-26 13:48:44.338
+Test Case 'AdderTests.testAddsTwice' passed (0.0 seconds)
+Test Suite 'AdderTests' passed at 2026-11-26 13:48:44.338
+	 Executed 2 tests, with 0 failures (0 unexpected) in 0.0 (0.0) seconds
+Test Suite 'Selected tests' passed at 2026-11-26 13:48:44.338
+	 Executed 2 tests, with 0 failures (0 unexpected) in 0.0 (0.0) seconds
+Test Suite 'Selected tests' started at 2026-11-26 13:48:44.343
+Test Suite 'Selected tests' passed at 2026-11-26 13:48:44.344
+	 Executed 0 tests, with 0 failures (0 unexpected) in 0.0 (0.0) seconds
+◇ Test run started.
+↳ Testing Library Version: 6.4.2 (288a2328ff84644)
+↳ Target Platform: x86_64-unknown-linux-gnu
+◇ Suite Arithmetic started.
+◇ Test parses() started.
+◇ Test parsesTwice() started.
+✔ Suite Arithmetic passed after 0.001 seconds.
+✔ Test parsesTwice() passed after 0.001 seconds.
+✔ Test parses() passed after 0.001 seconds.
+✔ Test run with 2 tests in 1 suite passed after 0.001 seconds.
+# exit: 0

@@ -536,7 +536,10 @@ package reposcan
 // by repeating the whole grading run. A kill the test alone does not repeat
 // is still confirmed by the repeat, so a count can only stay or move to the
 // stricter reading; the recorded confirmation differs. Behaviour bump; the
-// shape is unchanged.
+// shape is unchanged. (Corrected 2026-11-26: the count can also rise. The
+// test alone can confirm a kill the repeat would have left unmeasured, when
+// the whole suite fails on the original code again for another, flaky test
+// while the killing test alone passes on it.)
 // "53" (2026-11-23): cargo test and cargo-nextest salvage an authored test
 // whose cases partly fail on the unmutated code (lang.Runner.FailedTests and
 // DeselectCmd: libtest's `--exact --skip`, and a nextest filterset excluding
@@ -641,6 +644,48 @@ package reposcan
 // salvage -skip declines the same, and `-test.skip` / `--test.skip` after
 // -args. Behaviour bump;
 // the shape is unchanged.
+// "56" (2026-11-26): swift test confirms a kill by running the killing test
+// alone (lang.Runner.KillerCmd: the one-test --filter, built only from an id
+// swift-testing's own record gives), as every other language does; a "55"
+// Swift verdict confirmed every kill by repeating the whole grading run. A
+// kill named from the printed lines only (XCTest's Class.method, a
+// swift-testing test the record omits) is still confirmed by the repeat. As
+// with "52", the recorded confirmation differs, and a count can stay or
+// rise: a kill the test alone does not repeat falls to the repeat as before,
+// and the test alone can confirm a kill the repeat would have left
+// unmeasured (the whole suite failing again on the original code for
+// another, flaky test).
+// Overloaded parameterised tests share one id, so their "alone" run runs
+// each overload. Also in "56": swift test salvages an authored test
+// whose cases partly fail on the unmutated code (lang.Runner.FailedTests and
+// DeselectCmd: a --skip per failure the record names, and per XCTest
+// Class.method in any target), as every other language does; a "55" Swift
+// verdict discarded such a test whole, so its passing cases proved nothing.
+// "55" has reached main, so this is its own generation.
+// Behaviour bump; the shape is unchanged.
+// "57" (2026-11-26): every language makes the workspace substrate's rebuild
+// run (lang.RebuildProbe), where only Swift did, so a Go, Python, Ruby,
+// JavaScript, TypeScript, PHP or Rust file graded there has its per-mutant
+// cap floored at three times a run on the probe, as "44" floored a warmed
+// jail's. A timed-out mutant's kill is now confirmed by re-running that
+// probe, which pays the rebuild the mutant paid, where "55" re-ran the
+// unmutated code, which on Swift skips the relink (adequacy.RebuildProbeJail),
+// so a box too slow to finish a rebuild in the budget fails the file's
+// grading with the reason instead of crediting a kill; the kill
+// confirmation's repeat, when it times out, is judged on the probe the same
+// way and leaves the mutant unmeasured, where "55" called it repeated on the
+// cheap unmutated run. A Python file's coding cookie and a Ruby file's
+// encoding comment stay where they are read, after which the probe goes. (A go test command without
+// -count=1 replays a cached result for the probe as for the unmutated code,
+// go 1.26.7, so for Go this changes the cap and the re-probe by nothing.) A rebuild run is refused only when it is itself slower than the
+// five-minute ceiling, where "55" refused one whose three times was, so a
+// Swift file whose rebuild run took 100 s to 5 min, not graded under "55",
+// is now graded with its cap at the ceiling. A "55" verdict from the
+// workspace substrate may hold a timeout kill this generation would not
+// credit, or a cap it would floor, so it is re-measured rather than reused.
+// "57", not "56", because the Swift kill-confirmation branch (#579) takes
+// "56" and either may reach main first. Behaviour bump; the shape is
+// unchanged.
 // "58" (2026-11-26): proven PHPUnit tests are merged into the one class the
 // file is named after (lang.phpPlugin.ConcatTests), where "55" handed back
 // the first as the file and every other as a file of its own, and proven

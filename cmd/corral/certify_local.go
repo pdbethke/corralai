@@ -3097,9 +3097,12 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		// has ONE tree, and a scorer told to run six mutants at once against
 		// it would queue five of them behind the borrow channel for the whole
 		// audit. The number that scores must be the number that exists.
-		// The workspace has no run cache; its one rewrite is the report flags,
-		// through the same door the jail's commands take.
-		rewrite := gradingRewrite(gradingPlugin(in.langName), in.inv, in.checkArgv, nil)
+		// The workspace shares no cache of corral's making, but every run
+		// uses the operator's own tool cache (GOCACHE), so it takes the
+		// runner row's no-replay rewrite (workspaceNoReplay) and then the
+		// report flags, through the same door the jail's commands take.
+		plug := gradingPlugin(in.langName)
+		rewrite := gradingRewrite(plug, in.inv, in.checkArgv, workspaceNoReplay(plug, in.inv, in.checkArgv))
 		w.scorer = advpool.JailScorer{Jail: pool, RepoDir: in.repoDir, BaseFiles: base, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Landing: w.landing, Concurrency: pool.Trees(), Lang: in.langName, Selection: in.selection, SelectionMap: in.selectionMap, FailureParser: failureParser, KillerCmd: killerCmd, FailFast: failFast, EvidenceLines: evidence, CommandRewrite: rewrite}
 		w.validator = advpool.JailValidator{Jail: pool, RepoDir: in.repoDir, BaseFiles: base, DevTestPath: w.devTestKey, Landing: w.landing, CommandRewrite: rewrite}
 		w.jailEnum = advpool.JailEnumerator{Jail: pool, BaseFiles: base}

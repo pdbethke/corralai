@@ -54,7 +54,7 @@ type gradingRunCache struct {
 	// row's RunCache is final(jail), read when the file's run ends.
 	Record string
 	// warmRejected is set by the warm check when the dev pass's own command
-	// is one the rewrite cannot give the flag that forbids a cached result,
+	// is one the row cannot read as forbidding a cached result,
 	// the one reason a decided-shared cache goes unwarmed with a dev pass.
 	// nil unless the cache is decided shared.
 	warmRejected *atomic.Bool
@@ -91,7 +91,7 @@ func (gc gradingRunCache) unwarmed(j adequacy.Jail) (why string, unwarmed bool) 
 	}
 	reason := "no dev pass ran"
 	if gc.warmRejected != nil && gc.warmRejected.Load() {
-		reason = "the dev suite's command could not be given the flag that forbids a cached result"
+		reason = "the dev suite's command could not be read as one that forbids a cached result"
 	}
 	return "never warmed (" + reason + ")", true
 }
@@ -110,24 +110,31 @@ func (gc gradingRunCache) unwarmed(j adequacy.Jail) (why string, unwarmed bool) 
 // that runs no test — gets no cache and no rewrite: today's run, with the
 // reason on the record. A jail that then reports its cache unshared (a backend
 // that cannot overlay, a directory that cannot be made) drops the rewrite too.
+// So does a cache the row's Unsupported refuses for this command over this
+// tree (read, the tree as the jail will see it: the seed, then the
+// dependency directories): jest's in a project that uses ts-jest, whose
+// cache key leaves out the files a file imports.
 //
 // The caller closes a returned jail that is an adequacy.RunCacheJail when the
 // file's run ends (it removes the cache directory); closing a jail with no
 // cache is a no-op.
-func newGradingJail(iso sandbox.Isolator, timeout time.Duration, depBinds []adequacy.DepBind, plug lang.Plugin, inv lang.Invocation, baseline []string) (adequacy.Jail, gradingRunCache) {
+func newGradingJail(iso sandbox.Isolator, timeout time.Duration, depBinds []adequacy.DepBind, plug lang.Plugin, inv lang.Invocation, baseline []string, read func(rel string) ([]byte, error)) (adequacy.Jail, gradingRunCache) {
 	if plug == nil {
 		return newRunJail(iso, timeout, depBinds), gradingRunCache{}
 	}
-	env, ok := lang.RunCacheFor(plug, inv)
-	if !ok {
+	cache, why := lang.RunCacheFor(plug, inv, read)
+	if why != "" {
+		return newRunJail(iso, timeout, depBinds), gradingRunCache{Record: "unshared: " + why}
+	}
+	if cache == nil {
 		return newRunJail(iso, timeout, depBinds), gradingRunCache{}
 	}
 	if _, state := lang.RunCacheCmd(plug, inv, baseline); state != lang.RunCacheRewritten {
 		return newRunJail(iso, timeout, depBinds), gradingRunCache{
-			Record: "unshared: the test command cannot be given the flag that forbids a cached result (" + state.String() + ")",
+			Record: "unshared: the test command cannot be read as one that forbids a cached result (" + state.String() + ")",
 		}
 	}
-	jail := newRunJail(iso, timeout, depBinds, adequacy.WithRunCache(env))
+	jail := newRunJail(iso, timeout, depBinds, adequacy.WithRunCache(cache))
 	rj, isRunCache := jail.(adequacy.RunCacheJail)
 	if !isRunCache {
 		return jail, gradingRunCache{Record: "unshared: the jail cannot share a cache"}

@@ -149,3 +149,20 @@ func TestTheWorkspaceHeaderSaysWhenACommandMayReplayACachedResult(t *testing.T) 
 		t.Errorf("pytest has no no-replay rewrite, yet:\n%s", buf.String())
 	}
 }
+
+// The workspace's no-replay rewrite never adds a shared cache's words: jest
+// shares a cache directory in the jail by naming it on the command
+// (--cacheDirectory=/corral-cache, lang.RunCacheCmd), and the workspace has
+// no such directory, so a jest command there is run as typed.
+func TestWorkspaceJestCommandsNameNoSharedCache(t *testing.T) {
+	argv := []string{"node", "./node_modules/jest/bin/jest.js"}
+	js := gradingPlugin("javascript")
+	if rw := workspaceNoReplay(js, lang.Cmd(argv), argv); rw != nil {
+		if got := rw(argv); strings.Contains(strings.Join(got, " "), "cacheDirectory") {
+			t.Errorf("the workspace rewrite of %v names a cache: %v", argv, got)
+		}
+	}
+	if got, _ := lang.RunCacheCmd(js, lang.Cmd(argv), argv); !strings.Contains(strings.Join(got, " "), "--cacheDirectory=") {
+		t.Errorf("control: the jail's RunCacheCmd(%v) = %v, want the shared cache named", argv, got)
+	}
+}

@@ -74,6 +74,22 @@ want() { # want <runner> <expected> <got>
   if [ "$2" = "$3" ]; then echo "ok   $1: ran $3"; else echo "FAIL $1: ran $3, want $2"; fail=1; fi
 }
 
+# swiftran: the tests a run executed, from its own summaries: every
+# swift-testing "Test run with N tests" plus every XCTest run's total, the
+# "Executed N tests" that closes its outermost suite (the suites nested in
+# it repeat their part). Swift 6.4.2 under swiftbuild runs each test product
+# on its own and prints one summary of each framework per product, so they
+# are summed; reading the last of each counted 5 where 8 ran. The same
+# count as swiftRan in internal/lang/swift_runner_test.go.
+swiftran() {
+  awk '
+    /^Test Suite .* started at / { depth++; next }
+    /^Test Suite .* (passed|failed) at / { depth--; outer = (depth == 0); next }
+    /^[ \t]*Executed [0-9]+ tests?, with/ { if (outer) n += $2; outer = 0; next }
+    /Test run with [0-9]+ tests? / { s = $0; sub(/.*Test run with /, "", s); sub(/ .*/, "", s); n += s }
+    END { print n + 0 }'
+}
+
 # --- swift test (internal/lang/swift_runner.go) ----------------------------
 # The package in src/swift has two test targets: CalcTests (swift-testing,
 # five tests) and CalcXCTests (XCTest, three). Run from DIR/swift; $SWIFT may
@@ -87,21 +103,6 @@ capture_swift() (
   swiftout() {
     local f="$1"; shift
     "$@" 2>&1 | sed -e "s#$pdir#\$DIR/swift#g" > "$OUT/$f" || true
-  }
-  # swiftran: the tests a run executed, from its own summaries: every
-  # swift-testing "Test run with N tests" plus every XCTest run's total, the
-  # "Executed N tests" that closes its outermost suite (the suites nested in
-  # it repeat their part). Swift 6.4.2 under swiftbuild runs each test product
-  # on its own and prints one summary of each framework per product, so they
-  # are summed; reading the last of each counted 5 where 8 ran. The same
-  # count as swiftRan in internal/lang/swift_runner_test.go.
-  swiftran() {
-    awk '
-      /^Test Suite .* started at / { depth++; next }
-      /^Test Suite .* (passed|failed) at / { depth--; outer = (depth == 0); next }
-      /^[ \t]*Executed [0-9]+ tests?, with/ { if (outer) n += $2; outer = 0; next }
-      /Test run with [0-9]+ tests? / { s = $0; sub(/.*Test run with /, "", s); sub(/ .*/, "", s); n += s }
-      END { print n + 0 }'
   }
   # swiftcmd <fixture> <argv> <cmd...>: `# argv:` the operator's command, `$ `
   # the row's command (cmd, whose first word is swift), the run of cmd under
@@ -265,6 +266,23 @@ capture_swift_hook() (
   CORRAL_FAIL_TESTING=1 hookrun "swift-hook-crash-$v.txt" "${GRADED[@]}"
   rm Tests/CalcTests/Crash.swift
   want "swift-hook-crash-exit-$v" 1 "$(exitof "swift-hook-crash-$v.txt")"
+  # The killer command (swiftKillerCmd): the failing run narrowed to one id
+  # its record gave, by the one-test --filter, runs that test alone and
+  # fails: one in a suite with a display name, and a parameterised one (one
+  # test, three cases, one failing).
+  CORRAL_FAIL_TESTING=1 hookrun "swift-killer-suite-$v.txt" swift test --filter '^CalcTests\.Arithmetic/adds\(\)(?:/|$)'
+  want "swift-killer-suite-$v" "1 1" "$(swiftran < "$OUT/swift-killer-suite-$v.txt") $(exitof "swift-killer-suite-$v.txt")"
+  CORRAL_FAIL_TESTING=1 hookrun "swift-killer-param-$v.txt" swift test --filter '^CalcTests\.Arithmetic/doubles\(value:\)(?:/|$)'
+  want "swift-killer-param-$v" "1 1" "$(swiftran < "$OUT/swift-killer-param-$v.txt") $(exitof "swift-killer-param-$v.txt")"
+  # Salvage (swiftDeselectCmd): both frameworks failing, rerun skipping the
+  # four failures by what swiftFailedTests names (three record ids, XCTest's
+  # Class.method in any target): the other four tests run and pass; with the
+  # unit filter a unit pass carries, the two left in that target.
+  local skips=(--skip '^CalcTests\.Arithmetic/adds\(\)(?:/|$)' --skip '^CalcTests\.Arithmetic/doubles\(value:\)(?:/|$)' --skip '^CalcTests\.Arithmetic/fails\(\)(?:/|$)' --skip '^[^.]+\.AdderTests/testFails(?:/|$)')
+  CORRAL_FAIL_TESTING=1 CORRAL_FAIL_XCTEST=1 hookrun "swift-salvage-$v.txt" swift test "${skips[@]}"
+  want "swift-salvage-$v" "4 0" "$(swiftran < "$OUT/swift-salvage-$v.txt") $(exitof "swift-salvage-$v.txt")"
+  CORRAL_FAIL_TESTING=1 CORRAL_FAIL_XCTEST=1 hookrun "swift-salvage-unit-$v.txt" swift test --filter '^(?:CalcTests)\.' "${skips[@]}"
+  want "swift-salvage-unit-$v" "2 0" "$(swiftran < "$OUT/swift-salvage-unit-$v.txt") $(exitof "swift-salvage-unit-$v.txt")"
   return "$fail"
 )
 
@@ -1076,8 +1094,22 @@ want nextest-profile-no-fail-fast 3 "$(cd fail/cargo && cargo nextest run -j 1 -
 want nextest-fail-fast-before-separator 1 "$(cd fail/cargo && cargo nextest run -j 1 --fail-fast -- tests:: 2>&1 | nextran_of)"
 want nextest-fail-fast-after-separator-refused 96 "$(cd fail/cargo && cargo nextest run -j 1 -- tests:: --fail-fast >/dev/null 2>&1; echo $?)"
 
+# --- fail-fast: vitest's row adds --bail=1 to mutant runs (FailFastCmd). Two
+# files each fail one test; without the flag both fail, with it the run stops
+# after the first (vitest 5 reports the other file in the total, neither
+# passed nor failed), and a passing run still exits 0 with it. The flag is
+# placed where the row places it; --no-file-parallelism after it makes the
+# count exact, as -j 1 does for nextest above.
+# TestVitestFailFastIsTheRowsCommand holds the commands equal to the row's.
+vfailed() { sed 's/\x1b\[[0-9;]*m//g' | grep -oE 'Test Files +[0-9]+ failed' | grep -oE '[0-9]+' | head -1; }
+want vitest-bail-off 2 "$(cd "$DIR" && npx --no-install vitest run failfast/vitest 2>&1 | vfailed)"
+want vitest-bail 1 "$(cd "$DIR" && npx --no-install vitest run failfast/vitest --bail=1 --no-file-parallelism 2>&1 | vfailed)"
+want vitest-bail-passing-exit 0 "$(cd "$DIR" && npx --no-install vitest run calc.vitest.test.mjs --bail=1 >/dev/null 2>&1; echo $?)"
+
 # Each killer command (KillerCmd: the failing run's own command, narrowed to the
 # test its failure reader named, no file added) runs that test and nothing else.
+minikilled() { grep -oE '[0-9]+ runs, [0-9]+ assertions, [0-9]+ failures' | head -1; }
+mochakilled() { grep -oE '[0-9]+ (passing|failing)' | paste -sd' '; }
 killed() { grep -oE '([0-9]+ examples?, [0-9]+ failures?)|(Tests: [0-9]+, Assertions: [0-9]+, (Failures|Errors): [0-9]+)' | head -1; }
 # A jest title holding the printed separator ` › `: the id the jest hook's record
 # gives (`Sep::a › b`, jest_record.go) runs that test alone; the id the printed
@@ -1087,6 +1119,16 @@ want jest-killer-separator-title "1 failed, 7 skipped, 8 total" "$(env -u AI_AGE
 want jest-killer-separator-title-printed-id "8 skipped, 8 total" "$(env -u AI_AGENT -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT npx --no-install jest fail/jest-edge/e.jest.test.js --testNamePattern '^Sep a b$' 2>&1 | jesttests)"
 want rspec-killer "1 example, 1 failure" "$($RSPEC fail/spec/f_spec.rb -E '\ACalc adds \(a\+b\)\z' 2>&1 | killed)"
 want rspec-killer-nested "1 example, 1 failure" "$($RSPEC fail/spec/f_spec.rb -E '\AMyApp::Calc top level\z' 2>&1 | killed)"
+# minitest's killer: --name matches Class#method (minitest 5.20.0), so the full
+# id runs that one test, a nested module's included; the bare method name it
+# also matches cannot hold the anchored `#`.
+want minitest-killer "1 runs, 1 assertions, 1 failures" "$(ruby fail/f_test.rb --name '/\ACalcTest#test_adds\z/' 2>&1 | minikilled)"
+want minitest-killer-nested "1 runs, 1 assertions, 1 failures" "$(ruby fail/f_test.rb --name '/\AMyApp::NegTest#test_x\z/' 2>&1 | minikilled)"
+# mocha's killer: --grep over the full title, anchored; each of the fixture's
+# three failures (nested, with regex characters, top level) runs alone.
+want mocha-killer "0 passing 1 failing" "$(npx --no-install mocha fail/f.mocha.js --grep '^Calc adds \(a\+b\)$' 2>&1 | mochakilled)"
+want mocha-killer-nested "0 passing 1 failing" "$(npx --no-install mocha fail/f.mocha.js --grep '^Calc neg adds$' 2>&1 | mochakilled)"
+want mocha-killer-top-level "0 passing 1 failing" "$(npx --no-install mocha fail/f.mocha.js --grep '^top level$' 2>&1 | mochakilled)"
 want phpunit-killer "Tests: 1, Assertions: 1, Failures: 1" "$(vendor/bin/phpunit fail/tests/FTest.php --filter '/(?:^|\\)FTest::testAdds(?: with data set .*)?$/' 2>&1 | killed)"
 want phpunit-killer-dataset "Tests: 2, Assertions: 2, Failures: 1" "$(vendor/bin/phpunit fail/tests/FTest.php --filter '/(?:^|\\)FTest::testData(?: with data set .*)?$/' 2>&1 | killed)"
 # A failing data set's id (phpFailures, the argument suffix dropped) runs that

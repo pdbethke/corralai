@@ -49,7 +49,7 @@ func TestAGoFileWhoseDevCommandFailsTheWarmCheckRecordsNeverWarmed(t *testing.T)
 		t.Fatal(err)
 	}
 	w.cleanup()
-	const want = "unshared: never warmed (the dev suite's command could not be given the flag that forbids a cached result)"
+	const want = "unshared: never warmed (the dev suite's command could not be read as one that forbids a cached result)"
 	if sink != want {
 		t.Errorf("record = %q, want %q", sink, want)
 	}

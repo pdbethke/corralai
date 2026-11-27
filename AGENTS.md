@@ -278,6 +278,36 @@ or not anything is shared: without it the baseline, its stability runs and a tim
 kill's re-probe replayed `(cached)` results, and a timeout was confirmed as a kill
 (`TestAWorkspaceGoBaselineThatReplaysCreditsAFalseKill`).
 
+**A Rust file's grading shares cargo's target directory by the same mechanism, and its trap is mtimes, not results.**
+The cargo rows declare `CARGO_TARGET_DIR` as their cache (`cargoRunCache` in `internal/lang/rust_units.go`). cargo stores no
+test result, so their `RunCacheArgs` rewrite nothing: a `cargo test` or `cargo nextest run` corral can read is
+`RunCacheRewritten` as it stands, and anything else is `unreadable` and shares nothing, as for go. What a shared target/
+holds is build output, and cargo decides a path crate's build is still good by comparing its source files' mtimes with
+the build's. So `runInJailCache` takes the cache BEFORE it writes a run's workspace: a frozen run's files are then always
+newer than the warm build, and the project's own crates are rebuilt in every run while the vendored dependencies are not.
+Before that order, a mutant written while the warm build was still running was graded as the original
+(`TestACargoRunIssuedDuringTheWarmBuildIsGradedOnItsOwnCode`; the backdated-mutant control beside it shows the hazard).
+A command naming its own `--target-dir`, which cargo prefers to the variable, shares none. `internal/adequacy/run_cache_cargo_test.go`
+runs this argument against the real jail.
+
+**jest shares its cache directory by the same mechanism, named on the command, and its traps are `--onlyFailures` and ts-jest.**
+jest reads no environment variable for its cache, so its `EvidenceCache` has no `Env` and declares `Args`
+(`--cacheDirectory=<dir>`), which `lang.RunCacheCmd` adds to every command the row reads as `RunCacheRewritten`
+(`jestRunCache` in `internal/lang/jest_cache.go`); `WithRunCache` takes the `*lang.EvidenceCache`, as `Seed` does, and the
+jail sets a variable only for a cache that has one. jest keeps no test result, only transforms keyed by each file's bytes,
+mtime-keyed module metadata (safe by the cache-before-workspace order above) and per-file timings, and those timings are what
+`--onlyFailures` selects by: on a warm cache a mutant's run ran no test. So a command that sets the cache or selects tests
+from jest's records or version control shares none (`jestCacheUnsupported`). A transform is keyed by its own file's bytes,
+not the files it imports, and ts-jest compiles an import's value (a const enum member) into the importer, so over a warm
+cache a mutant of the imported file was graded as the original (ts-jest 26.5.6): a project whose package.json names ts-jest
+or whose node_modules holds it shares none either. That refusal reads the TREE, so `lang.RunCacheFor` takes a reader
+(`adequacy.TreeFileReader` over the seed and the dependency binds in `newGradingJail`; the checkout on disk for the scan
+header) and has no default one; `lang.NoTree` is the explicit "no tree". The unit evidence pass asks for an `Args` cache
+only when `RunCacheCmd` reads the operator's command, as grading does (`askedCache`): through a package script its words
+were appended after the script's own and Unsupported never saw them. `internal/adequacy/run_cache_jest_test.go`
+runs the argument against the real jail with jest from `CORRALAI_JEST_NODE_MODULES` (CI installs the runner-fixture pins,
+which include the Babel presets its TypeScript case compiles with).
+
 ## Trying it quickly
 
 `corral demo --writer-model <m> --mutant-model <m> --critic-model <m>` writes a
@@ -506,7 +536,7 @@ only the authored one.
   put first moves every later line, which changes the compiled object, and
   relinked the same six products a mutant relinked (measured on
   taplin/Lariat). That is the rebuild
-  probe (`leadingCommentProbe`, `lang.PerRunBuilder`). An unused `private func`
+  probe (`lang.RebuildProbe`, every language's since 2026-11-26). An unused `private func`
   was tried too and rejected: it changes the module's interface and rebuilds
   every dependent target, far past what a body mutant costs.
 - **`--enable-code-coverage` in the default build directory evicts the

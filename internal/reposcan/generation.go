@@ -536,7 +536,10 @@ package reposcan
 // by repeating the whole grading run. A kill the test alone does not repeat
 // is still confirmed by the repeat, so a count can only stay or move to the
 // stricter reading; the recorded confirmation differs. Behaviour bump; the
-// shape is unchanged.
+// shape is unchanged. (Corrected 2026-11-26: the count can also rise. The
+// test alone can confirm a kill the repeat would have left unmeasured, when
+// the whole suite fails on the original code again for another, flaky test
+// while the killing test alone passes on it.)
 // "53" (2026-11-23): cargo test and cargo-nextest salvage an authored test
 // whose cases partly fail on the unmutated code (lang.Runner.FailedTests and
 // DeselectCmd: libtest's `--exact --skip`, and a nextest filterset excluding
@@ -641,6 +644,97 @@ package reposcan
 // salvage -skip declines the same, and `-test.skip` / `--test.skip` after
 // -args. Behaviour bump;
 // the shape is unchanged.
+// "56" (2026-11-26): swift test confirms a kill by running the killing test
+// alone (lang.Runner.KillerCmd: the one-test --filter, built only from an id
+// swift-testing's own record gives), as every other language does; a "55"
+// Swift verdict confirmed every kill by repeating the whole grading run. A
+// kill named from the printed lines only (XCTest's Class.method, a
+// swift-testing test the record omits) is still confirmed by the repeat. As
+// with "52", the recorded confirmation differs, and a count can stay or
+// rise: a kill the test alone does not repeat falls to the repeat as before,
+// and the test alone can confirm a kill the repeat would have left
+// unmeasured (the whole suite failing again on the original code for
+// another, flaky test).
+// Overloaded parameterised tests share one id, so their "alone" run runs
+// each overload. Also in "56": swift test salvages an authored test
+// whose cases partly fail on the unmutated code (lang.Runner.FailedTests and
+// DeselectCmd: a --skip per failure the record names, and per XCTest
+// Class.method in any target), as every other language does; a "55" Swift
+// verdict discarded such a test whole, so its passing cases proved nothing.
+// "55" has reached main, so this is its own generation.
+// Behaviour bump; the shape is unchanged.
+// "57" (2026-11-26): every language makes the workspace substrate's rebuild
+// run (lang.RebuildProbe), where only Swift did, so a Go, Python, Ruby,
+// JavaScript, TypeScript, PHP or Rust file graded there has its per-mutant
+// cap floored at three times a run on the probe, as "44" floored a warmed
+// jail's. A timed-out mutant's kill is now confirmed by re-running that
+// probe, which pays the rebuild the mutant paid, where "55" re-ran the
+// unmutated code, which on Swift skips the relink (adequacy.RebuildProbeJail),
+// so a box too slow to finish a rebuild in the budget fails the file's
+// grading with the reason instead of crediting a kill; the kill
+// confirmation's repeat, when it times out, is judged on the probe the same
+// way and leaves the mutant unmeasured, where "55" called it repeated on the
+// cheap unmutated run. A Python file's coding cookie and a Ruby file's
+// encoding comment stay where they are read, after which the probe goes. (A go test command without
+// -count=1 replays a cached result for the probe as for the unmutated code,
+// go 1.26.7, so for Go this changes the cap and the re-probe by nothing.) A rebuild run is refused only when it is itself slower than the
+// five-minute ceiling, where "55" refused one whose three times was, so a
+// Swift file whose rebuild run took 100 s to 5 min, not graded under "55",
+// is now graded with its cap at the ceiling. A "55" verdict from the
+// workspace substrate may hold a timeout kill this generation would not
+// credit, or a cap it would floor, so it is re-measured rather than reused.
+// "57", not "56", because the Swift kill-confirmation branch (#579) takes
+// "56" and either may reach main first. Behaviour bump; the shape is
+// unchanged.
+// "58" (2026-11-26): proven PHPUnit tests are merged into the one class the
+// file is named after (lang.phpPlugin.ConcatTests), where "55" handed back
+// the first as the file and every other as a file of its own, and proven
+// Swift tests are merged with each part's type suffixed by its mutant id
+// (lang.swiftPlugin.ConcatTests), where "55" merged none. A "55" verdict for
+// a PHP or Swift file with two or more proven tests carries the authored
+// test and extras of the old shape and no together run of a merged file, so
+// it is re-measured rather than reused. "58" because #579 takes "56" and
+// #580 "57", and any of them may reach main first. Behaviour bump; the
+// shape is unchanged.
+// "59" (2026-11-26): vitest's row stops each mutant run at the first failing
+// test (--bail=1, lang.FailFastArgsFor), as jest's and mocha's do, where
+// "55" ran every selected test of a vitest mutant; the graded command
+// changes, as it did for a script's runner in "26". "59" because #579, #580
+// and the PHP/Swift merge take "56" to "58", and any of them may reach main
+// first. Behaviour bump; the shape is unchanged.
+// "60" (2026-11-26): a minitest kill is confirmed by running the killing
+// test alone (lang.minitestKillerCmd: `--name /\A<Class#method>\z/` after
+// the test file, for a `ruby <file.rb>` command), as rspec's is, where "55"
+// confirmed it by repeating the whole grading run; a kill whose test passes
+// alone is now refuted that way rather than repeated. "60" because #579 to
+// #582 take "56" to "59", and any of them may reach main first. Behaviour
+// bump; the shape is unchanged.
+// "61" (2026-11-27): a mocha kill is confirmed by running the killing test
+// alone (lang.mochaKillerCmd: `--grep ^<full title>$` added to the failing
+// run's own command), as jest's and vitest's are, where "55" confirmed it by
+// repeating the whole grading run; a kill whose test passes alone is now
+// refuted that way rather than repeated. "61" because #579 to #582 and the
+// minitest killer take "56" to "60", and any of them may reach main first.
+// Behaviour bump; the shape is unchanged.
+// "62" (2026-11-27): a Rust file's grading in the sandbox shares one cargo
+// target directory (CARGO_TARGET_DIR, the cargo rows' EvidenceCache),
+// warmed by the unmutated run and frozen for every other, as go's GOCACHE
+// is, so its per-mutant time cap is now floored at three times that warming
+// run, and its file row records RunCache; the unit evidence pass shares it
+// among its units. Every jailed run now takes its cache before writing its
+// workspace (cargo judges a build by mtimes, and a mutant written during the
+// warm build was graded as the original). "62" because #579 to #582 and the
+// minitest and mocha killers take "56" to "61", and any of them may reach
+// main first. Behaviour bump; the shape is unchanged.
+// "63" (2026-11-27): a JavaScript or TypeScript file graded with jest in the
+// sandbox shares one jest cache directory (the jest row's EvidenceCache,
+// named on the command by --cacheDirectory, which RunCacheCmd adds), warmed
+// by the unmutated run and frozen for every other, so its per-mutant time
+// cap is floored at three times that warming run and its file row records
+// RunCache; the unit evidence pass shares it among its units, and only for a
+// command grading would share it with. A project that uses ts-jest shares
+// none (its cache key leaves out the files a file imports). Stacked on
+// "62". Behaviour bump; the shape is unchanged.
 //
 // "64": on the workspace substrate every go test and gotestsum command
 // grading runs takes the row's no-replay rewrite (-count=1 where the command

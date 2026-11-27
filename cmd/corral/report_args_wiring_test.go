@@ -402,12 +402,19 @@ func TestADeselectedCommandReachesTheRunnerNarrowedInsideTheWrapper(t *testing.T
 				t.Fatal(err)
 			}
 			runs++
+			if !got.Hook {
+				t.Errorf("pytest ran %q without the failure hook loaded", got.Args)
+			}
+			// The pool's rebuild run (no job box holds this pool, so the
+			// wiring makes it) runs the file's own command, rewritten as
+			// every grading run is, before any authored pass: once, first,
+			// and with no --deselect, since nothing was salvaged yet.
+			if runs == 1 && !slices.Contains(got.Args, "--deselect") {
+				continue
+			}
 			at := slices.Index(got.Args, "--deselect")
 			if at < 0 || at+1 >= len(got.Args) || got.Args[at+1] != id {
 				t.Errorf("pytest received %q, want --deselect %q among its arguments", got.Args, id)
-			}
-			if !got.Hook {
-				t.Errorf("pytest ran %q without the failure hook loaded", got.Args)
 			}
 		}
 		if runs < 3 {

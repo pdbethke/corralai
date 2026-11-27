@@ -137,24 +137,26 @@ func WithToolchainFrom(cmd []string) JailOption {
 	return func(j *bwrapJail) { j.toolchainFrom, j.toolchainSet = cmd, true }
 }
 
-// WithRunCache gives the jail one tool cache (env names the variable that
-// points a tool at it, GOCACHE for go) that its fresh-workspace runs share,
-// the way a seed shares its own (Seed): WarmRun fills it, and every other run
-// sees it frozen at sandbox.CacheTarget, a copy-on-write overlay whose writes
-// vanish with the run, so no run can change what another reads. Where the
-// backend cannot overlay the directory, or it cannot be made, the runs carry
-// no cache and no env (as a jail without this option), nothing is refused,
-// and RunCache says why. env "" asks for no cache. The directory is made on
-// the first of a run, WarmRun or RunCache; Close removes it. Each jail
-// the option is applied to gets its own cache, so one option value may be
+// WithRunCache gives the jail one tool cache (lang.EvidenceCache: its Env
+// names the variable that points a tool at it, GOCACHE for go; a cache with
+// no Env is named by the command, jest's --cacheDirectory, which
+// lang.RunCacheCmd adds) that its fresh-workspace runs share, the way a seed
+// shares its own (Seed): WarmRun fills it, and every other run sees it
+// frozen at sandbox.CacheTarget, a copy-on-write overlay whose writes vanish
+// with the run, so no run can change what another reads. Where the backend
+// cannot overlay the directory, or it cannot be made, the runs carry no
+// cache and no env (as a jail without this option), nothing is refused, and
+// RunCache says why. A nil cache asks for none. The directory is made on
+// the first of a run, WarmRun or RunCache; Close removes it. Each jail the
+// option is applied to gets its own cache, so one option value may be
 // reused.
-func WithRunCache(env string) JailOption {
+func WithRunCache(cache *lang.EvidenceCache) JailOption {
 	return func(j *bwrapJail) {
-		if env == "" {
+		if cache == nil {
 			j.runCache = nil
 			return
 		}
-		j.runCache = &runCache{env: env}
+		j.runCache = &runCache{env: cache.Env}
 	}
 }
 
@@ -166,14 +168,26 @@ func WithRunCache(env string) JailOption {
 //   - a RunCacheJail (Go's shared build cache in the bwrap jail): the warming
 //     run, the one run of a file that paid for a full build, after which a
 //     frozen run of unchanged code is a full cache hit;
-//   - a WorkspacePool whose language rebuilds per run (lang.PerRunBuilder):
-//     the run MeasureRebuild timed, with the file changed so its module
-//     must recompile and relink.
+//   - a WorkspacePool that made its rebuild run (lang.RebuildProbe): the
+//     run MeasureRebuild timed, with the file changed so its module must
+//     recompile and relink.
 //
 // Zero means no such run was measured, and changes no cap.
 type WarmDurationJail interface {
 	Jail
 	WarmDuration() time.Duration
+}
+
+// RebuildProbeJail is a Jail that made a rebuild run (a WorkspacePool after
+// MeasureRebuild passed) and reports it: probed is the file at codePath
+// changed so its module must recompile and relink, built from compliant.
+// Score confirms a timed-out mutant's kill by running probed in place of the
+// compliant code when both name the file it grades, so the run that confirms
+// pays the rebuild the mutant paid (see the re-probe in Score). All three are
+// "" until a rebuild run passed.
+type RebuildProbeJail interface {
+	Jail
+	RebuildProbe() (codePath, compliant, probed string)
 }
 
 // RunCacheJail is a Jail whose runs share a tool cache (WithRunCache).
@@ -249,6 +263,14 @@ func (c *runCache) shared() sandbox.SharedCache {
 		return sandbox.SharedCache{Unshared: c.unshared}
 	}
 	return sandbox.SharedCache{Target: sandbox.CacheTarget}
+}
+
+// issuedWarm reports whether a warming run has been granted the cache
+// writable (it may still be running).
+func (c *runCache) issuedWarm() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.warmed
 }
 
 // acquire returns the mount one run sees (nil when the cache is unshared or
@@ -581,17 +603,28 @@ func (j bwrapJail) runInJailCache(ctx context.Context, files map[string]string, 
 	if len(cmd) == 0 {
 		return sandbox.Result{}, errors.New("adequacy: empty command")
 	}
+	// The cache is taken BEFORE the workspace is written, so a frozen run's
+	// files are written after the warming run has released it: newer than
+	// every object that build left. cargo decides a path crate's build is
+	// still good by its source files' mtimes, so a mutant written while the
+	// warm build was still running (and blocked here until it ended) was
+	// older than that build's object of the original file, and cargo reused
+	// it: the mutant was graded as the original
+	// (TestACargoRunIssuedDuringTheWarmBuildIsGradedOnItsOwnCode). go
+	// compares content hashes and was never exposed; the order costs it
+	// nothing.
+	var mount *sandbox.CacheMount
+	if j.runCache != nil {
+		m, release := j.runCache.acquire(j.backend, !warm)
+		defer release()
+		mount = m
+	}
 	dir, err := j.writeWorkspace(files)
 	if err != nil {
 		return sandbox.Result{}, err
 	}
 	defer os.RemoveAll(dir) // #nosec G104 -- best-effort cleanup of our own disposable temp dir
-	ws := runWorkspace{dir: dir}
-	if j.runCache != nil {
-		mount, release := j.runCache.acquire(j.backend, !warm)
-		defer release()
-		ws.cache = mount
-	}
+	ws := runWorkspace{dir: dir, cache: mount}
 	start := time.Now()
 	res, err := j.runIn(ctx, ws, cmd, maxOutput, keepTail, keepHead)
 	took := time.Since(start)
@@ -687,6 +720,19 @@ func (j bwrapJail) runIn(ctx context.Context, ws runWorkspace, cmd []string, max
 // node_modules/<pkg> -> .pnpm/...) is followed and one that leaves it is
 // refused. A rel in neither is fs.ErrNotExist.
 func (j bwrapJail) ReadTreeFile(files map[string]string, rel string) ([]byte, error) {
+	return TreeFileReader(files, j.binds)(rel)
+}
+
+// TreeFileReader is ReadTreeFile for a tree not yet in a jail: files, then
+// the dependency directories binds mounts into it. It is how a caller asks a
+// row's lang.EvidenceCache.Unsupported about the tree before it builds the
+// grading jail (cmd/corral newGradingJail), by the same rule the jail reads
+// it with.
+func TreeFileReader(files map[string]string, binds []DepBind) func(rel string) ([]byte, error) {
+	return func(rel string) ([]byte, error) { return readTreeFile(files, binds, rel) }
+}
+
+func readTreeFile(files map[string]string, binds []DepBind, rel string) ([]byte, error) {
 	clean, ok := lang.TreeRel(rel)
 	if !ok {
 		return nil, fmt.Errorf("adequacy: %q is not a path inside the tree", rel)
@@ -698,10 +744,10 @@ func (j bwrapJail) ReadTreeFile(files map[string]string, rel string) ([]byte, er
 	// binds only directories below it (rel != "."), and a root bind would
 	// be the whole tree, which the seed holds instead.
 	var bind *DepBind
-	for i, b := range j.binds {
+	for i, b := range binds {
 		r := path.Clean(b.Rel)
 		if (clean == r || strings.HasPrefix(clean, r+"/")) && (bind == nil || len(r) > len(path.Clean(bind.Rel))) {
-			bind = &j.binds[i]
+			bind = &binds[i]
 		}
 	}
 	if bind == nil {

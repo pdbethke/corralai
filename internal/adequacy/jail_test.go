@@ -839,7 +839,7 @@ func runCacheJailOrSkip(t *testing.T) RunCacheJail {
 	t.Helper()
 	backend := overlayJailOrSkip(t)
 	t.Setenv("TMPDIR", t.TempDir())
-	j := NewJail(backend, 30*time.Second, WithRunCache("CORRAL_TEST_CACHE")).(RunCacheJail)
+	j := NewJail(backend, 30*time.Second, WithRunCache(&lang.EvidenceCache{Env: "CORRAL_TEST_CACHE"})).(RunCacheJail)
 	t.Cleanup(func() { _ = j.Close() })
 	if c := j.RunCache(); c.Target == "" {
 		t.Skipf("no shared cache on this host (%s); frozen-cache path unexercised", c.Unshared)
@@ -916,7 +916,7 @@ func TestRunCacheUnsharedWhenTheBackendCannotOverlay(t *testing.T) {
 		defer mu.Unlock()
 		seen = append(seen, o.Cache)
 	}}
-	j := NewJail(backend, time.Second, WithRunCache("CORRAL_TEST_CACHE")).(RunCacheJail)
+	j := NewJail(backend, time.Second, WithRunCache(&lang.EvidenceCache{Env: "CORRAL_TEST_CACHE"})).(RunCacheJail)
 	if c := j.RunCache(); c.Target != "" || !strings.HasPrefix(c.Unshared, "sandbox backend container cannot overlay a directory on the filesystem of ") {
 		t.Fatalf("RunCache = %+v, want unshared naming the backend", c)
 	}
@@ -1016,7 +1016,7 @@ func TestRunCacheNeverCreatedAfterClose(t *testing.T) {
 		defer mu.Unlock()
 		seen = append(seen, o.Cache)
 	}}
-	j := NewJail(backend, time.Second, WithRunCache("CORRAL_TEST_CACHE")).(RunCacheJail)
+	j := NewJail(backend, time.Second, WithRunCache(&lang.EvidenceCache{Env: "CORRAL_TEST_CACHE"})).(RunCacheJail)
 	if err := j.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -1043,7 +1043,7 @@ func TestRunCacheCloseRacesFirstRun(t *testing.T) {
 	t.Setenv("TMPDIR", tmp)
 	backend := overlayJailOrSkip(t)
 	for i := 0; i < 50; i++ {
-		j := NewJail(backend, 30*time.Second, WithRunCache("CORRAL_TEST_CACHE")).(RunCacheJail)
+		j := NewJail(backend, 30*time.Second, WithRunCache(&lang.EvidenceCache{Env: "CORRAL_TEST_CACHE"})).(RunCacheJail)
 		var wg sync.WaitGroup
 		wg.Add(2)
 		go func() {

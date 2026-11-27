@@ -1898,3 +1898,25 @@ func (pyPlugin) DependencyDirs() []DepDir {
 		{Name: ".tox", RunWrites: true},
 	}
 }
+
+// pythonCodingCookie is PEP 263's encoding declaration, which Python reads
+// on the first line, or on the second when the first is blank or a comment.
+var pythonCodingCookie = regexp.MustCompile(`^[ \t\f]*#.*?coding[:=][ \t]*[-\w.]+`)
+
+// KeptLines is FirstLineKeeper for Python: the rebuild probe goes after a
+// coding cookie where Python reads one, the first line or a second after a
+// blank or comment first line, because a probe before a second-line cookie
+// pushes it to the third, where Python ignores it and a latin-1 file stops
+// compiling (python 3, 2026-11-26: "SyntaxError: Non-UTF-8 code ... but no
+// encoding declared"; found by review). A first-line cookie would still count
+// on the second line, but stays first by the same rule.
+func (pyPlugin) KeptLines(body string) (int, error) {
+	lines := strings.SplitN(body, "\n", 3)
+	if pythonCodingCookie.MatchString(lines[0]) {
+		return 1, nil
+	}
+	if first := strings.TrimSpace(lines[0]); len(lines) > 1 && (first == "" || strings.HasPrefix(first, "#")) && pythonCodingCookie.MatchString(lines[1]) {
+		return 2, nil
+	}
+	return 0, nil
+}

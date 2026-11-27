@@ -276,8 +276,9 @@ type File struct {
 	// themselves, read when the file's run ended and from what its jail did:
 	// "shared" (one frozen cache, and a warming run ran on it: the dev
 	// suite's baseline on the unmutated code), or "unshared: <reason>" (the
-	// backend could not overlay it, the test command could not be given the
-	// flag that forbids a cached result, or "never warmed (<why>)": the cache
+	// backend could not overlay it, the test command could not be read as one
+	// that forbids a cached result (go's rows add -count=1; cargo stores no
+	// result, so a cargo command it can read already forbids one), or "never warmed (<why>)": the cache
 	// was mounted but no warming run happened, so every run saw it empty).
 	// The warming command always forbids a cached test result; a later
 	// command the rewrite cannot read runs as given, against a cache that

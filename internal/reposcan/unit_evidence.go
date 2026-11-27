@@ -441,14 +441,10 @@ func unitsCacheArgs(note string, cache *lang.EvidenceCache, args []string) strin
 	return note + ", and with " + what
 }
 
-// cacheName is what the pass calls a cache: its Name, else its Env, else
-// "tool cache".
+// cacheName is what the pass calls a cache: its Label, else "tool cache".
 func cacheName(cache *lang.EvidenceCache) string {
-	switch {
-	case cache.Name != "":
-		return cache.Name
-	case cache.Env != "":
-		return cache.Env
+	if l := cache.Label(); l != "" {
+		return l
 	}
 	return "tool cache"
 }

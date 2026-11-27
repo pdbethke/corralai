@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
 // A test UNIT is the smallest thing a runner runs on its own: a test file
@@ -149,13 +151,16 @@ func EvidenceUnitCmd(p Plugin, inv Invocation, unitCmd []string) []string {
 // copy-on-write overlay whose writes are discarded with the run, so no
 // unit's run can change what another unit reads. It lives at a fixed path
 // inside the jail. Env, when set, is the environment variable the jail
-// points at that path (GOCACHE); Args, when set, is the words a unit
-// command takes to use the cache at dir, appended after EvidenceArgs'. A
-// pass that cannot share the cache gives neither, and each unit starts
-// from an empty cache, as every jailed run did before.
+// points at that path (GOCACHE); Args, when set, is the words a command
+// takes to use the cache at dir, for a tool that reads no variable for it
+// (jest's --cacheDirectory): appended to a unit command after
+// EvidenceArgs', and to a graded command by RunCacheCmd. A row declares one
+// or the other. A pass that cannot share the cache gives neither, and each
+// run starts from an empty cache, as every jailed run did before.
 //
-// Name is what the pass calls the cache when it says it was not shared;
-// Env stands in when Name is "". Unsupported, when set, is why the tool
+// Name is what corral calls a cache with no Env when it says what was
+// shared or why not (Label); a cache with an Env is called by it, the name
+// an operator can look up. Unsupported, when set, is why the tool
 // the operator's argv runs would not take Args — read from the tree as the
 // jail sees it (read: the seed, then the dependency directories mounted
 // into it), never learned by running the tool and reading an error — or ""
@@ -166,6 +171,15 @@ type EvidenceCache struct {
 	Env         string
 	Args        func(dir string) []string
 	Unsupported func(argv []string, read func(rel string) ([]byte, error)) string
+}
+
+// Label is what corral calls the cache, on the scan header and in the unit
+// pass's note: its Env, else its Name.
+func (c *EvidenceCache) Label() string {
+	if c.Env != "" {
+		return c.Env
+	}
+	return c.Name
 }
 
 // TreeRel is rel as a read of the tree (EvidenceCache.Unsupported's read)
@@ -182,28 +196,32 @@ func TreeRel(rel string) (string, bool) {
 }
 
 // runRowCache reports whether a runner row declares a cache a sandboxed run
-// can share: one that names the environment variable the jail points at it.
-// It is the one test behind both the run-cache parity capability and
-// RunCacheFor.
-func runRowCache(r Runner) bool { return r.EvidenceCache != nil && r.EvidenceCache.Env != "" }
+// can share: one that names the environment variable the jail points at it,
+// or the words that point the command at it. It is the one test behind both
+// the run-cache parity capability and RunCacheFor.
+func runRowCache(r Runner) bool {
+	c := r.EvidenceCache
+	return c != nil && (c.Env != "" || c.Args != nil)
+}
 
-// RunCacheFor is the environment variable (GOCACHE) that points a sandboxed
-// run of argv's runner at the cache it shares; ok=false when the row
+// RunCacheFor is the cache a sandboxed run of argv's runner shares (its Env,
+// GOCACHE, is what the jail sets; its Args are added by RunCacheCmd);
+// ok=false when the row
 // declares none, or declares one its Unsupported reason says this command
 // cannot take. Unsupported is asked of the command alone, with a tree that
 // reads as empty: no row that declares a cache has such a reason today, and
 // one that does would need this signature to carry the tree.
-func RunCacheFor(p Plugin, inv Invocation) (env string, ok bool) {
+func RunCacheFor(p Plugin, inv Invocation) (*EvidenceCache, bool) {
 	r, found := RunnerFor(p, inv)
 	if !found || !runRowCache(r) {
-		return "", false
+		return nil, false
 	}
 	if u := r.EvidenceCache.Unsupported; u != nil {
 		if u(inv.Argv, func(string) ([]byte, error) { return nil, fs.ErrNotExist }) != "" {
-			return "", false
+			return nil, false
 		}
 	}
-	return r.EvidenceCache.Env, true
+	return r.EvidenceCache, true
 }
 
 // RunCacheRewrite says what RunCacheCmd did with a command.
@@ -250,7 +268,11 @@ func (r RunCacheRewrite) String() string {
 // an env prefix, a .go file argument, an unlisted flag, anything not go or
 // gotestsum — is RunCacheUnreadable. The rewrite reads cmd's words and cannot
 // see inside a wrapper, so an operator who wraps the command gets no -count=1.
-// cmd is never modified.
+// cmd is never modified. A row whose cache is named by the command
+// (EvidenceCache.Args: jest) gets those words, for the cache at
+// sandbox.CacheTarget, on every command it reads as RunCacheRewritten, and
+// on no other: a command the row cannot read is run as given, and uses no
+// shared cache.
 //
 // What a caller must do: share the cache only when the command that WARMS it
 // comes back RunCacheRewritten. A frozen command that comes back
@@ -262,7 +284,11 @@ func RunCacheCmd(p Plugin, inv Invocation, cmd []string) ([]string, RunCacheRewr
 	if !ok || !runRowCache(r) || r.RunCacheArgs == nil {
 		return cmd, RunCacheNone
 	}
-	return r.RunCacheArgs(slices.Clone(cmd))
+	out, state := r.RunCacheArgs(slices.Clone(cmd))
+	if state == RunCacheRewritten && r.EvidenceCache.Args != nil {
+		out = append(out, r.EvidenceCache.Args(sandbox.CacheTarget)...)
+	}
+	return out, state
 }
 
 // RunCacheArgv is RunCacheCmd as a rewrite hook: the command it returns,

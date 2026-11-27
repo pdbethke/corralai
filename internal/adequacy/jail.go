@@ -137,24 +137,26 @@ func WithToolchainFrom(cmd []string) JailOption {
 	return func(j *bwrapJail) { j.toolchainFrom, j.toolchainSet = cmd, true }
 }
 
-// WithRunCache gives the jail one tool cache (env names the variable that
-// points a tool at it, GOCACHE for go) that its fresh-workspace runs share,
-// the way a seed shares its own (Seed): WarmRun fills it, and every other run
-// sees it frozen at sandbox.CacheTarget, a copy-on-write overlay whose writes
-// vanish with the run, so no run can change what another reads. Where the
-// backend cannot overlay the directory, or it cannot be made, the runs carry
-// no cache and no env (as a jail without this option), nothing is refused,
-// and RunCache says why. env "" asks for no cache. The directory is made on
-// the first of a run, WarmRun or RunCache; Close removes it. Each jail
-// the option is applied to gets its own cache, so one option value may be
+// WithRunCache gives the jail one tool cache (lang.EvidenceCache: its Env
+// names the variable that points a tool at it, GOCACHE for go; a cache with
+// no Env is named by the command, jest's --cacheDirectory, which
+// lang.RunCacheCmd adds) that its fresh-workspace runs share, the way a seed
+// shares its own (Seed): WarmRun fills it, and every other run sees it
+// frozen at sandbox.CacheTarget, a copy-on-write overlay whose writes vanish
+// with the run, so no run can change what another reads. Where the backend
+// cannot overlay the directory, or it cannot be made, the runs carry no
+// cache and no env (as a jail without this option), nothing is refused, and
+// RunCache says why. A nil cache asks for none. The directory is made on
+// the first of a run, WarmRun or RunCache; Close removes it. Each jail the
+// option is applied to gets its own cache, so one option value may be
 // reused.
-func WithRunCache(env string) JailOption {
+func WithRunCache(cache *lang.EvidenceCache) JailOption {
 	return func(j *bwrapJail) {
-		if env == "" {
+		if cache == nil {
 			j.runCache = nil
 			return
 		}
-		j.runCache = &runCache{env: env}
+		j.runCache = &runCache{env: cache.Env}
 	}
 }
 

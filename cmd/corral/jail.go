@@ -118,7 +118,7 @@ func newGradingJail(iso sandbox.Isolator, timeout time.Duration, depBinds []adeq
 	if plug == nil {
 		return newRunJail(iso, timeout, depBinds), gradingRunCache{}
 	}
-	env, ok := lang.RunCacheFor(plug, inv)
+	cache, ok := lang.RunCacheFor(plug, inv)
 	if !ok {
 		return newRunJail(iso, timeout, depBinds), gradingRunCache{}
 	}
@@ -127,7 +127,7 @@ func newGradingJail(iso sandbox.Isolator, timeout time.Duration, depBinds []adeq
 			Record: "unshared: the test command cannot be read as one that forbids a cached result (" + state.String() + ")",
 		}
 	}
-	jail := newRunJail(iso, timeout, depBinds, adequacy.WithRunCache(env))
+	jail := newRunJail(iso, timeout, depBinds, adequacy.WithRunCache(cache))
 	rj, isRunCache := jail.(adequacy.RunCacheJail)
 	if !isRunCache {
 		return jail, gradingRunCache{Record: "unshared: the jail cannot share a cache"}

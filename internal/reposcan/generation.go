@@ -651,7 +651,14 @@ package reposcan
 // warm build was graded as the original). "62" because #579 to #582 and the
 // minitest and mocha killers take "56" to "61", and any of them may reach
 // main first. Behaviour bump; the shape is unchanged.
-const VerdictGeneration = "62"
+// "63" (2026-11-27): a JavaScript or TypeScript file graded with jest in the
+// sandbox shares one jest cache directory (the jest row's EvidenceCache,
+// named on the command by --cacheDirectory, which RunCacheCmd adds), warmed
+// by the unmutated run and frozen for every other, so its per-mutant time
+// cap is floored at three times that warming run and its file row records
+// RunCache; the unit evidence pass shares it among its units. Stacked on
+// "62". Behaviour bump; the shape is unchanged.
+const VerdictGeneration = "63"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

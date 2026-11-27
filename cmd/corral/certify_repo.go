@@ -4056,8 +4056,8 @@ func printRunDisclosures(w io.Writer, ex *localExecutor, jobs []reposcan.Job) {
 			if !runCacheShareable(ex.iso) {
 				continue
 			}
-			if env, ok := lang.RunCacheFor(p, inv); ok {
-				fmt.Fprintf(w, "  build cache: grading runs for %s share a frozen %s, warmed by the unmutated run\n", j.Lang, env)
+			if cache, ok := lang.RunCacheFor(p, inv); ok {
+				fmt.Fprintf(w, "  build cache: grading runs for %s share a frozen %s, warmed by the unmutated run\n", j.Lang, cache.Label())
 				// SAY IT ONCE when the cache is shared but the workspace is
 				// not placed (a bubblewrap whose start-up probe could overlay
 				// a directory at its own path and not at /corral-work): each

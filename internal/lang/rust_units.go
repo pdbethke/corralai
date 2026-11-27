@@ -542,7 +542,7 @@ func nextestUnitsCmd(argv []string, units []string) ([]string, bool) {
 // prefers --target-dir to the variable (both measured on cargo 1.90), so a
 // command naming its own --target-dir would build where the cache is not;
 // such a command shares none (cargoTargetDirNamed).
-var cargoRunCache = &EvidenceCache{Name: "cargo's target directory", Env: "CARGO_TARGET_DIR", Unsupported: cargoTargetDirNamed}
+var cargoRunCache = &EvidenceCache{Env: "CARGO_TARGET_DIR", Unsupported: cargoTargetDirNamed}
 
 // cargoTargetDirNamed is cargoRunCache's Unsupported: why argv would not
 // build in the shared directory, or "" when it would. Only cargo's own

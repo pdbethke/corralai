@@ -90,7 +90,8 @@ func TestGoTestEvidenceArgsCountOne(t *testing.T) {
 }
 
 // go test and gotestsum share one GOCACHE across the units of an evidence
-// pass; a row with no shared cache names none.
+// pass, and jest one cache directory, named on each unit command; a row with
+// no shared cache names none.
 func TestEvidenceCacheFor(t *testing.T) {
 	g, _ := ByName("go")
 	for _, argv := range [][]string{{"go", "test", "./..."}, {"gotestsum", "--", "./..."}} {
@@ -100,7 +101,10 @@ func TestEvidenceCacheFor(t *testing.T) {
 		}
 	}
 	ts, _ := ByName("typescript")
-	if c := EvidenceCacheFor(ts, Cmd([]string{"jest"})); c != nil {
-		t.Errorf("EvidenceCacheFor(jest) = %+v, want nil", c)
+	if c := EvidenceCacheFor(ts, Cmd([]string{"jest"})); c == nil || c.Env != "" || !slices.Equal(c.Args("/d"), []string{"--cacheDirectory=/d"}) {
+		t.Errorf("EvidenceCacheFor(jest) = %+v, want jest's cache directory, named by --cacheDirectory", c)
+	}
+	if c := EvidenceCacheFor(ts, Cmd([]string{"npx", "vitest", "run"})); c != nil {
+		t.Errorf("EvidenceCacheFor(vitest) = %+v, want nil", c)
 	}
 }

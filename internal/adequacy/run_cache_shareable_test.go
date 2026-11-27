@@ -3,6 +3,7 @@
 package adequacy
 
 import (
+	"github.com/pdbethke/corralai/internal/lang"
 	"path/filepath"
 	"testing"
 )
@@ -23,7 +24,7 @@ func TestRunCacheShareableIsTheJailsOwnAnswer(t *testing.T) {
 	}
 
 	iso := overlayJailOrSkip(t)
-	j := NewJail(iso, 0, WithRunCache("CORRAL_TEST_CACHE")).(RunCacheJail)
+	j := NewJail(iso, 0, WithRunCache(&lang.EvidenceCache{Env: "CORRAL_TEST_CACHE"})).(RunCacheJail)
 	defer j.Close()
 	want := j.RunCache().Unshared == ""
 	if got := RunCacheShareable(iso); got != want {

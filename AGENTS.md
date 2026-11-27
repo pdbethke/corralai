@@ -531,7 +531,7 @@ only the authored one.
   put first moves every later line, which changes the compiled object, and
   relinked the same six products a mutant relinked (measured on
   taplin/Lariat). That is the rebuild
-  probe (`leadingCommentProbe`, `lang.PerRunBuilder`). An unused `private func`
+  probe (`lang.RebuildProbe`, every language's since 2026-11-26). An unused `private func`
   was tried too and rejected: it changes the module's interface and rebuilds
   every dependent target, far past what a body mutant costs.
 - **`--enable-code-coverage` in the default build directory evicts the

@@ -44,10 +44,20 @@ func TestKillerCmdNarrowsTheRunByName(t *testing.T) {
 			[]string{"node", "./node_modules/vitest/vitest.mjs", "run", "-t", `^A(?: | > )b$`}},
 		{"javascript", "vitest", []string{"node", "./node_modules/vitest/vitest.mjs"}, "A::b",
 			[]string{"node", "./node_modules/vitest/vitest.mjs", "run", "-t", `^A(?: | > )b$`}},
+		// mocha: the full title, anchored, added to the failing run's own argv.
+		{"javascript", "mocha", []string{"npx", "mocha", "test"}, "Calc::adds (a+b)",
+			[]string{"npx", "mocha", "test", "--grep", `^Calc adds \(a\+b\)$`}},
+		{"typescript", "mocha", []string{"npx", "mocha", "--bail"}, "top level",
+			[]string{"npx", "mocha", "--bail", "--grep", "^top level$"}},
 		// rspec: the full description `Failed examples:` names, anchored.
 		{"ruby", "rspec", []string{"bundle", "exec", "rspec", "spec"}, "Calc adds (a+b)",
 			[]string{"bundle", "exec", "rspec", "spec", "-E", `\ACalc adds \(a\+b\)\z`}},
 		{"ruby", "rspec", []string{"rspec"}, "MyApp::Calc top level", []string{"rspec", "-E", `\AMyApp::Calc top level\z`}},
+		// minitest: --name after the test file, anchored on Class#method.
+		{"ruby", "minitest", []string{"ruby", "-Itest", "test/calc_test.rb"}, "CalcTest#test_adds",
+			[]string{"ruby", "-Itest", "test/calc_test.rb", "--name", `/\ACalcTest#test_adds\z/`}},
+		{"ruby", "minitest", []string{"ruby", "test/calc_test.rb", "-v"}, "MyApp::NegTest#test_x?",
+			[]string{"ruby", "test/calc_test.rb", "-v", "--name", `/\AMyApp::NegTest#test_x\?\z/`}},
 		// cargo test: libtest's --exact, after the binaries' `--`.
 		{"rust", "cargo-test", []string{"cargo", "test", "--workspace"}, "tests::adds",
 			[]string{"cargo", "test", "--workspace", "--", "--exact", "tests::adds"}},
@@ -87,9 +97,24 @@ func TestKillerCmdRefusesAFilteredArgv(t *testing.T) {
 		{"go", "go-test", []string{"sh", "-c", "go test ./..."}, "TestX"},
 		{"javascript", "vitest", []string{"node", "./node_modules/vitest/vitest.mjs", "run"}, ""},
 		{"javascript", "jest", []string{"npx", "jest"}, ""},
+		{"javascript", "mocha", []string{"npx", "mocha", "--grep", "y"}, "A::b"},
+		{"javascript", "mocha", []string{"npx", "mocha", "-g", "y"}, "A::b"},
+		{"javascript", "mocha", []string{"npx", "mocha", "--fgrep", "y"}, "A::b"},
+		{"javascript", "mocha", []string{"npx", "mocha", "--invert"}, "A::b"},
+		{"javascript", "mocha", []string{"npx", "mocha"}, ""},
 		{"ruby", "rspec", []string{"rspec", "-e", "adds"}, "Calc adds"},
 		{"ruby", "rspec", []string{"rspec", "--example", "adds"}, "Calc adds"},
 		{"ruby", "rspec", []string{"rspec"}, ""},
+		// minitest: a filter of its own, a launcher that passes no test
+		// arguments (rake, testrb, ruby -S), or an id that is not Class#method.
+		{"ruby", "minitest", []string{"ruby", "test/a_test.rb", "-n", "test_y"}, "ATest#test_x"},
+		{"ruby", "minitest", []string{"ruby", "test/a_test.rb", "--name=/y/"}, "ATest#test_x"},
+		{"ruby", "minitest", []string{"ruby", "test/a_test.rb", "--exclude", "/y/"}, "ATest#test_x"},
+		{"ruby", "minitest", []string{"rake", "test"}, "ATest#test_x"},
+		{"ruby", "minitest", []string{"testrb", "test/a_test.rb"}, "ATest#test_x"},
+		{"ruby", "minitest", []string{"ruby", "-S", "rake", "test"}, "ATest#test_x"},
+		{"ruby", "minitest", []string{"ruby", "test/a_test.rb"}, "test_x"},
+		{"ruby", "minitest", []string{"ruby", "test/a_test.rb"}, ""},
 		{"php", "phpunit", []string{"vendor/bin/phpunit", "--filter", "x"}, "FTest::testAdds"},
 		{"php", "phpunit", []string{"vendor/bin/phpunit"}, "FTest"},
 		{"php", "phpunit", []string{"vendor/bin/phpunit"}, ""},
@@ -134,9 +159,9 @@ func TestStripPyPositionalsKeepsOptionsAndTheirValues(t *testing.T) {
 }
 
 func TestKillerCmdForIsNilWithoutARow(t *testing.T) {
-	p, _ := ByName("ruby")
-	if KillerCmdFor(p, Invocation{Argv: []string{"ruby", "-Itest", "test/a_test.rb"}}) != nil {
-		t.Error("minitest has no KillerCmd, KillerCmdFor must be nil")
+	p, _ := ByName("javascript")
+	if KillerCmdFor(p, Invocation{Argv: []string{"node", "--test"}}) != nil {
+		t.Error("node --test has no KillerCmd, KillerCmdFor must be nil")
 	}
 }
 
@@ -202,6 +227,11 @@ func TestKillerFiltersAreTheOnesTheCaptureScriptRan(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, c := range []struct{ lang, runner, id string }{
+		{"ruby", "minitest", "CalcTest#test_adds"},
+		{"ruby", "minitest", "MyApp::NegTest#test_x"},
+		{"javascript", "mocha", "Calc::adds (a+b)"},
+		{"javascript", "mocha", "Calc neg::adds"},
+		{"javascript", "mocha", "top level"},
 		{"ruby", "rspec", "Calc adds (a+b)"},
 		{"ruby", "rspec", "MyApp::Calc top level"},
 		{"php", "phpunit", "FTest::testAdds"},
@@ -209,8 +239,11 @@ func TestKillerFiltersAreTheOnesTheCaptureScriptRan(t *testing.T) {
 		{"rust", "cargo-nextest", "units-a::it integrates"},
 	} {
 		argv := []string{c.runner}
-		if c.runner == "cargo-nextest" {
+		switch c.runner {
+		case "cargo-nextest":
 			argv = []string{"cargo", "nextest", "run", "--workspace"}
+		case "minitest":
+			argv = []string{"ruby", "fail/f_test.rb"}
 		}
 		cmd, ok := killerRow(t, c.lang, c.runner).KillerCmd(argv, c.id)
 		if !ok {
@@ -257,5 +290,69 @@ func TestPHPUnitKillerRunsTheFailingDataSetAlone(t *testing.T) {
 		if !ran {
 			t.Errorf("%q: the capture script saw no %s run exactly one test", c.id, filter)
 		}
+	}
+}
+
+// The failures mocha's reader takes from the captured failing run are the
+// ids the capture script's killer checks ran, each selecting one test: what
+// the scorer blames is what the killer runs.
+func TestMochaKillerRunsTheCapturedFailuresAlone(t *testing.T) {
+	ids := mochaFailures(readFixture(t, "mocha-fail.txt"))
+	want := []string{"top level", "Calc::adds (a+b)", "Calc neg::adds"}
+	if !slices.Equal(ids, want) {
+		t.Fatalf("mochaFailures = %q, want %q", ids, want)
+	}
+	b, err := os.ReadFile(filepath.Join("..", "..", "scripts", "capture-runner-fixtures.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := killerRow(t, "javascript", "mocha")
+	for _, id := range ids {
+		cmd, ok := r.KillerCmd([]string{"npx", "mocha", "fail/f.mocha.js"}, id)
+		if !ok {
+			t.Fatalf("%q: no killer command", id)
+		}
+		filter := "'" + cmd[len(cmd)-1] + "'"
+		var ran bool
+		for _, line := range strings.Split(string(b), "\n") {
+			if strings.HasPrefix(line, "want mocha-killer") && strings.Contains(line, `"0 passing 1 failing"`) && strings.Contains(line, filter) {
+				ran = true
+			}
+		}
+		if !ran {
+			t.Errorf("%q: the capture script saw no %s run exactly one failing test", id, filter)
+		}
+	}
+}
+
+// Through a package script the killer's words follow the script's `--`,
+// as the jest script's do: the scorer asks through KillerCmdFor.
+func TestKillerCmdForNarrowsAMochaPackageScript(t *testing.T) {
+	p, _ := ByName("javascript")
+	inv := Invocation{Argv: []string{"npm", "test"}, Script: []string{"mocha"}, Pass: "--", Narrow: true}
+	killer := KillerCmdFor(p, inv)
+	if killer == nil {
+		t.Fatal("KillerCmdFor is nil for a mocha script")
+	}
+	got, ok := killer(inv.Argv, "Calc neg::adds")
+	want := []string{"npm", "test", "--", "--grep", "^Calc neg adds$"}
+	if !ok || !slices.Equal(got, want) {
+		t.Fatalf("got %q ok=%v, want %q", got, ok, want)
+	}
+}
+
+// The scorer asks through KillerCmdFor, never the row: an operator's
+// `ruby -Itest <file>` command resolves to the minitest row and narrows.
+func TestKillerCmdForNarrowsAMinitestCommand(t *testing.T) {
+	p, _ := ByName("ruby")
+	inv := Invocation{Argv: []string{"ruby", "-Itest", "test/a_test.rb"}}
+	killer := KillerCmdFor(p, inv)
+	if killer == nil {
+		t.Fatal("KillerCmdFor is nil for a minitest command")
+	}
+	got, ok := killer(inv.Argv, "ATest#test_x")
+	want := []string{"ruby", "-Itest", "test/a_test.rb", "--name", `/\AATest#test_x\z/`}
+	if !ok || !slices.Equal(got, want) {
+		t.Fatalf("got %q ok=%v, want %q", got, ok, want)
 	}
 }

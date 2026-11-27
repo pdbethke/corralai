@@ -9,6 +9,7 @@
 package lang
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -227,62 +228,83 @@ type TreeEnver interface {
 	TreeEnv(tree string, cores int) []string
 }
 
-// PerRunBuilder is an OPTIONAL plugin capability: the language's mutant pays
-// build work that the unmutated baseline does not, so the per-mutant time cap
-// must be floored by a run that pays it too. RebuildProbe returns src changed
-// so the file's module must recompile AND relink, and its tests run as
-// before; ok is false for a file it cannot change that way, which then gets
-// no floor. The workspace substrate runs the file's command once on the
-// probe (adequacy.WorkspacePool.MeasureRebuild) and the cap is floored at the
-// same multiple of that run (adequacy.mutantTimeoutCap).
+// RebuildProbe returns src changed so the file's module must recompile AND
+// relink, and its tests run as before, for every language: the run the
+// workspace substrate times on it (adequacy.WorkspacePool.MeasureRebuild)
+// floors each mutant's time cap at the same multiple of that run
+// (adequacy.mutantTimeoutCap), and it is the run that confirms a timed-out
+// mutant's kill (adequacy.RebuildProbeJail), so a mutant that pays build work
+// the unmutated baseline does not is never cut off and credited for it. An
+// error is a file it cannot change that way, which then gets no floor; the
+// error says why.
 //
-// Every implementation returns leadingCommentProbe: one line comment, in the
-// language's own marker, before the file's first line. Before and not after,
-// because what a mutant pays and a baseline does not is the RELINK, and only
-// a change that moves code changes the compiled object. Measured 2026-11-19
-// on taplin/Lariat at be0c5fd (Swift 6.3.2, one 32-core machine, in Docker),
-// `swift build --build-tests` after each change to Sources/LassoParser/
-// Evaluator.swift, as SwiftPM's own "Build complete!" line timed it:
-// rewritten with its own bytes (what every run on the workspace substrate
-// does to the file, the baseline included) 6.3 and 6.4 s, compiling the file
-// and linking nothing; a comment line appended at the end 6.3 s, the same; a
-// comment line put first 15.5 s, relinking six products; a one-line mutant
-// 15.4 s, relinking the same six. The line moves every
-// line after it by one, so a test that asserts a line number of this file
-// (a message carrying #line, say) can fail on the probe: that run then sets
-// no floor, and says so.
+// The rule is one line comment, in the language's own marker, before the
+// file's first line. Before and not after, because what a mutant pays and a
+// baseline does not is the RELINK, and only a change that moves code changes
+// the compiled object. Measured 2026-11-19 on taplin/Lariat at be0c5fd (Swift
+// 6.3.2, one 32-core machine, in Docker), `swift build --build-tests` after
+// each change to Sources/LassoParser/Evaluator.swift, as SwiftPM's own "Build
+// complete!" line timed it: rewritten with its own bytes (what every run on
+// the workspace substrate does to the file, the baseline included) 6.3 and
+// 6.4 s, compiling the file and linking nothing; a comment line appended at
+// the end 6.3 s, the same; a comment line put first 15.5 s, relinking six
+// products; a one-line mutant 15.4 s, relinking the same six. The line moves
+// every line after it by one, so a test that asserts a line number of this
+// file (a message carrying #line, say) can fail on the probe: that run then
+// sets no floor, and says so.
 //
-// Which languages implement it, and why each other one does not (Rust on a
-// measurement, the rest not measured), is the parity table's
-// "rebuild-floor" capability (parity.go), which the parity test enforces.
-// A language that does not implement it keeps the cap it had.
-type PerRunBuilder interface {
-	RebuildProbe(codePath, src string) (probed string, ok bool)
+// Every language gets it, including those whose mutant may pay nothing a
+// baseline does not (an interpreter with no build step): the cost is one
+// suite run per file on the workspace substrate, and what it buys is one
+// rule for every language's cap instead of an exemption per language. What
+// it does not buy: a go test command without -count=1 replays a cached
+// result for the probe, as it does for the unchanged file (go 1.26.7,
+// 2026-11-26: `go test .` printed "(cached)" after a same-bytes rewrite and
+// after this probe), so for such a command the run measures no rebuild. A language
+// whose first line must stay first says so through FirstLineKeeper; a
+// shebang (`#!`, not Rust's `#![` inner attribute) stays first in every
+// language, because it only works as the first line, and such a file is not
+// probed: a probe that does not build would measure a failed build.
+func RebuildProbe(p Plugin, src string) (string, error) {
+	body, bom := strings.CutPrefix(src, utf8BOM)
+	if strings.HasPrefix(body, "#!") && !strings.HasPrefix(body, "#![") {
+		return "", errors.New("its first line must stay first (a shebang)")
+	}
+	at := 0
+	if k, ok := p.(FirstLineKeeper); ok {
+		n, err := k.KeptLines(body)
+		if err != nil {
+			return "", err
+		}
+		for range n {
+			nl := strings.IndexByte(body[at:], '\n')
+			if nl < 0 {
+				return "", errors.New("its first lines must stay first and nothing follows them")
+			}
+			at += nl + 1
+		}
+	}
+	probed := body[:at] + p.LineComment() + " " + rebuildProbeText + "\n" + body[at:]
+	if bom {
+		probed = utf8BOM + probed
+	}
+	return probed, nil
 }
 
-// rebuildProbeText is the comment leadingCommentProbe writes: what the line
-// is, for anyone who finds it in a tree a killed process left behind.
+// FirstLineKeeper is the OPTIONAL plugin capability RebuildProbe asks about a
+// file's first lines: n is how many must stay where they are, and the probe
+// goes after them; an error is a file the probe cannot go into at all. body
+// is the file without a byte-order mark.
+type FirstLineKeeper interface {
+	KeptLines(body string) (n int, err error)
+}
+
+// rebuildProbeText is the comment RebuildProbe writes: what the line is, for
+// anyone who finds it in a tree a killed process left behind.
 const rebuildProbeText = "corral rebuild probe: corral removes this line when the run ends"
 
 // utf8BOM is the UTF-8 byte-order mark, which must stay a file's first bytes.
 const utf8BOM = "\xef\xbb\xbf"
-
-// leadingCommentProbe is the one RebuildProbe rule (see PerRunBuilder): a
-// line comment in marker put before src's first line, after a byte-order
-// mark if src has one. A file that starts with a shebang (`#!`, not Rust's
-// `#![` inner attribute) is refused, because a shebang only works as the
-// first line, and a probe that does not build would measure a failed build.
-func leadingCommentProbe(marker, src string) (string, bool) {
-	body, bom := strings.CutPrefix(src, utf8BOM)
-	if strings.HasPrefix(body, "#!") && !strings.HasPrefix(body, "#![") {
-		return "", false
-	}
-	probed := marker + " " + rebuildProbeText + "\n" + body
-	if bom {
-		probed = utf8BOM + probed
-	}
-	return probed, true
-}
 
 // HarnessConfigurer is the OPTIONAL interface a plugin implements to name
 // the files its test runner reads before any test runs — pytest's

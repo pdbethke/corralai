@@ -55,52 +55,60 @@ func countRebuildRuns(t *testing.T, stub func() (time.Duration, error)) *int {
 	real := measureRebuild
 	t.Cleanup(func() { measureRebuild = real })
 	n := new(int)
-	measureRebuild = func(p *adequacy.WorkspacePool, ctx context.Context, base map[string]string, codePath, probed string, cmd []string) (time.Duration, error) {
+	measureRebuild = func(p *adequacy.WorkspacePool, ctx context.Context, base map[string]string, codePath, compliant, probed string, cmd []string) (time.Duration, error) {
 		*n++
 		if stub != nil {
 			return stub()
 		}
-		return real(p, ctx, base, codePath, probed, cmd)
+		return real(p, ctx, base, codePath, compliant, probed, cmd)
 	}
 	return n
 }
 
-// A language whose mutant pays a relink its baseline does not gets one timed
-// run on the probe, its duration becomes the pool's floor, the file is put
-// back, and the scan says nothing: a floor that was measured needs no excuse.
-func TestRebuildFloorIsMeasuredForAPerRunBuilder(t *testing.T) {
-	pool, root, codeKey, cmd := rebuildFixture(t, "let ok = \"OK\"\n")
-	runs := countRebuildRuns(t, nil)
-	took, record, err := rebuildFloor(context.Background(), pool, mustPlugin(t, "swift"), codeKey, []byte("let ok = \"OK\"\n"), cmd, 0)
-	if err != nil {
-		t.Fatalf("rebuildFloor: %v", err)
-	}
-	if record != capFloorOf(pool) || !strings.HasPrefix(record, "rebuild run, ") {
-		t.Errorf("record = %q, want the measured rebuild run named, as capFloorOf(pool) = %q", record, capFloorOf(pool))
-	}
-	if *runs != 1 || took <= 0 || pool.WarmDuration() != took {
-		t.Fatalf("runs = %d, took = %v, WarmDuration = %v: want one run whose duration is the floor", *runs, took, pool.WarmDuration())
-	}
-	if b, _ := os.ReadFile(filepath.Join(root, codeKey)); string(b) != "let ok = \"OK\"\n" {
-		t.Fatalf("%s left as %q", codeKey, b)
-	}
-	if line := capFloorNoneLine(codeKey, record); line != "" {
-		t.Errorf("the scan would print %q for a floor that was measured", line)
+// Every language gets one timed run on the probe, its duration becomes the
+// pool's floor, the probe is what confirms a timed-out mutant's kill, the
+// file is put back, and the scan says nothing: a floor that was measured
+// needs no excuse. The fixture's file is named for Swift and holds no code
+// any language would read; the command only greps it.
+func TestRebuildFloorIsMeasuredForEveryLanguage(t *testing.T) {
+	for _, name := range lang.Names() {
+		src := "OK\n"
+		if name == "php" {
+			src = "<?php\nOK\n"
+		}
+		pool, root, codeKey, cmd := rebuildFixture(t, src)
+		runs := countRebuildRuns(t, nil)
+		took, record, err := rebuildFloor(context.Background(), pool, mustPlugin(t, name), codeKey, []byte(src), cmd, 0)
+		if err != nil {
+			t.Fatalf("%s: rebuildFloor: %v", name, err)
+		}
+		if record != capFloorOf(pool) || !strings.HasPrefix(record, "rebuild run, ") {
+			t.Errorf("%s: record = %q, want the measured rebuild run named, as capFloorOf(pool) = %q", name, record, capFloorOf(pool))
+		}
+		if *runs != 1 || took <= 0 || pool.WarmDuration() != took {
+			t.Fatalf("%s: runs = %d, took = %v, WarmDuration = %v: want one run whose duration is the floor", name, *runs, took, pool.WarmDuration())
+		}
+		if path, compliant, probed := pool.RebuildProbe(); path != codeKey || compliant != src || !strings.Contains(probed, "corral rebuild probe") {
+			t.Errorf("%s: RebuildProbe() = %q, %q, %q; want the file, its code and the probe", name, path, compliant, probed)
+		}
+		if b, _ := os.ReadFile(filepath.Join(root, codeKey)); string(b) != src {
+			t.Fatalf("%s: %s left as %q", name, codeKey, b)
+		}
+		if line := capFloorNoneLine(codeKey, record); line != "" {
+			t.Errorf("%s: the scan would print %q for a floor that was measured", name, line)
+		}
 	}
 }
 
-// No rebuild run for a language that does not declare one, and none when the
-// operator named --test-timeout: that cap is theirs and no floor reaches it.
-func TestRebuildFloorRunsNothingItDoesNotNeed(t *testing.T) {
+// No rebuild run when the operator named --test-timeout: that cap is theirs
+// and no floor reaches it.
+func TestRebuildFloorRunsNothingUnderAnExplicitTimeout(t *testing.T) {
 	pool, _, codeKey, cmd := rebuildFixture(t, "OK\n")
 	runs := countRebuildRuns(t, nil)
-	for _, c := range []struct {
-		lang    string
-		timeout time.Duration
-	}{{"go", 0}, {"python", 0}, {"rust", 0}, {"swift", time.Minute}} {
-		took, record, err := rebuildFloor(context.Background(), pool, mustPlugin(t, c.lang), codeKey, []byte("OK\n"), cmd, c.timeout)
+	for _, name := range lang.Names() {
+		took, record, err := rebuildFloor(context.Background(), pool, mustPlugin(t, name), codeKey, []byte("OK\n"), cmd, time.Minute)
 		if err != nil || took != 0 || record != "" {
-			t.Errorf("%s (test-timeout %v): took %v, record %q, err %v; want nothing run and nothing recorded", c.lang, c.timeout, took, record, err)
+			t.Errorf("%s (test-timeout 1m): took %v, record %q, err %v; want nothing run and nothing recorded", name, took, record, err)
 		}
 	}
 	if *runs != 0 || pool.WarmDuration() != 0 {

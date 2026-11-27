@@ -1,0 +1,13 @@
+Building for debugging...
+Build complete! (0.27 secs)
+◇ Test run started.
+↳ Testing Library Version: 6.4.2 (288a2328ff84644)
+↳ Target Platform: x86_64-unknown-linux-gnu
+◇ Suite Arithmetic started.
+◇ Test parses() started.
+◇ Test parsesTwice() started.
+✔ Suite Arithmetic passed after 0.001 seconds.
+✔ Test parsesTwice() passed after 0.001 seconds.
+✔ Test parses() passed after 0.001 seconds.
+✔ Test run with 2 tests in 1 suite passed after 0.001 seconds.
+# exit: 0

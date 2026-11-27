@@ -1109,6 +1109,7 @@ want vitest-bail-passing-exit 0 "$(cd "$DIR" && npx --no-install vitest run calc
 # Each killer command (KillerCmd: the failing run's own command, narrowed to the
 # test its failure reader named, no file added) runs that test and nothing else.
 minikilled() { grep -oE '[0-9]+ runs, [0-9]+ assertions, [0-9]+ failures' | head -1; }
+mochakilled() { grep -oE '[0-9]+ (passing|failing)' | paste -sd' '; }
 killed() { grep -oE '([0-9]+ examples?, [0-9]+ failures?)|(Tests: [0-9]+, Assertions: [0-9]+, (Failures|Errors): [0-9]+)' | head -1; }
 # A jest title holding the printed separator ` › `: the id the jest hook's record
 # gives (`Sep::a › b`, jest_record.go) runs that test alone; the id the printed
@@ -1123,6 +1124,11 @@ want rspec-killer-nested "1 example, 1 failure" "$($RSPEC fail/spec/f_spec.rb -E
 # also matches cannot hold the anchored `#`.
 want minitest-killer "1 runs, 1 assertions, 1 failures" "$(ruby fail/f_test.rb --name '/\ACalcTest#test_adds\z/' 2>&1 | minikilled)"
 want minitest-killer-nested "1 runs, 1 assertions, 1 failures" "$(ruby fail/f_test.rb --name '/\AMyApp::NegTest#test_x\z/' 2>&1 | minikilled)"
+# mocha's killer: --grep over the full title, anchored; each of the fixture's
+# three failures (nested, with regex characters, top level) runs alone.
+want mocha-killer "0 passing 1 failing" "$(npx --no-install mocha fail/f.mocha.js --grep '^Calc adds \(a\+b\)$' 2>&1 | mochakilled)"
+want mocha-killer-nested "0 passing 1 failing" "$(npx --no-install mocha fail/f.mocha.js --grep '^Calc neg adds$' 2>&1 | mochakilled)"
+want mocha-killer-top-level "0 passing 1 failing" "$(npx --no-install mocha fail/f.mocha.js --grep '^top level$' 2>&1 | mochakilled)"
 want phpunit-killer "Tests: 1, Assertions: 1, Failures: 1" "$(vendor/bin/phpunit fail/tests/FTest.php --filter '/(?:^|\\)FTest::testAdds(?: with data set .*)?$/' 2>&1 | killed)"
 want phpunit-killer-dataset "Tests: 2, Assertions: 2, Failures: 1" "$(vendor/bin/phpunit fail/tests/FTest.php --filter '/(?:^|\\)FTest::testData(?: with data set .*)?$/' 2>&1 | killed)"
 # A failing data set's id (phpFailures, the argument suffix dropped) runs that

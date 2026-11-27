@@ -709,7 +709,14 @@ package reposcan
 // alone is now refuted that way rather than repeated. "60" because #579 to
 // #582 take "56" to "59", and any of them may reach main first. Behaviour
 // bump; the shape is unchanged.
-const VerdictGeneration = "60"
+// "61" (2026-11-27): a mocha kill is confirmed by running the killing test
+// alone (lang.mochaKillerCmd: `--grep ^<full title>$` added to the failing
+// run's own command), as jest's and vitest's are, where "55" confirmed it by
+// repeating the whole grading run; a kill whose test passes alone is now
+// refuted that way rather than repeated. "61" because #579 to #582 and the
+// minitest killer take "56" to "60", and any of them may reach main first.
+// Behaviour bump; the shape is unchanged.
+const VerdictGeneration = "61"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

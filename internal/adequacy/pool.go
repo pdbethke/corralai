@@ -36,7 +36,8 @@ type Disclosure struct {
 	// Note says WHY when Trees is 1 after a downgrade. When Trees > 1 it
 	// says what the trees do not have in common with the checkout that a
 	// reader would otherwise assume: the build directories each tree builds
-	// for itself (ownBuildNote), or "" when there are none.
+	// for itself (ownBuildNote) and a lockfile git ignores that was copied
+	// into each tree anyway (WithLockfile), or "" when there are none.
 	Note string
 	// Shared names the dependency directories (in symlinkedDepDirs order)
 	// that exist at the checkout and were SYMLINKED into every tree rather
@@ -141,7 +142,7 @@ type WorkspacePool struct {
 	// the probe's answer must not lose that half of the disclosure.
 	shared []string
 
-	// note is the Disclosure.Note this pool was built with (ownBuildNote),
+	// note is the Disclosure.Note this pool was built with (joinNotes),
 	// retained for the reason shared is: Probe restates it when it keeps the
 	// trees.
 	note string
@@ -194,8 +195,10 @@ var (
 //     every tree. Copying the universe without it instead would need
 //     reposcan.TreeDigest to leave it out in lockstep (see gitUniverse), and
 //     is not done.
-//   - a lockfile was declared (WithLockfile) and is not in the universe:
-//     Trees: 1, the note naming the file.
+//   - a lockfile was declared (WithLockfile), is not in the universe, and is
+//     not a regular file inside root to copy into each tree from the
+//     checkout: Trees: 1, the note naming the file. (One git ignores but the
+//     checkout holds is copied, and the trees' note says so.)
 //
 // WithTreeEnv is lifted out of opts and honoured here, per tree; every other
 // option is passed through to each tree's NewWorkspaceRunner unchanged.
@@ -258,8 +261,22 @@ func NewWorkspacePool(ctx context.Context, root string, n int, timeout time.Dura
 	if len(copiedBuild) > 0 {
 		return single(strings.Join(copiedBuild, ", ") + " is build output that git does not ignore, so it would be copied into every tree instead of each tree building its own; ignoring it in git gives each tree a build of its own")
 	}
+	// The lockfile every tree must hold. One git ignores (Cargo.lock in most
+	// Rust libraries) is copied from the checkout into each tree beside the
+	// universe: it is the checkout's own resolution, which every run on the
+	// checkout reads, so a tree holding it builds what the checkout builds.
+	// reposcan.TreeDigest does not key on it, any more than it did on the
+	// checkout's own ignored copy: a change to an ignored lockfile alone
+	// (`cargo update`) leaves the selection cache's key as it was, before
+	// this copy and after.
+	toCopy := universe
+	lockNote := ""
 	if lf := probe.lockfile; lf != "" && !slices.Contains(universe, lf) {
-		return single(lf + " is not among the files copied into each tree (git neither tracks it nor lists it as an unignored file), so each tree would resolve the dependencies for itself and could build versions the checkout does not")
+		if why := lockfileUncopyable(root, lf); why != "" {
+			return single(lf + " " + why + ", so each tree would resolve the dependencies for itself and could build versions the checkout does not")
+		}
+		toCopy = append(slices.Clip(universe), lf)
+		lockNote = lf + " is ignored by git, so the checkout's copy of it is put in each tree, and every tree builds the dependency versions it locks"
 	}
 
 	// THE COPY. Measured around the whole loop, not per tree: N trees is one
@@ -284,7 +301,7 @@ func NewWorkspacePool(ctx context.Context, root string, n int, timeout time.Dura
 			return single("could not create a tree: " + terr.Error())
 		}
 		temps = append(temps, tree)
-		shared, cerr := copyTree(root, tree, universe, links)
+		shared, cerr := copyTree(root, tree, toCopy, links)
 		if cerr != nil {
 			cleanup()
 			return single("could not copy the checkout: " + cerr.Error())
@@ -295,7 +312,7 @@ func NewWorkspacePool(ctx context.Context, root string, n int, timeout time.Dura
 	p := newPool(root, temps, temps, timeout, treeEnv, plugEnv, opts)
 	p.shared = linked
 	p.copyDuration = copied
-	p.note = ownBuildNote(ownBuild)
+	p.note = joinNotes(ownBuildNote(ownBuild), lockNote)
 	return p, Disclosure{Trees: n, Note: p.note, Shared: linked, CopyDuration: copied}, nil
 }
 
@@ -342,6 +359,38 @@ func buildDirsIn(dirs []lang.BuildDir, universe, links []string) (copied, own []
 	return copied, own
 }
 
+// joinNotes joins a pool's notes on its trees, leaving out empty ones.
+func joinNotes(notes ...string) string {
+	return strings.Join(slices.DeleteFunc(notes, func(n string) bool { return n == "" }), "; ")
+}
+
+// lockfileUncopyable says why the lockfile rel (WithLockfile), which git
+// does not list, cannot be copied from the checkout at root into each tree,
+// or "" when it can: it must be inside root, every directory on the way to
+// it a real directory, and it a regular file. A symlink anywhere on the path
+// is refused rather than followed: copyTree copies a tracked symlinked
+// directory as a link, and writing the lockfile through it would write into
+// whatever it names, the checkout's own file among them.
+func lockfileUncopyable(root, rel string) string {
+	local := filepath.FromSlash(rel)
+	if !filepath.IsLocal(local) {
+		return "is outside the directory copied into each tree"
+	}
+	for d := filepath.Dir(local); d != "."; d = filepath.Dir(d) {
+		if fi, err := os.Lstat(filepath.Join(root, d)); err != nil || !fi.IsDir() {
+			return "is not in the checkout through real directories only (a directory on its path is missing or a symlink)"
+		}
+	}
+	fi, err := os.Lstat(filepath.Join(root, local))
+	switch {
+	case err != nil:
+		return "is not in the checkout (git neither tracks it nor lists it, and there is no such file)"
+	case !fi.Mode().IsRegular():
+		return "is not a regular file in the checkout"
+	}
+	return ""
+}
+
 // ownBuildNote is what a pool of more than one tree says about the build
 // directories its trees build for themselves: none of them is copied
 // (buildDirsIn sent a pool that would copy one to a single tree) or linked,
@@ -375,9 +424,10 @@ func WithBuildDirs(dirs []lang.BuildDir) WorkspaceOption {
 // path relative to the pool's root (lang.LockfileFor, for a language that
 // declares one). A tree that holds no resolved dependencies of its own
 // resolves them on its first run, and trees agree on the versions only when
-// each holds the checkout's lockfile; when the trees would not hold it (it is
-// ignored, absent, or above the root), NewWorkspacePool is one tree, the
-// checkout, and its note names the file. Best-effort like every other reason
+// each holds the checkout's lockfile. One git ignores is copied from the
+// checkout into each tree, and the pool's note says so; when the trees could
+// not hold it (it is absent, not a regular file, or above the root),
+// NewWorkspacePool is one tree, the checkout, and its note names the file. Best-effort like every other reason
 // the pool gives for one tree: never an error.
 //
 // Like WithTreeEnv it is a WorkspaceOption so it travels in the same list,
@@ -464,7 +514,9 @@ func insideGitWorkTree(root string) bool {
 // two must keep walking in lockstep: reposcan.TreeDigest's evidence is only
 // valid for a tree a pool copy of THIS function would produce byte-for-byte
 // the same universe for, so a change to what counts as "the tree" here
-// belongs beside a matching change there, not made alone.
+// belongs beside a matching change there, not made alone. The one file a
+// tree holds beyond it is a declared lockfile git ignores (WithLockfile),
+// which the checkout the evidence was measured on holds as well.
 //
 // Returns the repo-relative paths in git's order and their total size in
 // bytes. A path that has vanished between the listing and the stat is skipped

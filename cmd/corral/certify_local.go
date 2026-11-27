@@ -2816,9 +2816,10 @@ func (h *workspacePool) close() {
 // workspaceRunnerOpts is the option list a workspace pool of trees trees on
 // the checkout at repoDir is built with, for the language plug: its per-run
 // env, and when there is more than one tree its per-tree env, the lockfile
-// every tree must hold when the language declares one (lang.LockfileFor),
+// every tree must hold when the language declares one (lang.LockfileFor, for
+// the audited file codePath; asked only then, since Rust's asks cargo),
 // and the language's build directories (lang.BuildDirer).
-func workspaceRunnerOpts(plug lang.Plugin, trees int, repoDir string) []adequacy.WorkspaceOption {
+func workspaceRunnerOpts(plug lang.Plugin, trees int, repoDir, codePath string) []adequacy.WorkspaceOption {
 	opts := []adequacy.WorkspaceOption{adequacy.WithPerRunEnv(plug.WorkspaceRunEnv)}
 	// WithTreeEnv is per-TREE and therefore only meaningful once there is
 	// more than one: it gives a copy its own import path (Python) and its
@@ -2839,8 +2840,10 @@ func workspaceRunnerOpts(plug lang.Plugin, trees int, repoDir string) []adequacy
 			return te.TreeEnv(tree, share)
 		}))
 	}
-	if rel, ok := lang.LockfileFor(plug, repoDir); ok && trees > 1 {
-		opts = append(opts, adequacy.WithLockfile(rel))
+	if trees > 1 {
+		if rel, ok := lang.LockfileFor(plug, repoDir, codePath); ok {
+			opts = append(opts, adequacy.WithLockfile(rel))
+		}
 	}
 	// The audited language's build directories, and only its own: see
 	// adequacy.WithBuildDirs. A language that declares none passes none.
@@ -3024,7 +3027,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 			// rather than failing the whole audit over it.
 			var runnerOpts []adequacy.WorkspaceOption
 			if plug, ok := lang.ByName(in.langName); ok {
-				runnerOpts = workspaceRunnerOpts(plug, trees, in.repoDir)
+				runnerOpts = workspaceRunnerOpts(plug, trees, in.repoDir, in.codePath)
 			}
 
 			built, disc, perr := newWorkspacePool(ctx, in.repoDir, trees, in.timeout, runnerOpts...)

@@ -1,0 +1,25 @@
+[0/1] Planning build
+Building for debugging...
+[0/3] Write swift-version-24593BA9C3E375BF.txt
+Build complete! (0.06s)
+Test Suite 'Selected tests' started at 2026-11-26 13:48:19.076
+Test Suite 'AdderTests' started at 2026-11-26 13:48:19.077
+Test Case 'AdderTests.testAdds' started at 2026-11-26 13:48:19.077
+Test Case 'AdderTests.testAdds' passed (0.001 seconds)
+Test Case 'AdderTests.testAddsTwice' started at 2026-11-26 13:48:19.078
+Test Case 'AdderTests.testAddsTwice' passed (0.0 seconds)
+Test Suite 'AdderTests' passed at 2026-11-26 13:48:19.078
+	 Executed 2 tests, with 0 failures (0 unexpected) in 0.001 (0.001) seconds
+Test Suite 'Selected tests' passed at 2026-11-26 13:48:19.078
+	 Executed 2 tests, with 0 failures (0 unexpected) in 0.001 (0.001) seconds
+◇ Test run started.
+↳ Testing Library Version: 6.3.2 (70eff261d7f462c)
+↳ Target Platform: x86_64-unknown-linux-gnu
+◇ Suite Arithmetic started.
+◇ Test parsesTwice() started.
+◇ Test parses() started.
+✔ Suite Arithmetic passed after 0.001 seconds.
+✔ Test parsesTwice() passed after 0.001 seconds.
+✔ Test parses() passed after 0.001 seconds.
+✔ Test run with 2 tests in 1 suite passed after 0.001 seconds.
+# exit: 0

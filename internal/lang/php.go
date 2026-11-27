@@ -4,6 +4,7 @@ package lang
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -457,74 +458,6 @@ func phpDataSetID(id string) string {
 // names nothing: no test can be blamed for a summary that never named one.
 func phpFirstFailure(output []byte) string { return firstOf(phpFailures)(output) }
 
-// phpNamespaceRe matches a top-level `namespace X\Y;` declaration — PHP's
-// SINGLETON header: exactly one may govern a file, unlike an `import`/`use`
-// line, which may repeat harmlessly. Only the single-statement form is
-// matched (no `namespace X { ... }` braced form): the writer prompt never
-// asks for it, and none of the shipped languages' concatenators handle a
-// braced/block variant of their own singleton header either (Go's
-// `goPackageRe` is equally single-form).
-var phpNamespaceRe = regexp.MustCompile(`^namespace\s+([\w\\]+)\s*;`)
-
-// phpUseRe matches a top-level `use X\Y;` IMPORT statement. It is checked
-// only when a line is top-level (mergeParts never applies isHeader to an
-// indented line), which is what keeps this from also matching a trait
-// inclusion (`use Loggable;`) INSIDE a class body — that always sits
-// indented one level in.
-var phpUseRe = regexp.MustCompile(`^use\s+[\w\\]`)
-
-var (
-	phpRequireRe = regexp.MustCompile(`^require(?:_once)?\s`)
-	phpDeclareRe = regexp.MustCompile(`^declare\s*\(`)
-	// phpClassRe accepts the `final`/`abstract` modifiers PHPUnit test
-	// classes sometimes carry ahead of `class`.
-	phpClassRe = regexp.MustCompile(`^(?:final\s+|abstract\s+)*class\s+([A-Za-z_]\w*)`)
-	phpFuncRe  = regexp.MustCompile(`^function\s+([A-Za-z_]\w*)\s*\(`)
-)
-
-// ConcatTests folds several proven PHPUnit files into one: the opening
-// `<?php` tag and a `namespace` declaration are stripped out and re-emitted
-// exactly once (both are SINGLETONS PHP fails to parse repeated — the same
-// reasoning goPlugin.ConcatTests gives its own `package` clause), disagreeing
-// namespace declarations REFUSED rather than guessed at (mirrors Go's
-// package-clause mismatch), `use`/`require(_once)`/`declare` lines hoisted
-// and de-duplicated by exact text, and a colliding class (or, defensively, a
-// colliding top-level function) name SUFFIXED with its mutant id.
-//
-// Every top-level declaration here is renameable, unlike Go/Python/Ruby's
-// "only the test name" carve-out: an authored PHP test's class is not
-// referenced from ANYWHERE outside its own file — PHPUnit's directory-based
-// discovery `require()`s a matching file and reflects on whichever TestCase
-// subclasses it finds newly declared, it does not look the class up by name
-// — so suffixing every occurrence of a colliding name within that SAME
-// part's body (mergeParts' word-boundary-bounded substitution, the identical
-// mechanism JS's full permissiveness already relies on) safely rewrites its
-// own internal self-references (`new InvoiceTest()`, `InvoiceTest::class`)
-// along with the declaration itself. That is also why two parts declaring
-// the SAME class name is the ordinary case here, not a rare collision: the
-// writer prompt gives the model no per-mutant class name to differentiate
-// on, so the common shape is exactly the one this merge exists to handle —
-// see the design doc's "decide by what phpunit COLLECTS" note and the
-// fake-jail proof in concat_php_jail_test.go: a file with several
-// distinctly (or suffix-disambiguated) named TestCase subclasses is
-// discovered and runs every one of them.
-func (phpPlugin) ConcatTests(parts []AuthoredPart) (string, error) {
-	// NOT MERGEABLE under PHPUnit 10 and 11, which is what ships: the
-	// runner loads ONE class per file, the one named after the file, and
-	// reports "Class X cannot be found" for a file declaring anything else
-	// — so a merged file of suffixed classes (InvoiceTest_s0m1,
-	// InvoiceTest_s0m2) ran nothing and exited 1. The earlier
-	// implementation rested on a hand-written require+reflection driver
-	// that mimicked PHPUnit 9's loader, not PHPUnit itself; the sixth
-	// review ran the real runner. A single part is returned as-is (its
-	// class already matches its file); every further proven test rides
-	// separately, each to be saved under its own class name.
-	if len(parts) == 1 {
-		return parts[0].Source, nil
-	}
-	return "", fmt.Errorf("php: PHPUnit 10+ loads one class per file, the class named after the file, so proven PHPUnit tests are not merged — save each under its own class name (%s)", parts[len(parts)-1].MutantID)
-}
-
 // COVERAGE FOR PHP — pcov or Xdebug, and the extension is the honest catch.
 //
 // PHP is the one language of the six that CANNOT be instrumented with what a
@@ -785,4 +718,20 @@ func (phpPlugin) LineComment() string { return "//" }
 // directory, so each private tree needs its own (see DepDir.CopyPerTree).
 func (phpPlugin) DependencyDirs() []DepDir {
 	return []DepDir{{Name: "vendor", CopyPerTree: []string{"autoload.php", "composer"}}}
+}
+
+// KeptLines is FirstLineKeeper for PHP: the rebuild probe goes after the
+// `<?php` line, because text before the open tag is output, and a
+// declare(strict_types=1) after such text is a fatal error ("strict_types
+// declaration must be the very first statement in the script", PHP 8, run
+// 2026-11-26). A file that does not open with the tag (a template), or whose
+// first line closes it again, is not probed: a line after `?>` is output too.
+func (phpPlugin) KeptLines(body string) (int, error) {
+	if len(body) < 5 || !strings.EqualFold(body[:5], "<?php") {
+		return 0, errors.New("it does not open with <?php, and a line before the open tag would be output")
+	}
+	if first, _, _ := strings.Cut(body, "\n"); strings.Contains(first, "?>") {
+		return 0, errors.New("its first line closes the <?php tag, and a line after it would be output")
+	}
+	return 1, nil
 }

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Elastic-2.0
 
 // Package tomllite is corral's one reader of TOML text: line-based, read-only,
-// and deliberately small. corral has no TOML library and reads TOML for two
-// narrow questions about files a repository owns — which tables a cargo
-// config already declares (before vendoring appends its own), and, next,
-// what a Cargo.toml names its package. Every TOML question goes through this
+// and deliberately small. corral has no TOML library and reads TOML for a few
+// narrow questions about files a repository owns: which tables a cargo
+// config already declares (before vendoring appends its own), what a
+// Cargo.toml names its package, and whether it declares any dependency. Every TOML question goes through this
 // package so there is one reading of the syntax, never a second parser.
 //
 // What it does not do: values beyond the simple cases its callers need,
@@ -15,26 +15,35 @@ package tomllite
 
 import "strings"
 
-// TablesDeclared is every table a TOML text opens, normalised (segments
-// unquoted, spaces dropped): `[source."crates-io"]` and
-// `source.crates-io.replace-with = …` both declare source.crates-io. Line-
-// based on purpose — it decides only whether to refuse, so a miss costs the
-// toolchain's own rejection, never a silent merge.
-func TablesDeclared(text string) []string {
-	var out []string
-	cur := "" // the table the following keys belong to
-	for _, line := range strings.Split(text, "\n") {
-		line = strings.TrimSpace(stripComment(line))
+// line is one meaningful line of a TOML text as this package reads it: a
+// table header (header true, path the table, arrayOfTables for [[...]]) or a
+// key, with path the table it belongs to joined to the key and value the raw
+// text after '='. Every reader here walks lines, so the syntax is read once.
+type line struct {
+	path, value           string
+	header, arrayOfTables bool
+}
+
+// lines is text read line by line: a leading byte-order mark and comments
+// stripped, blank lines and lines that are neither a header nor a key =
+// value dropped.
+func lines(text string) []line {
+	var out []line
+	cur := ""                                 // the table the following keys belong to
+	text = strings.TrimPrefix(text, "\ufeff") // a UTF-8 byte-order mark is not part of the first line
+	for _, raw := range strings.Split(text, "\n") {
+		l := strings.TrimSpace(stripComment(raw))
 		switch {
-		case line == "":
+		case l == "":
 			continue
-		case strings.HasPrefix(line, "[[") && strings.HasSuffix(line, "]]"):
-			cur = normKey(line[2 : len(line)-2]) // an array of tables is never a duplicate
-		case strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]"):
-			cur = normKey(line[1 : len(line)-1])
-			out = append(out, cur)
+		case strings.HasPrefix(l, "[[") && strings.HasSuffix(l, "]]"):
+			cur = normKey(l[2 : len(l)-2])
+			out = append(out, line{path: cur, header: true, arrayOfTables: true})
+		case strings.HasPrefix(l, "[") && strings.HasSuffix(l, "]"):
+			cur = normKey(l[1 : len(l)-1])
+			out = append(out, line{path: cur, header: true})
 		default:
-			k, _, isKV := strings.Cut(line, "=")
+			k, v, isKV := strings.Cut(l, "=")
 			if !isKV {
 				continue
 			}
@@ -42,11 +51,42 @@ func TablesDeclared(text string) []string {
 			if cur != "" {
 				key = cur + "." + key
 			}
-			segs := strings.Split(key, ".")
+			out = append(out, line{path: key, value: strings.TrimSpace(v)})
+		}
+	}
+	return out
+}
+
+// TablesDeclared is every table a TOML text opens, normalised (segments
+// unquoted, spaces dropped): `[source."crates-io"]` and
+// `source.crates-io.replace-with = …` both declare source.crates-io. Line-
+// based on purpose — it decides only whether to refuse, so a miss costs the
+// toolchain's own rejection, never a silent merge.
+func TablesDeclared(text string) []string {
+	var out []string
+	for _, l := range lines(text) {
+		switch {
+		case l.arrayOfTables: // an array of tables is never a duplicate
+		case l.header:
+			out = append(out, l.path)
+		default:
+			segs := strings.Split(l.path, ".")
 			for n := 2; n < len(segs); n++ { // a dotted key a.b.c opens table a.b (a is opened by its own header or key)
 				out = append(out, strings.Join(segs[:n], "."))
 			}
 		}
+	}
+	return out
+}
+
+// Paths is every table header and every key of a TOML text, each as its full
+// normalised path (a key under [a] is a.key; a dotted key a.b = … is a.b), in
+// the order they appear. A caller asking whether a text declares something
+// anywhere, as a table or as a key, reads this.
+func Paths(text string) []string {
+	var out []string
+	for _, l := range lines(text) {
+		out = append(out, l.path)
 	}
 	return out
 }
@@ -86,34 +126,15 @@ func normKey(k string) string {
 // "no name" means and never receives a guess.
 func StringValue(text, table, key string) (string, bool) {
 	want := normKey(table) + "." + normKey(key)
-	cur := ""
-	for _, line := range strings.Split(text, "\n") {
-		line = strings.TrimSpace(stripComment(line))
-		switch {
-		case line == "":
+	for _, l := range lines(text) {
+		if l.header || l.path != want {
 			continue
-		case strings.HasPrefix(line, "[[") && strings.HasSuffix(line, "]]"):
-			cur = normKey(line[2 : len(line)-2])
-		case strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]"):
-			cur = normKey(line[1 : len(line)-1])
-		default:
-			k, v, isKV := strings.Cut(line, "=")
-			if !isKV {
-				continue
-			}
-			full := normKey(k)
-			if cur != "" {
-				full = cur + "." + full
-			}
-			if full != want {
-				continue
-			}
-			v = strings.TrimSpace(v)
-			if len(v) >= 2 && (v[0] == '"' || v[0] == '\'') && v[len(v)-1] == v[0] {
-				return v[1 : len(v)-1], true
-			}
-			return "", false
 		}
+		v := l.value
+		if len(v) >= 2 && (v[0] == '"' || v[0] == '\'') && v[len(v)-1] == v[0] {
+			return v[1 : len(v)-1], true
+		}
+		return "", false
 	}
 	return "", false
 }

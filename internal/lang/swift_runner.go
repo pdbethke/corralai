@@ -103,6 +103,101 @@ func swiftSingleCmd(argv []string, _, id string) ([]string, bool) {
 	return append(slices.Clone(argv), "--filter", swiftFilterFor(id)), true
 }
 
+// swiftKillerCmd narrows the failing run to the one test killedBy names,
+// with the one-test --filter swiftSingleCmd uses, but only for an id
+// swift-testing's own record gives (swiftRecordedID): `Module.fn(...)` or
+// `Module.Type/.../fn(...)`, as `swift test list` prints it. Every other
+// name a run gives comes from the printed lines (swiftPrintedFailures) and
+// is no id: a swift-testing function or quoted display name carries no
+// suite or module, so a filter built from it could run a test of the same
+// name elsewhere, and XCTest's Class.method carries no target. Those kills
+// are confirmed by repeating the grading run, as before.
+//
+// Overloads share an id: two parameterised tests of one name and argument
+// labels (`f(value: Int)` and `f(value: String)`) are one id in the record,
+// `KTests.f(value:)`, which `swift test list` prints only with each one's
+// `/<file>:<line>:<column>` added, so the filter runs both (measured on
+// Swift 6.3.2 and 6.4.2: "Test run with 2 tests"). As with jest's and
+// rspec's shared names, a kill confirmed that way is still a run in which
+// the blamed name failed.
+func swiftKillerCmd(argv []string, killedBy string) ([]string, bool) {
+	if !swiftRecordedID(killedBy) {
+		return nil, false
+	}
+	return swiftSingleCmd(argv, "", killedBy)
+}
+
+// swiftRecordedID reports whether name has the shape of an id
+// swiftTestingID builds from swift-testing's record: a module, ".", then a
+// function signature, with any enclosing types between them joined by "/".
+// A printed swift-testing name has no module before its signature, a
+// display name is quoted, and an XCTest name ends in no ")".
+func swiftRecordedID(name string) bool {
+	if strings.HasPrefix(name, `"`) || !strings.HasSuffix(name, ")") {
+		return false
+	}
+	sig := strings.Index(name, "(")
+	if sig < 0 {
+		return false
+	}
+	module, _, ok := strings.Cut(name[:sig], ".")
+	return ok && module != "" && !strings.Contains(module, "/")
+}
+
+// xctestPrintedName is the Class.method XCTest prints for a failing test
+// on Linux (xctestFailed), simple identifiers only.
+var xctestPrintedName = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)$`)
+
+// swiftFailedTests is the row's salvage reader: the failing tests swiftFailures
+// names that swiftDeselectCmd can skip. When swift-testing's record was read,
+// that is its ids and XCTest's printed Class.method; a swift-testing name the
+// printed lines give besides is left out, since the record names every
+// swift-testing failure but those of a crashed test process and the printed
+// twin of a test with a display name, and neither can be skipped by its
+// printed name. A failure left out is not skipped, so the rerun fails again
+// and nothing is salvaged. With no record, the printed names are the answer
+// as they are, and swiftDeselectCmd refuses the swift-testing ones.
+func swiftFailedTests(out string) []string {
+	names := swiftFailures(out)
+	if _, ok := swiftRecordedFailures(out); !ok {
+		return names
+	}
+	return slices.DeleteFunc(names, func(n string) bool { return !swiftRecordedID(n) && !xctestPrintedName.MatchString(n) })
+}
+
+// swiftDeselectCmd reruns argv without the tests ids, one `--skip` each: a
+// swift-testing record id by the one-test pattern (swiftFilterFor), an
+// XCTest Class.method as `^[^.]+\.Class/method(?:/|$)`, the method in that
+// class in any target, since the printed name carries none (a passing test
+// of the same name in another target is skipped too, which only makes the
+// rerun run less; so is every overload sharing a record id, see
+// swiftKillerCmd). Any other name (a printed swift-testing name, which has
+// no suite or module) refuses the rerun. swift test applies every --skip,
+// and after a --filter, so a unit filter argv carries stays (measured on
+// Swift 6.3.2 and 6.4.2, swift-salvage-*.txt, on the bare command; the
+// hook's wrapper, which a graded rerun goes through, was measured apart to
+// leave a run's printed output and exit as they are).
+func swiftDeselectCmd(argv, ids []string) ([]string, bool) {
+	if len(ids) == 0 {
+		return nil, false
+	}
+	if _, ok := swiftTestAt(argv); !ok || hasFlag(argv, "--list-tests", "-l") {
+		return nil, false
+	}
+	out := slices.Clone(argv)
+	for _, id := range ids {
+		switch m := xctestPrintedName.FindStringSubmatch(id); {
+		case swiftRecordedID(id):
+			out = append(out, "--skip", swiftFilterFor(id))
+		case m != nil:
+			out = append(out, "--skip", `^[^.]+\.`+regexp.QuoteMeta(m[1])+"/"+regexp.QuoteMeta(m[2])+"(?:/|$)")
+		default:
+			return nil, false
+		}
+	}
+	return out, true
+}
+
 // swiftCoruns: the pattern for id also selects every listed id that extends
 // it by "/" (a suite id and the tests inside it), because the pattern ends at
 // "/". `swift test list` lists tests, not suites, so two listed ids do not
@@ -164,9 +259,8 @@ func swiftFailures(output string) []string {
 // (`CalcTests.Arithmetic/adds()`), which SingleCmd takes and the critic's
 // list uses; from the printed lines it is the bare name they print, which
 // cannot be narrowed back to one listed id, since no swift-testing failure
-// line names the test's suite or target. The row has no KillerCmd either
-// way: XCTest's printed name lacks its target, and a run killed only by one
-// still has no id to run alone.
+// line names the test's suite or target. The row's KillerCmd
+// (swiftKillerCmd) is built from the first kind only.
 var swiftFirstFailure = firstOf(swiftFailures)
 
 // A Swift test unit is a test TARGET, as cargo's is: the module a test id

@@ -392,25 +392,6 @@ func TestEveryLanguageHasAConcatenator(t *testing.T) {
 	}
 }
 
-// TestPHPConcatDoesNotMergeUnderPHPUnit10 replaces three tests that asserted
-// a merge PHPUnit 10+ cannot run. The old tests rested on a hand-written
-// require+reflection driver that mimicked PHPUnit 9's loader; the sixth
-// review ran the real runner (11.5): a file declaring InvoiceTest_s0m1 and
-// InvoiceTest_s0m2 → "Class InvoiceTest cannot be found", Tests: 1, exit 1
-// — neither ran. One proven test is returned as-is; every further one rides
-// separately, with the reason on it.
-func TestPHPConcatDoesNotMergeUnderPHPUnit10(t *testing.T) {
-	one := AuthoredPart{MutantID: "s0/m1", Source: "<?php\nuse PHPUnit\\Framework\\TestCase;\nfinal class InvoiceTest extends TestCase { public function testA(): void { $this->assertTrue(true); } }\n"}
-	two := AuthoredPart{MutantID: "s0/m2", Source: "<?php\nuse PHPUnit\\Framework\\TestCase;\nfinal class InvoiceTest extends TestCase { public function testB(): void { $this->assertTrue(true); } }\n"}
-	merged, extra := ConcatAuthored(phpPlugin{}, []AuthoredPart{one, two})
-	if merged != one.Source {
-		t.Errorf("the first proven test should be handed back as-is; got %q", merged)
-	}
-	if len(extra) != 1 || extra[0].MutantID != "s0/m2" || !strings.Contains(extra[0].Reason, "PHPUnit 10+") {
-		t.Errorf("the second proven test should ride separately with the reason: %+v", extra)
-	}
-}
-
 // MULTI-LINE IMPORTS ARE ONE HEADER. The merge hoisted an import by its
 // first line only, so `import {` went to the top of the file and its
 // specifier lines and `} from "…"` stayed in the body: REA's five proven

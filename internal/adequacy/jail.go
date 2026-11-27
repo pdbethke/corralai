@@ -166,14 +166,26 @@ func WithRunCache(env string) JailOption {
 //   - a RunCacheJail (Go's shared build cache in the bwrap jail): the warming
 //     run, the one run of a file that paid for a full build, after which a
 //     frozen run of unchanged code is a full cache hit;
-//   - a WorkspacePool whose language rebuilds per run (lang.PerRunBuilder):
-//     the run MeasureRebuild timed, with the file changed so its module
-//     must recompile and relink.
+//   - a WorkspacePool that made its rebuild run (lang.RebuildProbe): the
+//     run MeasureRebuild timed, with the file changed so its module must
+//     recompile and relink.
 //
 // Zero means no such run was measured, and changes no cap.
 type WarmDurationJail interface {
 	Jail
 	WarmDuration() time.Duration
+}
+
+// RebuildProbeJail is a Jail that made a rebuild run (a WorkspacePool after
+// MeasureRebuild passed) and reports it: probed is the file at codePath
+// changed so its module must recompile and relink, built from compliant.
+// Score confirms a timed-out mutant's kill by running probed in place of the
+// compliant code when both name the file it grades, so the run that confirms
+// pays the rebuild the mutant paid (see the re-probe in Score). All three are
+// "" until a rebuild run passed.
+type RebuildProbeJail interface {
+	Jail
+	RebuildProbe() (codePath, compliant, probed string)
 }
 
 // RunCacheJail is a Jail whose runs share a tool cache (WithRunCache).

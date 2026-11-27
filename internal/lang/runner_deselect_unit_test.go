@@ -10,7 +10,8 @@ import (
 // deselectUnitBases is one operator command and one unit per row that both
 // salvages (DeselectCmd) and runs units (UnitsCmd), and the failing test's id
 // in the form that row's FailedTests gives it, when it is not a description
-// (Rust: a libtest path, or nextest's `<binary id> <test>`). The test below
+// (Rust: a libtest path, or nextest's `<binary id> <test>`; Swift: a
+// swift-testing record id). The test below
 // derives the rows from the table and fails on a row missing here, so a new
 // row cannot skip the check by not being listed.
 var deselectUnitBases = map[string]struct {
@@ -26,6 +27,7 @@ var deselectUnitBases = map[string]struct {
 	"phpunit":       {[]string{"vendor/bin/phpunit"}, "tests/ACorralTest.php", ""},
 	"cargo-test":    {[]string{"cargo", "test", "--workspace"}, "units-a/lib", "tests::rejects_bad_input"},
 	"cargo-nextest": {[]string{"cargo", "nextest", "run", "--workspace"}, "units-a", "units-a tests::rejects_bad_input"},
+	"swift-test":    {[]string{"swift", "test"}, "CalcTests", "CalcTests.Arithmetic/adds()"},
 }
 
 // A salvaged authored pass is built from the run's base like any other

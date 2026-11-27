@@ -346,10 +346,16 @@ var runners = []Runner{
 		ListCmd:  pyListCmd, ParseList: pyParseTestList, SingleCmd: pySingleCmd,
 		Note: "listing and one-test runs use pytest, which collects unittest suites; they need pytest installed",
 	},
-	// jest and mocha take --bail. vitest is left without one deliberately:
-	// its bail spelling has changed across major versions, and an
-	// unrecognised flag would make every mutant exit non-zero and read as a
-	// kill. node --test has no such flag.
+	// jest and mocha take --bail, and vitest --bail=1 (it takes a count).
+	// vitest was left without one because its spelling was said to have
+	// changed across major versions, and an unrecognised flag makes every
+	// mutant exit non-zero, which reads as a kill. Measured 2026-11-26:
+	// vitest 1.6.1, 2.1.9, 3.2.7, 5.1.0 and 5.1.2 all take --bail=1, stop after the
+	// first failing test, and exit 0 with it on a passing suite (vitest 4 was
+	// not installed: npm failed). A vitest that refuses it (0.x before 0.29
+	// had no --bail) fails the baseline re-run adequacy makes with the flag
+	// before trusting it, so the flag is then dropped, never read as kills.
+	// node --test has no such flag.
 	{
 		// Detect adds jest's entry script (node ./node_modules/jest/bin/jest.js,
 		// the form AGENTS.md gives for the jail) to the word.
@@ -389,7 +395,7 @@ var runners = []Runner{
 	{
 		// Detect adds vitest's entry script to the word; a shell-wrapped
 		// script is still read through Words.
-		Name: "vitest", ID: "vitest", Languages: []string{"javascript", "typescript"}, Words: []string{"vitest"},
+		Name: "vitest", ID: "vitest", Languages: []string{"javascript", "typescript"}, Words: []string{"vitest"}, FailFast: []string{"--bail=1"},
 		Detect: func(argv []string) bool { return vitestIndex(argv) >= 0 },
 		At:     vitestIndex,
 		// A reporters list in the project's vitest config (json, junit)
@@ -414,7 +420,7 @@ var runners = []Runner{
 		EvidenceArgs:   vitestEvidenceArgs,
 		VersionCmd:     vitestVersionCmd,
 		UnitNoCoverage: "no worker coverage: the run's V8 coverage named no project file, though corral ran the unit with --pool=threads; that is what vitest's forks pool gives (measured on vitest 3.2.7 and 5.0.3), so check whether the test file itself forces another pool",
-		Note:           "listing, one-test, one-file and several-file runs verified on vitest 3.2 and 5.1, salvage on 5.1; --reporter=default verified on vitest 5.1.0 against a config whose reporters list (json) hides the failures; the unit evidence pass runs each file with --pool=threads, because the forks pool wrote no worker coverage (measured on vitest 3.2.7 and 5.0.3); unit evidence counted through corral's vm source-map preload on vitest 3.2.7 and 5.0.3; vitest 1, 2 and 4 were not run. vitest has no failure hook, because corral must never write into a project's file and no command line keeps vitest's JUnit report out of one (measured on vitest 5.1.0, report/vitest-outputfile): `--outputFile=<file>` keeps it out of a config's `outputFile`, a string or an object, but a reporter the config names with options, `reporters: [['junit', {outputFile}]]`, keeps them when the command line names the same reporter, and the report goes to the project's file (`--outputFile.junit=<file>` loses to a config's string `outputFile` as well); so the killing test is read from the printed ` FAIL ` lines alone",
+		Note:           "listing, one-test, one-file and several-file runs verified on vitest 3.2 and 5.1, salvage on 5.1; --bail=1 on mutant runs verified on vitest 1.6.1, 2.1.9, 3.2.7, 5.1.0 and 5.1.2 (two failing files: one failed, where 2 fail without it; a passing run exits 0 with it), not on vitest 4; --reporter=default verified on vitest 5.1.0 against a config whose reporters list (json) hides the failures; the unit evidence pass runs each file with --pool=threads, because the forks pool wrote no worker coverage (measured on vitest 3.2.7 and 5.0.3); unit evidence counted through corral's vm source-map preload on vitest 3.2.7 and 5.0.3; vitest 1, 2 and 4 were not run. vitest has no failure hook, because corral must never write into a project's file and no command line keeps vitest's JUnit report out of one (measured on vitest 5.1.0, report/vitest-outputfile): `--outputFile=<file>` keeps it out of a config's `outputFile`, a string or an object, but a reporter the config names with options, `reporters: [['junit', {outputFile}]]`, keeps them when the command line names the same reporter, and the report goes to the project's file (`--outputFile.junit=<file>` loses to a config's string `outputFile` as well); so the killing test is read from the printed ` FAIL ` lines alone",
 	},
 	{
 		Name: "node --test", ID: "node-test", Languages: []string{"javascript", "typescript"}, Default: true,
@@ -507,11 +513,11 @@ var runners = []Runner{
 		// test file, and a critic's name (TestNamesInSource's, already in
 		// the listing's form) is checked against it before it is run.
 		ListCmd: swiftListCmd, ParseList: swiftParseList, SingleCmd: swiftSingleCmd, ResolveByList: true, Coruns: swiftCoruns,
-		FirstFailure: swiftFirstFailure, ReportHook: swiftRecordHook,
+		FirstFailure: swiftFirstFailure, ReportHook: swiftRecordHook, KillerCmd: swiftKillerCmd, FailedTests: swiftFailedTests, DeselectCmd: swiftDeselectCmd,
 		ListUnits: swiftListUnits, ParseUnits: swiftParseUnits, UnitCmd: oneUnit(swiftUnitsCmd),
 		UnitsCmd: swiftUnitsCmd, UnitForFile: swiftUnitForFile, UnitNoun: "test targets",
 		Disclose: swiftDisclose, PreflightBin: func(argv []string) string { return preflightBin(argv, "swift") },
-		Note: "corral's sandbox does not run Swift, so a Swift audit runs only on `certify --repo --substrate workspace`, and no audit with models has been run on one yet. Run on Swift 6.3.2 on Linux, in a container: the listing; one test alone (`--filter`) for each of four id shapes, an XCTest Class/method, a top-level swift-testing function, one in a suite with a display name and a parameterised one, each running exactly one test; one-target and two-target runs; and the failure lines of both frameworks. Other id shapes (nested suites, a name that is no ASCII identifier) were not run. The --help lists no retry option, so no test is reported flaky; a swift-testing failure is named by the id `swift test list` prints, read from swift-testing's own record of the run (`--xunit-output`, run on Swift 6.3.2 and 6.4.2), and by its function or display name, as its output prints it, where there is no record (a command the hook does not wrap, or a crashed test process); XCTest writes no record unless its tests run in parallel, which the hook does not add, so an XCTest failure is never read from a record: it is named from its printed line, as Class.method without its target; a test target declared with its own `path:` in Package.swift is not mapped to its files; a swift-testing record over 30 KiB (lang.RecordPrintMax) is not printed, so that it cannot push the printed lines out of the 64 KiB tail corral keeps of a mutant's run: the wrapper prints one `corral-record-skipped <format> <bytes>` line in its place, and the printed lines are read, as without the hook; a record that is printed still takes its size out of that tail, leaving the printed lines at least 34 KiB, so an XCTest failure, or a test of a crashed swift-testing process, which only the printed lines name, can fall out of it when the run printed more than that",
+		Note: "corral's sandbox does not run Swift, so a Swift audit runs only on `certify --repo --substrate workspace`, and no audit with models has been run on one yet. Run on Swift 6.3.2 on Linux, in a container: the listing; one test alone (`--filter`) for each of four id shapes, an XCTest Class/method, a top-level swift-testing function, one in a suite with a display name and a parameterised one, each running exactly one test; one-target and two-target runs; and the failure lines of both frameworks. Other id shapes (nested suites, a name that is no ASCII identifier) were not run. The --help lists no retry option, so no test is reported flaky; a swift-testing failure is named by the id `swift test list` prints, read from swift-testing's own record of the run (`--xunit-output`, run on Swift 6.3.2 and 6.4.2), and by its function or display name, as its output prints it, where there is no record (a command the hook does not wrap, or a crashed test process); XCTest writes no record unless its tests run in parallel, which the hook does not add, so an XCTest failure is never read from a record: it is named from its printed line, as Class.method without its target; a kill is confirmed by running the killing test alone, with the one-test --filter, only when the record named it by its listed id (run on 6.3.2 and 6.4.2 on a failing run, for a test in a suite with a display name and a parameterised one, each running that test alone and failing; overloaded parameterised tests share one id, and that run runs every overload, measured on both); a kill named from the printed lines alone is confirmed by repeating the grading run; an authored test whose cases partly fail is salvaged by a rerun with a --skip for each failure the record names and each XCTest Class.method (in any target, which can skip a passing test of that name in another target, as a record id's skip does every overload sharing it), run on 6.3.2 and 6.4.2, on the bare command, with both frameworks failing: the four skips ran the other four tests and passed, and with a unit --filter the two left in that target; a swift-testing failure only the printed lines name is not skipped, so a run with one salvages nothing; a test target declared with its own `path:` in Package.swift is not mapped to its files; a swift-testing record over 30 KiB (lang.RecordPrintMax) is not printed, so that it cannot push the printed lines out of the 64 KiB tail corral keeps of a mutant's run: the wrapper prints one `corral-record-skipped <format> <bytes>` line in its place, and the printed lines are read, as without the hook; a record that is printed still takes its size out of that tail, leaving the printed lines at least 34 KiB, so an XCTest failure, or a test of a crashed swift-testing process, which only the printed lines name, can fall out of it when the run printed more than that",
 	},
 }
 

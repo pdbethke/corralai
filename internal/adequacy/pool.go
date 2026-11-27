@@ -36,7 +36,8 @@ type Disclosure struct {
 	// Note says WHY when Trees is 1 after a downgrade. When Trees > 1 it
 	// says what the trees do not have in common with the checkout that a
 	// reader would otherwise assume: the build directories each tree builds
-	// for itself (ownBuildNote), or "" when there are none.
+	// for itself (ownBuildNote) and a lockfile git ignores that was copied
+	// into each tree anyway (WithLockfile), or "" when there are none.
 	Note string
 	// Shared names the dependency directories (in symlinkedDepDirs order)
 	// that exist at the checkout and were SYMLINKED into every tree rather
@@ -141,20 +142,32 @@ type WorkspacePool struct {
 	// the probe's answer must not lose that half of the disclosure.
 	shared []string
 
-	// note is the Disclosure.Note this pool was built with (ownBuildNote),
+	// note is the Disclosure.Note this pool was built with (joinNotes),
 	// retained for the reason shared is: Probe restates it when it keeps the
 	// trees.
 	note string
 
-	// warmDur is the rebuild run MeasureRebuild timed, in nanoseconds; zero
-	// until one passed. Written once before scoring and read by every
-	// concurrent cap Score derives, hence atomic.
-	warmDur atomic.Int64
+	// rebuild is the rebuild run MeasureRebuild timed and the probe it ran;
+	// nil until one passed. Written once before scoring and read by every
+	// concurrent cap and re-probe Score makes, hence atomic, and one pointer
+	// so the duration and the probe are never read from two different runs.
+	rebuild atomic.Pointer[rebuildRun]
+}
+
+// rebuildRun is one passing rebuild run (MeasureRebuild): how long it took,
+// and the probe it ran, with the file and the code it was built from.
+type rebuildRun struct {
+	took                    time.Duration
+	path, compliant, probed string
 }
 
 // The pool reports a warm duration, so Score reads a measured rebuild run
 // through the same door it reads a warmed run cache's (WarmDurationJail).
 var _ WarmDurationJail = (*WorkspacePool)(nil)
+
+// And the probe that run made, so Score confirms a timed-out mutant's kill on
+// a run that pays the same rebuild (RebuildProbeJail).
+var _ RebuildProbeJail = (*WorkspacePool)(nil)
 
 // The pool must be substitutable for a WorkspaceRunner everywhere one is used
 // today, so every interface a caller may assert is asserted here at COMPILE
@@ -194,8 +207,10 @@ var (
 //     every tree. Copying the universe without it instead would need
 //     reposcan.TreeDigest to leave it out in lockstep (see gitUniverse), and
 //     is not done.
-//   - a lockfile was declared (WithLockfile) and is not in the universe:
-//     Trees: 1, the note naming the file.
+//   - a lockfile was declared (WithLockfile), is not in the universe, and is
+//     not a regular file inside root to copy into each tree from the
+//     checkout: Trees: 1, the note naming the file. (One git ignores but the
+//     checkout holds is copied, and the trees' note says so.)
 //
 // WithTreeEnv is lifted out of opts and honoured here, per tree; every other
 // option is passed through to each tree's NewWorkspaceRunner unchanged.
@@ -258,8 +273,22 @@ func NewWorkspacePool(ctx context.Context, root string, n int, timeout time.Dura
 	if len(copiedBuild) > 0 {
 		return single(strings.Join(copiedBuild, ", ") + " is build output that git does not ignore, so it would be copied into every tree instead of each tree building its own; ignoring it in git gives each tree a build of its own")
 	}
+	// The lockfile every tree must hold. One git ignores (Cargo.lock in most
+	// Rust libraries) is copied from the checkout into each tree beside the
+	// universe: it is the checkout's own resolution, which every run on the
+	// checkout reads, so a tree holding it builds what the checkout builds.
+	// reposcan.TreeDigest does not key on it, any more than it did on the
+	// checkout's own ignored copy: a change to an ignored lockfile alone
+	// (`cargo update`) leaves the selection cache's key as it was, before
+	// this copy and after.
+	toCopy := universe
+	lockNote := ""
 	if lf := probe.lockfile; lf != "" && !slices.Contains(universe, lf) {
-		return single(lf + " is not among the files copied into each tree (git neither tracks it nor lists it as an unignored file), so each tree would resolve the dependencies for itself and could build versions the checkout does not")
+		if why := lockfileUncopyable(root, lf); why != "" {
+			return single(lf + " " + why + ", so each tree would resolve the dependencies for itself and could build versions the checkout does not")
+		}
+		toCopy = append(slices.Clip(universe), lf)
+		lockNote = lf + " is ignored by git, so the checkout's copy of it is put in each tree, and every tree builds the dependency versions it locks"
 	}
 
 	// THE COPY. Measured around the whole loop, not per tree: N trees is one
@@ -284,7 +313,7 @@ func NewWorkspacePool(ctx context.Context, root string, n int, timeout time.Dura
 			return single("could not create a tree: " + terr.Error())
 		}
 		temps = append(temps, tree)
-		shared, cerr := copyTree(root, tree, universe, links)
+		shared, cerr := copyTree(root, tree, toCopy, links)
 		if cerr != nil {
 			cleanup()
 			return single("could not copy the checkout: " + cerr.Error())
@@ -295,7 +324,7 @@ func NewWorkspacePool(ctx context.Context, root string, n int, timeout time.Dura
 	p := newPool(root, temps, temps, timeout, treeEnv, plugEnv, opts)
 	p.shared = linked
 	p.copyDuration = copied
-	p.note = ownBuildNote(ownBuild)
+	p.note = joinNotes(ownBuildNote(ownBuild), lockNote)
 	return p, Disclosure{Trees: n, Note: p.note, Shared: linked, CopyDuration: copied}, nil
 }
 
@@ -342,6 +371,38 @@ func buildDirsIn(dirs []lang.BuildDir, universe, links []string) (copied, own []
 	return copied, own
 }
 
+// joinNotes joins a pool's notes on its trees, leaving out empty ones.
+func joinNotes(notes ...string) string {
+	return strings.Join(slices.DeleteFunc(notes, func(n string) bool { return n == "" }), "; ")
+}
+
+// lockfileUncopyable says why the lockfile rel (WithLockfile), which git
+// does not list, cannot be copied from the checkout at root into each tree,
+// or "" when it can: it must be inside root, every directory on the way to
+// it a real directory, and it a regular file. A symlink anywhere on the path
+// is refused rather than followed: copyTree copies a tracked symlinked
+// directory as a link, and writing the lockfile through it would write into
+// whatever it names, the checkout's own file among them.
+func lockfileUncopyable(root, rel string) string {
+	local := filepath.FromSlash(rel)
+	if !filepath.IsLocal(local) {
+		return "is outside the directory copied into each tree"
+	}
+	for d := filepath.Dir(local); d != "."; d = filepath.Dir(d) {
+		if fi, err := os.Lstat(filepath.Join(root, d)); err != nil || !fi.IsDir() {
+			return "is not in the checkout through real directories only (a directory on its path is missing or a symlink)"
+		}
+	}
+	fi, err := os.Lstat(filepath.Join(root, local))
+	switch {
+	case err != nil:
+		return "is not in the checkout (git neither tracks it nor lists it, and there is no such file)"
+	case !fi.Mode().IsRegular():
+		return "is not a regular file in the checkout"
+	}
+	return ""
+}
+
 // ownBuildNote is what a pool of more than one tree says about the build
 // directories its trees build for themselves: none of them is copied
 // (buildDirsIn sent a pool that would copy one to a single tree) or linked,
@@ -375,9 +436,10 @@ func WithBuildDirs(dirs []lang.BuildDir) WorkspaceOption {
 // path relative to the pool's root (lang.LockfileFor, for a language that
 // declares one). A tree that holds no resolved dependencies of its own
 // resolves them on its first run, and trees agree on the versions only when
-// each holds the checkout's lockfile; when the trees would not hold it (it is
-// ignored, absent, or above the root), NewWorkspacePool is one tree, the
-// checkout, and its note names the file. Best-effort like every other reason
+// each holds the checkout's lockfile. One git ignores is copied from the
+// checkout into each tree, and the pool's note says so; when the trees could
+// not hold it (it is absent, not a regular file, or above the root),
+// NewWorkspacePool is one tree, the checkout, and its note names the file. Best-effort like every other reason
 // the pool gives for one tree: never an error.
 //
 // Like WithTreeEnv it is a WorkspaceOption so it travels in the same list,
@@ -464,7 +526,9 @@ func insideGitWorkTree(root string) bool {
 // two must keep walking in lockstep: reposcan.TreeDigest's evidence is only
 // valid for a tree a pool copy of THIS function would produce byte-for-byte
 // the same universe for, so a change to what counts as "the tree" here
-// belongs beside a matching change there, not made alone.
+// belongs beside a matching change there, not made alone. The one file a
+// tree holds beyond it is a declared lockfile git ignores (WithLockfile),
+// which the checkout the evidence was measured on holds as well.
 //
 // Returns the repo-relative paths in git's order and their total size in
 // bytes. A path that has vanished between the listing and the stat is skipped
@@ -790,28 +854,39 @@ func (p *WorkspacePool) EnumerateDetailed(ctx context.Context, files map[string]
 	return r.EnumerateDetailed(ctx, files, cmd)
 }
 
-// ErrRebuildOverCeiling is a rebuild run whose floor puts the per-mutant cap
-// above maxMutantTimeout: the ceiling would cut every mutant's run short of
-// the margin any other cap gives, and one mutant that ran past it fails the
+// ErrRebuildOverCeiling is a rebuild run slower than maxMutantTimeout: every
+// mutant pays that rebuild, so the ceiling would cut every mutant's run off,
+// and a mutant cut off with a probe that cannot finish either fails the
 // file's grading partway through. The file is not graded (rebuildFloorRefusal).
 // A rebuild run cut off at the runner's timeout is this error too
 // (MeasureRebuild): it is slower than any run that finished.
 var ErrRebuildOverCeiling = errors.New("the rebuild run is too slow for corral's per-mutant ceiling")
 
 // rebuildFloorRefusal is ErrRebuildOverCeiling, with both durations, when a
-// rebuild run of took floors the cap above the ceiling; nil otherwise. The
-// floor is mutantTimeoutCap's own term for it (mutantTimeoutMultiple x took),
-// so the refusal and the cap cannot disagree about where the ceiling bites.
+// rebuild run of took is itself slower than the per-mutant ceiling, so every
+// mutant, which pays that rebuild, would be cut off; nil otherwise. A run
+// under the ceiling whose floor (mutantTimeoutMultiple x took) is over it is
+// graded with the cap at the ceiling, as a slow baseline is: a mutant cut off
+// there is credited as a kill only when the rebuild probe finishes in the
+// same budget (RebuildProbeJail), so the thinner margin can stop the file's
+// grading partway (a mutant whose re-probe also runs out of time fails the
+// report, as a slow baseline's already could), never credit a kill it did
+// not earn.
+//
+// Until 2026-11-26 this refused at the floor, three times the run. That was
+// safe only while the re-probe ran the cheap unmutated code, and with every
+// language making a rebuild run it would have stopped grading every suite
+// slower than 100 s on the workspace substrate, which grades today.
 func rebuildFloorRefusal(took time.Duration) error {
-	if floor := took * mutantTimeoutMultiple; floor > maxMutantTimeout {
-		return fmt.Errorf("%w: it took %s, so each mutant would need %s (%d times that run), over the %s ceiling", ErrRebuildOverCeiling, took.Round(time.Millisecond), floor.Round(time.Millisecond), mutantTimeoutMultiple, maxMutantTimeout)
+	if took > maxMutantTimeout {
+		return fmt.Errorf("%w: it took %s, longer than the %s each mutant, which pays the same rebuild, is given", ErrRebuildOverCeiling, took.Round(time.Millisecond), maxMutantTimeout)
 	}
 	return nil
 }
 
 // MeasureRebuild runs testCmd once with codePath holding probed, a copy of the
 // file changed so its module must recompile and relink and its tests behave
-// as before (lang.PerRunBuilder), and keeps how long that run took as the
+// as before (lang.RebuildProbe), and keeps how long that run took as the
 // pool's WarmDuration: the floor Score puts under every per-mutant cap, so a
 // mutant is given the time its own rebuild takes.
 //
@@ -836,7 +911,7 @@ func rebuildFloorRefusal(took time.Duration) error {
 //
 // took is the run's wall clock whatever the outcome, so the time it cost is
 // accounted even when it yields no floor.
-func (p *WorkspacePool) MeasureRebuild(ctx context.Context, base map[string]string, codePath, probed string, testCmd []string) (took time.Duration, err error) {
+func (p *WorkspacePool) MeasureRebuild(ctx context.Context, base map[string]string, codePath, compliant, probed string, testCmd []string) (took time.Duration, err error) {
 	files := Overlay{Base: base, CodePath: codePath}.With(probed)
 	start := time.Now()
 	pass, err := p.RunTest(ctx, files, testCmd)
@@ -853,13 +928,28 @@ func (p *WorkspacePool) MeasureRebuild(ctx context.Context, base map[string]stri
 	if rerr := rebuildFloorRefusal(took); rerr != nil {
 		return took, rerr
 	}
-	p.warmDur.Store(int64(took))
+	p.rebuild.Store(&rebuildRun{took: took, path: codePath, compliant: compliant, probed: probed})
 	return took, nil
 }
 
 // WarmDuration is WarmDurationJail.WarmDuration: the rebuild run
 // MeasureRebuild timed, zero until one passed.
-func (p *WorkspacePool) WarmDuration() time.Duration { return time.Duration(p.warmDur.Load()) }
+func (p *WorkspacePool) WarmDuration() time.Duration {
+	if r := p.rebuild.Load(); r != nil {
+		return r.took
+	}
+	return 0
+}
+
+// RebuildProbe is RebuildProbeJail.RebuildProbe: the probe the passing
+// rebuild run ran, with its file and the code it was built from; "" until one
+// passed.
+func (p *WorkspacePool) RebuildProbe() (codePath, compliant, probed string) {
+	if r := p.rebuild.Load(); r != nil {
+		return r.path, r.compliant, r.probed
+	}
+	return "", "", ""
+}
 
 // Verify pre-flights every tree, so a copy that failed to materialise is
 // caught before the first job wastes time discovering it.

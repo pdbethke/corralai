@@ -3,6 +3,8 @@
 package lang
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -329,5 +331,137 @@ func TestSwiftDollarAnchoredFilterRunsNothingAndPasses(t *testing.T) {
 	}
 	if got := swiftFilterFor("CalcTests.parses()"); strings.HasSuffix(got, `\)$`) {
 		t.Errorf("swiftFilterFor ends in the pattern that selected nothing: %s", got)
+	}
+}
+
+// The killer command (confirm-alone) narrows the failing run to the one test
+// swift-testing's own record named, by the id `swift test list` prints, with
+// the same --filter a one-test run uses; the ids here are what the row reads
+// from the committed failing run on each toolchain (all three failures sit
+// in a suite: one with a display name, one parameterised). A name only the
+// printed lines give (a function signature with no module, a quoted display
+// name, XCTest's Class.method, which names no target) is no listed id, so no
+// killer is built from it, nor for a command that already filters by name.
+func TestSwiftKillerCmdNarrowsToTheRecordedID(t *testing.T) {
+	r := rowByID(t, "swift-test")
+	if r.KillerCmd == nil {
+		t.Fatal("the swift-test row has no KillerCmd")
+	}
+	for _, v := range []string{"6.3.2", "6.4.2"} {
+		b, err := os.ReadFile(filepath.Join("testdata", "runners", "swift-hook-fail-"+v+".txt")) // #nosec G304 -- test fixture under testdata
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := swiftFailures(string(b))
+		for _, id := range []string{`CalcTests.Arithmetic/adds()`, `CalcTests.Arithmetic/doubles(value:)`, `CalcTests.Arithmetic/fails()`} {
+			if !slices.Contains(got, id) {
+				t.Errorf("%s: the failing run names %q, which lacks %q", v, got, id)
+			}
+		}
+	}
+	for id, want := range map[string]string{
+		`CalcTests.Arithmetic/adds()`:          `^CalcTests\.Arithmetic/adds\(\)(?:/|$)`,
+		`CalcTests.Arithmetic/doubles(value:)`: `^CalcTests\.Arithmetic/doubles\(value:\)(?:/|$)`,
+		`CalcTests.parses()`:                   `^CalcTests\.parses\(\)(?:/|$)`,
+	} {
+		cmd, ok := r.KillerCmd([]string{"swift", "test"}, id)
+		if !ok || !slices.Equal(cmd, []string{"swift", "test", "--filter", want}) {
+			t.Errorf("%s: got %q, %v; want swift test --filter %s", id, cmd, ok, want)
+		}
+	}
+	for _, id := range []string{"", `adds()`, `"adds two numbers"`, `AdderTests.testFails`, `CalcXCTests.AdderTests/testFails`, `x)`, `Calc.x)`} {
+		if cmd, ok := r.KillerCmd([]string{"swift", "test"}, id); ok {
+			t.Errorf("%q is no swift-testing id the record gives, but got %q", id, cmd)
+		}
+	}
+	if cmd, ok := r.KillerCmd([]string{"swift", "test", "--filter", "Calc"}, `CalcTests.parses()`); ok {
+		t.Errorf("a command with its own --filter: got %q, want no killer", cmd)
+	}
+}
+
+// The killer commands above, run on a failing run of the fixture on each
+// toolchain (scripts/capture-runner-fixtures.sh, swift-killer-*.txt): each
+// ran exactly one test, which failed, so the kill it confirms is that test's
+// alone. The commands are the --filter strings the test above expects.
+func TestSwiftKillerCommandsRanOneFailingTest(t *testing.T) {
+	for _, v := range []string{"6.3.2", "6.4.2"} {
+		for _, shape := range []string{"suite", "param"} {
+			f := "swift-killer-" + shape + "-" + v + ".txt"
+			b, err := os.ReadFile(filepath.Join("testdata", "runners", f)) // #nosec G304 -- test fixture under testdata
+			if err != nil {
+				t.Fatal(err)
+			}
+			out := string(b)
+			if n := swiftRan(t, out); n != 1 {
+				t.Errorf("%s: ran %d tests, want 1", f, n)
+			}
+			if !strings.Contains(out, "\n# exit: 1\n") {
+				t.Errorf("%s: want the run to fail (# exit: 1)", f)
+			}
+		}
+	}
+}
+
+// Salvage: the failing tests of the committed failing run (both frameworks
+// failing) are named by what can be skipped, the three swift-testing record
+// ids and XCTest's Class.method, and the rerun skips each: a record id by
+// the one-test pattern, an XCTest name in any target. Measured on Swift
+// 6.3.2 and 6.4.2 (swift-salvage-*.txt): the four skips ran the other four
+// tests and passed, and with a unit --filter the two left in that target.
+// The display-name test's printed twin ("adds two numbers") is not among
+// them: the record already names it. A swift-testing name only the printed
+// lines give is not skippable, so with no record nothing is salvaged.
+func TestSwiftSalvageSkipsTheRecordedAndXCTestFailures(t *testing.T) {
+	r := rowByID(t, "swift-test")
+	if r.FailedTests == nil || r.DeselectCmd == nil {
+		t.Fatal("the swift-test row cannot salvage")
+	}
+	want := []string{`CalcTests.Arithmetic/adds()`, `CalcTests.Arithmetic/doubles(value:)`, `CalcTests.Arithmetic/fails()`, `AdderTests.testFails`}
+	skips := []string{"swift", "test",
+		"--skip", `^CalcTests\.Arithmetic/adds\(\)(?:/|$)`,
+		"--skip", `^CalcTests\.Arithmetic/doubles\(value:\)(?:/|$)`,
+		"--skip", `^CalcTests\.Arithmetic/fails\(\)(?:/|$)`,
+		"--skip", `^[^.]+\.AdderTests/testFails(?:/|$)`}
+	for _, v := range []string{"6.3.2", "6.4.2"} {
+		b, err := os.ReadFile(filepath.Join("testdata", "runners", "swift-hook-fail-"+v+".txt")) // #nosec G304 -- test fixture under testdata
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := r.FailedTests(string(b))
+		slices.Sort(got)
+		w := slices.Clone(want)
+		slices.Sort(w)
+		if !slices.Equal(got, w) {
+			t.Errorf("%s: FailedTests = %q, want %q", v, got, w)
+		}
+		cmd, ok := r.DeselectCmd([]string{"swift", "test"}, want)
+		if !ok || !slices.Equal(cmd, skips) {
+			t.Errorf("%s: DeselectCmd = %q, %v\nwant %q", v, cmd, ok, skips)
+		}
+		for _, f := range []string{"swift-salvage-" + v + ".txt", "swift-salvage-unit-" + v + ".txt"} {
+			b, err := os.ReadFile(filepath.Join("testdata", "runners", f)) // #nosec G304 -- test fixture under testdata
+			if err != nil {
+				t.Fatal(err)
+			}
+			n := map[bool]int{true: 2, false: 4}[strings.Contains(f, "-unit-")]
+			if ran := swiftRan(t, string(b)); ran != n || !strings.Contains(string(b), "\n# exit: 0\n") {
+				t.Errorf("%s: ran %d tests, want %d, and a passing run", f, ran, n)
+			}
+		}
+	}
+	// Printed lines alone (no record): the swift-testing names cannot be
+	// skipped, so there is no rerun; nor for a bare name, a display name,
+	// or none.
+	b, err := os.ReadFile(filepath.Join("testdata", "runners", "swift-fail-testing.txt")) // #nosec G304 -- test fixture under testdata
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd, ok := r.DeselectCmd([]string{"swift", "test"}, r.FailedTests(string(b))); ok {
+		t.Errorf("printed swift-testing names only: got %q, want no rerun", cmd)
+	}
+	for _, ids := range [][]string{nil, {`adds()`}, {`"adds two numbers"`}, {`CalcTests.parses()`, `fails()`}} {
+		if cmd, ok := r.DeselectCmd([]string{"swift", "test"}, ids); ok {
+			t.Errorf("%q: got %q, want no rerun", ids, cmd)
+		}
 	}
 }

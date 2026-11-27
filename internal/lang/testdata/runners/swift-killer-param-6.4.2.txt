@@ -1,0 +1,20 @@
+Building for debugging...
+Build complete! (0.30 secs)
+◇ Test run started.
+↳ Testing Library Version: 6.4.2 (288a2328ff84644)
+↳ Target Platform: x86_64-unknown-linux-gnu
+◇ Suite Arithmetic started.
+◇ Test doubles(value:) started.
+◇ Test case passing 1 argument value → 2 to doubles(value:) started.
+◇ Test case passing 1 argument value → 1 to doubles(value:) started.
+◇ Test case passing 1 argument value → 3 to doubles(value:) started.
+✘ Test doubles(value:) recorded an issue with 1 argument value → 2 at CalcTests.swift:26:9: Expectation failed: double(value) == value + value + (planted && value == 2 ? 1 : 0)
+↳ double(value) == value + value + (planted && value == 2 ? 1 : 0) → false
+↳   double(value) → 4
+↳   value + value + (planted && value == 2 ? 1 : 0) → 5
+✘ Test doubles(value:) with 3 test cases failed after 0.001 seconds with 1 issue.
+✘ Suite Arithmetic failed after 0.001 seconds with 1 issue.
+✘ Test run with 1 test in 1 suite failed after 0.001 seconds with 1 issue.
+Note: Some test targets reported failures:
+  - CalcTests (Swift Testing)
+# exit: 1

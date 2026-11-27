@@ -457,8 +457,8 @@ var runners = []Runner{
 	},
 	{
 		Name: "minitest", ID: "minitest", Languages: []string{"ruby"}, Words: []string{"ruby", "rake", "testrb"},
-		FirstFailure: firstOf(minitestFailures), FailedTests: minitestFailures, DeselectCmd: minitestDeselectCmd,
-		Note: "minitest has no list mode and no full-name selector; rspec is the Ruby runner that lists and runs one test; no unit evidence: no listing command; Ruby falls back to name pairing under minitest; no report flags: a reporter the project installs in its own test helper (minitest-reporters, not run here) can replace the printed failures, and no flag undoes it; no failure hook: no option minitest 5.20.0 lists (the --help of the fixture's test file, run) writes a record of the run to a file, and a reporter gem that writes one (minitest-reporters' JUnit reporter, not run) is installed by the project's own test helper, which no command-line word does, so its failures are read from what it prints",
+		FirstFailure: firstOf(minitestFailures), FailedTests: minitestFailures, DeselectCmd: minitestDeselectCmd, KillerCmd: minitestKillerCmd,
+		Note: "minitest has no list mode, so it lists no test and runs none alone for the critic; rspec is the Ruby runner that does. A killing test is run alone by `--name /\\A<Class#method>\\z/` after the test file, which minitest 5.20.0 matches against `Class#method` (run on the fixture: one test, nested module included), only when the command is `ruby <file.rb>`; no unit evidence: no listing command; Ruby falls back to name pairing under minitest; no report flags: a reporter the project installs in its own test helper (minitest-reporters, not run here) can replace the printed failures, and no flag undoes it; no failure hook: no option minitest 5.20.0 lists (the --help of the fixture's test file, run) writes a record of the run to a file, and a reporter gem that writes one (minitest-reporters' JUnit reporter, not run) is installed by the project's own test helper, which no command-line word does, so its failures are read from what it prints",
 	},
 	{
 		Name: "phpunit", ID: "phpunit", Languages: []string{"php"}, Default: true, Words: []string{"phpunit"},

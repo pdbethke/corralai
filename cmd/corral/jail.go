@@ -542,6 +542,31 @@ func hasContainerRuntime() bool {
 	return false
 }
 
+// workspaceNoReplay is the run-cache half of gradingRewrite on the workspace
+// substrate: the runner row's no-replay rewrite (lang.NoReplayArgv, -count=1
+// for go test and gotestsum when the command has no -count of its own), for
+// every command grading hands the pool, or nil when base's runner row has no
+// such rewrite (every runner but go test, gotestsum and cargo's, which
+// rewrites nothing). The jail gives a run an empty cache unless it shares one, so
+// there the rewrite comes only with a shared cache (newGradingJail); the
+// workspace's runs all use the operator's GOCACHE, and without it go reported
+// the result an earlier run stored for the unmutated baseline, its stability
+// runs and the re-probe that confirms a timed-out kill, while each mutant ran
+// its tests. A baseline that takes no time derives a per-mutant cap from
+// nothing, and a re-probe that replays confirms any timeout as a kill
+// (TestWorkspaceGoRunsNeverReplayACachedResult). Each command is judged on
+// its own words, as RunCacheCmd judges it: a shell wrapper or an env prefix
+// is run as given, which printRunDisclosures says.
+func workspaceNoReplay(plug lang.Plugin, inv lang.Invocation, base []string) func([]string) []string {
+	if plug == nil {
+		return nil
+	}
+	if _, state := lang.NoReplayCmd(plug, inv.WithArgv(base), base); state == lang.RunCacheNone {
+		return nil
+	}
+	return lang.NoReplayArgv(plug, inv)
+}
+
 // gradingRewrite is the ONE command rewrite a file's grading hands its runner
 // (advpool.JailScorer and JailValidator CommandRewrite), on every substrate:
 // the shared run cache's no-replay rewrite (gradingRunCache.Rewrite, nil

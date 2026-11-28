@@ -285,15 +285,39 @@ func (r RunCacheRewrite) String() string {
 // when the warm run forbade one), and when the warm command is not
 // RunCacheRewritten the caller records that the cache was not shared.
 func RunCacheCmd(p Plugin, inv Invocation, cmd []string) ([]string, RunCacheRewrite) {
+	out, state := NoReplayCmd(p, inv, cmd)
+	if state == RunCacheRewritten {
+		if r, ok := RunnerFor(p, inv); ok && r.EvidenceCache.Args != nil {
+			out = append(out, r.EvidenceCache.Args(sandbox.CacheTarget)...)
+		}
+	}
+	return out, state
+}
+
+// NoReplayCmd is cmd with its runner row's no-replay rewrite alone
+// (Runner.RunCacheArgs), and the state saying what became of it, for a run
+// that shares no cache of corral's making but may still meet a tool's own:
+// on the workspace substrate every run uses the operator's GOCACHE, so a
+// `go test` without -count=1 reports the result an earlier run of unchanged
+// code stored instead of running the tests (the unmutated baseline, its
+// stability runs, and the re-probe that confirms a timed-out kill all run
+// unchanged code). RunCacheCmd is the jail's form of the same rewrite, which
+// also adds a shared cache's own words (jest's --cacheDirectory=/corral-cache):
+// never on the workspace, which shares no such cache. cmd is never modified.
+func NoReplayCmd(p Plugin, inv Invocation, cmd []string) ([]string, RunCacheRewrite) {
 	r, ok := RunnerFor(p, inv)
 	if !ok || !runRowCache(r) || r.RunCacheArgs == nil {
 		return cmd, RunCacheNone
 	}
-	out, state := r.RunCacheArgs(slices.Clone(cmd))
-	if state == RunCacheRewritten && r.EvidenceCache.Args != nil {
-		out = append(out, r.EvidenceCache.Args(sandbox.CacheTarget)...)
+	return r.RunCacheArgs(slices.Clone(cmd))
+}
+
+// NoReplayArgv is NoReplayCmd as a rewrite hook.
+func NoReplayArgv(p Plugin, inv Invocation) func([]string) []string {
+	return func(cmd []string) []string {
+		out, _ := NoReplayCmd(p, inv, cmd)
+		return out
 	}
-	return out, state
 }
 
 // RunCacheArgv is RunCacheCmd as a rewrite hook: the command it returns,

@@ -256,11 +256,13 @@ type TreeEnver interface {
 // Every language gets it, including those whose mutant may pay nothing a
 // baseline does not (an interpreter with no build step): the cost is one
 // suite run per file on the workspace substrate, and what it buys is one
-// rule for every language's cap instead of an exemption per language. What
-// it does not buy: a go test command without -count=1 replays a cached
-// result for the probe, as it does for the unchanged file (go 1.26.7,
-// 2026-11-26: `go test .` printed "(cached)" after a same-bytes rewrite and
-// after this probe), so for such a command the run measures no rebuild. A language
+// rule for every language's cap instead of an exemption per language. A go
+// test command without -count=1 replays a cached result for the probe, as it
+// does for the unchanged file (go 1.26.7, 2026-11-26: `go test .` printed
+// "(cached)" after a same-bytes rewrite and after this probe), so the
+// workspace gives every go command it can read -count=1 (NoReplayCmd); one it
+// cannot read (a shell wrapper) is run as given, and its probe measures no
+// rebuild. A language
 // whose first line must stay first says so through FirstLineKeeper; a
 // shebang (`#!`, not Rust's `#![` inner attribute) stays first in every
 // language, because it only works as the first line, and such a file is not

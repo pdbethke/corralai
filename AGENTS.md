@@ -271,7 +271,12 @@ file's row records `RunCache`, read when the file's run ends and from what the j
 the cache, `unshared: never warmed (<why>)` if it was mounted and never filled,
 `unshared: <reason>` otherwise, `""` for a file not graded. It is a field of the file's
 result and not of the `Verdict`, whose shape is pinned to the verdict cache. `internal/adequacy/run_cache_replay_test.go`
-runs the safety argument against the real jail.
+runs the safety argument against the real jail. The workspace substrate has no cache of corral's making, but its
+runs use the operator's own `GOCACHE`, so the same row rewrite is applied there to every
+command (`lang.NoReplayCmd`, via `workspaceNoReplay` in `cmd/corral/jail.go`), whether
+or not anything is shared: without it the baseline, its stability runs and a timed-out
+kill's re-probe replayed `(cached)` results, and a timeout was confirmed as a kill
+(`TestAWorkspaceGoBaselineThatReplaysCreditsAFalseKill`).
 
 **A Rust file's grading shares cargo's target directory by the same mechanism, and its trap is mtimes, not results.**
 The cargo rows declare `CARGO_TARGET_DIR` as their cache (`cargoRunCache` in `internal/lang/rust_units.go`). cargo stores no

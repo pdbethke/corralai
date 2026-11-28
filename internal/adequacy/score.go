@@ -1134,10 +1134,11 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 	// asserts a line number of this file (an authored one, say: the rebuild
 	// run ran only the developer's) fails on it, and that re-probe then
 	// fails the report, as a failing compliant re-probe does: it errs toward
-	// grading nothing, never toward a kill. It does not cover go test
-	// without -count=1 on the workspace substrate, which replays a cached
-	// result for the probe as for the unmutated code (go 1.26.7,
-	// 2026-11-26) while a mutant runs its tests.
+	// grading nothing, never toward a kill. A go test without -count=1
+	// replays a cached result for the probe as for the unmutated code (go
+	// 1.26.7, 2026-11-26) while a mutant runs its tests, which is why the
+	// workspace gives every go command it can read -count=1
+	// (lang.NoReplayCmd, TestAWorkspaceGoBaselineThatReplaysCreditsAFalseKill).
 	reprobeCode, reprobeWhat := compliantCode, "the compliant baseline"
 	if rp, ok := j.(RebuildProbeJail); ok {
 		if path, compliant, probed := rp.RebuildProbe(); probed != "" && path == codePath && compliant == compliantCode {

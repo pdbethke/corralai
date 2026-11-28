@@ -4035,38 +4035,47 @@ func printRunDisclosures(w io.Writer, ex *localExecutor, jobs []reposcan.Job) {
 		for _, line := range lang.RunDisclosures(p, ex.repoDir, inv) {
 			fmt.Fprintf(w, "  %s\n", line)
 		}
+		// The workspace substrate runs the checkout itself, with the
+		// operator's own tool cache: a command the no-replay rewrite cannot
+		// read (a shell wrapper, an env prefix) runs as given there, and go
+		// may report a result an earlier run stored (workspaceNoReplay).
+		// Said once per language, since the base command is.
+		base := ex.baseCmd(j)
+		if ex.substrate == substrateWorkspace {
+			if _, state := lang.NoReplayCmd(p, inv.WithArgv(base), base); state == lang.RunCacheUnreadable {
+				fmt.Fprintf(w, "  test results: the %s test command cannot be read as one that forbids a cached result, so on the workspace it runs as given and may report a result cached by an earlier run\n", j.Lang)
+			}
+			continue
+		}
 		// Said once per language, and only where there is a jail whose
-		// grading runs could share one (the backend must overlay too): the workspace substrate runs the
-		// checkout itself. A file that cannot share it says so on its own
-		// lines (runCacheUnsharedLine).
-		if ex.substrate != substrateWorkspace {
-			// And only when the scan's base command is one the rewrite
-			// reads (RunCacheRewritten): a command it cannot read shares no
-			// cache, and the per-file lines say so.
-			base := ex.baseCmd(j)
-			if _, state := lang.RunCacheCmd(p, inv.WithArgv(base), base); state != lang.RunCacheRewritten {
-				continue
-			}
-			// And only where a run-cache jail would share its cache
-			// (adequacy.RunCacheShareable, the jail's own decision, which also
-			// checks the temporary directory's filesystem): a backend that
-			// cannot overlay (--jail container, sandbox-exec, an older bwrap),
-			// or a temp directory an overlay cannot sit on, shares no cache,
-			// and every file would then contradict this line.
-			if !runCacheShareable(ex.iso) {
-				continue
-			}
-			if cache, _ := lang.RunCacheFor(p, inv, checkoutTreeReader(ex.repoDir)); cache != nil {
-				fmt.Fprintf(w, "  build cache: grading runs for %s share a frozen %s, warmed by the unmutated run\n", j.Lang, cache.Label())
-				// SAY IT ONCE when the cache is shared but the workspace is
-				// not placed (a bubblewrap whose start-up probe could overlay
-				// a directory at its own path and not at /corral-work): each
-				// run keeps its own path, so Go rebuilds the project's own
-				// packages every run, and nothing else would say why.
-				if !placementSaid && !placesWorkspace(ex.iso) {
-					placementSaid = true
-					fmt.Fprintf(w, "  sandbox: this bubblewrap cannot place a workspace at %s, so runs keep their own paths and a shared build cache reuses only the standard library\n", sandbox.WorkTarget)
-				}
+		// grading runs could share one (the backend must overlay too). A
+		// file that cannot share it says so on its own lines
+		// (runCacheUnsharedLine).
+		// And only when the scan's base command is one the rewrite
+		// reads (RunCacheRewritten): a command it cannot read shares no
+		// cache, and the per-file lines say so.
+		if _, state := lang.RunCacheCmd(p, inv.WithArgv(base), base); state != lang.RunCacheRewritten {
+			continue
+		}
+		// And only where a run-cache jail would share its cache
+		// (adequacy.RunCacheShareable, the jail's own decision, which also
+		// checks the temporary directory's filesystem): a backend that
+		// cannot overlay (--jail container, sandbox-exec, an older bwrap),
+		// or a temp directory an overlay cannot sit on, shares no cache,
+		// and every file would then contradict this line.
+		if !runCacheShareable(ex.iso) {
+			continue
+		}
+		if cache, _ := lang.RunCacheFor(p, inv, checkoutTreeReader(ex.repoDir)); cache != nil {
+			fmt.Fprintf(w, "  build cache: grading runs for %s share a frozen %s, warmed by the unmutated run\n", j.Lang, cache.Label())
+			// SAY IT ONCE when the cache is shared but the workspace is
+			// not placed (a bubblewrap whose start-up probe could overlay
+			// a directory at its own path and not at /corral-work): each
+			// run keeps its own path, so Go rebuilds the project's own
+			// packages every run, and nothing else would say why.
+			if !placementSaid && !placesWorkspace(ex.iso) {
+				placementSaid = true
+				fmt.Fprintf(w, "  sandbox: this bubblewrap cannot place a workspace at %s, so runs keep their own paths and a shared build cache reuses only the standard library\n", sandbox.WorkTarget)
 			}
 		}
 	}

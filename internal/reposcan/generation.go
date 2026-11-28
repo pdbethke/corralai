@@ -735,7 +735,20 @@ package reposcan
 // command grading would share it with. A project that uses ts-jest shares
 // none (its cache key leaves out the files a file imports). Stacked on
 // "62". Behaviour bump; the shape is unchanged.
-const VerdictGeneration = "63"
+//
+// "64": on the workspace substrate every go test and gotestsum command
+// grading runs takes the row's no-replay rewrite (-count=1 where the command
+// has no -count; cmd/corral workspaceNoReplay), as the jail's do when they
+// share a cache. "55" ran them as typed over the operator's GOCACHE, so the
+// unmutated baseline, its stability runs and the re-probe that confirms a
+// timed-out kill could report a stored result instead of running: a cap
+// derived from a run that took no time, a flaky suite read as stable, and a
+// timeout confirmed as a kill by a replay
+// (adequacy.TestAWorkspaceGoBaselineThatReplaysCreditsAFalseKill). "64"
+// because the open branches for #579 to #585 and the jest run cache take
+// "56" to "63", and any of them may reach main first. Behaviour bump; the
+// shape is unchanged.
+const VerdictGeneration = "64"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

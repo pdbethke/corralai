@@ -4056,8 +4056,8 @@ func printRunDisclosures(w io.Writer, ex *localExecutor, jobs []reposcan.Job) {
 			if !runCacheShareable(ex.iso) {
 				continue
 			}
-			if env, ok := lang.RunCacheFor(p, inv); ok {
-				fmt.Fprintf(w, "  build cache: grading runs for %s share a frozen %s, warmed by the unmutated run\n", j.Lang, env)
+			if cache, _ := lang.RunCacheFor(p, inv, checkoutTreeReader(ex.repoDir)); cache != nil {
+				fmt.Fprintf(w, "  build cache: grading runs for %s share a frozen %s, warmed by the unmutated run\n", j.Lang, cache.Label())
 				// SAY IT ONCE when the cache is shared but the workspace is
 				// not placed (a bubblewrap whose start-up probe could overlay
 				// a directory at its own path and not at /corral-work): each
@@ -4069,6 +4069,25 @@ func printRunDisclosures(w io.Writer, ex *localExecutor, jobs []reposcan.Job) {
 				}
 			}
 		}
+	}
+}
+
+// checkoutTreeReader reads a file of the checkout at dir, by lang.TreeRel's
+// rule and through an os.Root, so a symlink cannot leave it: the tree a
+// scan's jail seeds from and binds its dependency directories out of, for a
+// question asked before any jail exists (the scan header's run cache).
+func checkoutTreeReader(dir string) func(rel string) ([]byte, error) {
+	return func(rel string) ([]byte, error) {
+		clean, ok := lang.TreeRel(rel)
+		if !ok {
+			return nil, fmt.Errorf("%q is not a path inside the tree", rel)
+		}
+		root, err := os.OpenRoot(dir)
+		if err != nil {
+			return nil, err
+		}
+		defer root.Close()
+		return root.ReadFile(clean)
 	}
 }
 

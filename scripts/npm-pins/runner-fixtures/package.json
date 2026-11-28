@@ -1,8 +1,10 @@
 {
  "name": "corral-runner-fixture-tools",
  "private": true,
- "description": "The JS test runners scripts/capture-runner-fixtures.sh records output from. Installed with npm ci from the lockfile beside this file, so every package is pinned by its integrity hash. The overrides lift glob and minimatch, which jest and mocha pull in at advised-against versions, to their first patched releases.",
+ "description": "The JS test runners scripts/capture-runner-fixtures.sh records output from, and the Babel presets the sandbox's jest TypeScript test compiles with. Installed with npm ci from the lockfile beside this file, so every package is pinned by its integrity hash. The overrides lift glob and minimatch, which jest and mocha pull in at advised-against versions, to their first patched releases.",
  "dependencies": {
+  "@babel/preset-env": "7.29.14",
+  "@babel/preset-typescript": "7.29.16",
   "jest": "30.5.2",
   "mocha": "12.0.3",
   "vitest": "5.1.0"

@@ -285,6 +285,24 @@ Before that order, a mutant written while the warm build was still running was g
 A command naming its own `--target-dir`, which cargo prefers to the variable, shares none. `internal/adequacy/run_cache_cargo_test.go`
 runs this argument against the real jail.
 
+**jest shares its cache directory by the same mechanism, named on the command, and its traps are `--onlyFailures` and ts-jest.**
+jest reads no environment variable for its cache, so its `EvidenceCache` has no `Env` and declares `Args`
+(`--cacheDirectory=<dir>`), which `lang.RunCacheCmd` adds to every command the row reads as `RunCacheRewritten`
+(`jestRunCache` in `internal/lang/jest_cache.go`); `WithRunCache` takes the `*lang.EvidenceCache`, as `Seed` does, and the
+jail sets a variable only for a cache that has one. jest keeps no test result, only transforms keyed by each file's bytes,
+mtime-keyed module metadata (safe by the cache-before-workspace order above) and per-file timings, and those timings are what
+`--onlyFailures` selects by: on a warm cache a mutant's run ran no test. So a command that sets the cache or selects tests
+from jest's records or version control shares none (`jestCacheUnsupported`). A transform is keyed by its own file's bytes,
+not the files it imports, and ts-jest compiles an import's value (a const enum member) into the importer, so over a warm
+cache a mutant of the imported file was graded as the original (ts-jest 26.5.6): a project whose package.json names ts-jest
+or whose node_modules holds it shares none either. That refusal reads the TREE, so `lang.RunCacheFor` takes a reader
+(`adequacy.TreeFileReader` over the seed and the dependency binds in `newGradingJail`; the checkout on disk for the scan
+header) and has no default one; `lang.NoTree` is the explicit "no tree". The unit evidence pass asks for an `Args` cache
+only when `RunCacheCmd` reads the operator's command, as grading does (`askedCache`): through a package script its words
+were appended after the script's own and Unsupported never saw them. `internal/adequacy/run_cache_jest_test.go`
+runs the argument against the real jail with jest from `CORRALAI_JEST_NODE_MODULES` (CI installs the runner-fixture pins,
+which include the Babel presets its TypeScript case compiles with).
+
 ## Trying it quickly
 
 `corral demo --writer-model <m> --mutant-model <m> --critic-model <m>` writes a

@@ -3164,7 +3164,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 			authoritative[w.devTestKey] = string(in.devTest)
 		}
 		repoFiles := workspaceFromSeed(seed, authoritative)
-		jail, gc := newGradingJail(in.iso, in.timeout, depBinds, gradingPlugin(in.langName), in.inv.WithArgv(in.checkArgv), in.checkArgv)
+		jail, gc := newGradingJail(in.iso, in.timeout, depBinds, gradingPlugin(in.langName), in.inv.WithArgv(in.checkArgv), in.checkArgv, adequacy.TreeFileReader(repoFiles, depBinds))
 		w.closeWithCleanup(jail, in.runCache, in.capFloor, gc, in.testTimeout)
 		// enumerator backs the tests×mutants matrix's test-listing step
 		// (--matrix). Wired unconditionally off the SAME backend/timeout/binds
@@ -3191,7 +3191,9 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		// names none (scoreWorkspace), so that is the warming command here.
 		plug := gradingPlugin(in.langName)
 		warm := gradingBase(plug, "", in.checkArgv)
-		jail, gc := newGradingJail(in.iso, in.timeout, nil, plug, in.inv.WithArgv(warm), warm)
+		// The single-file scaffold holds the code and its test, and no
+		// manifest or dependency directory a cache's refusal could read.
+		jail, gc := newGradingJail(in.iso, in.timeout, nil, plug, in.inv.WithArgv(warm), warm, lang.NoTree)
 		w.closeWithCleanup(jail, in.runCache, in.capFloor, gc, in.testTimeout)
 		enumerator := newRunEnumerator(in.iso, in.timeout, nil)
 		rewrite := gradingRewrite(plug, in.inv, warm, gc.Rewrite)

@@ -1110,7 +1110,8 @@ func (f seededFake) Close() error {
 	return nil
 }
 
-// A go pass shares one GOCACHE among its units: the first runnable unit
+// A go pass shares one GOCACHE among its units, and a jest pass one cache
+// directory: the first runnable unit
 // runs ONCE, alone, with the cache writable, and that run is its evidence;
 // every later unit runs with it frozen. Each unit command carries -count=1
 // (lang.EvidenceUnitCmd), so the frozen cache's test results are never
@@ -1186,13 +1187,31 @@ func TestCollectUnitEvidenceWarmsOnceThenFreezes(t *testing.T) {
 		t.Errorf("seed refused: ev.Changed = %q, want %q", ev.Changed, wantChanged)
 	}
 
-	// A runner with no shared cache asks for none and never warms.
+	// jest shares its cache directory too, named on each unit command
+	// (lang.EvidenceCache.Args), after the unit's own words and before
+	// coverage wraps it; the pass says so once.
 	vf := newUnitFixture(t, "typescript", []string{"jest"}, "corral-units-cwd /w\n[\"/w/test/alpha.test.ts\",\"/w/test/beta.test.ts\"]\n")
-	vf.answer("test/alpha.test.ts", sandbox.EnumerateResult{Output: jsReport("7 10 src/x.ts")})
-	vf.answer("test/beta.test.ts", sandbox.EnumerateResult{Output: jsReport("2 10 src/x.ts")})
+	jestUnit := func(unit string) []string {
+		cmd, ok := lang.UnitRunCmd(vf.p, vf.inv, unit)
+		if !ok {
+			t.Fatalf("no one-unit command for %q", unit)
+		}
+		cov, _ := vf.p.(lang.CoverageReporter).CoverageCmd(append(lang.EvidenceUnitCmd(vf.p, vf.inv, cmd), "--cacheDirectory="+sandbox.CacheTarget))
+		return cov
+	}
+	vf.run.res[argvKey(jestUnit("test/alpha.test.ts"))] = sandbox.EnumerateResult{Output: jsReport("7 10 src/x.ts")}
+	vf.run.res[argvKey(jestUnit("test/beta.test.ts"))] = sandbox.EnumerateResult{Output: jsReport("2 10 src/x.ts")}
 	jrun := &seedingFake{unitFakeRunner: vf.run, shareCache: true}
-	if ev := collect(vf, jrun); !ev.Settled() || jrun.cacheAsked != nil || slices.ContainsFunc(jrun.calls, func(c string) bool { return strings.HasPrefix(c, "warm ") }) {
-		t.Errorf("jest: ev = %+v, cache asked %+v, runs %q; want no cache and no warm run", ev, jrun.cacheAsked, jrun.calls)
+	ev = collect(vf, jrun)
+	if !ev.Settled() || jrun.cacheAsked == nil || jrun.cacheAsked.Label() != "jest cache directory" {
+		t.Fatalf("jest: ev = %+v, cache asked %+v; want both units green over jest's cache directory", ev, jrun.cacheAsked)
+	}
+	want = []string{"warm " + argvKey(jestUnit("test/alpha.test.ts")), "frozen " + argvKey(jestUnit("test/beta.test.ts"))}
+	if !slices.Equal(jrun.calls, want) {
+		t.Errorf("jest: seeded runs = %q, want the first unit warm and the rest frozen: %q", jrun.calls, want)
+	}
+	if wantJest := "the evidence pass runs each unit with --cacheDirectory=/corral-cache (a shared jest cache directory, filled by the first unit and frozen for every later one)"; ev.Changed != wantJest {
+		t.Errorf("jest: Changed = %q, want %q", ev.Changed, wantJest)
 	}
 }
 
@@ -1284,12 +1303,11 @@ func TestTheJailSeedsAndReadsItsTree(t *testing.T) {
 	}
 }
 
-// The pass's cache helpers, over hand-built caches: no row shares a cache
-// with options or a version gate today, so these are the only tests of
-// those branches until one does.
+// The pass's cache helpers, over hand-built caches. A cache with an Env is
+// called by it, and only one without is called by its Name (Label).
 func TestUnitPassCacheHelpers(t *testing.T) {
 	args := []string{"--cache", "--cache-dir", sandbox.CacheTarget}
-	named := &lang.EvidenceCache{Name: "transform cache", Env: "TC"}
+	named := &lang.EvidenceCache{Name: "transform cache"}
 	if got, want := unitsCacheArgs("", named, args), "the evidence pass runs each unit with --cache --cache-dir /corral-cache (a shared transform cache, filled by the first unit and frozen for every later one)"; got != want {
 		t.Errorf("unitsCacheArgs with no note = %q, want %q", got, want)
 	}
@@ -1303,6 +1321,7 @@ func TestUnitPassCacheHelpers(t *testing.T) {
 	}{
 		{named, "transform cache"},
 		{&lang.EvidenceCache{Env: "GOCACHE"}, "GOCACHE"},
+		{&lang.EvidenceCache{Name: "cargo's target directory", Env: "CARGO_TARGET_DIR"}, "CARGO_TARGET_DIR"},
 		{&lang.EvidenceCache{}, "tool cache"},
 	} {
 		if got := cacheName(c.cache); got != c.want {
@@ -1326,20 +1345,48 @@ func TestUnitPassCacheHelpers(t *testing.T) {
 	noGate := &lang.EvidenceCache{Env: "TC"}
 	takes := &lang.EvidenceCache{Name: "c", Unsupported: gate("")}
 	refuses := &lang.EvidenceCache{Name: "c", Unsupported: gate("tool 0.9 is older than 1.0")}
-	if asked, why := askedCache(nil, argv, read); asked != nil || why != "" {
+	if asked, why := askedCache(nil, lang.Cmd(argv), nil, read); asked != nil || why != "" {
 		t.Errorf("askedCache(nil) = %+v, %q; want nil, \"\"", asked, why)
 	}
-	if asked, why := askedCache(noGate, argv, read); asked != noGate || why != "" {
+	if asked, why := askedCache(nil, lang.Cmd(argv), noGate, read); asked != noGate || why != "" {
 		t.Errorf("no Unsupported: askedCache = %+v, %q; want the cache, \"\"", asked, why)
 	}
-	if asked, why := askedCache(takes, argv, read); asked != takes || why != "" {
+	if asked, why := askedCache(nil, lang.Cmd(argv), takes, read); asked != takes || why != "" {
 		t.Errorf("Unsupported gives \"\": askedCache = %+v, %q; want the cache, \"\"", asked, why)
 	}
-	if asked, why := askedCache(refuses, argv, read); asked != nil || why != "tool 0.9 is older than 1.0" {
+	if asked, why := askedCache(nil, lang.Cmd(argv), refuses, read); asked != nil || why != "tool 0.9 is older than 1.0" {
 		t.Errorf("Unsupported gives a reason: askedCache = %+v, %q; want nil and the reason", asked, why)
 	}
 	if !slices.Equal(gotArgv, argv) || reads != 2 {
 		t.Errorf("Unsupported saw argv %q and read %d times, want %q and 2", gotArgv, reads, argv)
+	}
+
+	// A cache named by the command is asked for only when grading would
+	// share it: the command is one lang.RunCacheCmd reads. A package
+	// script (whose words Unsupported never sees) and a `--` are not.
+	js, _ := lang.ByName("javascript")
+	jestCache := lang.EvidenceCacheFor(js, lang.Cmd([]string{"npx", "jest"}))
+	if jestCache == nil || jestCache.Args == nil {
+		t.Fatalf("the jest row's cache = %+v, want one named by the command", jestCache)
+	}
+	pkg := func(rel string) ([]byte, error) {
+		if rel == "package.json" {
+			return []byte(`{"scripts":{"test":"jest --onlyFailures"}}`), nil
+		}
+		return nil, fs.ErrNotExist
+	}
+	for _, c := range []struct {
+		inv  lang.Invocation
+		want bool
+	}{
+		{lang.Cmd([]string{"npx", "jest"}), true},
+		{lang.Invocation{Argv: []string{"npm", "test"}, Script: []string{"jest", "--onlyFailures"}}, false},
+		{lang.Cmd([]string{"npx", "jest", "--", "src"}), false},
+	} {
+		asked, why := askedCache(js, c.inv, lang.EvidenceCacheFor(js, c.inv), pkg)
+		if (asked != nil) != c.want || (asked == nil && why == "") {
+			t.Errorf("%+v: askedCache = %+v, %q; want asked=%v, with a reason when not", c.inv, asked, why, c.want)
+		}
 	}
 }
 

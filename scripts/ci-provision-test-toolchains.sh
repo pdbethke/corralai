@@ -144,6 +144,18 @@ TSDIR=/usr/local/lib/corral-ci-toolchains
     echo "CORRALAI_TYPESCRIPT_NODE_MODULES=$TSDIR/node_modules" >> "$GITHUB_ENV"
   fi; } || true
 tsc --version || echo "tsc not available — ts-in-jail test will SKIP"
+# The JS test runners the runner fixtures were captured with (jest, mocha,
+# vitest), pinned the same way from scripts/npm-pins/runner-fixtures. The
+# jest run-cache tests bind this node_modules into the jail as a project's
+# own (CORRALAI_JEST_NODE_MODULES); without it they skip.
+RFDIR=/usr/local/lib/corral-runner-fixtures
+{ sudo install -d "$RFDIR" &&
+  sudo cp "$REPO/scripts/npm-pins/runner-fixtures/package.json" "$REPO/scripts/npm-pins/runner-fixtures/package-lock.json" "$RFDIR/" &&
+  sudo npm ci --prefix "$RFDIR" --no-audit --no-fund &&
+  if [ -n "${GITHUB_ENV:-}" ]; then
+    echo "CORRALAI_JEST_NODE_MODULES=$RFDIR/node_modules" >> "$GITHUB_ENV"
+  fi; } || true
+node "$RFDIR/node_modules/jest/bin/jest.js" --version || echo "jest not available — jest run-cache tests will SKIP"
 
 echo "== Rust (internal/lang rust plugin; the jail's pinned RUSTUP_HOME) =="
 # The jail pins RUSTUP_HOME=/usr/local/rustup (internal/sandbox/pinnedenv.go),

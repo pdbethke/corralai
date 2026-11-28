@@ -67,7 +67,7 @@ func cargoCacheJail(t *testing.T) RunCacheJail {
 	t.Setenv("PATH", systemCargoBin+":"+os.Getenv("PATH"))
 	vendor := corraldepVendor(t)
 	j := NewJail(backend, 3*time.Minute, WithReadOnlyBinds([]DepBind{{Host: vendor, Rel: "vendor"}}),
-		WithRunCache("CARGO_TARGET_DIR")).(RunCacheJail)
+		WithRunCache(&lang.EvidenceCache{Env: "CARGO_TARGET_DIR"})).(RunCacheJail)
 	t.Cleanup(func() { _ = j.Close() })
 	if c := j.RunCache(); c.Target == "" {
 		t.Skipf("SKIP: no shared cache on this host (%s)", c.Unshared)

@@ -4,6 +4,7 @@ package adequacy
 
 import (
 	"context"
+	"github.com/pdbethke/corralai/internal/lang"
 	"os/exec"
 	"strings"
 	"testing"
@@ -39,7 +40,7 @@ func TestAWarmRunThatForbidsACachedResultLeavesNoneToReplay(t *testing.T) {
 	backend := overlayJailOrSkip(t)
 	t.Setenv("TMPDIR", t.TempDir())
 	newJail := func() RunCacheJail {
-		j := NewJail(backend, 2*time.Minute, WithRunCache("GOCACHE")).(RunCacheJail)
+		j := NewJail(backend, 2*time.Minute, WithRunCache(&lang.EvidenceCache{Env: "GOCACHE"})).(RunCacheJail)
 		t.Cleanup(func() { _ = j.Close() })
 		if c := j.RunCache(); c.Target == "" {
 			t.Skipf("no shared cache on this host (%s)", c.Unshared)

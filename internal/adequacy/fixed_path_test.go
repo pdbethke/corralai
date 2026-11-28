@@ -45,7 +45,7 @@ func goRunCacheJail(t *testing.T) RunCacheJail {
 		t.Skipf("%s cannot place a workspace at a fixed path", backendVersion(backend))
 	}
 	t.Setenv("TMPDIR", t.TempDir())
-	j := NewJail(backend, 3*time.Minute, WithRunCache("GOCACHE")).(RunCacheJail)
+	j := NewJail(backend, 3*time.Minute, WithRunCache(&lang.EvidenceCache{Env: "GOCACHE"})).(RunCacheJail)
 	t.Cleanup(func() { _ = j.Close() })
 	if c := j.RunCache(); c.Target == "" {
 		t.Skipf("no shared cache on this host (%s); the frozen-cache path is unexercised", c.Unshared)
